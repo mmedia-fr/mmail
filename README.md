@@ -16,7 +16,7 @@ Le cadrage complet — exigences, décisions actées (les « décisions » numé
 citées dans le code), pistes écartées et leur motif — est tenu dans un dossier
 de projet interne.
 
-## État — 0.1.0
+## État — 0.1.1
 
 **Lecture et tri.** Pas encore de rédaction ni d'envoi.
 
@@ -30,6 +30,13 @@ de projet interne.
 - marquage lu / non lu (Ctrl+Q, Ctrl+U) ; un message affiché est marqué lu ;
 - **masquage local** des dossiers peu utilisés, réaffichage en un clic ;
 - affichage du **message brut** (bouton « Source ») ;
+- **copie automatique de la sélection**, comme dans MMdedit : un texte
+  sélectionné dans un message part au presse-papier, sauf ce qu'un autre
+  logiciel vient d'y déposer, protégé une minute ; clic droit sur le message :
+  « Copier », « Tout sélectionner » ; sur une ligne de la liste : copier
+  l'adresse de l'expéditeur ou l'objet ;
+- **barre d'information** : compte et dossier ouverts, nombre de messages et de
+  non-lus, sélection, état de la synchronisation, déplacements en attente ;
 - **pièces jointes** listées sous l'en-tête du message : « Ouvrir » avec le
   logiciel du système, « Enregistrer sous… » ; un programme ou un script
   (`.exe`, `.js`, `.bat`…) ne s'ouvre pas depuis MMail, il s'enregistre ;
@@ -54,7 +61,9 @@ par `Message-ID` pour ne pas créer de doublon.
 ## Limites connues
 
 - Connexion en **IMAPS (port 993)** seulement ; pas de STARTTLS ni d'OAuth2.
-- Le corps HTML est affiché **réduit au texte**.
+- Le corps HTML est affiché **réduit au texte** : paragraphes, blocs, listes
+  et lignes de tableau sont respectés, styles et scripts écartés, mais ni
+  images ni mise en forme.
 - Sous Android, les pièces jointes s'ouvrent mais ne s'enregistrent pas
   ailleurs ; leur ouverture n'a pas été éprouvée sur un téléphone.
 - Pas encore de rédaction, de réponse, de signatures ni de filtres.

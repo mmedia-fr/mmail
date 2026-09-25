@@ -18,6 +18,7 @@
 #include <QtQml/qqml.h>
 
 #include "coffre.h"
+#include "presse_papier.h"
 
 #ifdef Q_OS_WIN
 #  include <windows.h>  // GetCommandLineW / CommandLineToArgvW
@@ -90,6 +91,9 @@ int main(int argc, char* argv[])
   // Coffre des mots de passe, natif : exposé à QML comme un type à part, hors du
   // module Rust.
   qmlRegisterType<Coffre>("fr.mmedia.mmail.natif", 1, 0, "Coffre");
+  // Presse-papier du système, que QML ne sait pas lire : la copie automatique
+  // de la sélection en a besoin pour ne pas écraser ce qu'un tiers y a déposé.
+  qmlRegisterType<PressePapier>("fr.mmedia.mmail.natif", 1, 0, "PressePapier");
 
   QQmlApplicationEngine engine;
   // En contrôle de fabrication, l'interface ne touche ni au coffre ni au réseau

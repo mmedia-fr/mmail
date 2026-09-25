@@ -9,6 +9,6 @@ fn main() {
 
     CxxQtBuilder::new_qml_module(QmlModule::new("fr.mmedia.mmail").qml_files(["qml/Main.qml"]))
         .qt_module("Qml")
-        .files(["src/socle.rs", "src/boite.rs"])
+        .files(["src/socle.rs", "src/boite.rs", "src/pont_presse_papier.rs"])
         .build();
 }

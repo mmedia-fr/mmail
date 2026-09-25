@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=MMail
+GenericName=Client de messagerie
+Comment=Client de messagerie IMAP — outil M-Media
+Exec=mmail
+Icon=mmail
+Categories=Network;Email;
+Terminal=false
+StartupWMClass=mmail

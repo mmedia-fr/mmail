@@ -1,0 +1,42 @@
+[package]
+name = "mmail_core"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "GPL-3.0-or-later"
+publish = false
+
+[lib]
+# staticlib pour la liaison avec Qt ; rlib pour que `cargo test` compile les
+# tests du noyau.
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+cxx = "1.0"
+cxx-qt = "0.10"
+cxx-qt-lib = { version = "0.10", features = ["qt_full"] }
+
+# TLS en pur Rust : pas d'OpenSSL à compiler pour Android.
+rustls = "0.23"
+
+# Analyse des en-têtes et des corps MIME. C'est la surface d'attaque du client :
+# d'où un analyseur éprouvé, en Rust, plutôt qu'écrit à la main.
+mail-parser = "0.11"
+
+# Index local (décision 14 du dossier de projet). « bundled » compile SQLite
+# avec le programme : rien à installer sur les postes, et la même version
+# partout, Android compris.
+rusqlite = { version = "0.37", features = ["bundled"] }
+
+# Autorités de certification : celles du système sur le bureau, par le
+# vérificateur de plateforme. Sous Android, ce vérificateur exige un composant
+# Java et une initialisation JNI que l'APK n'embarque pas : on y prend les
+# autorités de Mozilla, compilées avec le programme.
+[target.'cfg(not(target_os = "android"))'.dependencies]
+rustls-platform-verifier = "0.6"
+
+[target.'cfg(target_os = "android")'.dependencies]
+webpki-roots = "1"
+
+[build-dependencies]
+cxx-qt-build = "0.10"

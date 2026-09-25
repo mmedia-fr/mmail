@@ -1,0 +1,16 @@
+# Socle Rust / Qt
+_build/
+core/target/
+.qmlls.ini
+dist/
+*.log
+
+# Le .gitignore exclut « build/ » ailleurs : ici le dossier porte des sources
+# (script Inno Setup, ressource d'icône), il est donc ré-inclus.
+!build/
+build/MMail/
+
+# Profil et base locale, jamais versionnés
+*.sqlite
+*.sqlite3
+config.json

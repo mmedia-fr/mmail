@@ -1,0 +1,16 @@
+# Fins de ligne imposées par type de fichier.
+#
+# cmd.exe ne sait pas lire un .bat en LF : il perd le premier caractère de
+# chaque ligne (« REM » devient « M », « echo » devient « cho »…) et le script
+# échoue intégralement. Inversement, bash refuse un .sh en CRLF.
+# Sans ces règles, un simple aller-retour d'édition casse la chaîne de build.
+
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+*.sh  text eol=lf
+*.py  text eol=lf
+*.iss text eol=crlf
+
+*.ico binary
+*.png binary

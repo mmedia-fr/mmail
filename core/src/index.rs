@@ -63,6 +63,17 @@ pub fn corps_affichable(brut: &[u8]) -> String {
     let Some(message) = MessageParser::default().parse(brut) else {
         return "(message illisible)".to_string();
     };
+    // Un message tout en HTML : mail-parser le présente comme corps texte,
+    // mais sa conversion ne revient à la ligne qu'après <br> et </p> — les
+    // blocs <div>, les tableaux et les listes d'Outlook et des lettres
+    // d'information ressortaient en longues lignes collées.
+    if let Some(partie) = message.text_part(0) {
+        if partie.is_text_html() {
+            if let Some(html) = partie.text_contents() {
+                return html_vers_texte(html);
+            }
+        }
+    }
     if let Some(texte) = message.body_text(0) {
         return texte.into_owned();
     }
@@ -196,32 +207,194 @@ pub fn ouverture_risquee(nom: &str) -> bool {
     EXECUTABLES.contains(&extension.as_str())
 }
 
-/// Réduction sommaire d'un HTML à son texte : retire les balises et rend les
-/// entités les plus courantes. Ce n'est pas un rendu — l'affichage HTML viendra
-/// avec la rédaction (décision 7) — mais de quoi lire un message.
+/// Réduction d'un HTML à son texte, en gardant sa structure de lignes : ce
+/// n'est pas un rendu — l'affichage HTML viendra plus tard —, mais de quoi lire
+/// un message mis en page. Le contenu invisible (en-tête, styles, scripts,
+/// commentaires) est écarté, les blocs et les lignes de tableau passent à la
+/// ligne, les éléments de liste sont marqués, les entités sont décodées.
+///
+/// Un bloc (`<div>`, `<p>`…) impose d'être en début de ligne, sans ajouter de
+/// ligne vide : Gmail et Outlook mettent chaque ligne d'un message dans son
+/// propre bloc, et une ligne vide y est un bloc contenant un `<br>`. Seul
+/// `<br>` ajoute toujours un saut.
 fn html_vers_texte(html: &str) -> String {
-    let mut sortie = String::with_capacity(html.len());
-    let mut dans_balise = false;
-    for c in html.chars() {
-        match c {
-            '<' => dans_balise = true,
-            '>' => dans_balise = false,
-            c if !dans_balise => sortie.push(c),
+    let mut texte = String::with_capacity(html.len());
+    let mut reste = html;
+    // Élément dont on saute le contenu jusqu'à sa balise fermante.
+    let mut ignorer: Option<String> = None;
+    let ajouter = |texte: &mut String, fragment: &str| {
+        // Dans un HTML, un saut de ligne du source n'est qu'un espace.
+        for c in fragment.chars() {
+            texte.push(if c == '\n' || c == '\r' || c == '\t' { ' ' } else { c });
+        }
+    };
+    while let Some(debut) = reste.find('<') {
+        if ignorer.is_none() {
+            ajouter(&mut texte, &reste[..debut]);
+        }
+        let apres = &reste[debut..];
+        if apres.starts_with("<!--") {
+            reste = apres.find("-->").map(|f| &apres[f + 3..]).unwrap_or("");
+            continue;
+        }
+        let Some(fin) = apres.find('>') else {
+            if ignorer.is_none() {
+                ajouter(&mut texte, apres);
+            }
+            reste = "";
+            break;
+        };
+        let balise = &apres[1..fin];
+        reste = &apres[fin + 1..];
+        let fermante = balise.starts_with('/');
+        let nom: String = balise
+            .trim_start_matches('/')
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric())
+            .collect::<String>()
+            .to_ascii_lowercase();
+        if let Some(n) = &ignorer {
+            if fermante && &nom == n {
+                ignorer = None;
+            }
+            continue;
+        }
+        match nom.as_str() {
+            "head" | "style" | "script" | "title" | "template" if !fermante => {
+                ignorer = Some(nom);
+            }
+            "br" => texte.push('\n'),
+            "p" | "div" | "tr" | "table" | "blockquote" | "ul" | "ol" | "hr" | "section"
+            | "article" | "header" | "footer" | "center" | "pre" | "address" | "h1" | "h2"
+            | "h3" | "h4" | "h5" | "h6" => a_la_ligne(&mut texte),
+            "li" if !fermante => {
+                a_la_ligne(&mut texte);
+                texte.push_str("• ");
+            }
+            "td" | "th" if fermante => texte.push_str("   "),
             _ => {}
         }
     }
+    if ignorer.is_none() {
+        ajouter(&mut texte, reste);
+    }
+    let texte = decoder_entites(&texte);
+
+    // Espaces résumés dans chaque ligne ; une seule ligne vide entre deux
+    // paragraphes ; ni en tête ni en fin.
+    let mut lignes: Vec<String> = Vec::new();
+    for ligne in texte.lines() {
+        let propre = ligne.split_whitespace().collect::<Vec<_>>().join(" ");
+        if propre.is_empty() && lignes.last().map(|l| l.is_empty()).unwrap_or(true) {
+            continue;
+        }
+        lignes.push(propre);
+    }
+    while lignes.last().map(|l| l.is_empty()).unwrap_or(false) {
+        lignes.pop();
+    }
+    lignes.join("\n")
+}
+
+/// Passe à la ligne, sauf si la ligne en cours est encore vide (ou blanche) :
+/// deux blocs qui se suivent ne font pas de ligne vide entre eux.
+fn a_la_ligne(texte: &mut String) {
+    let ligne = texte.rsplit('\n').next().unwrap_or("");
+    if !ligne.trim().is_empty() {
+        texte.push('\n');
+    }
+}
+
+/// Décode les entités HTML : numériques (`&#233;`, `&#xE9;`) et nommées les
+/// plus courantes. Une entité inconnue est laissée telle quelle.
+fn decoder_entites(texte: &str) -> String {
+    let mut sortie = String::with_capacity(texte.len());
+    let mut reste = texte;
+    while let Some(i) = reste.find('&') {
+        sortie.push_str(&reste[..i]);
+        let apres = &reste[i + 1..];
+        // Une entité tient en moins de 12 caractères avant son « ; ».
+        let fin = apres.char_indices().take(12).find(|(_, c)| *c == ';').map(|(j, _)| j);
+        match fin.and_then(|f| entite(&apres[..f]).map(|v| (f, v))) {
+            Some((f, valeur)) => {
+                sortie.push_str(&valeur);
+                reste = &apres[f + 1..];
+            }
+            None => {
+                sortie.push('&');
+                reste = apres;
+            }
+        }
+    }
+    sortie.push_str(reste);
     sortie
-        .replace("&nbsp;", " ")
-        .replace("&amp;", "&")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&#39;", "'")
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty())
-        .collect::<Vec<_>>()
-        .join("\n")
+}
+
+fn entite(nom: &str) -> Option<String> {
+    if let Some(nombre) = nom.strip_prefix('#') {
+        let code = match nombre.strip_prefix(['x', 'X']) {
+            Some(hexa) => u32::from_str_radix(hexa, 16).ok()?,
+            None => nombre.parse().ok()?,
+        };
+        let c = char::from_u32(code)?;
+        return Some(match c {
+            // Invisibles : césure conditionnelle, liants.
+            '\u{ad}' | '\u{200b}' | '\u{200c}' | '\u{200d}' | '\u{feff}' => String::new(),
+            c => c.to_string(),
+        });
+    }
+    let valeur = match nom {
+        "nbsp" | "ensp" | "emsp" | "thinsp" => " ",
+        "shy" | "zwnj" | "zwj" => "",
+        "amp" => "&",
+        "lt" => "<",
+        "gt" => ">",
+        "quot" => "\"",
+        "apos" => "'",
+        "eacute" => "é",
+        "egrave" => "è",
+        "ecirc" => "ê",
+        "euml" => "ë",
+        "agrave" => "à",
+        "aacute" => "á",
+        "acirc" => "â",
+        "auml" => "ä",
+        "ccedil" => "ç",
+        "icirc" => "î",
+        "iuml" => "ï",
+        "ocirc" => "ô",
+        "ouml" => "ö",
+        "ugrave" => "ù",
+        "ucirc" => "û",
+        "uuml" => "ü",
+        "Eacute" => "É",
+        "Egrave" => "È",
+        "Ecirc" => "Ê",
+        "Agrave" => "À",
+        "Ccedil" => "Ç",
+        "oelig" => "œ",
+        "OElig" => "Œ",
+        "aelig" => "æ",
+        "rsquo" => "’",
+        "lsquo" => "‘",
+        "rdquo" => "”",
+        "ldquo" => "“",
+        "laquo" => "«",
+        "raquo" => "»",
+        "hellip" => "…",
+        "ndash" => "–",
+        "mdash" => "—",
+        "euro" => "€",
+        "copy" => "©",
+        "reg" => "®",
+        "trade" => "™",
+        "deg" => "°",
+        "middot" => "·",
+        "bull" => "•",
+        "times" => "×",
+        _ => return None,
+    };
+    Some(valeur.to_string())
 }
 
 /// Nom d'affichage et adresse du premier contact d'un champ d'adresses.
@@ -382,5 +555,55 @@ TVqQAA==\r\n\
         for nom in ["facture.pdf", "photo.jpeg", "exe", "tableau.xlsx", "notes.txt"] {
             assert!(!ouverture_risquee(nom), "{nom}");
         }
+    }
+
+    #[test]
+    fn html_d_outlook_remis_en_lignes() {
+        let html = concat!(
+            "<html><head><title>Titre</title><style>p { color: red; }</style></head>",
+            "<body><!-- commentaire --><div>Bonjour,</div><div><br></div>",
+            "<div>Veuillez trouver ci-joint la facture n&deg;&nbsp;12 d&#233;taill&eacute;e :</div>",
+            "<ul><li>ligne A</li><li>ligne B</li></ul>",
+            "<table><tr><td>Total</td><td>12,50&nbsp;&euro;</td></tr></table>",
+            "<p>Cordialement,<br>L&rsquo;&eacute;quipe</p><script>alert(1)</script></body></html>"
+        );
+        let texte = html_vers_texte(html);
+        assert!(!texte.contains("color"), "le CSS doit disparaître : {texte}");
+        assert!(!texte.contains("alert"), "le script doit disparaître : {texte}");
+        assert!(!texte.contains("Titre"));
+        assert!(!texte.contains("commentaire"));
+        let lignes: Vec<&str> = texte.lines().collect();
+        assert_eq!(lignes[0], "Bonjour,");
+        assert!(texte.contains("\nVeuillez trouver ci-joint la facture n° 12 détaillée :\n"), "{texte}");
+        assert!(texte.contains("• ligne A\n• ligne B"), "{texte}");
+        assert!(texte.contains("Total 12,50 €"), "{texte}");
+        assert!(texte.contains("Cordialement,\nL’équipe"), "{texte}");
+        assert!(!texte.contains("\n\n\n"), "pas plus d'une ligne vide : {texte:?}");
+    }
+
+    #[test]
+    fn blocs_successifs_sans_ligne_vide() {
+        // Outlook : un paragraphe par ligne, une ligne vide = paragraphe à
+        // espace insécable. Gmail : un <div> par ligne, <div><br></div> pour
+        // une ligne vide. Et le source indenté ne doit rien ajouter.
+        let outlook = "<p class=MsoNormal>Bonjour,<o:p></o:p></p>\n  <p class=MsoNormal><o:p>&nbsp;</o:p></p>\n  <p class=MsoNormal>Suite.<o:p></o:p></p>";
+        assert_eq!(html_vers_texte(outlook), "Bonjour,\n\nSuite.");
+        let gmail = "<div dir=\"ltr\">\n  <div>Un</div>\n  <div>Deux</div>\n  <div><br></div>\n  <div>Trois</div>\n</div>";
+        assert_eq!(html_vers_texte(gmail), "Un\nDeux\n\nTrois");
+    }
+
+    #[test]
+    fn entites_inconnues_ou_tronquees_laissees() {
+        assert_eq!(decoder_entites("A &amp; B"), "A & B");
+        assert_eq!(decoder_entites("R&D, 5 &lt; 6"), "R&D, 5 < 6");
+        assert_eq!(decoder_entites("&inconnue; &#x1F600; &#9999999999;"), "&inconnue; 😀 &#9999999999;");
+        assert_eq!(decoder_entites("fin &"), "fin &");
+        assert_eq!(decoder_entites("é&eacute"), "é&eacute");
+    }
+
+    #[test]
+    fn message_tout_en_html_passe_par_la_conversion() {
+        let brut = b"From: a@b.fr\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<div>Un</div><div>Deux</div>\r\n";
+        assert_eq!(corps_affichable(brut), "Un\nDeux");
     }
 }

@@ -5,6 +5,8 @@ pub mod deplacement;
 pub mod imap;
 pub mod index;
 pub mod magasin;
+pub mod pont_presse_papier;
+pub mod presse_papier;
 pub mod socle;
 pub mod protocole;
 pub mod synchro;

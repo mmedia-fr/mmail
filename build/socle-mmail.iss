@@ -1,7 +1,7 @@
 ﻿; Installeur Windows de MMail — socle Rust / Qt 6 (Inno Setup 6).
 ;
 ; Compilation :
-;   ISCC.exe /DAppVersion=0.1.0 build\socle-mmail.iss
+;   ISCC.exe /DAppVersion=0.1.1 build\socle-mmail.iss
 ;
 ; Prérequis : dist\MMail\ doit contenir MMail.exe et les bibliothèques Qt
 ; déposées par windeployqt (cf. le workflow « socle », étape « Paquet Windows »).
@@ -13,7 +13,7 @@
 ; « mailto: » attendra la rédaction.
 
 #ifndef AppVersion
-  #define AppVersion "0.1.0"
+  #define AppVersion "0.1.1"
 #endif
 #define AppName        "MMail"
 #define AppPublisher   "M-Media"

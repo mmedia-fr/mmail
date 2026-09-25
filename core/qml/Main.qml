@@ -32,6 +32,16 @@ ApplicationWindow {
 
     Socle { id: socle }
     Boite { id: boite }
+    PressePapier { id: pressePapier }
+    ReglePressePapier { id: reglePresse }
+
+    Settings {
+        id: reglagesEdition
+        category: "edition"
+        // Comme dans MMdedit : toute sélection faite dans un message part au
+        // presse-papier, sauf ce qu'un autre logiciel vient d'y déposer.
+        property bool copieAuto: true
+    }
     readonly property string noyau: socle.noyau
 
     // Un seul volet à la fois sous cette largeur : 0 arborescence, 1 liste,
@@ -83,13 +93,15 @@ ApplicationWindow {
             libelle: qsTr("Classique (Windows 9x)"),
             fond: "#d4d0c8", texte: "#000000", base: "#ffffff",
             bouton: "#d4d0c8", surbrillance: "#000080", texteSurbrillance: "#ffffff",
-            police: "MS Shell Dlg 2", taille: 9, mono: "Courier New"
+            police: ["MS Shell Dlg 2", "Tahoma", "Microsoft Sans Serif", "Arial"], taille: 9,
+            mono: ["Courier New", "Liberation Mono", "DejaVu Sans Mono"]
         },
         "moderne": {
             libelle: qsTr("Moderne (M-Media)"),
             fond: "#f6f7f8", texte: "#231f20", base: "#ffffff",
             bouton: "#ffffff", surbrillance: "#21abe3", texteSurbrillance: "#ffffff",
-            police: "Segoe UI", taille: 10, mono: "Cascadia Mono"
+            police: ["Segoe UI", "Noto Sans", "DejaVu Sans", "Arial"], taille: 10,
+            mono: ["Cascadia Mono", "Consolas", "DejaVu Sans Mono", "Courier New"]
         },
         "systeme": { libelle: qsTr("Système (aspect natif)") }
     })
@@ -119,7 +131,7 @@ ApplicationWindow {
             required property var modelData
             target: fenetre
             property: modelData.propriete
-            value: fenetre.jeu ? fenetre.jeu[modelData.clef] : ""
+            value: fenetre.jeu ? fenetre.valeurJeu(modelData.clef) : ""
             when: fenetre.jeu !== null
             restoreMode: Binding.RestoreBindingOrValue
         }
@@ -134,7 +146,28 @@ ApplicationWindow {
     readonly property real tailleArborescence: tailleBase * reglages.zoomArborescence
     readonly property real tailleListe: tailleBase * reglages.zoomListe
     readonly property real tailleMessage: tailleBase * reglages.zoomMessage
-    readonly property string policeMono: jeu ? jeu.mono : "monospace"
+    readonly property string policeMono: premierePolice(jeu ? jeu.mono
+                                                            : ["Consolas", "DejaVu Sans Mono", "Courier New"])
+
+    // Polices installées, relevées une fois : une police demandée qui manque
+    // cède la place à la suivante de sa liste, plutôt qu'au choix arbitraire
+    // de Qt. « MS Shell Dlg 2 », par exemple, n'est qu'un alias de Windows que
+    // la base de polices de Qt 6.8 ne connaît pas.
+    readonly property var famillesInstallees: Qt.fontFamilies()
+
+    function premierePolice(liste) {
+        if (typeof liste === "string")
+            return liste
+        for (var i = 0; i < liste.length; ++i)
+            if (famillesInstallees.indexOf(liste[i]) >= 0)
+                return liste[i]
+        return liste.length > 0 ? liste[liste.length - 1] : ""
+    }
+
+    function valeurJeu(clef) {
+        var v = jeu[clef]
+        return Array.isArray(v) ? premierePolice(v) : v
+    }
 
     // --------------------------------------------------------------- zoom
     //
@@ -165,7 +198,12 @@ ApplicationWindow {
 
     Connections {
         target: boite
-        function onRevisionChanged() { fenetre.rafraichirArborescence() }
+        function onRevisionChanged() {
+            fenetre.rafraichirArborescence()
+            if (!boite.occupe)
+                fenetre.derniereSynchro = new Date()
+        }
+        function onDossierCourantChanged() { fenetre.majInfoDossier() }
     }
 
     // ------------------------------------------------------------- en-tête
@@ -211,11 +249,6 @@ ApplicationWindow {
                 elide: Text.ElideRight
                 font.bold: true
                 Layout.fillWidth: true
-            }
-            Label {
-                visible: boite.enAttente > 0
-                text: qsTr("%n déplacement(s) en attente", "", boite.enAttente)
-                opacity: 0.8
             }
             BusyIndicator {
                 running: boite.occupe
@@ -423,6 +456,22 @@ ApplicationWindow {
                     background: Rectangle { color: fenetre.palette.base }
                     text: qsTr("Aucun message sélectionné.")
 
+                    onSelectedTextChanged: if (selectedText.length > 0) fenetre.selectionChangee()
+                    // Un Ctrl+C explicite écrit par la même règle que la copie
+                    // automatique : sans cela, la règle y verrait un dépôt venu
+                    // d'ailleurs, et se protégerait contre MMail lui-même.
+                    Keys.onPressed: function(touche) {
+                        if (touche.matches(StandardKey.Copy) && selectedText.length > 0) {
+                            fenetre.copierTexte(selectedText, fenetre.sourceVisible ? "source" : "message")
+                            touche.accepted = true
+                        }
+                    }
+                    TapHandler {
+                        acceptedButtons: Qt.RightButton
+                        onTapped: menuCorps.popup()
+                    }
+                    onPressAndHold: if (fenetre.compact) menuCorps.popup()
+
                     WheelHandler {
                         acceptedModifiers: Qt.ControlModifier
                         onWheel: function(roue) {
@@ -440,24 +489,192 @@ ApplicationWindow {
         }
     }
 
+    // ------------------------------------------------------ barre d'information
+    //
+    // À gauche, ce qui est ouvert et ce qu'il contient ; au milieu, le dernier
+    // message de l'application, qui s'efface de lui-même ; à droite, l'état du
+    // presse-papier, des déplacements et de la synchronisation.
     footer: ToolBar {
         RowLayout {
             anchors.fill: parent
             anchors.leftMargin: 8
             anchors.rightMargin: 8
+            spacing: 14
             Label {
-                text: boite.erreur.length > 0 ? boite.erreur : messageEtat.texte
-                color: boite.erreur.length > 0 ? "#b00020" : palette.windowText
+                text: fenetre.infoDossier
                 elide: Text.ElideRight
                 maximumLineCount: 1
                 Layout.fillWidth: true
+                Layout.minimumWidth: 120
+            }
+            Label {
+                visible: text.length > 0
+                text: fenetre.passager
+                color: fenetre.passagerErreur ? "#b00020" : palette.windowText
+                elide: Text.ElideRight
+                maximumLineCount: 1
+                Layout.maximumWidth: fenetre.width * 0.4
+            }
+            Label {
+                visible: reglePresse.restant > 0
+                text: qsTr("presse-papier protégé %1 s").arg(reglePresse.restant)
+                opacity: 0.75
+            }
+            Label {
+                visible: boite.enAttente > 0
+                text: fenetre.accord(boite.enAttente, qsTr("déplacement en attente"), qsTr("déplacements en attente"))
+            }
+            Label {
+                text: fenetre.etatSynchro()
+                opacity: 0.75
             }
         }
     }
 
+    // Message passager : il s'efface au bout de quelques secondes — plus
+    // longtemps pour une erreur.
+    property string passager: ""
+    property bool passagerErreur: false
+    property string infoDossier: ""
+    property var derniereSynchro: null
+
+    Timer {
+        id: minuteurPassager
+        onTriggered: fenetre.passager = ""
+    }
+
+    function annoncer(texte, erreur) {
+        if (!texte || texte.length === 0)
+            return
+        passager = texte
+        passagerErreur = erreur
+        minuteurPassager.interval = erreur ? 12000 : 6000
+        minuteurPassager.restart()
+    }
+
+    Connections {
+        target: boite
+        function onErreurChanged() {
+            if (boite.erreur.length > 0)
+                fenetre.annoncer(boite.erreur, true)
+        }
+    }
+
+    /// « 1 message », « 3 messages » : qsTr ne sait accorder qu'avec un
+    /// fichier de traduction, que l'application n'a pas (elle est en français).
+    function accord(n, singulier, pluriel) {
+        return n + " " + (n > 1 ? pluriel : singulier)
+    }
+
+    function etatSynchro() {
+        if (boite.occupe)
+            return qsTr("Synchronisation…")
+        if (!derniereSynchro)
+            return qsTr("Hors ligne")
+        function deux(n) { return (n < 10 ? "0" : "") + n }
+        return qsTr("À jour à %1").arg(deux(derniereSynchro.getHours()) + ":" + deux(derniereSynchro.getMinutes()))
+    }
+
+    /// Compte et dossier ouverts, leurs compteurs, et la sélection s'il y en a
+    /// plusieurs.
+    function majInfoDossier() {
+        if (boite.dossierCourant.length === 0) {
+            var n = listeComptes().length
+            infoDossier = n === 0 ? qsTr("Aucun compte")
+                                  : accord(n, qsTr("compte"), qsTr("comptes")) + qsTr(", aucun dossier ouvert")
+            return
+        }
+        var ligne = null
+        for (var i = 0; i < modeleArborescence.count; ++i) {
+            var l = modeleArborescence.get(i)
+            if (l.genre === "dossier" && l.compte === boite.compteCourant && l.chemin === boite.dossierCourant) {
+                ligne = l
+                break
+            }
+        }
+        var texte = ligne ? ligne.adresse + " › " + libelleLigne(ligne) : boite.dossierCourant
+        var total = ligne ? ligne.messages : modeleMessages.count
+        texte += "  —  " + accord(total, qsTr("message"), qsTr("messages"))
+        if (ligne && ligne.nonLus > 0)
+            texte += ", " + accord(ligne.nonLus, qsTr("non lu"), qsTr("non lus"))
+        var choisis = Object.keys(selection).length
+        if (choisis > 1)
+            texte += "  —  " + accord(choisis, qsTr("sélectionné"), qsTr("sélectionnés"))
+        infoDossier = texte
+    }
+
+    onSelectionChanged: majInfoDossier()
+
+    // ------------------------------------------------------- presse-papier
+    Timer {
+        id: minuteurSelection
+        interval: 300
+        onTriggered: fenetre.copierSelectionAuto()
+    }
+    Timer {
+        interval: 1000
+        repeat: true
+        running: reglePresse.restant > 0
+        onTriggered: reglePresse.rafraichir(fenetre.maintenant())
+    }
+    Connections {
+        target: pressePapier
+        function onChange() {
+            reglePresse.depot(pressePapier.texte, fenetre.maintenant())
+        }
+    }
+
+    // Heure en secondes, telle que l'attend la règle du presse-papier.
+    function maintenant() {
+        return Date.now() / 1000
+    }
+
+    function selectionChangee() {
+        if (reglagesEdition.copieAuto)
+            minuteurSelection.restart()
+    }
+
+    /// Copie automatique : la sélection du message part au presse-papier une
+    /// fois stabilisée, sauf si un autre logiciel vient d'y déposer quelque
+    /// chose — ce contenu-là est protégé une minute.
+    function copierSelectionAuto() {
+        var texte = vueCorps.selectedText
+        if (!reglagesEdition.copieAuto || texte.length === 0)
+            return
+        if (!reglePresse.peutEcraser(maintenant())) {
+            annoncer(qsTr("Presse-papier protégé : la sélection n'est pas copiée."), false)
+            return
+        }
+        copierTexte(texte, sourceVisible ? "source" : "message")
+    }
+
+    /// Copie explicite, qui passe toujours : c'est l'utilisateur qui la demande.
+    function copierTexte(texte, origine) {
+        if (!texte || texte.length === 0)
+            return
+        // La règle apprend d'abord que l'écriture vient de nous : sous Linux,
+        // le presse-papier signale le dépôt pendant même l'écriture, et la
+        // règle y verrait sinon un dépôt étranger — MMail se protégerait
+        // alors une minute contre sa propre copie.
+        reglePresse.ecriture(texte, origine, maintenant())
+        pressePapier.deposer(texte)
+        annoncer(qsTr("Copié : %1.").arg(accord(texte.length, qsTr("caractère"), qsTr("caractères"))), false)
+    }
+
+    function copierChamp(champ) {
+        var uids = uidsChoisis()
+        if (uids.length !== 1)
+            return
+        var i = indexDe(uids[0])
+        if (i >= 0)
+            copierTexte(modeleMessages.get(i)[champ], "message")
+    }
+
+    // Les messages de l'application passent par la barre d'information.
     QtObject {
         id: messageEtat
         property string texte: ""
+        onTexteChanged: fenetre.annoncer(texte, false)
     }
 
     // ------------------------------------------------ ligne d'arborescence
@@ -696,7 +913,7 @@ ApplicationWindow {
                     id: texteEtiquette
                     anchors.centerIn: parent
                     color: fenetre.palette.highlightedText
-                    text: qsTr("%n message(s)", "", Object.keys(fenetre.selection).length)
+                    text: fenetre.accord(Object.keys(fenetre.selection).length, qsTr("message"), qsTr("messages"))
                 }
                 states: State {
                     when: zone.drag.active
@@ -812,6 +1029,26 @@ ApplicationWindow {
     }
 
     Menu {
+        id: menuCorps
+        MenuItem {
+            text: qsTr("Copier")
+            enabled: vueCorps.selectedText.length > 0
+            onTriggered: fenetre.copierTexte(vueCorps.selectedText, fenetre.sourceVisible ? "source" : "message")
+        }
+        MenuItem {
+            text: qsTr("Tout sélectionner")
+            onTriggered: vueCorps.selectAll()
+        }
+        MenuSeparator {}
+        MenuItem {
+            text: qsTr("Copier la sélection automatiquement")
+            checkable: true
+            checked: reglagesEdition.copieAuto
+            onTriggered: reglagesEdition.copieAuto = checked
+        }
+    }
+
+    Menu {
         id: menuMessage
         MenuItem { text: qsTr("Déplacer vers…"); onTriggered: fenetre.ouvrirDeplacer() }
         MenuSeparator {}
@@ -819,6 +1056,17 @@ ApplicationWindow {
         MenuItem { text: qsTr("Marquer comme non lu"); onTriggered: fenetre.marquerSelection(false) }
         MenuSeparator {}
         MenuItem { text: qsTr("Supprimer"); onTriggered: fenetre.supprimerSelection() }
+        MenuSeparator {}
+        MenuItem {
+            text: qsTr("Copier l'adresse de l'expéditeur")
+            enabled: Object.keys(fenetre.selection).length === 1
+            onTriggered: fenetre.copierChamp("adresse")
+        }
+        MenuItem {
+            text: qsTr("Copier l'objet")
+            enabled: Object.keys(fenetre.selection).length === 1
+            onTriggered: fenetre.copierChamp("sujet")
+        }
         MenuItem {
             text: qsTr("Afficher la source")
             enabled: Object.keys(fenetre.selection).length === 1
@@ -992,7 +1240,7 @@ ApplicationWindow {
 
     Dialog {
         id: dlgDeplacer
-        title: qsTr("Déplacer %n message(s) vers…", "", Object.keys(fenetre.selection).length)
+        title: qsTr("Déplacer %1 vers…").arg(fenetre.accord(Object.keys(fenetre.selection).length, qsTr("message"), qsTr("messages")))
         modal: true
         anchors.centerIn: Overlay.overlay
         width: Math.min(520, fenetre.width - 24)
@@ -1151,12 +1399,13 @@ ApplicationWindow {
         }
 
         function onDossierOuvert(compte, chemin, veille) {
+            fenetre.derniereSynchro = new Date()
             if (compte !== boite.compteCourant || chemin !== boite.dossierCourant)
                 return
             fenetre.rafraichirListe()
             if (!veille)
-                messageEtat.texte = qsTr("%1 : %n message(s).", "", modeleMessages.count)
-                        .arg(fenetre.libelleCourant())
+                messageEtat.texte = qsTr("%1 : %2.").arg(fenetre.libelleCourant())
+                        .arg(fenetre.accord(modeleMessages.count, qsTr("message"), qsTr("messages")))
             if (fenetre.essai && fenetre.essai.afficherPremier && modeleMessages.count > 0) {
                 fenetre.essai.afficherPremier = false
                 fenetre.choisir(0, 0)
@@ -1201,7 +1450,7 @@ ApplicationWindow {
                 fenetre.enDeplacement = ({})
             fenetre.rafraichirListe()
             if (erreurs.length === 0)
-                messageEtat.texte = qsTr("%n message(s) déplacé(s).", "", nombre)
+                messageEtat.texte = fenetre.accord(nombre, qsTr("message déplacé."), qsTr("messages déplacés."))
             if (fenetre.essai && fenetre.essai.scenario) {
                 console.log("scenario: deplacement termine", nombre, erreurs)
                 fenetre.etapeScenario()
@@ -1352,6 +1601,7 @@ ApplicationWindow {
             modeleArborescence.clear()
             modeleArborescence.append(lignes)
         }
+        majInfoDossier()
     }
 
     function libelleLigne(l) {
@@ -1426,6 +1676,7 @@ ApplicationWindow {
                 if (avant.lu !== messages[j].lu || avant.repondu !== messages[j].repondu)
                     modeleMessages.set(j, messages[j])
             }
+            majInfoDossier()
             return
         }
         var position = vueMessages.contentY
@@ -1486,7 +1737,7 @@ ApplicationWindow {
         if (nombre === 1 && nouvelle[uid])
             afficherMessage(uid)
         else if (nombre > 1)
-            messageEtat.texte = qsTr("%n message(s) sélectionné(s).", "", nombre)
+            messageEtat.texte = accord(nombre, qsTr("message sélectionné."), qsTr("messages sélectionnés."))
     }
 
     function deplacerCurseur(pas, etendre) {
@@ -1561,7 +1812,7 @@ ApplicationWindow {
         if (!boite.deplacer(uids.join(","), compte, chemin))
             return
         retirerDeLaListe(uids)
-        messageEtat.texte = qsTr("Déplacement de %n message(s)…", "", uids.length)
+        messageEtat.texte = qsTr("Déplacement de %1…").arg(accord(uids.length, qsTr("message"), qsTr("messages")))
     }
 
     function supprimerSelection() {
@@ -1878,6 +2129,15 @@ ApplicationWindow {
             return "un déplacement a été accepté sans dossier ouvert"
         if (boite.ouvrirPiece(1, 0))
             return "une pièce jointe a été demandée sans dossier ouvert"
+        // Presse-papier : la copie explicite écrit, et la règle y reconnaît la
+        // sienne — pas de protection contre MMail lui-même.
+        copierTexte("essai de copie", "message")
+        if (reglePresse.libelle !== "message")
+            return "règle du presse-papier : origine « " + reglePresse.libelle + " »"
+        if (!reglePresse.peutEcraser(maintenant()))
+            return "règle du presse-papier : protection contre sa propre copie"
+        if (premierePolice(["police-inexistante", "autre-inexistante"]) !== "autre-inexistante")
+            return "repli de police"
         // La rubrique Favoris est toujours là, même vide.
         if (arborescence.length === 0 || arborescence[0].genre !== "rubrique")
             return "rubrique Favoris absente"

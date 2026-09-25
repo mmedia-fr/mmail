@@ -79,6 +79,16 @@ jobs:
           # l'installeur désignent MMail.exe, pas le nom de la cible CMake.
           cp _build/mmail.exe dist/MMail/MMail.exe
           "$QT_ROOT_DIR/bin/windeployqt.exe" --release --qmldir core/qml dist/MMail/MMail.exe
+          # Runtime Visual C++ (Qt, main.cpp et le noyau Rust en dépendent) déposé à côté
+          # de l'exécutable : l'installation se fait sans élévation, et vc_redist.x64.exe,
+          # que windeployqt joint sans le lancer, en exigerait une. Sans ces DLL, un poste
+          # qui n'a pas le redistribuable ne démarre pas le programme (même défaut et même
+          # correctif que MMdedit 0.4.3 et GenFam 8.0.1).
+          rm -f dist/MMail/vc_redist*.exe
+          crt=$(ls -d "$(cygpath -u "$VCToolsRedistDir")"x64/Microsoft.VC14*.CRT | head -1)
+          test -d "$crt"
+          cp "$crt"/*.dll dist/MMail/
+          for dll in vcruntime140.dll vcruntime140_1.dll msvcp140.dll; do test -f "dist/MMail/$dll"; done
           # windeployqt ne dépose que qwindows.dll : sans la plateforme offscreen,
           # rien ne peut être contrôlé sans session ouverte — ni ici, ni sur un
           # poste, où c'est le seul moyen de vérifier une installation à distance.
@@ -95,6 +105,24 @@ jobs:
         run: ./dist/MMail/MMail.exe --smoke
         env:
           QT_QPA_PLATFORM: offscreen
+      - name: Contrôle Windows — installation par l'installeur
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # Ce que reçoit le poste, et non le dossier dist : l'installeur doit
+          # emporter le runtime Visual C++, faute de quoi le programme installé
+          # ne démarre que là où le redistribuable est déjà présent.
+          $setup = Get-ChildItem dist\MMail-*-setup.exe | Select-Object -First 1
+          $dir = "$env:RUNNER_TEMP\MMailInstalle"
+          $p = Start-Process -FilePath $setup.FullName -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/CURRENTUSER", "/DIR=`"$dir`"" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "installation en echec : code $($p.ExitCode)" }
+          foreach ($dll in "vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll") {
+            if (-not (Test-Path "$dir\$dll")) { throw "runtime Visual C++ absent de l'installe : $dll" }
+          }
+          if (Test-Path "$dir\vc_redist.x64.exe") { throw "vc_redist.x64.exe encore embarque" }
+          $env:QT_QPA_PLATFORM = "offscreen"
+          $q = Start-Process -FilePath "$dir\MMail.exe" -ArgumentList "--smoke" -Wait -PassThru -NoNewWindow
+          if ($q.ExitCode -ne 0) { throw "fumee de l'installe en echec : code $($q.ExitCode)" }
       - name: Dépôt de l'installeur Windows
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@v4

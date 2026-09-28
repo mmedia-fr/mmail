@@ -99,6 +99,11 @@ int main(int argc, char* argv[])
   // En contrôle de fabrication, l'interface ne touche ni au coffre ni au réseau
   // de sa propre initiative.
   engine.rootContext()->setContextProperty(QStringLiteral("modeControle"), smoke);
+  // Version de Qt réellement chargée, pour « À propos » : elle diffère d'une
+  // cible à l'autre, et c'est la première chose à demander sur un défaut
+  // d'affichage.
+  engine.rootContext()->setContextProperty(QStringLiteral("versionQt"),
+                                           QString::fromLatin1(qVersion()));
   // Commodité de développement : des variables d'environnement ouvrent une ou
   // deux sessions au démarrage, ce qui permet de saisir l'interface en image
   // sans personne devant l'écran. Rien n'est lu si elles sont absentes.

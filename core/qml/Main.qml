@@ -32,6 +32,17 @@ ApplicationWindow {
 
     Socle { id: socle }
     Boite { id: boite }
+    // Configuration automatique du serveur, et lien de configuration.
+    Configuration {
+        id: configuration
+        onServeurDecouvert: function(adresse, hote) { fenetre.serveurDecouvert(adresse, hote) }
+        onLienLu: function(contenu) { fenetre.appliquerLien(contenu) }
+        onLienEchoue: function(message) {
+            var lien = fenetre.lienEnCours
+            fenetre.lienEnCours = ""
+            dlgLien.ouvrir(lien, qsTr("Ce lien n'a pas pu être lu — %1").arg(message))
+        }
+    }
     PressePapier { id: pressePapier }
     ReglePressePapier { id: reglePresse }
 
@@ -43,6 +54,10 @@ ApplicationWindow {
         property bool copieAuto: true
     }
     readonly property string noyau: socle.noyau
+    // Comptes du profil, pour le menu « Comptes » : { compte, adresse, hote }.
+    property var comptesConnus: []
+    // Lien de configuration en cours de lecture, rendu au dialogue s'il échoue.
+    property string lienEnCours: ""
 
     // Un seul volet à la fois sous cette largeur : 0 arborescence, 1 liste,
     // 2 message.
@@ -221,9 +236,10 @@ ApplicationWindow {
                 onClicked: fenetre.vue = fenetre.vue - 1
             }
             ToolButton {
-                text: qsTr("Ajouter un compte…")
+                id: boutonComptes
+                text: qsTr("Comptes")
                 visible: !fenetre.compact || fenetre.vue === 0
-                onClicked: fenetre.demanderCompte(null, "")
+                onClicked: menuComptes.popup(boutonComptes, 0, boutonComptes.height)
             }
             ToolButton {
                 text: qsTr("Actualiser")
@@ -243,6 +259,12 @@ ApplicationWindow {
                 id: boutonAffichage
                 text: qsTr("Affichage")
                 onClicked: menuAffichage.popup(boutonAffichage, 0, boutonAffichage.height)
+            }
+            ToolButton {
+                id: boutonAide
+                text: "?"
+                font.bold: true
+                onClicked: menuAide.popup(boutonAide, 0, boutonAide.height)
             }
             Label {
                 text: fenetre.compact && fenetre.vue > 0 ? fenetre.libelleCourant() : ""
@@ -286,6 +308,26 @@ ApplicationWindow {
                 model: ListModel { id: modeleArborescence }
                 boundsBehavior: Flickable.StopAtBounds
                 delegate: ligneArborescence
+
+                // Un blanc et un trait au-dessus de chaque compte : la rubrique
+                // Favoris et les boîtes ne se lisent plus comme une seule liste.
+                section.property: "groupe"
+                section.delegate: Item {
+                    required property string section
+                    width: vueArborescence.width
+                    height: section === "favoris" ? 0 : 16
+                    Rectangle {
+                        visible: parent.section !== "favoris"
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.leftMargin: 6
+                        anchors.rightMargin: 6
+                        anchors.verticalCenter: parent.verticalCenter
+                        height: 2
+                        color: fenetre.palette.windowText
+                        opacity: 0.3
+                    }
+                }
 
                 HoverHandler { onHoveredChanged: if (hovered) fenetre.colonneActive = "arborescence" }
 
@@ -816,8 +858,13 @@ ApplicationWindow {
                 }
                 Label {
                     text: fenetre.libelleLigne(model)
-                    color: ligne.highlighted ? fenetre.palette.highlightedText : fenetre.palette.windowText
+                    color: ligne.highlighted ? fenetre.palette.highlightedText
+                         : model.genre === "rubrique" ? fenetre.palette.highlight
+                         : fenetre.palette.windowText
                     font.bold: model.genre === "compte" || model.genre === "rubrique" || model.nonLus > 0
+                    // Les en-têtes, rubrique et comptes, un cran au-dessus des dossiers.
+                    font.pointSize: model.genre === "compte" || model.genre === "rubrique"
+                                    ? fenetre.tailleArborescence * 1.12 : fenetre.tailleArborescence
                     font.italic: model.masque || model.genre === "favori-vide"
                     opacity: model.masque || model.genre === "favori-vide"
                              || (ligne.estDossier && !model.selectionnable) ? 0.5 : 1
@@ -967,7 +1014,58 @@ ApplicationWindow {
 
     // ---------------------------------------------------------------- menus
     Menu {
+        id: menuComptes
+        onAboutToShow: width = fenetre.largeurMenu(menuComptes)
+        MenuItem {
+            text: qsTr("Ajouter un compte…")
+            onTriggered: fenetre.demanderCompte(null, "")
+        }
+        MenuItem {
+            text: qsTr("Ajouter avec un lien de configuration…")
+            onTriggered: dlgLien.ouvrir("", "")
+        }
+        MenuSeparator {}
+        // Le retrait est aussi au clic droit sur le compte ; il est repris ici
+        // pour qu'on le trouve sans le connaître.
+        Menu {
+            id: menuRetrait
+            title: qsTr("Retirer un compte")
+            onAboutToShow: width = fenetre.largeurMenu(menuRetrait)
+            Instantiator {
+                model: fenetre.comptesConnus
+                delegate: MenuItem {
+                    required property var modelData
+                    text: modelData.adresse + "…"
+                    onTriggered: dlgRetrait.ouvrir(modelData.compte, modelData.adresse, modelData.hote)
+                }
+                onObjectAdded: function(indice, objet) { menuRetrait.insertItem(indice, objet) }
+                onObjectRemoved: function(indice, objet) { menuRetrait.removeItem(objet) }
+            }
+            MenuItem {
+                text: qsTr("Aucun compte")
+                enabled: false
+                visible: fenetre.comptesConnus.length === 0
+                height: visible ? implicitHeight : 0
+            }
+        }
+    }
+
+    Menu {
+        id: menuAide
+        onAboutToShow: width = fenetre.largeurMenu(menuAide)
+        MenuItem {
+            text: qsTr("Aide (F1)")
+            onTriggered: dlgAide.open()
+        }
+        MenuItem {
+            text: qsTr("À propos de MMail…")
+            onTriggered: dlgAPropos.open()
+        }
+    }
+
+    Menu {
         id: menuAffichage
+        onAboutToShow: width = fenetre.largeurMenu(menuAffichage)
         Repeater {
             model: fenetre.nomsApparence
             MenuItem {
@@ -1154,6 +1252,11 @@ ApplicationWindow {
         onActivated: boite.actualiser()
     }
     Shortcut {
+        sequences: [StandardKey.HelpContents]
+        enabled: !fenetre.dialogueOuvert()
+        onActivated: dlgAide.open()
+    }
+    Shortcut {
         sequences: [StandardKey.ZoomIn, "Ctrl+="]
         onActivated: fenetre.zoomer(fenetre.colonneActive, 1.1)
     }
@@ -1180,6 +1283,10 @@ ApplicationWindow {
         anchors.centerIn: Overlay.overlay
         width: Math.min(460, fenetre.width - 24)
         standardButtons: Dialog.Ok | Dialog.Cancel
+        // Vrai dès que la personne a touché au serveur : la configuration
+        // automatique ne réécrit plus ce champ.
+        property bool hoteSaisi: false
+        property string infoServeur: ""
         onAccepted: fenetre.validerCompte()
         onRejected: fenetre.demandeSuivante()
         onOpened: (champAdresse.text.length > 0 ? champMotDePasse : champAdresse).forceActiveFocus()
@@ -1205,6 +1312,7 @@ ApplicationWindow {
                 enabled: dlgCompte.compteId === 0
                 inputMethodHints: Qt.ImhEmailCharactersOnly | Qt.ImhNoAutoUppercase
                 Layout.fillWidth: true
+                onEditingFinished: fenetre.chercherServeur()
             }
             Label { text: qsTr("Serveur IMAP :") }
             TextField {
@@ -1213,6 +1321,16 @@ ApplicationWindow {
                 enabled: dlgCompte.compteId === 0
                 inputMethodHints: Qt.ImhUrlCharactersOnly | Qt.ImhNoAutoUppercase
                 Layout.fillWidth: true
+                onTextEdited: dlgCompte.hoteSaisi = text.length > 0
+            }
+            Label {
+                Layout.columnSpan: 2
+                Layout.fillWidth: true
+                visible: text.length > 0
+                wrapMode: Text.Wrap
+                opacity: 0.75
+                font.pixelSize: 11
+                text: dlgCompte.infoServeur
             }
             Label { text: qsTr("Mot de passe :") }
             TextField {
@@ -1234,6 +1352,53 @@ ApplicationWindow {
                 opacity: 0.75
                 font.pixelSize: 11
                 text: qsTr("Le mot de passe n'est jamais écrit par MMail : il est confié au coffre du système (Gestionnaire d'identifiants sous Windows, Secret Service ou KWallet sous Linux, Keystore sous Android). Connexion en IMAPS, port 993.")
+            }
+        }
+    }
+
+    Dialog {
+        id: dlgLien
+        title: qsTr("Ajouter avec un lien de configuration")
+        modal: true
+        anchors.centerIn: Overlay.overlay
+        width: Math.min(520, fenetre.width - 24)
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        function ouvrir(lien, note) {
+            champLien.text = lien
+            noteLien.text = note
+            open()
+        }
+        onOpened: champLien.forceActiveFocus()
+        onAccepted: fenetre.lireLien(champLien.text.trim())
+
+        ColumnLayout {
+            anchors.fill: parent
+            spacing: 6
+            Label {
+                id: noteLien
+                Layout.fillWidth: true
+                visible: text.length > 0
+                wrapMode: Text.Wrap
+                color: "#b00020"
+            }
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                text: qsTr("Collez le lien de configuration que vous avez reçu :")
+            }
+            TextField {
+                id: champLien
+                placeholderText: "https://…"
+                inputMethodHints: Qt.ImhUrlCharactersOnly | Qt.ImhNoAutoUppercase
+                Layout.fillWidth: true
+                onAccepted: dlgLien.accept()
+            }
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                opacity: 0.75
+                font.pixelSize: 11
+                text: qsTr("Le lien ne sert qu'une fois. Il apporte l'adresse, le serveur et le mot de passe de chaque compte ; le mot de passe va directement au coffre du système, sans être affiché.")
             }
         }
     }
@@ -1309,6 +1474,109 @@ ApplicationWindow {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    // Aide : ce que l'interface ne dit pas d'elle-même — gestes, raccourcis,
+    // et ce qu'un geste fait ou ne fait pas sur le serveur.
+    Dialog {
+        id: dlgAide
+        title: qsTr("Aide de MMail")
+        modal: true
+        anchors.centerIn: Overlay.overlay
+        // Taille fixée, et non déduite du texte : même raison que plus bas pour
+        // le dialogue de retrait.
+        width: Math.min(620, fenetre.width - 24)
+        height: Math.min(620, fenetre.height - 24)
+        standardButtons: Dialog.Close
+        ScrollView {
+            id: defilementAide
+            anchors.fill: parent
+            contentWidth: availableWidth
+            clip: true
+            Label {
+                width: defilementAide.availableWidth
+                wrapMode: Text.Wrap
+                textFormat: Text.StyledText
+                text: qsTr(
+                    "<b>Comptes</b><br>"
+                    + "Menu « Comptes » : ajouter ou retirer un compte. À l'ajout, le serveur est "
+                    + "cherché d'après l'adresse, si son domaine publie sa configuration. Un lien de "
+                    + "configuration, reçu de votre administrateur, ajoute un ou plusieurs comptes "
+                    + "sans rien saisir ; il ne sert qu'une fois. Retirer un compte efface de ce "
+                    + "poste son index et son mot de passe mémorisé ; rien n'est supprimé sur le serveur. "
+                    + "Clic droit sur un compte : se connecter, se déconnecter, oublier le mot de passe. "
+                    + "Un clic sur le compte replie ou déplie ses dossiers.<br><br>"
+                    + "<b>Favoris</b><br>"
+                    + "Glissez un dossier sur la rubrique Favoris pour l'y épingler ; glissez un favori "
+                    + "sur un autre pour le placer avant lui. Clic droit sur un dossier : ajouter aux "
+                    + "favoris ou les retirer, masquer le dossier. Le bouton « Dossiers masqués » les "
+                    + "réaffiche.<br><br>"
+                    + "<b>Trier</b><br>"
+                    + "Glissez un ou plusieurs messages sur un dossier, de n'importe quel compte. Clic "
+                    + "droit sur un message, ou Ctrl+Maj+V : « Déplacer vers… », avec un filtre sur le "
+                    + "nom du dossier. Entre deux boîtes, le message n'est retiré de la source qu'une "
+                    + "fois déposé dans la cible ; un déplacement interrompu reprend à la connexion "
+                    + "suivante.<br><br>"
+                    + "<b>Clavier</b><br>"
+                    + "Suppr : envoyer à la corbeille de la boîte, rien n'est détruit · Ctrl+Q : marquer "
+                    + "comme lu · Ctrl+U : marquer comme non lu · Ctrl+Maj+V : déplacer vers… · "
+                    + "Ctrl+A : tout sélectionner · F5 : actualiser · F1 : cette aide. "
+                    + "Ctrl+clic et Maj+clic sélectionnent plusieurs messages.<br><br>"
+                    + "<b>Affichage</b><br>"
+                    + "Chaque colonne a son propre zoom : Ctrl + molette sur la colonne, ou Ctrl +, "
+                    + "Ctrl − et Ctrl 0 sur la dernière colonne survolée ; pincement au doigt. Le menu "
+                    + "« Affichage » propose trois apparences.<br><br>"
+                    + "<b>Message</b><br>"
+                    + "Le bouton « Source » affiche le message brut, en-têtes compris. Un texte "
+                    + "sélectionné part au presse-papier, sauf ce qu'un autre logiciel vient d'y "
+                    + "déposer, protégé une minute.<br><br>"
+                    + "<b>Pièces jointes</b><br>"
+                    + "Listées sous l'en-tête du message : « Ouvrir » avec le logiciel du système, "
+                    + "« Enregistrer sous… ». Un programme ou un script ne s'ouvre pas depuis MMail, il "
+                    + "s'enregistre.")
+            }
+        }
+    }
+
+    Dialog {
+        id: dlgAPropos
+        title: qsTr("À propos de MMail")
+        modal: true
+        anchors.centerIn: Overlay.overlay
+        width: Math.min(460, fenetre.width - 24)
+        standardButtons: Dialog.Close
+        ColumnLayout {
+            width: dlgAPropos.availableWidth
+            spacing: 8
+            Label {
+                text: "MMail " + Qt.application.version
+                font.bold: true
+                font.pointSize: fenetre.font.pointSize * 1.4
+            }
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                text: qsTr("Client de messagerie IMAP pour Windows, Linux et Android.")
+            }
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                text: qsTr("© M-Media — logiciel libre, distribué sous licence GNU GPL version 3.")
+            }
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                textFormat: Text.StyledText
+                text: qsTr("Sources : %1").arg("<a href=\"https://github.com/mmedia-fr/mmail\">github.com/mmedia-fr/mmail</a>")
+                onLinkActivated: function(lien) { Qt.openUrlExternally(lien) }
+            }
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                opacity: 0.7
+                text: fenetre.noyau + " · Qt " + versionQt
             }
         }
     }
@@ -1508,8 +1776,23 @@ ApplicationWindow {
         return null
     }
 
+    /// Largeur d'un menu : celle de sa plus longue entrée. Le style Fusion la
+    /// fixe sinon à 200 pixels, et tronque ce qui dépasse. Appelée avant
+    /// l'affichage : les entrées n'y sont pas encore visibles, d'où aucun tri
+    /// sur `visible`.
+    function largeurMenu(menu) {
+        var largeur = 0
+        for (var i = 0; i < menu.count; ++i) {
+            var entree = menu.itemAt(i)
+            if (entree)
+                largeur = Math.max(largeur, entree.implicitWidth)
+        }
+        return Math.max(200, largeur + menu.leftPadding + menu.rightPadding)
+    }
+
     function dialogueOuvert() {
         return dlgCompte.visible || dlgDeplacer.visible || dlgRetrait.visible
+            || dlgAide.visible || dlgAPropos.visible || dlgLien.visible
     }
 
     /// Ouvre le dialogue de compte : `compte` nul pour un nouveau compte.
@@ -1526,7 +1809,89 @@ ApplicationWindow {
         champMotDePasse.text = ""
         caseMemoriser.checked = reglages.memoriser
         noteCompte.text = note
+        dlgCompte.hoteSaisi = champHote.text.length > 0
+        dlgCompte.infoServeur = ""
         dlgCompte.open()
+    }
+
+    /// Configuration automatique : le serveur se déduit de l'adresse, tant que
+    /// la personne ne l'a pas saisi elle-même.
+    function chercherServeur() {
+        var adresse = champAdresse.text.trim()
+        if (dlgCompte.compteId > 0 || dlgCompte.hoteSaisi || adresse.indexOf("@") < 1)
+            return
+        dlgCompte.infoServeur = qsTr("Recherche du serveur…")
+        configuration.decouvrir(adresse)
+    }
+
+    function serveurDecouvert(adresse, hote) {
+        // Réponse tardive : l'adresse a changé, ou le serveur a été saisi.
+        if (!dlgCompte.visible || dlgCompte.hoteSaisi || champAdresse.text.trim() !== adresse)
+            return
+        if (hote.length > 0) {
+            champHote.text = hote
+            dlgCompte.infoServeur = qsTr("Serveur trouvé automatiquement.")
+        } else {
+            dlgCompte.infoServeur = qsTr("Serveur introuvable automatiquement : saisissez-le.")
+        }
+    }
+
+    function lireLien(lien) {
+        if (lien.length === 0)
+            return
+        lienEnCours = lien
+        messageEtat.texte = qsTr("Lecture du lien de configuration…")
+        configuration.lireLien(lien)
+    }
+
+    /// Document d'un lien de configuration (cf. README) :
+    /// `{"mmail": 1, "comptes": [{"adresse", "hote", "motDePasse"}]}`.
+    function appliquerLien(contenu) {
+        var lien = lienEnCours
+        lienEnCours = ""
+        var document = null
+        try {
+            document = JSON.parse(contenu)
+        } catch (e) {
+            document = null
+        }
+        var comptes = document && document.mmail === 1 && Array.isArray(document.comptes)
+                ? document.comptes : []
+        var retenus = []
+        var ecartes = []
+        for (var i = 0; i < comptes.length; ++i) {
+            var c = comptes[i]
+            var valide = c !== null && typeof c === "object"
+                    && typeof c.adresse === "string" && c.adresse.trim().indexOf("@") > 0
+                    && typeof c.hote === "string" && c.hote.trim().length > 0
+                    && typeof c.motDePasse === "string" && c.motDePasse.length > 0
+                    && (c.port === undefined || c.port === 993)
+            if (!valide) {
+                ecartes.push(c && typeof c.adresse === "string" ? c.adresse : "?")
+                continue
+            }
+            retenus.push({ adresse: c.adresse.trim(), hote: c.hote.trim().toLowerCase(),
+                           motDePasse: c.motDePasse })
+        }
+        if (retenus.length === 0) {
+            // Le lien est consommé : le rendre au dialogue ne servirait qu'à
+            // montrer ce qui a été reçu.
+            dlgLien.ouvrir("", qsTr("Ce lien ne contient aucun compte utilisable par MMail."))
+            return
+        }
+        // Un compte venu d'un lien n'a pas de mot de passe connu de la
+        // personne : il ne vit que par le coffre.
+        reglages.memoriser = true
+        for (var j = 0; j < retenus.length; ++j) {
+            var r = retenus[j]
+            secretsAConserver[r.adresse] = { cle: cle(r.adresse, r.hote), motDePasse: r.motDePasse }
+            boite.connecter(r.hote, r.adresse, r.motDePasse)
+        }
+        var texte = qsTr("Lien de configuration : connexion de %1.")
+                .arg(retenus.map(function(r) { return r.adresse }).join(", "))
+        if (ecartes.length > 0)
+            texte += " " + qsTr("Écarté : %1.").arg(ecartes.join(", "))
+        messageEtat.texte = texte
     }
 
     function demandeSuivante() {
@@ -1579,7 +1944,10 @@ ApplicationWindow {
             messages: l.messages || 0,
             nonLus: l.nonLus || 0,
             masque: l.masque === true,
-            favori: l.favori === true
+            favori: l.favori === true,
+            // Section de la liste : la rubrique Favoris, puis un groupe par compte.
+            groupe: l.genre === "rubrique" || l.genre === "favori" || l.genre === "favori-vide"
+                    ? "favoris" : "compte-" + (l.compte || 0)
         }
     }
 
@@ -1601,6 +1969,12 @@ ApplicationWindow {
             modeleArborescence.clear()
             modeleArborescence.append(lignes)
         }
+        var comptes = lignes.filter(function(l) { return l.genre === "compte" })
+                            .map(function(l) { return { compte: l.compte, adresse: l.adresse, hote: l.hote } })
+        // Réaffecté seulement s'il change : le menu reconstruit ses entrées à
+        // chaque affectation, et l'arborescence est relue à chaque veille.
+        if (JSON.stringify(comptes) !== JSON.stringify(comptesConnus))
+            comptesConnus = comptes
         majInfoDossier()
     }
 

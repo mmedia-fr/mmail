@@ -16,13 +16,20 @@ Le cadrage complet — exigences, décisions actées (les « décisions » numé
 citées dans le code), pistes écartées et leur motif — est tenu dans un dossier
 de projet interne.
 
-## État — 0.1.1
+## État — 0.1.2
 
 **Lecture et tri.** Pas encore de rédaction ni d'envoi.
 
 - **plusieurs comptes dans une seule arborescence**, repliables, avec la
   rubrique **Favoris** au-dessus : on l'alimente en y **glissant un dossier**,
-  et l'on réordonne ses favoris de la même façon ;
+  et l'on réordonne ses favoris de la même façon ; un blanc et un trait
+  séparent chaque compte de ce qui le précède ;
+- **menu « Comptes »** : ajouter un compte — le serveur est trouvé d'après
+  l'adresse quand le domaine publie sa configuration —, en ajouter un ou
+  plusieurs par un **lien de configuration**, ou en retirer un (voir
+  « Configuration d'un compte ») ;
+- **menu « ? »** : aide (F1) et « À propos » — versions de MMail, du noyau et
+  de Qt ;
 - **déplacement par glisser-déposer ou par clic droit**, vers un dossier de la
   même boîte ou de n'importe quelle autre boîte connectée ; dialogue
   « Déplacer vers… » avec filtre (Ctrl+Maj+V) ;
@@ -57,6 +64,51 @@ drapeaux et sa date de réception d'origine, et **ne le retire de la source
 qu'une fois le dépôt accepté**. Une coupure au milieu ne perd rien : le
 déplacement reprend à la connexion suivante, et la cible est d'abord interrogée
 par `Message-ID` pour ne pas créer de doublon.
+
+## Configuration d'un compte
+
+### Configuration automatique
+
+À l'ajout d'un compte, dès que l'adresse est saisie, MMail cherche le serveur
+IMAP dans le document de configuration que publie le domaine, au format
+« autoconfig » de Thunderbird. Il interroge, dans l'ordre :
+
+1. `https://autoconfig.<domaine>/mail/config-v1.1.xml?emailaddress=<adresse>`
+2. `https://<domaine>/.well-known/autoconfig/mail/config-v1.1.xml?emailaddress=<adresse>`
+
+Il retient le premier serveur `imap` en `SSL` sur le port 993 dont
+l'identifiant est l'adresse elle-même. Aucun annuaire tiers n'est interrogé.
+Mailcow sert ce document : il suffit que `autoconfig.<domaine>` désigne le
+serveur. Un serveur saisi à la main n'est jamais remplacé.
+
+### Lien de configuration
+
+Un administrateur peut préparer un ou plusieurs comptes, mot de passe compris,
+derrière une adresse HTTPS **à usage unique**. La personne la colle dans
+« Comptes › Ajouter avec un lien de configuration… », sans rien saisir
+d'autre ; les mots de passe vont au coffre du système sans être affichés.
+
+Ce que MMail attend du serveur qui sert le lien :
+
+- MMail l'interroge en **`POST`**, sans corps, avec `Accept: application/json`,
+  et ne suit aucune redirection ;
+- `200` : le document ci-dessous, que le serveur **détruit en le remettant** ;
+  `404` ou `410` : lien inconnu, déjà utilisé ou expiré ;
+- un `GET` — la même adresse ouverte dans un navigateur — ne doit pas le
+  consommer ; le serveur peut y afficher le mode d'emploi.
+
+```json
+{
+  "mmail": 1,
+  "comptes": [
+    { "adresse": "nom@exemple.fr", "hote": "mail.exemple.fr", "motDePasse": "…" }
+  ]
+}
+```
+
+`port`, facultatif, ne peut valoir que 993. Un compte incomplet est écarté, et
+signalé ; les autres sont ajoutés. Comme pour une saisie à la main, un mot de
+passe n'est confié au coffre qu'une fois accepté par le serveur.
 
 ## Limites connues
 

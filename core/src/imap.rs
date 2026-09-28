@@ -19,7 +19,7 @@ use std::time::Duration;
 use crate::protocole::{self, Dossier, Entete, EtatDossier, Statut, MARQUEUR};
 
 /// Délai au-delà duquel une opération réseau est abandonnée.
-const DELAI: Duration = Duration::from_secs(30);
+pub(crate) const DELAI: Duration = Duration::from_secs(30);
 
 /// Délai d'établissement de la connexion : un serveur injoignable doit être
 /// signalé vite, pas au bout des deux minutes du système.
@@ -472,7 +472,7 @@ impl Client {
 /// Configuration TLS du bureau : le vérificateur de la plateforme, qui lit le
 /// magasin de certificats du système (Windows, Linux, macOS).
 #[cfg(not(target_os = "android"))]
-fn configuration_tls() -> Resultat<rustls::ClientConfig> {
+pub(crate) fn configuration_tls() -> Resultat<rustls::ClientConfig> {
     use rustls_platform_verifier::ConfigVerifierExt;
     rustls::ClientConfig::with_platform_verifier().map_err(|e| Erreur::Reseau(e.to_string()))
 }
@@ -481,13 +481,13 @@ fn configuration_tls() -> Resultat<rustls::ClientConfig> {
 /// programme. Le vérificateur de plateforme y exigerait un composant Java et une
 /// initialisation JNI que l'APK n'embarque pas — toute connexion échouerait.
 #[cfg(target_os = "android")]
-fn configuration_tls() -> Resultat<rustls::ClientConfig> {
+pub(crate) fn configuration_tls() -> Resultat<rustls::ClientConfig> {
     let racines = rustls::RootCertStore { roots: webpki_roots::TLS_SERVER_ROOTS.to_vec() };
     Ok(rustls::ClientConfig::builder().with_root_certificates(racines).with_no_client_auth())
 }
 
 /// Établit la connexion TCP, adresse par adresse, avec un délai borné.
-fn joindre(hote: &str, port: u16) -> Resultat<TcpStream> {
+pub(crate) fn joindre(hote: &str, port: u16) -> Resultat<TcpStream> {
     let adresses = (hote, port)
         .to_socket_addrs()
         .map_err(|e| Erreur::Reseau(format!("{hote} : {e}")))?;

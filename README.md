@@ -16,7 +16,7 @@ Le cadrage complet — exigences, décisions actées (les « décisions » numé
 citées dans le code), pistes écartées et leur motif — est tenu dans un dossier
 de projet interne.
 
-## État — 0.2.1
+## État — 0.2.2
 
 **Lecture, tri, rédaction et envoi.**
 
@@ -35,6 +35,18 @@ de projet interne.
   signature… »), ajoutée aux nouveaux messages, aux réponses, ou sur demande ;
 - **adresses proposées** en tapant un destinataire : celles à qui l'on a
   écrit, puis les expéditeurs connus ;
+- **options d'envoi** : importance haute ou basse (`Importance`,
+  `X-Priority`), accusé de réception demandé au serveur (DSN, RFC 3461),
+  confirmation de lecture demandée au destinataire (`Disposition-Notification-To`) ;
+- **envoi différé** : le message attend sur le serveur, dans un dossier
+  « Envoi différé » créé au besoin, et part à l'heure dite si MMail est ouvert
+  — sur ce poste ou un autre ; sinon à la prochaine ouverture ;
+- **drapeau de suivi** (`\Flagged`) posé ou retiré d'un clic en bout de ligne,
+  par le menu ou la touche Insertion ; importance des messages reçus signalée
+  dans la liste (« ! », « ↓ ») et dans l'en-tête ;
+- **confirmation de lecture** demandée par un expéditeur : proposée, jamais
+  envoyée d'office ; la réponse — envoi ou refus — n'est demandée qu'une fois
+  (`$MDNSent`) ;
 - **plusieurs comptes dans une seule arborescence**, repliables, avec la
   rubrique **Favoris** au-dessus : on l'alimente en y **glissant un dossier**,
   et l'on réordonne ses favoris de la même façon ; un blanc et un trait

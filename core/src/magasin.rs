@@ -18,7 +18,7 @@ use crate::protocole::{Dossier, EtatDossier, Statut};
 pub type Resultat<T> = Result<T, Erreur>;
 
 /// Version du schéma, portée par `PRAGMA user_version`.
-const VERSION_SCHEMA: i32 = 3;
+const VERSION_SCHEMA: i32 = 4;
 
 #[derive(Debug)]
 pub struct Erreur(pub String);
@@ -88,6 +88,10 @@ pub struct MessageLocal {
     /// Pièces jointes : supposées d'après les en-têtes, puis constatées à la
     /// lecture du message.
     pub pieces: bool,
+    /// Drapeau de suivi (`\Flagged`).
+    pub suivi: bool,
+    /// Importance annoncée : 1 haute, 0 normale, -1 basse.
+    pub importance: i8,
 }
 
 /// Étape d'un déplacement entre boîtes (décision 16).
@@ -258,6 +262,13 @@ impl Magasin {
         if version < 3 {
             self.ajouter_colonne("messages", "pieces", "INTEGER NOT NULL DEFAULT 0")?;
             self.ajouter_colonne("messages", "pieces_certain", "INTEGER NOT NULL DEFAULT 0")?;
+            self.base.execute("UPDATE folders SET uidvalidity = 0", [])?;
+        }
+        // Version 4 : suivi et importance ; même relecture, pour l'importance,
+        // qui vient d'en-têtes jusque-là non demandés.
+        if version < 4 {
+            self.ajouter_colonne("messages", "suivi", "INTEGER NOT NULL DEFAULT 0")?;
+            self.ajouter_colonne("messages", "importance", "INTEGER NOT NULL DEFAULT 0")?;
             self.base.execute("UPDATE folders SET uidvalidity = 0", [])?;
         }
         self.base.pragma_update(None, "user_version", VERSION_SCHEMA)?;
@@ -553,10 +564,10 @@ impl Magasin {
             let mut insertion = transaction.prepare(
                 "INSERT INTO messages
                    (folder_id, uid, message_id, expediteur, adresse, sujet, date, horodatage,
-                    taille, lu, repondu, pieces)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+                    taille, lu, repondu, pieces, suivi, importance)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
                  ON CONFLICT(folder_id, uid)
-                 DO UPDATE SET lu = ?10, repondu = ?11,
+                 DO UPDATE SET lu = ?10, repondu = ?11, suivi = ?13, importance = ?14,
                     pieces = CASE WHEN pieces_certain = 1 THEN pieces ELSE ?12 END",
             )?;
             for m in messages {
@@ -572,7 +583,9 @@ impl Magasin {
                     m.taille,
                     m.lu as i32,
                     m.repondu as i32,
-                    m.pieces as i32
+                    m.pieces as i32,
+                    m.suivi as i32,
+                    m.importance as i32
                 ])?;
             }
         }
@@ -586,9 +599,10 @@ impl Magasin {
         for (uid, liste) in drapeaux {
             let lu = liste.iter().any(|d| d.eq_ignore_ascii_case("\\Seen"));
             let repondu = liste.iter().any(|d| d.eq_ignore_ascii_case("\\Answered"));
+            let suivi = liste.iter().any(|d| d.eq_ignore_ascii_case("\\Flagged"));
             transaction.execute(
-                "UPDATE messages SET lu = ?3, repondu = ?4 WHERE folder_id = ?1 AND uid = ?2",
-                params![dossier, uid, lu as i32, repondu as i32],
+                "UPDATE messages SET lu = ?3, repondu = ?4, suivi = ?5 WHERE folder_id = ?1 AND uid = ?2",
+                params![dossier, uid, lu as i32, repondu as i32, suivi as i32],
             )?;
         }
         transaction.commit()?;
@@ -648,6 +662,19 @@ impl Magasin {
             "UPDATE messages SET pieces = ?3, pieces_certain = 1 WHERE folder_id = ?1 AND uid = ?2",
             params![dossier, uid, pieces as i32],
         )?;
+        Ok(())
+    }
+
+    /// Pose ou retire localement le drapeau de suivi.
+    pub fn marquer_suivi(&self, dossier: i64, uids: &[u32], suivi: bool) -> Resultat<()> {
+        let transaction = self.base.unchecked_transaction()?;
+        for uid in uids {
+            transaction.execute(
+                "UPDATE messages SET suivi = ?3 WHERE folder_id = ?1 AND uid = ?2",
+                params![dossier, uid, suivi as i32],
+            )?;
+        }
+        transaction.commit()?;
         Ok(())
     }
 
@@ -820,7 +847,7 @@ fn lire_dossier(l: &rusqlite::Row<'_>) -> rusqlite::Result<DossierLocal> {
 }
 
 const SELECT_MESSAGE: &str = "SELECT uid, message_id, expediteur, adresse, sujet, date,
-        horodatage, taille, lu, repondu, pieces
+        horodatage, taille, lu, repondu, pieces, suivi, importance
      FROM messages";
 
 fn lire_message(l: &rusqlite::Row<'_>) -> rusqlite::Result<MessageLocal> {
@@ -836,6 +863,8 @@ fn lire_message(l: &rusqlite::Row<'_>) -> rusqlite::Result<MessageLocal> {
         lu: l.get::<_, i32>(8)? != 0,
         repondu: l.get::<_, i32>(9)? != 0,
         pieces: l.get::<_, i32>(10)? != 0,
+        suivi: l.get::<_, i32>(11)? != 0,
+        importance: l.get::<_, i32>(12)?.clamp(-1, 1) as i8,
     })
 }
 
@@ -1102,6 +1131,8 @@ mod tests {
             .execute_batch(
                 "ALTER TABLE messages DROP COLUMN pieces;
                  ALTER TABLE messages DROP COLUMN pieces_certain;
+                 ALTER TABLE messages DROP COLUMN suivi;
+                 ALTER TABLE messages DROP COLUMN importance;
                  PRAGMA user_version = 2;",
             )
             .unwrap();
@@ -1109,6 +1140,23 @@ mod tests {
         assert_eq!(m.dossier(id).unwrap().unwrap().uid_validity, 0, "dossier à relire");
         m.poser_messages(id, &[MessageLocal { uid: 1, pieces: true, ..Default::default() }]).unwrap();
         assert!(m.messages(id).unwrap()[0].pieces);
+    }
+
+    #[test]
+    fn suivi_et_importance_indexes() {
+        let m = Magasin::en_memoire().unwrap();
+        let compte = m.compte("a@b.fr", "h", 993, "a@b.fr").unwrap();
+        m.poser_dossiers(compte, &[dossier("INBOX", &[])]).unwrap();
+        let id = m.dossier_id(compte, "INBOX").unwrap();
+        m.poser_messages(id, &[MessageLocal { uid: 1, importance: 1, ..Default::default() }]).unwrap();
+        assert_eq!(m.messages(id).unwrap()[0].importance, 1);
+        m.marquer_suivi(id, &[1], true).unwrap();
+        assert!(m.messages(id).unwrap()[0].suivi);
+        // Les drapeaux relus du serveur font foi.
+        m.poser_drapeaux(id, &[(1, vec!["\\Seen".into()])]).unwrap();
+        assert!(!m.messages(id).unwrap()[0].suivi);
+        m.poser_drapeaux(id, &[(1, vec!["\\Flagged".into()])]).unwrap();
+        assert!(m.messages(id).unwrap()[0].suivi);
     }
 
     #[test]

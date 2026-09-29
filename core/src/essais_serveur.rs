@@ -440,7 +440,7 @@ fn envoi_smtp_d_une_boite_a_l_autre() {
     };
     let pj = [Fichier { nom: "piece jointe é.txt".into(), contenu: "contenu d'essai €".as_bytes().to_vec() }];
     let f = fabriquer(&r, maintenant, &pj).expect("fabrication");
-    crate::smtp::envoyer(&hote, &ua, &variable("MMAIL_MOTDEPASSE"), &ua, &f.destinataires, &f.envoi)
+    crate::smtp::envoyer(&hote, &ua, &variable("MMAIL_MOTDEPASSE"), &ua, &f.destinataires, &f.envoi, false)
         .expect("envoi SMTP");
 
     let mut b = session2();

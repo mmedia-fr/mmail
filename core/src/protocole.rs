@@ -91,6 +91,12 @@ impl Entete {
     pub fn repondu(&self) -> bool {
         self.drapeaux.iter().any(|d| d == "\\Answered")
     }
+
+    /// Drapeau de suivi (`\Flagged`), celui qu'Outlook appelle « assurer un
+    /// suivi ».
+    pub fn suivi(&self) -> bool {
+        self.drapeaux.iter().any(|d| d.eq_ignore_ascii_case("\\Flagged"))
+    }
 }
 
 /// Compteurs d'un dossier rendus par `STATUS` (ou `LIST … RETURN (STATUS …)`).
@@ -407,6 +413,49 @@ pub fn decoder_utf7(nom: &str) -> String {
     sortie
 }
 
+/// Encode un nom de dossier en UTF-7 modifié, pour le créer sur le serveur :
+/// « Envoi différé » → « Envoi diff&AOk-r&AOk- ».
+pub fn encoder_utf7(nom: &str) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+,";
+    let mut sortie = String::new();
+    let mut attente: Vec<u16> = Vec::new();
+    let vider = |attente: &mut Vec<u16>, sortie: &mut String| {
+        if attente.is_empty() {
+            return;
+        }
+        let octets: Vec<u8> = attente.iter().flat_map(|u| u.to_be_bytes()).collect();
+        sortie.push('&');
+        for bloc in octets.chunks(3) {
+            let n = (bloc[0] as u32) << 16
+                | (*bloc.get(1).unwrap_or(&0) as u32) << 8
+                | *bloc.get(2).unwrap_or(&0) as u32;
+            let utiles = bloc.len() + 1;
+            for (i, decalage) in [18, 12, 6, 0].into_iter().enumerate() {
+                if i < utiles {
+                    sortie.push(TABLE[(n >> decalage & 63) as usize] as char);
+                }
+            }
+        }
+        sortie.push('-');
+        attente.clear();
+    };
+    for c in nom.chars() {
+        if (' '..='~').contains(&c) {
+            vider(&mut attente, &mut sortie);
+            if c == '&' {
+                sortie.push_str("&-");
+            } else {
+                sortie.push(c);
+            }
+        } else {
+            let mut tampon = [0u16; 2];
+            attente.extend_from_slice(c.encode_utf16(&mut tampon));
+        }
+    }
+    vider(&mut attente, &mut sortie);
+    sortie
+}
+
 /// Base64 modifié (« , » au lieu de « / », sans remplissage) vers UTF-16BE.
 fn base64_utf7(code: &str) -> Option<String> {
     let mut bits: u32 = 0;
@@ -524,6 +573,12 @@ mod tests {
         assert_eq!(decoder_utf7("R&AOk-sum&AOk- &- notes"), "Résumé & notes");
         // Mal formé : rendu tel quel.
         assert_eq!(decoder_utf7("&AMk"), "&AMk");
+        // Et dans l'autre sens.
+        for nom in ["Envoi différé", "Éléments supprimés", "Résumé & notes", "Factures", "日本語 €"] {
+            assert_eq!(decoder_utf7(&encoder_utf7(nom)), nom, "{nom}");
+        }
+        assert_eq!(encoder_utf7("Éléments supprimés"), "&AMk-l&AOk-ments supprim&AOk-s");
+        assert_eq!(encoder_utf7("a&b"), "a&-b");
         let d = analyser_list(r#"* LIST (\HasNoChildren) "." "INBOX.&AMk-l&AOk-ments envoy&AOk-s""#).unwrap();
         assert_eq!(d.nom(), "Éléments envoyés");
         assert_eq!(d.profondeur(), 1);

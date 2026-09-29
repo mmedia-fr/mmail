@@ -27,9 +27,12 @@ pub fn ligne_index(entete: &Entete) -> MessageLocal {
         ligne.sujet = "(message illisible)".to_string();
         ligne.horodatage = horodatage(entete, None);
         ligne.pieces = pieces_annoncees(None, &entete.drapeaux);
+        ligne.suivi = entete.suivi();
         return ligne;
     };
     ligne.pieces = pieces_annoncees(Some(&message), &entete.drapeaux);
+    ligne.suivi = entete.suivi();
+    ligne.importance = importance(&message);
 
     ligne.sujet = message.subject().unwrap_or("(sans objet)").to_string();
     ligne.message_id = message.message_id().unwrap_or_default().to_string();
@@ -71,6 +74,32 @@ fn pieces_annoncees(message: Option<&Message<'_>>, drapeaux: &[String]) -> bool 
         "multipart" => sous == "mixed",
         "text" => false,
         _ => true,
+    }
+}
+
+/// Importance annoncée par l'expéditeur : 1 haute, -1 basse, 0 normale.
+/// `Importance` (Outlook), à défaut `X-Priority` (1-2 haute, 4-5 basse), à
+/// défaut `Priority` (RFC 2156).
+pub fn importance(message: &Message<'_>) -> i8 {
+    let champ = |nom: &str| message.header_raw(nom).map(|t| t.trim().to_ascii_lowercase());
+    if let Some(v) = champ("Importance") {
+        return match v.as_str() {
+            "high" => 1,
+            "low" => -1,
+            _ => 0,
+        };
+    }
+    if let Some(v) = champ("X-Priority") {
+        return match v.chars().next() {
+            Some('1') | Some('2') => 1,
+            Some('4') | Some('5') => -1,
+            _ => 0,
+        };
+    }
+    match champ("Priority").as_deref() {
+        Some("urgent") => 1,
+        Some("non-urgent") => -1,
+        _ => 0,
     }
 }
 
@@ -450,6 +479,24 @@ mod tests {
             date_interne: "16-Sep-2026 18:00:00 +0200".to_string(),
             brut: brut.as_bytes().to_vec(),
         }
+    }
+
+    #[test]
+    fn importance_et_suivi() {
+        let avec = |champs: &str| ligne_index(&entete(&format!("Subject: a\r\n{champs}\r\n\r\n")));
+        assert_eq!(avec("Importance: High").importance, 1);
+        assert_eq!(avec("Importance: low").importance, -1);
+        assert_eq!(avec("X-Priority: 1 (Highest)").importance, 1);
+        assert_eq!(avec("X-Priority: 5 (Lowest)").importance, -1);
+        assert_eq!(avec("X-Priority: 3 (Normal)").importance, 0);
+        assert_eq!(avec("Priority: urgent").importance, 1);
+        assert_eq!(avec("X-Mailer: rien").importance, 0);
+        // Importance prime sur X-Priority.
+        assert_eq!(avec("Importance: normal\r\nX-Priority: 1").importance, 0);
+        let mut e = entete("Subject: a\r\n\r\n");
+        assert!(!ligne_index(&e).suivi);
+        e.drapeaux.push("\\Flagged".into());
+        assert!(ligne_index(&e).suivi);
     }
 
     #[test]

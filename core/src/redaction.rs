@@ -12,8 +12,10 @@ use std::collections::hash_map::RandomState;
 use std::hash::{BuildHasher, Hasher};
 
 use mail_builder::headers::address::Address as AdresseSortante;
+use mail_builder::headers::content_type::ContentType;
 use mail_builder::headers::date::Date;
 use mail_builder::headers::raw::Raw;
+use mail_builder::mime::MimePart;
 use mail_builder::MessageBuilder;
 use mail_parser::{Address, DateTime, MessageParser};
 use serde::{Deserialize, Serialize};
@@ -39,8 +41,18 @@ pub struct Redaction {
     pub pieces: Vec<String>,
     pub en_reponse_a: String,
     pub references: Vec<String>,
-    /// Brouillon que cet envoi ou cet enregistrement remplace (0 : aucun).
+    /// Brouillon que cet envoi ou cet enregistrement remplace (0 : aucun), et
+    /// le dossier qui le porte (vide : celui des brouillons).
     pub brouillon_uid: u32,
+    pub brouillon_chemin: String,
+    /// Importance : 1 haute, 0 normale, -1 basse.
+    pub importance: i8,
+    /// Accusé de remise, demandé au serveur (DSN).
+    pub accuse_remise: bool,
+    /// Confirmation de lecture, demandée au destinataire (MDN).
+    pub confirmation_lecture: bool,
+    /// Heure d'envoi voulue, en secondes Unix (0 : tout de suite).
+    pub envoi_differe: i64,
     /// Message auquel on répond ou que l'on transfère : il reçoit `\Answered`
     /// ou `$Forwarded` une fois l'envoi fait.
     pub origine_chemin: String,
@@ -184,6 +196,7 @@ pub fn fabriquer(r: &Redaction, maintenant: i64, fichiers: &[Fichier]) -> Result
             )
         };
         let de = AdresseSortante::new_address((!r.nom.is_empty()).then(|| r.nom.clone()), r.de.clone());
+        let copie = avec_cci;
         let mut m = MessageBuilder::new()
             .from(de)
             .subject(r.objet.clone())
@@ -205,6 +218,22 @@ pub fn fabriquer(r: &Redaction, maintenant: i64, fichiers: &[Fichier]) -> Result
         if !r.references.is_empty() {
             m = m.references(r.references.clone());
         }
+        match r.importance {
+            1 => m = m.header("Importance", Raw::new("high")).header("X-Priority", Raw::new("1 (Highest)")),
+            -1 => m = m.header("Importance", Raw::new("low")).header("X-Priority", Raw::new("5 (Lowest)")),
+            _ => {}
+        }
+        if r.confirmation_lecture {
+            m = m.header("Disposition-Notification-To", Raw::new(format!("<{}>", r.de)));
+        }
+        // Ce que l'enveloppe porte seule, et qu'on veut retrouver en reprenant
+        // la copie : l'accusé de remise, l'heure d'envoi voulue.
+        if copie && r.accuse_remise {
+            m = m.header(ENTETE_ACCUSE, Raw::new("oui"));
+        }
+        if copie && r.envoi_differe > 0 {
+            m = m.header(ENTETE_DIFFERE, Raw::new(r.envoi_differe.to_string()));
+        }
         m = m.text_body(r.texte.clone());
         if !r.html.is_empty() {
             m = m.html_body(r.html.clone());
@@ -224,6 +253,11 @@ pub fn fabriquer(r: &Redaction, maintenant: i64, fichiers: &[Fichier]) -> Result
 
 // ------------------------------------------------ réponses et transferts
 
+/// En-têtes propres à MMail, sur les copies seulement (brouillons, envois
+/// différés) : jamais dans ce qui part chez le destinataire.
+pub const ENTETE_DIFFERE: &str = "X-MMail-Envoi-Differe";
+pub const ENTETE_ACCUSE: &str = "X-MMail-Accuse-Remise";
+
 /// Ce que le noyau rend à la fenêtre de rédaction pour la pré-remplir.
 #[derive(Debug, Default, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -241,9 +275,14 @@ pub struct Preparation {
     /// de travail après extraction.
     pub pieces: Vec<String>,
     pub brouillon_uid: u32,
+    pub brouillon_chemin: String,
     pub origine_chemin: String,
     pub origine_uid: u32,
     pub origine_mode: String,
+    pub importance: i8,
+    pub accuse_remise: bool,
+    pub confirmation_lecture: bool,
+    pub envoi_differe: i64,
 }
 
 /// Préfixe « RE : » ou « TR : », sauf si l'objet le porte déjà, sous l'une de
@@ -335,6 +374,10 @@ pub fn preparer(brut: &[u8], mode: &str, propres: &[String]) -> Preparation {
         }
         p.en_reponse_a = m.in_reply_to().as_text().unwrap_or("").to_string();
         p.references = references(&m);
+        p.importance = crate::index::importance(&m);
+        p.confirmation_lecture = m.header_raw("Disposition-Notification-To").is_some();
+        p.accuse_remise = m.header_raw(ENTETE_ACCUSE).is_some();
+        p.envoi_differe = echeance(brut).unwrap_or(0);
         return p;
     }
 
@@ -388,6 +431,138 @@ pub fn preparer(brut: &[u8], mode: &str, propres: &[String]) -> Preparation {
         }
     }
     p
+}
+
+// ------------------------------------------------ confirmation de lecture
+
+/// Adresse à laquelle l'expéditeur demande une confirmation de lecture, si
+/// le message en porte la demande (`Disposition-Notification-To`).
+pub fn confirmation_demandee(brut: &[u8]) -> Option<String> {
+    let m = MessageParser::default().parse_headers(brut)?;
+    // Champ que mail-parser ne tient pas pour une adresse : lu brut, puis
+    // analysé comme une saisie (« Nom <a@b.fr> »), encodage des noms compris.
+    let champ = m.header_raw("Disposition-Notification-To")?.replace(['\r', '\n'], " ");
+    let champ = match champ.rfind('<') {
+        Some(i) => champ[i..].to_string(),
+        None => champ,
+    };
+    adresses(champ.trim()).ok()?.into_iter().map(|(_, adresse)| adresse).next()
+}
+
+/// Confirmation de lecture (MDN, RFC 8098) pour un message reçu :
+/// `multipart/report` avec une partie lisible et une partie
+/// `message/disposition-notification`. Rend le destinataire et le message.
+pub fn confirmation_lecture(
+    brut: &[u8],
+    de: &str,
+    nom: &str,
+    maintenant: i64,
+) -> Option<(String, Vec<u8>)> {
+    let destinataire = confirmation_demandee(brut)?;
+    let m = MessageParser::default().parse(brut)?;
+    let objet = m.subject().unwrap_or("").to_string();
+    let envoye = m.date().map(date_longue).unwrap_or_default();
+    let lisible = format!(
+        "Votre message\n\n  À : {de}\n  Objet : {objet}\n  Envoyé : {envoye}\n\na été lu le {}.\n",
+        date_longue(&DateTime::from_timestamp(maintenant))
+    );
+    let mut rapport = format!(
+        "Reporting-UA: MMail/{}\r\nFinal-Recipient: rfc822;{de}\r\n",
+        env!("CARGO_PKG_VERSION")
+    );
+    if let Some(id) = m.message_id() {
+        rapport.push_str(&format!("Original-Message-ID: <{id}>\r\n"));
+    }
+    rapport.push_str("Disposition: manual-action/MDN-sent-manually; displayed\r\n");
+    let corps = MimePart::new(
+        ContentType::new("multipart/report").attribute("report-type", "disposition-notification"),
+        vec![
+            MimePart::new("text/plain", lisible),
+            // `message/*` : 7 bits seulement (RFC 2046 § 5.2) ; sans cela,
+            // mail-builder passe en quoted-printable et coupe les lignes longues.
+            MimePart::new("message/disposition-notification", rapport).transfer_encoding("7bit"),
+        ],
+    );
+    let expediteur = AdresseSortante::new_address((!nom.is_empty()).then(|| nom.to_string()), de.to_string());
+    let octets = MessageBuilder::new()
+        .from(expediteur)
+        .to(destinataire.as_str())
+        .subject(format!("Lu : {objet}"))
+        .date(Date::new(maintenant))
+        .message_id(nouvel_identifiant(de, maintenant))
+        .body(corps)
+        .write_to_vec()
+        .ok()?;
+    Some((destinataire, octets))
+}
+
+// -------------------------------------------------------- envoi différé
+
+/// Heure d'envoi voulue d'une copie différée (en-tête `X-MMail-Envoi-Differe`).
+pub fn echeance(brut: &[u8]) -> Option<i64> {
+    let m = MessageParser::default().parse_headers(brut)?;
+    m.header_raw(ENTETE_DIFFERE).and_then(|t| t.trim().parse().ok())
+}
+
+/// Ce qu'il faut pour envoyer une copie différée le moment venu.
+#[derive(Debug)]
+pub struct EnvoiDiffere {
+    pub de: String,
+    pub destinataires: Vec<String>,
+    pub accuse: bool,
+    /// Ce qui part : sans `Bcc` ni en-têtes de MMail, daté de l'envoi.
+    pub envoi: Vec<u8>,
+    /// Ce qui va dans « Éléments envoyés » : avec `Bcc`, daté de l'envoi.
+    pub copie: Vec<u8>,
+}
+
+/// Prépare l'envoi d'une copie différée : les destinataires sont relus dans
+/// ses en-têtes (`Bcc` compris), la date devient celle de l'envoi réel.
+pub fn preparer_envoi_differe(brut: &[u8], maintenant: i64) -> Result<EnvoiDiffere, String> {
+    let m = MessageParser::default().parse(brut).ok_or("message illisible")?;
+    let de = paires(m.from()).into_iter().next().map(|(_, a)| a).ok_or("message sans expéditeur")?;
+    let mut destinataires: Vec<String> = Vec::new();
+    for (_, adresse) in paires(m.to()).into_iter().chain(paires(m.cc())).chain(paires(m.bcc())) {
+        if !destinataires.iter().any(|d| d.eq_ignore_ascii_case(&adresse)) {
+            destinataires.push(adresse);
+        }
+    }
+    if destinataires.is_empty() {
+        return Err("message sans destinataire".into());
+    }
+    let accuse = m.header_raw(ENTETE_ACCUSE).is_some();
+    let date = format!("Date: {}", Date::new(maintenant).to_rfc822());
+    let propres = [ENTETE_DIFFERE, ENTETE_ACCUSE, "Date"];
+    Ok(EnvoiDiffere {
+        de,
+        destinataires,
+        accuse,
+        envoi: reecrire_entetes(brut, &[&propres[..], &["Bcc"]].concat(), &date),
+        copie: reecrire_entetes(brut, &propres, &date),
+    })
+}
+
+/// Retire des en-têtes (lignes de suite comprises) et en ajoute un en tête,
+/// sans toucher au corps.
+fn reecrire_entetes(brut: &[u8], retirer: &[&str], ajout: &str) -> Vec<u8> {
+    let fin = brut.windows(4).position(|w| w == b"\r\n\r\n").map(|i| i + 2).unwrap_or(brut.len());
+    let (tete, corps) = brut.split_at(fin);
+    let tete = String::from_utf8_lossy(tete);
+    let mut sortie = format!("{ajout}\r\n");
+    let mut garder = true;
+    for ligne in tete.split_inclusive("\r\n") {
+        let suite = ligne.starts_with(' ') || ligne.starts_with('\t');
+        if !suite {
+            let nom = ligne.split(':').next().unwrap_or("").trim();
+            garder = !retirer.iter().any(|r| r.eq_ignore_ascii_case(nom));
+        }
+        if garder {
+            sortie.push_str(ligne);
+        }
+    }
+    let mut octets = sortie.into_bytes();
+    octets.extend_from_slice(corps);
+    octets
 }
 
 fn references(m: &mail_parser::Message<'_>) -> Vec<String> {
@@ -540,6 +715,86 @@ mod tests {
         let b = preparer(&f.copie, "brouillon", &[]);
         assert!(b.html.contains("<b>gras</b>"));
         assert_eq!(b.texte.trim_end(), "Texte gras");
+    }
+
+    #[test]
+    fn options_d_envoi() {
+        let r = Redaction {
+            de: "moi@exemple.fr".into(),
+            a: "noel@exemple.fr".into(),
+            cci: "archive@exemple.fr".into(),
+            objet: "Urgent".into(),
+            texte: "x".into(),
+            importance: 1,
+            accuse_remise: true,
+            confirmation_lecture: true,
+            envoi_differe: 1_790_100_000,
+            ..Default::default()
+        };
+        let f = fabriquer(&r, 1_790_100_000, &[]).unwrap();
+        let envoi = String::from_utf8_lossy(&f.envoi).to_string();
+        assert!(envoi.contains("Importance: high") && envoi.contains("X-Priority: 1"));
+        assert!(envoi.contains("Disposition-Notification-To: <moi@exemple.fr>"));
+        assert!(!envoi.contains("X-MMail"), "rien de propre à MMail ne part");
+        // La copie garde de quoi reprendre le message tel qu'il a été réglé.
+        let b = preparer(&f.copie, "brouillon", &[]);
+        assert_eq!((b.importance, b.accuse_remise, b.confirmation_lecture, b.envoi_differe), (1, true, true, 1_790_100_000));
+        assert_eq!(echeance(&f.copie), Some(1_790_100_000));
+        assert_eq!(echeance(&f.envoi), None);
+    }
+
+    #[test]
+    fn envoi_differe_le_moment_venu() {
+        let r = Redaction {
+            de: "moi@exemple.fr".into(),
+            a: "noel@exemple.fr".into(),
+            cci: "archive@exemple.fr".into(),
+            objet: "Plus tard".into(),
+            texte: "Corps\nsur deux lignes".into(),
+            accuse_remise: true,
+            envoi_differe: 1_790_100_000,
+            ..Default::default()
+        };
+        let f = fabriquer(&r, 1_790_000_000, &[]).unwrap();
+        let e = preparer_envoi_differe(&f.copie, 1_790_100_060).unwrap();
+        assert_eq!(e.de, "moi@exemple.fr");
+        assert_eq!(e.destinataires, vec!["noel@exemple.fr", "archive@exemple.fr"]);
+        assert!(e.accuse);
+        let envoi = MessageParser::default().parse(&e.envoi).unwrap();
+        assert!(envoi.bcc().is_none());
+        assert_eq!(envoi.date().unwrap().to_timestamp(), 1_790_100_060, "daté de l'envoi réel");
+        assert!(envoi.body_text(0).unwrap().contains("sur deux lignes"));
+        let brut = String::from_utf8_lossy(&e.envoi).to_string();
+        assert!(!brut.contains("X-MMail") && brut.matches("Date:").count() == 1);
+        let copie = MessageParser::default().parse(&e.copie).unwrap();
+        assert_eq!(copie.bcc().unwrap().first().unwrap().address(), Some("archive@exemple.fr"));
+    }
+
+    #[test]
+    fn confirmation_de_lecture() {
+        let recu = "From: Hélène <helene@exemple.fr>\r\nTo: moi@exemple.fr\r\nSubject: Devis\r\n\
+                    Date: Tue, 29 Sep 2026 10:33:00 +0200\r\nMessage-ID: <devis.1@exemple.fr>\r\n\
+                    Disposition-Notification-To: Hélène <helene@exemple.fr>\r\n\r\nCorps\r\n";
+        assert_eq!(confirmation_demandee(recu.as_bytes()).as_deref(), Some("helene@exemple.fr"));
+        assert_eq!(confirmation_demandee(ORIGINAL.as_bytes()), None);
+        let (a, octets) = confirmation_lecture(recu.as_bytes(), "moi@exemple.fr", "", 1_790_000_000).unwrap();
+        assert_eq!(a, "helene@exemple.fr");
+        let texte = String::from_utf8_lossy(&octets).to_string();
+        assert!(texte.contains("multipart/report"));
+        assert!(texte.contains("report-type=") && texte.contains("disposition-notification"));
+        assert!(texte.contains("Original-Message-ID: <devis.1@exemple.fr>"));
+        assert!(texte.contains("Disposition: manual-action/MDN-sent-manually; displayed"));
+        let m = MessageParser::default().parse(&octets).unwrap();
+        assert_eq!(m.subject(), Some("Lu : Devis"));
+        // Un identifiant long reste d'un seul tenant.
+        let long = recu.replace("devis.1@exemple.fr", "179069362582.4099638.5162412060862382223@lab.exemple.fr");
+        let (_, octets) = confirmation_lecture(long.as_bytes(), "moi@exemple.fr", "", 1_790_000_000).unwrap();
+        let texte = String::from_utf8_lossy(&octets).to_string();
+        assert!(texte.contains("Original-Message-ID: <179069362582.4099638.5162412060862382223@lab.exemple.fr>"));
+        // La partie lisible, accentuée, peut être en quoted-printable ; le
+        // rapport, jamais.
+        let rapport = &texte[texte.find("message/disposition-notification").unwrap()..];
+        assert!(rapport[..rapport.find("\r\n\r\n").unwrap()].contains("Content-Transfer-Encoding: 7bit"));
     }
 
     #[test]

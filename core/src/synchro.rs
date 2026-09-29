@@ -226,6 +226,22 @@ pub fn marquer_lu(
     Ok(())
 }
 
+/// Pose ou retire le drapeau de suivi, sur le serveur puis dans l'index.
+pub fn marquer_suivi(
+    client: &mut Client,
+    magasin: &Magasin,
+    compte: i64,
+    chemin: &str,
+    uids: &[u32],
+    suivi: bool,
+) -> Result<(), Echec> {
+    assurer_selection(client, chemin)?;
+    client.marquer(uids, "\\Flagged", suivi)?;
+    let id = magasin.dossier_id(compte, chemin)?;
+    magasin.marquer_suivi(id, uids, suivi)?;
+    Ok(())
+}
+
 /// Sélectionne un dossier s'il ne l'est pas déjà, sans resynchroniser.
 pub fn assurer_selection(client: &mut Client, chemin: &str) -> Result<(), Echec> {
     if client.selection() != Some(chemin) {

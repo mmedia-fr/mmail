@@ -49,8 +49,9 @@ pub struct MessageComplet {
 
 /// En-têtes demandés pour l'index : de quoi afficher une liste de messages.
 /// `CONTENT-TYPE` : de quoi supposer des pièces jointes sans lire le corps.
-const CHAMPS_ENTETE: &str =
-    "FROM TO CC SUBJECT DATE MESSAGE-ID IN-REPLY-TO REFERENCES CONTENT-TYPE";
+/// `IMPORTANCE`, `X-PRIORITY`, `PRIORITY` : l'importance annoncée par l'expéditeur.
+const CHAMPS_ENTETE: &str = "FROM TO CC SUBJECT DATE MESSAGE-ID IN-REPLY-TO REFERENCES CONTENT-TYPE \
+     IMPORTANCE X-PRIORITY PRIORITY";
 
 pub type Resultat<T> = Result<T, Erreur>;
 
@@ -251,6 +252,24 @@ impl Client {
              BODY.PEEK[HEADER.FIELDS ({CHAMPS_ENTETE})])"
         ))?;
         Ok(protocole::analyser_fetch(&texte, &litteraux))
+    }
+
+    /// Quelques champs d'en-tête, désignés, des messages d'un intervalle.
+    pub fn champs(&mut self, intervalle: &str, champs: &str) -> Resultat<Vec<Entete>> {
+        let (texte, litteraux) = self.commande(&format!(
+            "UID FETCH {intervalle} (UID FLAGS INTERNALDATE RFC822.SIZE BODY.PEEK[HEADER.FIELDS ({champs})])"
+        ))?;
+        Ok(protocole::analyser_fetch(&texte, &litteraux))
+    }
+
+    /// Crée un dossier (nom en UTF-7 modifié). Un dossier qui existe déjà
+    /// n'est pas une erreur.
+    pub fn creer(&mut self, chemin: &str) -> Resultat<()> {
+        match self.commande(&format!("CREATE {}", citer(chemin))) {
+            Ok(_) => Ok(()),
+            Err(Erreur::Refuse(m)) if m.to_ascii_uppercase().contains("ALREADYEXISTS") => Ok(()),
+            Err(e) => Err(e),
+        }
     }
 
     /// Message entier, tel que le serveur le conserve (décision 6 du dossier).

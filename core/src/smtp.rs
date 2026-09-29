@@ -19,7 +19,8 @@ const LIGNE_MAX: usize = 8192;
 
 /// Envoie `octets` (un message RFC 5322 complet, sans en-tête `Bcc`) de
 /// `expediteur` à chacun des `destinataires` — `Cci` compris : c'est
-/// l'enveloppe qui les porte, pas le message.
+/// l'enveloppe qui les porte, pas le message. `accuse` demande un accusé de
+/// remise (DSN, RFC 3461) quand le serveur le propose ; sinon rien.
 pub fn envoyer(
     hote: &str,
     utilisateur: &str,
@@ -27,6 +28,7 @@ pub fn envoyer(
     expediteur: &str,
     destinataires: &[String],
     octets: &[u8],
+    accuse: bool,
 ) -> Resultat<()> {
     if destinataires.is_empty() {
         return Err(Erreur::Refuse("aucun destinataire".into()));
@@ -63,10 +65,12 @@ pub fn envoyer(
     } else {
         return Err(Erreur::Refuse("le serveur ne propose ni PLAIN ni LOGIN".into()));
     }
-    s.echanger("expéditeur", &format!("MAIL FROM:<{expediteur}>"), 250)?;
+    let dsn = accuse && ehlo.lines().any(|l| l.trim().eq_ignore_ascii_case("DSN"));
+    let (retour, notifier) = if dsn { (" RET=HDRS", " NOTIFY=SUCCESS,FAILURE") } else { ("", "") };
+    s.echanger("expéditeur", &format!("MAIL FROM:<{expediteur}>{retour}"), 250)?;
     for destinataire in destinataires {
         // 251 : « pas local, je transmets » — accepté aussi.
-        let (code, texte) = s.envoyer_ligne(&format!("RCPT TO:<{destinataire}>"))?;
+        let (code, texte) = s.envoyer_ligne(&format!("RCPT TO:<{destinataire}>{notifier}"))?;
         if code != 250 && code != 251 {
             return Err(Erreur::Refuse(format!("destinataire {destinataire} refusé : {code} {texte}")));
         }

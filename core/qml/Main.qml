@@ -291,6 +291,13 @@ ApplicationWindow {
         ScrollView {
             id: voletArborescence
             visible: !fenetre.compact || fenetre.vue === 0
+            // Ascenseurs toujours visibles dès qu'il y a de quoi défiler, et non
+            // seulement pendant le défilement (demande Manu du 2026-09-29). Leur
+            // place est réservée : posés par-dessus, ils masquaient les compteurs
+            // de non-lus. La réserve suit `size`, pas `visible` : un ascenseur
+            // qui n'a rien à faire défiler reste `visible`, seulement transparent.
+            ScrollBar.vertical.policy: ScrollBar.vertical.size < 1 ? ScrollBar.AlwaysOn : ScrollBar.AsNeeded
+            rightPadding: ScrollBar.vertical.size < 1 ? ScrollBar.vertical.width : 0
             SplitView.preferredWidth: fenetre.compact ? fenetre.width : reglages.largeurArborescence
             SplitView.minimumWidth: 160
             SplitView.fillWidth: fenetre.compact
@@ -350,6 +357,8 @@ ApplicationWindow {
         ScrollView {
             id: voletListe
             visible: !fenetre.compact || fenetre.vue === 1
+            ScrollBar.vertical.policy: ScrollBar.vertical.size < 1 ? ScrollBar.AlwaysOn : ScrollBar.AsNeeded
+            rightPadding: ScrollBar.vertical.size < 1 ? ScrollBar.vertical.width : 0
             SplitView.preferredWidth: fenetre.compact ? fenetre.width : reglages.largeurListe
             SplitView.minimumWidth: 240
             SplitView.fillWidth: fenetre.compact
@@ -485,6 +494,13 @@ ApplicationWindow {
                 id: cadreCorps
                 Layout.fillWidth: true
                 Layout.fillHeight: true
+                ScrollBar.vertical.policy: ScrollBar.vertical.size < 1 ? ScrollBar.AlwaysOn : ScrollBar.AsNeeded
+                // Réserve fixe : le texte se replie, sa hauteur dépend donc de la
+                // largeur, et une réserve qui suivrait le débordement bouclerait.
+                rightPadding: ScrollBar.vertical.width
+                // La source n'est pas repliée : elle défile aussi en largeur.
+                ScrollBar.horizontal.policy: ScrollBar.horizontal.size < 1 ? ScrollBar.AlwaysOn : ScrollBar.AsNeeded
+                bottomPadding: fenetre.sourceVisible ? ScrollBar.horizontal.height : 0
                 clip: true
                 contentWidth: fenetre.sourceVisible ? -1 : availableWidth
 
@@ -1453,9 +1469,13 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 clip: true
+                ScrollBar.vertical: ScrollBar {
+                    policy: size < 1 ? ScrollBar.AlwaysOn : ScrollBar.AsNeeded
+                }
                 model: ListModel { id: modeleCibles }
                 delegate: ItemDelegate {
                     width: ListView.view.width
+                           - (vueCibles.ScrollBar.vertical.size < 1 ? vueCibles.ScrollBar.vertical.width : 0)
                     highlighted: ListView.isCurrentItem
                     onClicked: vueCibles.currentIndex = index
                     onDoubleClicked: dlgDeplacer.accept()
@@ -1493,6 +1513,9 @@ ApplicationWindow {
         ScrollView {
             id: defilementAide
             anchors.fill: parent
+            ScrollBar.vertical.policy: ScrollBar.vertical.size < 1 ? ScrollBar.AlwaysOn : ScrollBar.AsNeeded
+            // Réserve fixe, comme pour le corps du message : texte replié.
+            rightPadding: ScrollBar.vertical.width
             contentWidth: availableWidth
             clip: true
             Label {

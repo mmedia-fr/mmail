@@ -16,10 +16,18 @@ Le cadrage complet — exigences, décisions actées (les « décisions » numé
 citées dans le code), pistes écartées et leur motif — est tenu dans un dossier
 de projet interne.
 
-## État — 0.1.4
+## État — 0.2.0
 
-**Lecture et tri.** Pas encore de rédaction ni d'envoi.
+**Lecture, tri, rédaction et envoi** en texte brut.
 
+- **rédaction** dans une fenêtre à part (un volet sur téléphone) : nouveau
+  message, réponse, réponse à tous, transfert — à la manière d'Outlook, avec
+  « RE : », « TR : » et le message d'origine sous un bloc « De / Envoyé / À /
+  Objet » ; Cc et Cci ; pièces jointes par « Joindre… » ou glisser-déposer,
+  celles d'un message transféré reprises d'office ; envoi par la soumission
+  SMTP du serveur (port 465), copie dans « Éléments envoyés », original marqué
+  « répondu » ou « transféré » ; brouillons enregistrés sur le serveur et
+  repris d'un double clic ;
 - **plusieurs comptes dans une seule arborescence**, repliables, avec la
   rubrique **Favoris** au-dessus : on l'alimente en y **glissant un dossier**,
   et l'on réordonne ses favoris de la même façon ; un blanc et un trait
@@ -125,7 +133,9 @@ passe n'est confié au coffre qu'une fois accepté par le serveur.
   images ni mise en forme.
 - Sous Android, les pièces jointes s'ouvrent mais ne s'enregistrent pas
   ailleurs ; leur ouverture n'a pas été éprouvée sur un téléphone.
-- Pas encore de rédaction, de réponse, de signatures ni de filtres.
+- Rédaction en texte brut seulement : ni mise en forme, ni signatures, ni
+  adresses proposées à la saisie (prévus en 0.2.1) ; pas de filtres.
+- L'envoi passe par le même serveur que la lecture, sur le port 465.
 - Sous Android, les autorités de certification sont celles de Mozilla,
   embarquées dans l'application — et non celles du téléphone.
 

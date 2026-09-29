@@ -16,6 +16,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Dialogs
 import QtQuick.Layouts
+import QtQuick.Window
 import Qt.labs.settings
 import fr.mmedia.mmail
 import fr.mmedia.mmail.natif
@@ -58,6 +59,11 @@ ApplicationWindow {
     property var comptesConnus: []
     // Lien de configuration en cours de lecture, rendu au dialogue s'il échoue.
     property string lienEnCours: ""
+    // Rôle SPECIAL-USE du dossier ouvert : « Drafts » change le double clic.
+    property string roleCourant: ""
+    // Rédactions ouvertes : jeton → contenu de la fenêtre de rédaction.
+    property int compteurRedactions: 0
+    property var redactions: ({})
 
     // Un seul volet à la fois sous cette largeur : 0 arborescence, 1 liste,
     // 2 message.
@@ -218,7 +224,10 @@ ApplicationWindow {
             if (!boite.occupe)
                 fenetre.derniereSynchro = new Date()
         }
-        function onDossierCourantChanged() { fenetre.majInfoDossier() }
+        function onDossierCourantChanged() {
+            fenetre.roleCourant = boite.roleCourant()
+            fenetre.majInfoDossier()
+        }
     }
 
     // ------------------------------------------------------------- en-tête
@@ -234,6 +243,11 @@ ApplicationWindow {
                 text: "‹"
                 font.pixelSize: 22
                 onClicked: fenetre.vue = fenetre.vue - 1
+            }
+            ToolButton {
+                text: qsTr("Nouveau message")
+                font.bold: true
+                onClicked: fenetre.rediger("nouveau")
             }
             ToolButton {
                 id: boutonComptes
@@ -441,6 +455,27 @@ ApplicationWindow {
                             elide: Text.ElideRight
                             Layout.fillWidth: true
                         }
+                    }
+                    // Un brouillon se reprend ; un message reçu reçoit une réponse.
+                    ToolButton {
+                        visible: fenetre.roleCourant === "Drafts"
+                        text: qsTr("Reprendre")
+                        onClicked: fenetre.rediger("brouillon")
+                    }
+                    ToolButton {
+                        visible: fenetre.roleCourant !== "Drafts"
+                        text: qsTr("Répondre")
+                        onClicked: fenetre.rediger("repondre")
+                    }
+                    ToolButton {
+                        visible: fenetre.roleCourant !== "Drafts"
+                        text: qsTr("Répondre à tous")
+                        onClicked: fenetre.rediger("repondre_tous")
+                    }
+                    ToolButton {
+                        visible: fenetre.roleCourant !== "Drafts"
+                        text: qsTr("Transférer")
+                        onClicked: fenetre.rediger("transferer")
                     }
                     ToolButton {
                         text: qsTr("Déplacer…")
@@ -733,6 +768,484 @@ ApplicationWindow {
         id: messageEtat
         property string texte: ""
         onTexteChanged: fenetre.annoncer(texte, false)
+    }
+
+    // ------------------------------------------------------------- rédaction
+    Component {
+        id: composantFenetreRedaction
+        Window {
+            id: fenetreRedaction
+            width: Math.min(900, Screen.desktopAvailableWidth - 40)
+            height: Math.min(700, Screen.desktopAvailableHeight - 60)
+            minimumWidth: 480
+            minimumHeight: 360
+            // Fenêtre indépendante, qui peut passer derrière la principale.
+            transientParent: null
+            visible: true
+            color: fenetre.palette.window
+            title: redaction ? redaction.titre : ""
+            property alias redaction: chargeurFenetre.item
+            function fermerRedaction() {
+                redaction.fermetureConfirmee = true
+                fenetreRedaction.close()
+            }
+            Loader {
+                id: chargeurFenetre
+                anchors.fill: parent
+                sourceComponent: composantRedaction
+                onLoaded: item.conteneur = fenetreRedaction
+            }
+            onClosing: function(fermeture) {
+                if (redaction && redaction.modifie && !redaction.fermetureConfirmee) {
+                    fermeture.accepted = false
+                    redaction.demanderFermeture()
+                    return
+                }
+                fenetre.oublierRedaction(redaction ? redaction.jeton : "")
+                Qt.callLater(function() { fenetreRedaction.destroy() })
+            }
+        }
+    }
+
+    Component {
+        id: composantVoletRedaction
+        Popup {
+            id: voletRedaction
+            parent: Overlay.overlay
+            x: 0
+            y: 0
+            width: parent ? parent.width : 0
+            height: parent ? parent.height : 0
+            modal: true
+            padding: 0
+            closePolicy: Popup.NoAutoClose
+            property alias redaction: chargeurVolet.item
+            function fermerRedaction() {
+                redaction.fermetureConfirmee = true
+                voletRedaction.close()
+            }
+            Loader {
+                id: chargeurVolet
+                anchors.fill: parent
+                sourceComponent: composantRedaction
+                onLoaded: item.conteneur = voletRedaction
+            }
+            onClosed: {
+                fenetre.oublierRedaction(redaction ? redaction.jeton : "")
+                Qt.callLater(function() { voletRedaction.destroy() })
+            }
+        }
+    }
+
+    Component {
+        id: composantRedaction
+        Page {
+            id: redac
+            // Une fenêtre à part ne reçoit ni la palette ni la police de la
+            // fenêtre principale : l'apparence choisie les lui transmet.
+            palette: fenetre.palette
+            font: fenetre.font
+
+            property string jeton: ""
+            property var conteneur: null
+            property int brouillonUid: 0
+            property string origineChemin: ""
+            property int origineUid: 0
+            property string origineMode: ""
+            property string enReponseA: ""
+            property var references: []
+            // Fichiers joints : [{chemin, nom, taille}].
+            property var pieces: []
+            property bool modifie: false
+            property bool occupe: false
+            property bool chargement: false
+            property bool fermetureConfirmee: false
+            property bool fermerApresEnregistrement: false
+            property bool afficherCopies: false
+            property string note: ""
+            property bool noteErreur: false
+            readonly property string titre: champObjet.text.length > 0 ? champObjet.text : qsTr("Nouveau message")
+
+            function choisirCompte(compte) {
+                for (var i = 0; i < fenetre.comptesConnus.length; ++i)
+                    if (fenetre.comptesConnus[i].compte === compte)
+                        choixCompte.currentIndex = i
+            }
+            function compteChoisi() {
+                return fenetre.comptesConnus[choixCompte.currentIndex] || null
+            }
+
+            function pret() {
+                chargement = false
+                occupe = false
+                champA.forceActiveFocus()
+            }
+
+            function attendre(texte) {
+                chargement = true
+                occupe = true
+                signaler(texte, false)
+            }
+
+            function signaler(texte, erreur) {
+                note = texte
+                noteErreur = erreur
+            }
+
+            /// Pré-remplit la rédaction (réponse, transfert, brouillon repris).
+            function remplir(p) {
+                chargement = true
+                champA.text = p.a || ""
+                champCc.text = p.cc || ""
+                champCci.text = p.cci || ""
+                champObjet.text = p.objet || ""
+                corpsRedaction.text = p.texte || ""
+                brouillonUid = p.brouillonUid || 0
+                origineChemin = p.origineChemin || ""
+                origineUid = p.origineUid || 0
+                origineMode = p.origineMode || ""
+                enReponseA = p.enReponseA || ""
+                references = p.references || []
+                var liste = []
+                var chemins = p.pieces || []
+                for (var i = 0; i < chemins.length; ++i) {
+                    var d = boite.decrireFichier(chemins[i])
+                    if (d.length > 0)
+                        liste.push(JSON.parse(d))
+                }
+                pieces = liste
+                afficherCopies = champCc.text.length > 0 || champCci.text.length > 0
+                chargement = false
+                occupe = false
+                modifie = false
+                signaler("", false)
+                if (champA.text.length === 0) {
+                    champA.forceActiveFocus()
+                } else {
+                    corpsRedaction.forceActiveFocus()
+                    corpsRedaction.cursorPosition = 0
+                }
+            }
+
+            function contenu() {
+                var c = compteChoisi()
+                return {
+                    jeton: jeton, de: c ? c.adresse : "", nom: "",
+                    a: champA.text, cc: champCc.text, cci: champCci.text,
+                    objet: champObjet.text, texte: corpsRedaction.text, html: "",
+                    pieces: pieces.map(function(f) { return f.chemin }),
+                    enReponseA: enReponseA, references: references, brouillonUid: brouillonUid,
+                    origineChemin: origineChemin, origineUid: origineUid, origineMode: origineMode
+                }
+            }
+
+            function ajouterFichiers(urls) {
+                var liste = pieces.slice()
+                for (var i = 0; i < urls.length; ++i) {
+                    var d = boite.decrireFichier(urls[i].toString())
+                    if (d.length === 0)
+                        continue
+                    var f = JSON.parse(d)
+                    if (!liste.some(function(x) { return x.chemin === f.chemin }))
+                        liste.push(f)
+                }
+                if (liste.length !== pieces.length) {
+                    pieces = liste
+                    modifie = true
+                }
+            }
+
+            function retirerPiece(i) {
+                var liste = pieces.slice()
+                liste.splice(i, 1)
+                pieces = liste
+                modifie = true
+            }
+
+            function envoyer(sansObjet) {
+                if (occupe)
+                    return
+                var c = compteChoisi()
+                if (!c) {
+                    signaler(qsTr("Aucun compte pour envoyer ce message."), true)
+                    return
+                }
+                if ((champA.text + champCc.text + champCci.text).trim().length === 0) {
+                    signaler(qsTr("Indiquez au moins un destinataire."), true)
+                    champA.forceActiveFocus()
+                    return
+                }
+                if (champObjet.text.trim().length === 0 && !sansObjet) {
+                    dlgSansObjet.open()
+                    return
+                }
+                occupe = true
+                signaler(qsTr("Envoi…"), false)
+                if (!boite.envoyerMessage(c.compte, JSON.stringify(contenu())))
+                    echouer(boite.erreur.length > 0 ? boite.erreur : qsTr("Envoi impossible."))
+            }
+
+            function enregistrer() {
+                if (occupe)
+                    return
+                var c = compteChoisi()
+                if (!c)
+                    return
+                occupe = true
+                signaler(qsTr("Enregistrement du brouillon…"), false)
+                if (!boite.enregistrerBrouillon(c.compte, JSON.stringify(contenu())))
+                    echouer(boite.erreur.length > 0 ? boite.erreur : qsTr("Enregistrement impossible."))
+            }
+
+            function brouillonEnregistre(uid) {
+                brouillonUid = uid
+                occupe = false
+                modifie = false
+                signaler(qsTr("Brouillon enregistré à %1.").arg(Qt.formatTime(new Date(), "hh:mm")), false)
+                if (fermerApresEnregistrement)
+                    conteneur.fermerRedaction()
+            }
+
+            function echouer(message) {
+                occupe = false
+                chargement = false
+                fermerApresEnregistrement = false
+                signaler(message, true)
+            }
+
+            function demanderFermeture() {
+                if (!modifie || fermetureConfirmee) {
+                    conteneur.fermerRedaction()
+                    return
+                }
+                dlgFermer.open()
+            }
+
+            header: ToolBar {
+                RowLayout {
+                    anchors.fill: parent
+                    anchors.leftMargin: 6
+                    anchors.rightMargin: 6
+                    ToolButton {
+                        text: qsTr("Envoyer")
+                        font.bold: true
+                        enabled: !redac.occupe
+                        onClicked: redac.envoyer(false)
+                    }
+                    ToolButton {
+                        text: qsTr("Enregistrer")
+                        enabled: !redac.occupe
+                        onClicked: redac.enregistrer()
+                    }
+                    ToolButton {
+                        text: qsTr("Joindre…")
+                        enabled: !redac.occupe
+                        onClicked: choixFichiers.open()
+                    }
+                    ToolButton {
+                        text: qsTr("Cc / Cci")
+                        checkable: true
+                        checked: redac.afficherCopies
+                        onToggled: redac.afficherCopies = checked
+                    }
+                    Label {
+                        text: redac.note
+                        color: redac.noteErreur ? "#b00020" : fenetre.palette.windowText
+                        opacity: redac.noteErreur ? 1 : 0.75
+                        elide: Text.ElideRight
+                        Layout.fillWidth: true
+                        horizontalAlignment: Text.AlignRight
+                    }
+                    ToolButton {
+                        text: qsTr("Fermer")
+                        onClicked: redac.demanderFermeture()
+                    }
+                }
+            }
+
+            ColumnLayout {
+                anchors.fill: parent
+                anchors.margins: 8
+                spacing: 6
+
+                GridLayout {
+                    columns: 2
+                    columnSpacing: 8
+                    rowSpacing: 4
+                    Layout.fillWidth: true
+                    enabled: !redac.chargement
+
+                    Label { text: qsTr("De :") }
+                    ComboBox {
+                        id: choixCompte
+                        model: fenetre.comptesConnus
+                        displayText: currentIndex >= 0 && fenetre.comptesConnus[currentIndex]
+                                     ? fenetre.comptesConnus[currentIndex].adresse : ""
+                        delegate: ItemDelegate {
+                            required property var modelData
+                            width: ListView.view ? ListView.view.width : implicitWidth
+                            text: modelData.adresse
+                        }
+                        Layout.fillWidth: true
+                        onActivated: redac.modifie = true
+                    }
+                    Label { text: qsTr("À :") }
+                    TextField {
+                        id: champA
+                        placeholderText: qsTr("nom@exemple.fr ; autre@exemple.fr")
+                        inputMethodHints: Qt.ImhEmailCharactersOnly | Qt.ImhNoAutoUppercase
+                        Layout.fillWidth: true
+                        onTextEdited: redac.modifie = true
+                    }
+                    Label { text: qsTr("Cc :"); visible: redac.afficherCopies }
+                    TextField {
+                        id: champCc
+                        visible: redac.afficherCopies
+                        inputMethodHints: Qt.ImhEmailCharactersOnly | Qt.ImhNoAutoUppercase
+                        Layout.fillWidth: true
+                        onTextEdited: redac.modifie = true
+                    }
+                    Label { text: qsTr("Cci :"); visible: redac.afficherCopies }
+                    TextField {
+                        id: champCci
+                        visible: redac.afficherCopies
+                        inputMethodHints: Qt.ImhEmailCharactersOnly | Qt.ImhNoAutoUppercase
+                        Layout.fillWidth: true
+                        onTextEdited: redac.modifie = true
+                    }
+                    Label { text: qsTr("Objet :") }
+                    TextField {
+                        id: champObjet
+                        Layout.fillWidth: true
+                        onTextEdited: redac.modifie = true
+                    }
+                }
+
+                // Fichiers joints, chacun retirable.
+                Flow {
+                    Layout.fillWidth: true
+                    spacing: 6
+                    visible: redac.pieces.length > 0
+                    Repeater {
+                        model: redac.pieces
+                        delegate: Rectangle {
+                            required property var modelData
+                            required property int index
+                            radius: 4
+                            color: fenetre.palette.base
+                            border.color: fenetre.palette.mid
+                            width: lignePiece.implicitWidth + 8
+                            height: lignePiece.implicitHeight + 4
+                            RowLayout {
+                                id: lignePiece
+                                anchors.centerIn: parent
+                                spacing: 2
+                                Label {
+                                    text: modelData.nom + "  (" + fenetre.tailleLisible(modelData.taille) + ")"
+                                    Layout.leftMargin: 6
+                                }
+                                ToolButton {
+                                    text: "×"
+                                    enabled: !redac.occupe
+                                    onClicked: redac.retirerPiece(index)
+                                }
+                            }
+                        }
+                    }
+                }
+
+                ScrollView {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    ScrollBar.vertical.policy: ScrollBar.vertical.size < 1 ? ScrollBar.AlwaysOn : ScrollBar.AsNeeded
+                    rightPadding: ScrollBar.vertical.width
+                    TextArea {
+                        id: corpsRedaction
+                        wrapMode: TextEdit.Wrap
+                        selectByMouse: true
+                        persistentSelection: true
+                        font.pointSize: fenetre.tailleColonne("message")
+                        enabled: !redac.chargement
+                        placeholderText: qsTr("Votre message")
+                        background: Rectangle { color: fenetre.palette.base }
+                        onTextChanged: if (!redac.chargement) redac.modifie = true
+                    }
+                }
+            }
+
+            // Fichiers glissés depuis l'explorateur : joints.
+            DropArea {
+                anchors.fill: parent
+                onEntered: function(glisse) { glisse.accepted = glisse.hasUrls }
+                onDropped: function(depose) {
+                    if (depose.hasUrls) {
+                        redac.ajouterFichiers(depose.urls)
+                        depose.accept(Qt.CopyAction)
+                    }
+                }
+            }
+
+            FileDialog {
+                id: choixFichiers
+                title: qsTr("Joindre des fichiers")
+                fileMode: FileDialog.OpenFiles
+                onAccepted: redac.ajouterFichiers(selectedFiles)
+            }
+
+            Dialog {
+                id: dlgSansObjet
+                title: qsTr("Envoyer sans objet ?")
+                modal: true
+                anchors.centerIn: parent
+                standardButtons: Dialog.Yes | Dialog.No
+                Label { text: qsTr("Ce message n'a pas d'objet.") }
+                onAccepted: redac.envoyer(true)
+            }
+
+            Dialog {
+                id: dlgFermer
+                title: qsTr("Fermer ce message ?")
+                modal: true
+                anchors.centerIn: parent
+                width: Math.min(520, redac.width - 24)
+                Label {
+                    width: dlgFermer.availableWidth
+                    wrapMode: Text.Wrap
+                    text: qsTr("Le message a été modifié depuis son dernier enregistrement.")
+                }
+                footer: DialogButtonBox {
+                    Button {
+                        text: qsTr("Enregistrer le brouillon")
+                        DialogButtonBox.buttonRole: DialogButtonBox.AcceptRole
+                    }
+                    Button {
+                        text: qsTr("Abandonner")
+                        DialogButtonBox.buttonRole: DialogButtonBox.DestructiveRole
+                    }
+                    Button {
+                        text: qsTr("Continuer")
+                        DialogButtonBox.buttonRole: DialogButtonBox.RejectRole
+                    }
+                }
+                onAccepted: {
+                    redac.fermerApresEnregistrement = true
+                    redac.enregistrer()
+                }
+                onDiscarded: {
+                    dlgFermer.close()
+                    redac.conteneur.fermerRedaction()
+                }
+            }
+
+            Shortcut {
+                sequences: ["Ctrl+Return", "Ctrl+Enter"]
+                onActivated: redac.envoyer(false)
+            }
+            Shortcut {
+                sequences: [StandardKey.Save]
+                onActivated: redac.enregistrer()
+            }
+        }
     }
 
     // ------------------------------------------------ ligne d'arborescence
@@ -1033,6 +1546,10 @@ ApplicationWindow {
                         fenetre.choisir(index, 0)
                     menuMessage.popup()
                 }
+                onDoubleClicked: function(souris) {
+                    if (souris.button === Qt.LeftButton)
+                        fenetre.rediger(fenetre.roleCourant === "Drafts" ? "brouillon" : "repondre")
+                }
                 onReleased: {
                     if (drag.active)
                         etiquette.Drag.drop()
@@ -1183,6 +1700,29 @@ ApplicationWindow {
         id: menuMessage
         font.pointSize: fenetre.tailleColonne("liste")
         onAboutToShow: width = fenetre.largeurMenu(menuMessage)
+        MenuItem {
+            visible: fenetre.roleCourant === "Drafts"
+            height: visible ? implicitHeight : 0
+            text: qsTr("Reprendre le brouillon")
+            onTriggered: fenetre.rediger("brouillon")
+        }
+        MenuItem {
+            visible: fenetre.roleCourant !== "Drafts"
+            height: visible ? implicitHeight : 0
+            text: qsTr("Répondre")
+            onTriggered: fenetre.rediger("repondre")
+        }
+        MenuItem {
+            visible: fenetre.roleCourant !== "Drafts"
+            height: visible ? implicitHeight : 0
+            text: qsTr("Répondre à tous")
+            onTriggered: fenetre.rediger("repondre_tous")
+        }
+        MenuItem {
+            text: qsTr("Transférer")
+            onTriggered: fenetre.rediger("transferer")
+        }
+        MenuSeparator {}
         MenuItem { text: qsTr("Déplacer vers…"); onTriggered: fenetre.ouvrirDeplacer() }
         MenuSeparator {}
         MenuItem { text: qsTr("Marquer comme lu"); onTriggered: fenetre.marquerSelection(true) }
@@ -1289,6 +1829,27 @@ ApplicationWindow {
     Shortcut {
         sequences: [StandardKey.Refresh]
         onActivated: boite.actualiser()
+    }
+    // Raccourcis d'Outlook pour la rédaction.
+    Shortcut {
+        sequences: [StandardKey.New]
+        enabled: !fenetre.dialogueOuvert()
+        onActivated: fenetre.rediger("nouveau")
+    }
+    Shortcut {
+        sequence: "Ctrl+R"
+        enabled: !fenetre.dialogueOuvert() && fenetre.uidCourant > 0
+        onActivated: fenetre.rediger(fenetre.roleCourant === "Drafts" ? "brouillon" : "repondre")
+    }
+    Shortcut {
+        sequence: "Ctrl+Shift+R"
+        enabled: !fenetre.dialogueOuvert() && fenetre.uidCourant > 0
+        onActivated: fenetre.rediger("repondre_tous")
+    }
+    Shortcut {
+        sequence: "Ctrl+F"
+        enabled: !fenetre.dialogueOuvert() && fenetre.uidCourant > 0
+        onActivated: fenetre.rediger("transferer")
     }
     Shortcut {
         sequences: [StandardKey.HelpContents]
@@ -1558,6 +2119,14 @@ ApplicationWindow {
                     + "poste son index et son mot de passe mémorisé ; rien n'est supprimé sur le serveur. "
                     + "Clic droit sur un compte : se connecter, se déconnecter, oublier le mot de passe. "
                     + "Un clic sur le compte replie ou déplie ses dossiers.<br><br>"
+                    + "<b>Rédaction</b><br>"
+                    + "« Nouveau message » (Ctrl+N), « Répondre » (Ctrl+R), « Répondre à tous » "
+                    + "(Ctrl+Maj+R), « Transférer » (Ctrl+F) — boutons au-dessus du message, ou clic "
+                    + "droit. Un double clic répond ; dans les brouillons, il reprend le brouillon. "
+                    + "Dans la fenêtre de rédaction : Ctrl+Entrée envoie, Ctrl+S enregistre le "
+                    + "brouillon sur le serveur ; « Joindre… » ou un glisser-déposer de fichiers "
+                    + "ajoute des pièces jointes. Une copie de chaque message envoyé est gardée dans "
+                    + "« Éléments envoyés ».<br><br>"
                     + "<b>Favoris</b><br>"
                     + "Glissez un dossier sur la rubrique Favoris pour l'y épingler ; glissez un favori "
                     + "sur un autre pour le placer avant lui. Clic droit sur un dossier : ajouter aux "
@@ -1752,6 +2321,37 @@ ApplicationWindow {
             }
             if (fenetre.essai && fenetre.essai.scenario === "pieces")
                 fenetre.etapeScenarioPieces()
+        }
+
+        function onPreparation(jeton, contenu) {
+            var r = fenetre.redactions[jeton]
+            if (r)
+                r.remplir(JSON.parse(contenu))
+        }
+
+        function onEnvoye(jeton, avertissement) {
+            var r = fenetre.redactions[jeton]
+            if (r)
+                r.conteneur.fermerRedaction()
+            messageEtat.texte = avertissement.length > 0
+                    ? qsTr("Message envoyé — %1").arg(avertissement)
+                    : qsTr("Message envoyé.")
+            fenetre.rafraichirListe()
+        }
+
+        function onBrouillonEnregistre(jeton, uid) {
+            var r = fenetre.redactions[jeton]
+            if (!r)
+                return
+            r.brouillonEnregistre(uid)
+        }
+
+        function onEchecRedaction(jeton, message) {
+            var r = fenetre.redactions[jeton]
+            if (r)
+                r.echouer(message)
+            else
+                messageEtat.texte = message
         }
 
         function onPieceEcrite(url, chemin, ouvrir) {
@@ -2211,6 +2811,55 @@ ApplicationWindow {
         for (var i = 0; i < modeleMessages.count; ++i)
             nouvelle[modeleMessages.get(i).uid] = true
         selection = nouvelle
+    }
+
+    // ---- rédaction
+
+    /// Ouvre une rédaction : une fenêtre à part sur le bureau, comme Outlook ;
+    /// en vue compacte (téléphone), un volet qui couvre la fenêtre principale.
+    function ouvrirRedaction(compte) {
+        compteurRedactions += 1
+        var jeton = "r" + compteurRedactions
+        var conteneur = compact ? composantVoletRedaction.createObject(fenetre)
+                                : composantFenetreRedaction.createObject(fenetre)
+        if (compact)
+            conteneur.open()
+        var r = conteneur.redaction
+        r.jeton = jeton
+        r.choisirCompte(compte)
+        var table = redactions
+        table[jeton] = r
+        redactions = table
+        return r
+    }
+
+    function oublierRedaction(jeton) {
+        if (jeton && redactions[jeton]) {
+            var table = redactions
+            delete table[jeton]
+            redactions = table
+        }
+    }
+
+    /// `mode` : « nouveau », « repondre », « repondre_tous », « transferer »
+    /// ou « brouillon » (reprise d'un brouillon du dossier ouvert).
+    function rediger(mode) {
+        var compte = boite.compteCourant > 0 ? boite.compteCourant
+                   : (comptesConnus.length > 0 ? comptesConnus[0].compte : 0)
+        if (mode === "nouveau") {
+            ouvrirRedaction(compte).pret()
+            return
+        }
+        var uids = uidsChoisis()
+        var uid = uids.length === 1 ? uids[0] : uidCourant
+        if (!uid) {
+            messageEtat.texte = qsTr("Choisissez d'abord un message.")
+            return
+        }
+        var r = ouvrirRedaction(compte)
+        r.attendre(mode === "brouillon" ? qsTr("Reprise du brouillon…") : qsTr("Préparation…"))
+        if (!boite.preparer(uid, mode, r.jeton))
+            r.echouer(boite.erreur.length > 0 ? boite.erreur : qsTr("Préparation impossible."))
     }
 
     function uidsChoisis() {

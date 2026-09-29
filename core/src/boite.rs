@@ -203,6 +203,37 @@ pub mod qobject {
         #[qinvokable]
         #[cxx_name = "actualiser"]
         fn actualiser(self: Pin<&mut Boite>);
+
+        /// Prépare une rédaction à partir d'un message du dossier ouvert.
+        /// `mode` : « repondre », « repondre_tous », « transferer » ou
+        /// « brouillon ». Issue : `preparation`, ou `echecRedaction`.
+        #[qinvokable]
+        #[cxx_name = "preparer"]
+        fn preparer(self: Pin<&mut Boite>, uid: i32, mode: &QString, jeton: &QString) -> bool;
+
+        /// Envoie un message rédigé (JSON, cf. `redaction::Redaction`) depuis
+        /// le compte `compte`. Issue : `envoye`, ou `echecRedaction`.
+        #[qinvokable]
+        #[cxx_name = "envoyerMessage"]
+        fn envoyer_message(self: Pin<&mut Boite>, compte: i32, redaction: &QString) -> bool;
+
+        /// Enregistre un brouillon dans le dossier des brouillons du compte.
+        /// Issue : `brouillonEnregistre`, ou `echecRedaction`.
+        #[qinvokable]
+        #[cxx_name = "enregistrerBrouillon"]
+        fn enregistrer_brouillon(self: Pin<&mut Boite>, compte: i32, redaction: &QString) -> bool;
+
+        /// Fichier à joindre, désigné par son URL (`file:…`) ou son chemin :
+        /// `{chemin, nom, taille}` en JSON, ou une chaîne vide s'il n'existe pas.
+        #[qinvokable]
+        #[cxx_name = "decrireFichier"]
+        fn decrire_fichier(&self, url: &QString) -> QString;
+
+        /// Rôle SPECIAL-USE du dossier ouvert (« Drafts », « Sent »…), vide
+        /// s'il n'en a pas.
+        #[qinvokable]
+        #[cxx_name = "roleCourant"]
+        fn role_courant(&self) -> QString;
     }
 
     impl cxx_qt::Threading for Boite {}
@@ -250,12 +281,37 @@ pub mod qobject {
         #[qsignal]
         #[cxx_name = "echec"]
         fn echec(self: Pin<&mut Boite>, compte: i32, etape: &QString, message: &QString);
+
+        /// Rédaction préparée (JSON, cf. `redaction::Preparation`) pour la
+        /// fenêtre désignée par `jeton`.
+        #[qsignal]
+        #[cxx_name = "preparation"]
+        fn preparation(self: Pin<&mut Boite>, jeton: &QString, contenu: &QString);
+
+        /// Message envoyé ; `avertissement` non vide si une suite a échoué
+        /// (copie dans « Éléments envoyés », marquage de l'original).
+        #[qsignal]
+        #[cxx_name = "envoye"]
+        fn envoye(self: Pin<&mut Boite>, jeton: &QString, avertissement: &QString);
+
+        /// Brouillon enregistré sous l'UID `uid` du dossier des brouillons.
+        #[qsignal]
+        #[cxx_name = "brouillonEnregistre"]
+        fn brouillon_enregistre(self: Pin<&mut Boite>, jeton: &QString, uid: i32);
+
+        /// Préparation, envoi ou enregistrement impossible.
+        #[qsignal]
+        #[cxx_name = "echecRedaction"]
+        fn echec_redaction(self: Pin<&mut Boite>, jeton: &QString, message: &QString);
     }
 }
 
 use core::pin::Pin;
 use cxx_qt::{CxxQtThread, CxxQtType, Threading};
 use cxx_qt_lib::{QString, QUrl};
+
+use crate::redaction::{self, Fichier, Preparation, Redaction};
+use crate::smtp;
 
 /// Délai sans commande au bout duquel un fil de travail relit ses compteurs.
 const VEILLE: Duration = Duration::from_secs(120);
@@ -295,6 +351,12 @@ enum Commande {
     Deplacer { source: String, uids: Vec<u32>, cible: Cible },
     /// Reprendre les déplacements interrompus dont ce compte est la source.
     Reprendre(HashMap<i64, Identifiants>),
+    /// Préparer une réponse, un transfert ou la reprise d'un brouillon.
+    Preparer { chemin: String, uid: u32, mode: String, jeton: String },
+    /// Envoyer : il faut le mot de passe, que le fil a oublié une fois la
+    /// session IMAP ouverte — il revient avec la commande.
+    Envoyer { redaction: Redaction, identifiants: Identifiants },
+    Brouillon { redaction: Redaction },
     /// Veille périodique, émise par le fil lui-même.
     Veille,
 }
@@ -352,6 +414,10 @@ enum Issue {
     /// ni attendus par l'interface, qui n'a qu'à relire ses compteurs.
     Repris { rapport: Rapport },
     Echec { etape: &'static str, message: String, session_perdue: bool },
+    Prepare { jeton: String, contenu: String },
+    Envoye { jeton: String, avertissement: String },
+    BrouillonEnregistre { jeton: String, uid: u32 },
+    EchecRedaction { jeton: String, message: String },
 }
 
 /// Session d'un compte, vue de l'interface.
@@ -787,6 +853,76 @@ impl qobject::Boite {
         }
     }
 
+    pub fn preparer(mut self: Pin<&mut Self>, uid: i32, mode: &QString, jeton: &QString) -> bool {
+        let Some((compte, chemin, _)) = self.courant.clone() else {
+            return false;
+        };
+        let commande =
+            Commande::Preparer { chemin, uid: uid as u32, mode: mode.to_string(), jeton: jeton.to_string() };
+        self.as_mut().envoyer(compte, commande)
+    }
+
+    /// Lit la rédaction transmise par l'interface ; `None` (et l'erreur posée)
+    /// si le JSON est illisible.
+    fn lire_redaction(mut self: Pin<&mut Self>, redaction: &QString) -> Option<Redaction> {
+        match serde_json::from_str::<Redaction>(&redaction.to_string()) {
+            Ok(r) => Some(r),
+            Err(e) => {
+                self.as_mut().set_erreur(QString::from(&format!("rédaction illisible : {e}")));
+                None
+            }
+        }
+    }
+
+    pub fn envoyer_message(mut self: Pin<&mut Self>, compte: i32, redaction: &QString) -> bool {
+        let compte = compte as i64;
+        let Some(redaction) = self.as_mut().lire_redaction(redaction) else {
+            return false;
+        };
+        let Some(identifiants) = self.identites.get(&compte).cloned() else {
+            self.as_mut().set_erreur(QString::from("ce compte n'est pas connecté"));
+            return false;
+        };
+        self.as_mut().envoyer(compte, Commande::Envoyer { redaction, identifiants })
+    }
+
+    pub fn enregistrer_brouillon(mut self: Pin<&mut Self>, compte: i32, redaction: &QString) -> bool {
+        let Some(redaction) = self.as_mut().lire_redaction(redaction) else {
+            return false;
+        };
+        self.as_mut().envoyer(compte as i64, Commande::Brouillon { redaction })
+    }
+
+    pub fn decrire_fichier(&self, url: &QString) -> QString {
+        let texte = url.to_string();
+        let chemin = if texte.starts_with("file:") {
+            QUrl::from(url).to_local_file().map(|c| c.to_string()).unwrap_or_default()
+        } else {
+            texte
+        };
+        let Ok(meta) = std::fs::metadata(&chemin) else {
+            return QString::from("");
+        };
+        if !meta.is_file() {
+            return QString::from("");
+        }
+        let nom = Path::new(&chemin).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        QString::from(&format!(
+            r#"{{"chemin":{},"nom":{},"taille":{}}}"#,
+            texte_json(&chemin),
+            texte_json(&nom),
+            meta.len()
+        ))
+    }
+
+    pub fn role_courant(&self) -> QString {
+        let role = match (&self.courant, &self.magasin) {
+            (Some((_, _, id)), Some(m)) => m.dossier(*id).ok().flatten().map(|d| d.role).unwrap_or_default(),
+            _ => String::new(),
+        };
+        QString::from(&role)
+    }
+
     // ----------------------------------------------------------------- privé
 
     fn etat(&self, compte: i64) -> Etat {
@@ -997,6 +1133,21 @@ impl qobject::Boite {
                 }
                 self.as_mut()
                     .deplacement_termine(rapport.deplaces as i32, &QString::from(&erreurs));
+            }
+            Issue::Prepare { jeton, contenu } => {
+                self.as_mut().preparation(&QString::from(&jeton), &QString::from(&contenu));
+            }
+            Issue::Envoye { jeton, avertissement } => {
+                // « Éléments envoyés » et l'original (répondu) ont changé.
+                self.as_mut().reviser();
+                self.as_mut().envoye(&QString::from(&jeton), &QString::from(&avertissement));
+            }
+            Issue::BrouillonEnregistre { jeton, uid } => {
+                self.as_mut().reviser();
+                self.as_mut().brouillon_enregistre(&QString::from(&jeton), uid as i32);
+            }
+            Issue::EchecRedaction { jeton, message } => {
+                self.as_mut().echec_redaction(&QString::from(&jeton), &QString::from(&message));
             }
             Issue::Repris { rapport } => {
                 // Les cibles ont reçu des messages : leurs compteurs aussi.
@@ -1239,6 +1390,24 @@ impl Travail {
                 e.identites.extend(identites);
                 self.reprendre(e)
             }
+            Commande::Preparer { chemin, uid, mode, jeton } => Some(match self.preparer(e, &chemin, uid, &mode) {
+                Ok(p) => Issue::Prepare { jeton, contenu: serde_json::to_string(&p).unwrap_or_default() },
+                Err(message) => Issue::EchecRedaction { jeton, message },
+            }),
+            Commande::Envoyer { redaction, identifiants } => {
+                let jeton = redaction.jeton.clone();
+                Some(match self.envoyer_redaction(e, &redaction, &identifiants) {
+                    Ok(avertissement) => Issue::Envoye { jeton, avertissement },
+                    Err(message) => Issue::EchecRedaction { jeton, message },
+                })
+            }
+            Commande::Brouillon { redaction } => {
+                let jeton = redaction.jeton.clone();
+                Some(match self.enregistrer_brouillon(e, &redaction) {
+                    Ok(uid) => Issue::BrouillonEnregistre { jeton, uid },
+                    Err(message) => Issue::EchecRedaction { jeton, message },
+                })
+            }
             Commande::Veille => {
                 if let Err(err) = synchro::arborescence(&mut e.client, &e.magasin, compte) {
                     return Some(echec("reseau", format!("veille : {err}"), &err));
@@ -1364,6 +1533,144 @@ fn annexe(e: &mut Etabli, compte: i64) -> Result<Client, Echec> {
     let mut client = Client::connecter(&identifiants.hote, PORT_IMAPS)?;
     client.ouvrir_session(&identifiants.utilisateur, &identifiants.mot_de_passe)?;
     Ok(client)
+}
+
+// ------------------------------------------------------------- rédaction
+
+impl Travail {
+    /// Chemin du dossier de ce compte qui porte un rôle SPECIAL-USE.
+    fn dossier_de_role(&self, e: &Etabli, role: &str) -> Option<String> {
+        e.magasin.dossiers(self.compte).ok()?.into_iter().find(|d| d.role == role).map(|d| d.chemin)
+    }
+
+    /// Fait une opération dans un autre dossier que celui qui est sélectionné,
+    /// puis y revient : la veille relit le dossier sélectionné, qui doit rester
+    /// celui que l'utilisateur regarde.
+    fn ailleurs<T>(
+        &self,
+        e: &mut Etabli,
+        chemin: &str,
+        operation: impl FnOnce(&mut Client) -> Result<T, Erreur>,
+    ) -> Result<T, String> {
+        let avant = e.client.selection().map(str::to_string);
+        assurer_selection(&mut e.client, chemin).map_err(|x| x.to_string())?;
+        let resultat = operation(&mut e.client).map_err(|x| x.to_string());
+        if let Some(avant) = avant {
+            let _ = assurer_selection(&mut e.client, &avant);
+        }
+        resultat
+    }
+
+    fn preparer(&self, e: &mut Etabli, chemin: &str, uid: u32, mode: &str) -> Result<Preparation, String> {
+        assurer_selection(&mut e.client, chemin).map_err(|x| x.to_string())?;
+        let octets = e.client.corps(uid).map_err(|x| format!("lecture du message : {x}"))?;
+        let propres: Vec<String> =
+            e.magasin.compte_par_id(self.compte).ok().flatten().map(|c| vec![c.adresse]).unwrap_or_default();
+        let mut p = redaction::preparer(&octets, mode, &propres);
+        if mode == "brouillon" {
+            p.brouillon_uid = uid;
+        } else {
+            p.origine_chemin = chemin.to_string();
+            p.origine_uid = uid;
+        }
+        if mode == "transferer" || mode == "brouillon" {
+            // Pièces reprises : écrites à part, elles se joignent ensuite comme
+            // n'importe quel fichier.
+            let racine = dossier_pieces(&self.profil)
+                .join(format!("redaction-{}-{uid}-{}", self.compte, maintenant()));
+            for piece in crate::index::pieces_jointes(&octets) {
+                let Some((nom, contenu)) = crate::index::extraire_piece(&octets, piece.indice) else {
+                    continue;
+                };
+                let dossier = racine.join(piece.indice.to_string());
+                let fichier = dossier.join(&nom);
+                std::fs::create_dir_all(&dossier)
+                    .and_then(|_| std::fs::write(&fichier, contenu))
+                    .map_err(|x| format!("pièce jointe {nom} : {x}"))?;
+                p.pieces.push(fichier.to_string_lossy().into_owned());
+            }
+        }
+        Ok(p)
+    }
+
+    fn envoyer_redaction(&self, e: &mut Etabli, r: &Redaction, id: &Identifiants) -> Result<String, String> {
+        let fichiers = lire_fichiers(&r.pieces)?;
+        let f = redaction::fabriquer(r, maintenant(), &fichiers)?;
+        if f.destinataires.is_empty() {
+            return Err("aucun destinataire".into());
+        }
+        smtp::envoyer(&id.hote, &id.utilisateur, &id.mot_de_passe, &r.de, &f.destinataires, &f.envoi)
+            .map_err(|x| format!("envoi : {x}"))?;
+        // Le message est parti : ce qui suit ne peut plus le faire échouer,
+        // seulement donner lieu à un avertissement.
+        let mut avertissements = Vec::new();
+        match self.dossier_de_role(e, "Sent") {
+            Some(envoyes) => {
+                if let Err(x) = e.client.deposer(&envoyes, &["\\Seen".into()], "", &f.copie) {
+                    avertissements.push(format!("copie dans « {envoyes} » : {x}"));
+                }
+            }
+            None => avertissements.push("aucun dossier des éléments envoyés : pas de copie gardée".into()),
+        }
+        if r.brouillon_uid > 0 {
+            if let Err(x) = self.effacer_brouillon(e, r.brouillon_uid) {
+                avertissements.push(format!("brouillon non effacé : {x}"));
+            }
+        }
+        if r.origine_uid > 0 && !r.origine_chemin.is_empty() {
+            let drapeau = if r.origine_mode == "transferer" { "$Forwarded" } else { "\\Answered" };
+            let uid = r.origine_uid;
+            if let Err(x) = self.ailleurs(e, &r.origine_chemin, |c| c.marquer(&[uid], drapeau, true)) {
+                avertissements.push(format!("marquage du message d'origine : {x}"));
+            }
+        }
+        let _ = synchro::arborescence(&mut e.client, &e.magasin, self.compte);
+        Ok(avertissements.join(" ; "))
+    }
+
+    fn enregistrer_brouillon(&self, e: &mut Etabli, r: &Redaction) -> Result<u32, String> {
+        let fichiers = lire_fichiers(&r.pieces)?;
+        let f = redaction::fabriquer(r, maintenant(), &fichiers)?;
+        let brouillons =
+            self.dossier_de_role(e, "Drafts").ok_or("ce compte n'a pas de dossier des brouillons")?;
+        let uid = e
+            .client
+            .deposer(&brouillons, &["\\Draft".into(), "\\Seen".into()], "", &f.copie)
+            .map_err(|x| format!("enregistrement du brouillon : {x}"))?;
+        // La version précédente s'efface une fois la nouvelle en place.
+        if r.brouillon_uid > 0 {
+            let _ = self.effacer_brouillon(e, r.brouillon_uid);
+        }
+        let _ = synchro::arborescence(&mut e.client, &e.magasin, self.compte);
+        Ok(uid.unwrap_or(0))
+    }
+
+    fn effacer_brouillon(&self, e: &mut Etabli, uid: u32) -> Result<(), String> {
+        let brouillons =
+            self.dossier_de_role(e, "Drafts").ok_or("ce compte n'a pas de dossier des brouillons")?;
+        self.ailleurs(e, &brouillons, |c| c.supprimer(&[uid]))
+    }
+}
+
+/// Lit les fichiers à joindre. Un fichier disparu entre-temps arrête tout : un
+/// message qui partirait sans l'une de ses pièces serait pire qu'un refus.
+fn lire_fichiers(chemins: &[String]) -> Result<Vec<Fichier>, String> {
+    chemins
+        .iter()
+        .map(|chemin| {
+            let nom = Path::new(chemin).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            std::fs::read(chemin)
+                .map(|contenu| Fichier { nom: nom.clone(), contenu })
+                .map_err(|x| format!("pièce jointe « {nom} » illisible : {x}"))
+        })
+        .collect()
+}
+
+fn maintenant() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 /// Lit le corps d'un message du dossier ouvert ; un message affiché (et non sa
@@ -1548,6 +1855,9 @@ mod tests {
                 Commande::Arborescence => "arborescence".into(),
                 Commande::Reprendre(_) => "reprendre".into(),
                 Commande::Veille => "veille".into(),
+                Commande::Preparer { .. } => "preparer".into(),
+                Commande::Envoyer { .. } => "envoyer".into(),
+                Commande::Brouillon { .. } => "brouillon".into(),
             })
             .collect()
     }

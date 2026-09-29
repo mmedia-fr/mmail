@@ -367,7 +367,7 @@ pub fn secondes_date_interne(date: &str) -> Option<i64> {
 }
 
 /// Jours écoulés depuis le 1er janvier 1970 (calendrier grégorien proleptique).
-fn jours_depuis_epoque(an: i64, mois: i64, jour: i64) -> i64 {
+pub(crate) fn jours_depuis_epoque(an: i64, mois: i64, jour: i64) -> i64 {
     let a = if mois <= 2 { an - 1 } else { an };
     let ere = a.div_euclid(400);
     let annee_ere = a - ere * 400;

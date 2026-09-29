@@ -9,6 +9,8 @@ pub mod index;
 pub mod magasin;
 pub mod pont_presse_papier;
 pub mod presse_papier;
+pub mod redaction;
+pub mod smtp;
 pub mod socle;
 pub mod protocole;
 pub mod synchro;

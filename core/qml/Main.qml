@@ -83,6 +83,15 @@ ApplicationWindow {
     // Pièces jointes du message affiché, telles que le noyau les rend.
     property var pieces: []
 
+    // Rédaction : identité et signature de chaque compte, en JSON
+    // (adresse → {nom, signature, nouveaux, reponses}) ; mise en forme par défaut.
+    Settings {
+        id: reglagesRedaction
+        category: "redaction"
+        property string identites: "{}"
+        property bool miseEnForme: true
+    }
+
     Settings {
         id: reglages
         category: "interface"
@@ -773,8 +782,13 @@ ApplicationWindow {
     // ------------------------------------------------------------- rédaction
     Component {
         id: composantFenetreRedaction
-        Window {
+        // ApplicationWindow et non Window : c'est elle qui transmet police et
+        // palette aux éléments flottants (listes, menus, dialogues) — une
+        // simple Window les laisse aux valeurs par défaut du système.
+        ApplicationWindow {
             id: fenetreRedaction
+            font: fenetre.font
+            palette: fenetre.palette
             width: Math.min(900, Screen.desktopAvailableWidth - 40)
             height: Math.min(700, Screen.desktopAvailableHeight - 60)
             minimumWidth: 480
@@ -862,6 +876,7 @@ ApplicationWindow {
             property bool fermetureConfirmee: false
             property bool fermerApresEnregistrement: false
             property bool afficherCopies: false
+            property bool miseEnForme: reglagesRedaction.miseEnForme
             property string note: ""
             property bool noteErreur: false
             readonly property string titre: champObjet.text.length > 0 ? champObjet.text : qsTr("Nouveau message")
@@ -875,10 +890,37 @@ ApplicationWindow {
                 return fenetre.comptesConnus[choixCompte.currentIndex] || null
             }
 
+            function identiteChoisie() {
+                var c = compteChoisi()
+                return fenetre.identite(c ? c.adresse : "")
+            }
+
             function pret() {
+                chargement = true
+                var i = identiteChoisie()
+                mef.poserTexte(i.nouveaux && i.signature.length > 0 ? "\n\n" + i.signature : "")
+                corpsRedaction.cursorPosition = 0
                 chargement = false
                 occupe = false
+                modifie = false
                 champA.forceActiveFocus()
+            }
+
+            function insererSignature() {
+                var i = identiteChoisie()
+                if (i.signature.length === 0) {
+                    signaler(qsTr("Aucune signature pour ce compte : menu « Comptes », « Nom et signature… »."), true)
+                    return
+                }
+                mef.inserer(corpsRedaction.cursorPosition, i.signature)
+            }
+
+            /// Mise en forme coupée : le texte est ramené au brut, puces et
+            /// numéros compris, pour que ce qui s'affiche soit ce qui part.
+            function basculerMiseEnForme(active) {
+                miseEnForme = active
+                if (!active && mef.enrichi())
+                    mef.poserTexte(mef.texte())
             }
 
             function attendre(texte) {
@@ -899,7 +941,15 @@ ApplicationWindow {
                 champCc.text = p.cc || ""
                 champCci.text = p.cci || ""
                 champObjet.text = p.objet || ""
-                corpsRedaction.text = p.texte || ""
+                if (p.html && p.html.length > 0) {
+                    miseEnForme = true
+                    mef.poserHtml(p.html)
+                } else {
+                    var i = identiteChoisie()
+                    var signature = p.mode !== "brouillon" && i.reponses && i.signature.length > 0
+                                  ? "\n\n" + i.signature : ""
+                    mef.poserTexte(signature + (p.texte || ""))
+                }
                 brouillonUid = p.brouillonUid || 0
                 origineChemin = p.origineChemin || ""
                 origineUid = p.origineUid || 0
@@ -930,9 +980,9 @@ ApplicationWindow {
             function contenu() {
                 var c = compteChoisi()
                 return {
-                    jeton: jeton, de: c ? c.adresse : "", nom: "",
+                    jeton: jeton, de: c ? c.adresse : "", nom: identiteChoisie().nom,
                     a: champA.text, cc: champCc.text, cci: champCci.text,
-                    objet: champObjet.text, texte: corpsRedaction.text, html: "",
+                    objet: champObjet.text, texte: mef.texte(), html: miseEnForme ? mef.html() : "",
                     pieces: pieces.map(function(f) { return f.chemin }),
                     enReponseA: enReponseA, references: references, brouillonUid: brouillonUid,
                     origineChemin: origineChemin, origineUid: origineUid, origineMode: origineMode
@@ -1011,6 +1061,68 @@ ApplicationWindow {
                 chargement = false
                 fermerApresEnregistrement = false
                 signaler(message, true)
+            }
+
+            // ---- adresses proposées à la saisie
+            function proposer(champ) {
+                var avant = champ.text.substring(0, champ.cursorPosition)
+                var coupure = Math.max(avant.lastIndexOf(","), avant.lastIndexOf(";"))
+                var morceau = avant.substring(coupure + 1).trim()
+                if (morceau.length < 2) {
+                    suggestions.close()
+                    return
+                }
+                var liste = JSON.parse(boite.adressesConnues(morceau))
+                if (liste.length === 0) {
+                    suggestions.close()
+                    return
+                }
+                suggestions.champ = champ
+                suggestions.liste = liste
+                vueSuggestions.currentIndex = 0
+                if (!suggestions.opened)
+                    suggestions.open()
+            }
+
+            function affichable(s) {
+                if (!s.nom || s.nom.toLowerCase() === s.adresse.toLowerCase())
+                    return s.adresse
+                var nom = s.nom.replace(/"/g, "")
+                return /[,;<>]/.test(nom) ? "\"" + nom + "\" <" + s.adresse + ">" : nom + " <" + s.adresse + ">"
+            }
+
+            function accepterSuggestion(i) {
+                var champ = suggestions.champ
+                var s = suggestions.liste[i]
+                suggestions.close()
+                if (!champ || !s)
+                    return
+                var avant = champ.text.substring(0, champ.cursorPosition)
+                var apres = champ.text.substring(champ.cursorPosition).replace(/^[^,;]*[,;]?\s*/, "")
+                var coupure = Math.max(avant.lastIndexOf(","), avant.lastIndexOf(";"))
+                var tete = avant.substring(0, coupure + 1)
+                var nouveau = (tete.length > 0 ? tete + " " : "") + affichable(s) + "; "
+                champ.text = nouveau + apres
+                champ.cursorPosition = nouveau.length
+                modifie = true
+            }
+
+            /// Flèches, Entrée, Tab et Échap pilotent la liste quand elle est ouverte.
+            function toucheAdresse(ev) {
+                if (!suggestions.opened)
+                    return
+                if (ev.key === Qt.Key_Down) {
+                    vueSuggestions.incrementCurrentIndex()
+                } else if (ev.key === Qt.Key_Up) {
+                    vueSuggestions.decrementCurrentIndex()
+                } else if (ev.key === Qt.Key_Return || ev.key === Qt.Key_Enter || ev.key === Qt.Key_Tab) {
+                    accepterSuggestion(vueSuggestions.currentIndex)
+                } else if (ev.key === Qt.Key_Escape) {
+                    suggestions.close()
+                } else {
+                    return
+                }
+                ev.accepted = true
             }
 
             function demanderFermeture() {
@@ -1092,32 +1204,127 @@ ApplicationWindow {
                     Label { text: qsTr("À :") }
                     TextField {
                         id: champA
+                        onTextEdited: {
+                            redac.modifie = true
+                            redac.proposer(champA)
+                        }
+                        Keys.onPressed: function(ev) { redac.toucheAdresse(ev) }
+                        onActiveFocusChanged: if (!activeFocus && suggestions.champ === champA) suggestions.close()
                         placeholderText: qsTr("nom@exemple.fr ; autre@exemple.fr")
                         inputMethodHints: Qt.ImhEmailCharactersOnly | Qt.ImhNoAutoUppercase
                         Layout.fillWidth: true
-                        onTextEdited: redac.modifie = true
                     }
                     Label { text: qsTr("Cc :"); visible: redac.afficherCopies }
                     TextField {
                         id: champCc
+                        onTextEdited: {
+                            redac.modifie = true
+                            redac.proposer(champCc)
+                        }
+                        Keys.onPressed: function(ev) { redac.toucheAdresse(ev) }
+                        onActiveFocusChanged: if (!activeFocus && suggestions.champ === champCc) suggestions.close()
                         visible: redac.afficherCopies
                         inputMethodHints: Qt.ImhEmailCharactersOnly | Qt.ImhNoAutoUppercase
                         Layout.fillWidth: true
-                        onTextEdited: redac.modifie = true
                     }
                     Label { text: qsTr("Cci :"); visible: redac.afficherCopies }
                     TextField {
                         id: champCci
+                        onTextEdited: {
+                            redac.modifie = true
+                            redac.proposer(champCci)
+                        }
+                        Keys.onPressed: function(ev) { redac.toucheAdresse(ev) }
+                        onActiveFocusChanged: if (!activeFocus && suggestions.champ === champCci) suggestions.close()
                         visible: redac.afficherCopies
                         inputMethodHints: Qt.ImhEmailCharactersOnly | Qt.ImhNoAutoUppercase
                         Layout.fillWidth: true
-                        onTextEdited: redac.modifie = true
                     }
                     Label { text: qsTr("Objet :") }
                     TextField {
                         id: champObjet
                         Layout.fillWidth: true
                         onTextEdited: redac.modifie = true
+                    }
+                }
+
+                // Mise en forme : les boutons ne prennent pas le focus, pour que
+                // la sélection du texte reste celle sur laquelle ils agissent.
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 2
+                    CheckBox {
+                        text: qsTr("Mise en forme")
+                        checked: redac.miseEnForme
+                        focusPolicy: Qt.NoFocus
+                        onToggled: redac.basculerMiseEnForme(checked)
+                    }
+                    ToolButton {
+                        visible: redac.miseEnForme
+                        text: qsTr("G")
+                        font.bold: true
+                        checkable: true
+                        checked: mef.gras
+                        focusPolicy: Qt.NoFocus
+                        onClicked: mef.basculerGras()
+                        ToolTip.visible: hovered
+                        ToolTip.text: qsTr("Gras (Ctrl+B)")
+                    }
+                    ToolButton {
+                        visible: redac.miseEnForme
+                        text: qsTr("I")
+                        font.italic: true
+                        checkable: true
+                        checked: mef.italique
+                        focusPolicy: Qt.NoFocus
+                        onClicked: mef.basculerItalique()
+                        ToolTip.visible: hovered
+                        ToolTip.text: qsTr("Italique (Ctrl+I)")
+                    }
+                    ToolButton {
+                        visible: redac.miseEnForme
+                        text: qsTr("S")
+                        font.underline: true
+                        checkable: true
+                        checked: mef.souligne
+                        focusPolicy: Qt.NoFocus
+                        onClicked: mef.basculerSouligne()
+                        ToolTip.visible: hovered
+                        ToolTip.text: qsTr("Souligné (Ctrl+U)")
+                    }
+                    ToolButton {
+                        visible: redac.miseEnForme
+                        text: qsTr("• Liste")
+                        checkable: true
+                        checked: mef.puces
+                        focusPolicy: Qt.NoFocus
+                        onClicked: mef.basculerListe(false)
+                    }
+                    ToolButton {
+                        visible: redac.miseEnForme
+                        text: qsTr("1. Liste")
+                        checkable: true
+                        checked: mef.numeros
+                        focusPolicy: Qt.NoFocus
+                        onClicked: mef.basculerListe(true)
+                    }
+                    ToolButton {
+                        visible: redac.miseEnForme
+                        text: qsTr("Lien…")
+                        focusPolicy: Qt.NoFocus
+                        onClicked: dlgAdresseLien.open()
+                    }
+                    ToolButton {
+                        visible: redac.miseEnForme
+                        text: qsTr("Effacer la mise en forme")
+                        focusPolicy: Qt.NoFocus
+                        onClicked: mef.effacerMiseEnForme()
+                    }
+                    Item { Layout.fillWidth: true }
+                    ToolButton {
+                        text: qsTr("Signature")
+                        focusPolicy: Qt.NoFocus
+                        onClicked: redac.insererSignature()
                     }
                 }
 
@@ -1161,6 +1368,7 @@ ApplicationWindow {
                     rightPadding: ScrollBar.vertical.width
                     TextArea {
                         id: corpsRedaction
+                        textFormat: TextEdit.RichText
                         wrapMode: TextEdit.Wrap
                         selectByMouse: true
                         persistentSelection: true
@@ -1185,6 +1393,87 @@ ApplicationWindow {
                 }
             }
 
+            MiseEnForme {
+                id: mef
+                document: corpsRedaction.textDocument
+                curseur: corpsRedaction.cursorPosition
+                debut: corpsRedaction.selectionStart
+                fin: corpsRedaction.selectionEnd
+            }
+
+            Popup {
+                id: suggestions
+                property var champ: null
+                property var liste: []
+                x: champ ? champ.mapToItem(redac, 0, 0).x : 0
+                y: champ ? champ.mapToItem(redac, 0, champ.height).y : 0
+                width: champ ? champ.width : 200
+                padding: 1
+                closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutsideParent
+                contentItem: ListView {
+                    id: vueSuggestions
+                    implicitHeight: contentHeight
+                    clip: true
+                    model: suggestions.liste
+                    delegate: ItemDelegate {
+                        required property var modelData
+                        required property int index
+                        width: ListView.view.width
+                        highlighted: ListView.isCurrentItem
+                        // Sans focus : le champ garderait sinon la main… et
+                        // fermerait la liste avant que le clic ne compte.
+                        focusPolicy: Qt.NoFocus
+                        text: modelData.nom.length > 0 ? modelData.nom + "  —  " + modelData.adresse : modelData.adresse
+                        onClicked: redac.accepterSuggestion(index)
+                    }
+                }
+            }
+
+            Dialog {
+                id: dlgAdresseLien
+                title: qsTr("Insérer un lien")
+                modal: true
+                anchors.centerIn: parent
+                width: Math.min(520, redac.width - 24)
+                standardButtons: Dialog.Ok | Dialog.Cancel
+                onOpened: {
+                    champAdresseLien.text = "https://"
+                    champAdresseLien.forceActiveFocus()
+                    champAdresseLien.cursorPosition = champAdresseLien.text.length
+                }
+                onAccepted: mef.poserLien(champAdresseLien.text)
+                ColumnLayout {
+                    anchors.fill: parent
+                    Label {
+                        Layout.fillWidth: true
+                        wrapMode: Text.Wrap
+                        text: qsTr("Adresse du lien, posée sur le texte sélectionné — ou insérée telle quelle s'il n'y en a pas :")
+                    }
+                    TextField {
+                        id: champAdresseLien
+                        Layout.fillWidth: true
+                        inputMethodHints: Qt.ImhUrlCharactersOnly | Qt.ImhNoAutoUppercase
+                        onAccepted: dlgAdresseLien.accept()
+                    }
+                }
+            }
+
+            Shortcut {
+                sequences: [StandardKey.Bold]
+                enabled: redac.miseEnForme
+                onActivated: mef.basculerGras()
+            }
+            Shortcut {
+                sequences: [StandardKey.Italic]
+                enabled: redac.miseEnForme
+                onActivated: mef.basculerItalique()
+            }
+            Shortcut {
+                sequences: [StandardKey.Underline]
+                enabled: redac.miseEnForme
+                onActivated: mef.basculerSouligne()
+            }
+
             FileDialog {
                 id: choixFichiers
                 title: qsTr("Joindre des fichiers")
@@ -1197,8 +1486,13 @@ ApplicationWindow {
                 title: qsTr("Envoyer sans objet ?")
                 modal: true
                 anchors.centerIn: parent
+                width: Math.min(420, redac.width - 24)
                 standardButtons: Dialog.Yes | Dialog.No
-                Label { text: qsTr("Ce message n'a pas d'objet.") }
+                Label {
+                    width: dlgSansObjet.availableWidth
+                    wrapMode: Text.Wrap
+                    text: qsTr("Ce message n'a pas d'objet.")
+                }
                 onAccepted: redac.envoyer(true)
             }
 
@@ -1569,6 +1863,11 @@ ApplicationWindow {
         MenuItem {
             text: qsTr("Ajouter avec un lien de configuration…")
             onTriggered: dlgLien.ouvrir("", "")
+        }
+        MenuItem {
+            text: qsTr("Nom et signature…")
+            enabled: fenetre.comptesConnus.length > 0
+            onTriggered: dlgIdentite.ouvrir(boite.compteCourant)
         }
         MenuSeparator {}
         // Le retrait est aussi au clic droit sur le compte ; il est repris ici
@@ -1957,6 +2256,81 @@ ApplicationWindow {
     }
 
     Dialog {
+        id: dlgIdentite
+        title: qsTr("Nom et signature")
+        modal: true
+        anchors.centerIn: Overlay.overlay
+        width: Math.min(560, fenetre.width - 24)
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        function ouvrir(compte) {
+            var i = 0
+            for (var k = 0; k < fenetre.comptesConnus.length; ++k)
+                if (fenetre.comptesConnus[k].compte === compte)
+                    i = k
+            choixIdentite.currentIndex = i
+            charger()
+            open()
+        }
+        function adresse() {
+            var c = fenetre.comptesConnus[choixIdentite.currentIndex]
+            return c ? c.adresse : ""
+        }
+        function charger() {
+            var i = fenetre.identite(adresse())
+            champNomAffiche.text = i.nom
+            champSignature.text = i.signature
+            caseSignatureNouveaux.checked = i.nouveaux
+            caseSignatureReponses.checked = i.reponses
+        }
+        onAccepted: fenetre.poserIdentite(adresse(), {
+            nom: champNomAffiche.text.trim(), signature: champSignature.text,
+            nouveaux: caseSignatureNouveaux.checked, reponses: caseSignatureReponses.checked })
+
+        ColumnLayout {
+            anchors.fill: parent
+            spacing: 6
+            ComboBox {
+                id: choixIdentite
+                Layout.fillWidth: true
+                model: fenetre.comptesConnus
+                displayText: currentIndex >= 0 && fenetre.comptesConnus[currentIndex]
+                             ? fenetre.comptesConnus[currentIndex].adresse : ""
+                delegate: ItemDelegate {
+                    required property var modelData
+                    width: ListView.view ? ListView.view.width : implicitWidth
+                    text: modelData.adresse
+                }
+                onActivated: dlgIdentite.charger()
+            }
+            Label { text: qsTr("Nom affiché chez les destinataires :") }
+            TextField {
+                id: champNomAffiche
+                Layout.fillWidth: true
+                placeholderText: qsTr("Prénom Nom")
+            }
+            Label { text: qsTr("Signature :") }
+            ScrollView {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 140
+                TextArea {
+                    id: champSignature
+                    wrapMode: TextEdit.Wrap
+                    placeholderText: qsTr("Prénom Nom\nFonction — Société\nTéléphone")
+                    background: Rectangle { color: fenetre.palette.base; border.color: fenetre.palette.mid }
+                }
+            }
+            CheckBox {
+                id: caseSignatureNouveaux
+                text: qsTr("L'ajouter aux nouveaux messages")
+            }
+            CheckBox {
+                id: caseSignatureReponses
+                text: qsTr("L'ajouter aux réponses et aux transferts")
+            }
+        }
+    }
+
+    Dialog {
         id: dlgLien
         title: qsTr("Ajouter avec un lien de configuration")
         modal: true
@@ -2126,7 +2500,11 @@ ApplicationWindow {
                     + "Dans la fenêtre de rédaction : Ctrl+Entrée envoie, Ctrl+S enregistre le "
                     + "brouillon sur le serveur ; « Joindre… » ou un glisser-déposer de fichiers "
                     + "ajoute des pièces jointes. Une copie de chaque message envoyé est gardée dans "
-                    + "« Éléments envoyés ».<br><br>"
+                    + "« Éléments envoyés ». Mise en forme : gras (Ctrl+B), italique (Ctrl+I), souligné "
+                    + "(Ctrl+U), listes, liens ; décochez « Mise en forme » pour un message en texte "
+                    + "brut. En tapant un destinataire, les adresses connues sont proposées : flèches "
+                    + "et Entrée pour choisir. Nom affiché et signature de chaque compte : menu "
+                    + "« Comptes », « Nom et signature… ».<br><br>"
                     + "<b>Favoris</b><br>"
                     + "Glissez un dossier sur la rubrique Favoris pour l'y épingler ; glissez un favori "
                     + "sur un autre pour le placer avant lui. Clic droit sur un dossier : ajouter aux "
@@ -2477,7 +2855,9 @@ ApplicationWindow {
 
     function dialogueOuvert() {
         return dlgCompte.visible || dlgDeplacer.visible || dlgRetrait.visible
-            || dlgAide.visible || dlgAPropos.visible || dlgLien.visible
+            || dlgAide.visible || dlgAPropos.visible || dlgLien.visible || dlgIdentite.visible
+            // Sur téléphone, la rédaction couvre la fenêtre principale.
+            || (compact && Object.keys(redactions).length > 0)
     }
 
     /// Ouvre le dialogue de compte : `compte` nul pour un nouveau compte.
@@ -2814,6 +3194,22 @@ ApplicationWindow {
     }
 
     // ---- rédaction
+
+    /// Nom affiché et signature d'un compte, avec leurs valeurs par défaut.
+    function identite(adresse) {
+        var table = {}
+        try { table = JSON.parse(reglagesRedaction.identites) } catch (e) { table = {} }
+        var i = table[adresse] || {}
+        return { nom: i.nom || "", signature: i.signature || "",
+                 nouveaux: i.nouveaux !== false, reponses: i.reponses !== false }
+    }
+
+    function poserIdentite(adresse, valeur) {
+        var table = {}
+        try { table = JSON.parse(reglagesRedaction.identites) } catch (e) { table = {} }
+        table[adresse] = valeur
+        reglagesRedaction.identites = JSON.stringify(table)
+    }
 
     /// Ouvre une rédaction : une fenêtre à part sur le bureau, comme Outlook ;
     /// en vue compacte (téléphone), un volet qui couvre la fenêtre principale.

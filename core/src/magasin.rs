@@ -201,6 +201,14 @@ impl Magasin {
                 body_state  TEXT NOT NULL DEFAULT 'headers',
                 UNIQUE (folder_id, uid)
             );
+            -- Adresses auxquelles on a écrit : elles complètent les expéditeurs
+            -- de l'index dans les propositions de saisie.
+            CREATE TABLE IF NOT EXISTS correspondants (
+                adresse     TEXT PRIMARY KEY COLLATE NOCASE,
+                nom         TEXT NOT NULL DEFAULT '',
+                envois      INTEGER NOT NULL DEFAULT 0,
+                dernier     INTEGER NOT NULL DEFAULT 0
+            );
             CREATE TABLE IF NOT EXISTS pending_ops (
                 id              INTEGER PRIMARY KEY,
                 nature          TEXT NOT NULL DEFAULT 'deplacer',
@@ -585,6 +593,52 @@ impl Magasin {
         }
         transaction.commit()?;
         Ok(())
+    }
+
+    // ------------------------------------------------------ correspondants
+
+    /// Note les destinataires d'un message envoyé : un nom connu n'est pas
+    /// effacé par une adresse saisie sans nom.
+    pub fn noter_correspondants(&self, adresses: &[(String, String)], quand: i64) -> Resultat<()> {
+        let transaction = self.base.unchecked_transaction()?;
+        for (nom, adresse) in adresses {
+            transaction.execute(
+                "INSERT INTO correspondants (adresse, nom, envois, dernier) VALUES (?1, ?2, 1, ?3)
+                 ON CONFLICT(adresse) DO UPDATE SET
+                    envois = envois + 1, dernier = ?3,
+                    nom = CASE WHEN ?2 <> '' THEN ?2 ELSE nom END",
+                params![adresse, nom, quand],
+            )?;
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// Adresses proposées à la saisie : celles à qui l'on a écrit, puis les
+    /// expéditeurs de l'index, dont l'adresse ou le nom contient `filtre`. Les
+    /// plus fréquentes d'abord.
+    pub fn contacts(&self, filtre: &str, limite: usize) -> Resultat<Vec<(String, String)>> {
+        let motif = format!(
+            "%{}%",
+            filtre.trim().replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")
+        );
+        let mut requete = self.base.prepare(
+            "SELECT nom, adresse FROM (
+                SELECT nom, adresse, 1000000 + envois AS poids, dernier FROM correspondants
+                 WHERE adresse LIKE ?1 ESCAPE '\\' OR nom LIKE ?1 ESCAPE '\\'
+                UNION ALL
+                SELECT MAX(expediteur), adresse, COUNT(*), MAX(horodatage) FROM messages
+                 WHERE adresse <> '' AND (adresse LIKE ?1 ESCAPE '\\' OR expediteur LIKE ?1 ESCAPE '\\')
+                 GROUP BY lower(adresse)
+             )
+             GROUP BY lower(adresse)
+             ORDER BY MAX(poids) DESC, MAX(dernier) DESC
+             LIMIT ?2",
+        )?;
+        let lignes = requete
+            .query_map(params![motif, limite as i64], |l| Ok((l.get(0)?, l.get(1)?)))?
+            .collect::<Result<Vec<(String, String)>, _>>()?;
+        Ok(lignes)
     }
 
     /// Pièces jointes constatées à la lecture d'un message : elles priment
@@ -1055,6 +1109,41 @@ mod tests {
         assert_eq!(m.dossier(id).unwrap().unwrap().uid_validity, 0, "dossier à relire");
         m.poser_messages(id, &[MessageLocal { uid: 1, pieces: true, ..Default::default() }]).unwrap();
         assert!(m.messages(id).unwrap()[0].pieces);
+    }
+
+    #[test]
+    fn contacts_proposes() {
+        let m = Magasin::en_memoire().unwrap();
+        let compte = m.compte("a@b.fr", "h", 993, "a@b.fr").unwrap();
+        m.poser_dossiers(compte, &[dossier("INBOX", &[])]).unwrap();
+        let id = m.dossier_id(compte, "INBOX").unwrap();
+        let recu = |uid, nom: &str, adresse: &str| MessageLocal {
+            uid,
+            expediteur: nom.into(),
+            adresse: adresse.into(),
+            ..Default::default()
+        };
+        m.poser_messages(
+            id,
+            &[
+                recu(1, "Hélène Martin", "helene@exemple.fr"),
+                recu(2, "Hélène Martin", "HELENE@exemple.fr"),
+                recu(3, "Noël Durand", "noel@exemple.fr"),
+                recu(4, "Promo", "promo_50%@exemple.fr"),
+            ],
+        )
+        .unwrap();
+        m.noter_correspondants(&[("".into(), "ecrit@ailleurs.fr".into())], 10).unwrap();
+        m.noter_correspondants(&[("Écrit Ailleurs".into(), "ecrit@ailleurs.fr".into())], 20).unwrap();
+        m.noter_correspondants(&[("".into(), "ecrit@ailleurs.fr".into())], 30).unwrap();
+
+        let tous = m.contacts("", 10).unwrap();
+        assert_eq!(tous[0], ("Écrit Ailleurs".into(), "ecrit@ailleurs.fr".into()), "à qui l'on écrit d'abord, nom gardé");
+        assert_eq!(tous.len(), 4, "une adresse, une ligne, quelle que soit la casse");
+        assert_eq!(m.contacts("hél", 10).unwrap()[0].1.to_lowercase(), "helene@exemple.fr");
+        assert_eq!(m.contacts("DURAND", 10).unwrap(), vec![("Noël Durand".into(), "noel@exemple.fr".into())]);
+        assert_eq!(m.contacts("50%", 10).unwrap().len(), 1, "% cherché tel quel");
+        assert!(m.contacts("zzz", 10).unwrap().is_empty());
     }
 
     #[test]

@@ -328,6 +328,11 @@ pub fn preparer(brut: &[u8], mode: &str, propres: &[String]) -> Preparation {
         p.cci = joindre(&paires(m.bcc()));
         p.objet = objet;
         p.texte = m.body_text(0).map(|t| t.into_owned()).unwrap_or_default();
+        // Un vrai corps HTML seulement : mail-parser en fabrique un à partir
+        // du texte quand le message n'en a pas.
+        if let Some(html) = m.html_part(0).filter(|part| part.is_text_html()) {
+            p.html = html.text_contents().unwrap_or("").to_string();
+        }
         p.en_reponse_a = m.in_reply_to().as_text().unwrap_or("").to_string();
         p.references = references(&m);
         return p;
@@ -515,10 +520,26 @@ mod tests {
         };
         let f = fabriquer(&r, 1_790_000_000, &[]).unwrap();
         let b = preparer(&f.copie, "brouillon", &[]);
+        assert_eq!(b.html, "", "brouillon en texte brut : pas de HTML inventé");
         assert_eq!(b.a, "noel@exemple.fr");
         assert_eq!(b.cci, "archive@exemple.fr");
         assert_eq!(b.objet, "Brouillon");
         assert_eq!(b.texte.trim_end(), "Texte en cours");
+    }
+
+    #[test]
+    fn reprise_d_un_brouillon_html() {
+        let r = Redaction {
+            de: "moi@exemple.fr".into(),
+            objet: "Mis en forme".into(),
+            texte: "Texte gras".into(),
+            html: "<p>Texte <b>gras</b></p>".into(),
+            ..Default::default()
+        };
+        let f = fabriquer(&r, 1_790_000_000, &[]).unwrap();
+        let b = preparer(&f.copie, "brouillon", &[]);
+        assert!(b.html.contains("<b>gras</b>"));
+        assert_eq!(b.texte.trim_end(), "Texte gras");
     }
 
     #[test]

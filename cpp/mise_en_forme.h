@@ -1,0 +1,301 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// Mise en forme du message en cours de rédaction : ce que QML ne sait pas faire
+// sur un TextArea en texte riche, et qui exige le QTextDocument qui est
+// derrière — gras, italique, souligné, listes, liens —, puis ce qui part : le
+// HTML et sa version en texte brut (décision 7 du dossier de projet).
+#pragma once
+
+#include <memory>
+
+#include <QtCore/QObject>
+#include <QtCore/QPointer>
+#include <QtCore/QString>
+#include <QtCore/QStringList>
+#include <QtGui/QColor>
+#include <QtGui/QFont>
+#include <QtGui/QTextBlock>
+#include <QtGui/QTextCharFormat>
+#include <QtGui/QTextCursor>
+#include <QtGui/QTextDocument>
+#include <QtGui/QTextList>
+#include <QtQuick/QQuickTextDocument>
+
+class MiseEnForme : public QObject
+{
+  Q_OBJECT
+  Q_PROPERTY(QQuickTextDocument* document READ document WRITE setDocument NOTIFY documentChange)
+  // Sélection du TextArea, que QML lie à ces trois propriétés.
+  Q_PROPERTY(int curseur READ curseurTexte WRITE setCurseur NOTIFY etatChange)
+  Q_PROPERTY(int debut READ debut WRITE setDebut NOTIFY etatChange)
+  Q_PROPERTY(int fin READ fin WRITE setFin NOTIFY etatChange)
+  // État sous le curseur, pour cocher les boutons de la barre.
+  Q_PROPERTY(bool gras READ gras NOTIFY etatChange)
+  Q_PROPERTY(bool italique READ italique NOTIFY etatChange)
+  Q_PROPERTY(bool souligne READ souligne NOTIFY etatChange)
+  Q_PROPERTY(bool puces READ puces NOTIFY etatChange)
+  Q_PROPERTY(bool numeros READ numeros NOTIFY etatChange)
+
+public:
+  using QObject::QObject;
+
+  QQuickTextDocument* document() const { return m_document; }
+  void setDocument(QQuickTextDocument* document)
+  {
+    if (m_document == document)
+      return;
+    m_document = document;
+    Q_EMIT documentChange();
+    Q_EMIT etatChange();
+  }
+  int curseurTexte() const { return m_curseur; }
+  int debut() const { return m_debut; }
+  int fin() const { return m_fin; }
+  void setCurseur(int v) { m_curseur = v; Q_EMIT etatChange(); }
+  void setDebut(int v) { m_debut = v; Q_EMIT etatChange(); }
+  void setFin(int v) { m_fin = v; Q_EMIT etatChange(); }
+
+  bool gras() const { return format().fontWeight() >= QFont::Bold; }
+  bool italique() const { return format().fontItalic(); }
+  bool souligne() const { return format().fontUnderline(); }
+  bool puces() const { return styleDeListe() == QTextListFormat::ListDisc; }
+  bool numeros() const { return styleDeListe() == QTextListFormat::ListDecimal; }
+
+  Q_INVOKABLE void basculerGras()
+  {
+    QTextCharFormat f;
+    f.setFontWeight(gras() ? QFont::Normal : QFont::Bold);
+    fusionner(f);
+  }
+  Q_INVOKABLE void basculerItalique()
+  {
+    QTextCharFormat f;
+    f.setFontItalic(!italique());
+    fusionner(f);
+  }
+  Q_INVOKABLE void basculerSouligne()
+  {
+    QTextCharFormat f;
+    f.setFontUnderline(!souligne());
+    fusionner(f);
+  }
+
+  /// Met les paragraphes sélectionnés en liste à puces (`numerotee` faux) ou
+  /// numérotée, ou les en retire s'ils y sont déjà.
+  Q_INVOKABLE void basculerListe(bool numerotee)
+  {
+    QTextDocument* doc = texte_();
+    if (!doc)
+      return;
+    const auto style = numerotee ? QTextListFormat::ListDecimal : QTextListFormat::ListDisc;
+    QTextCursor c = curseur();
+    c.beginEditBlock();
+    if (styleDeListe() == style) {
+      // Retirer : chaque bloc sélectionné sort de sa liste, sans retrait.
+      const QTextBlock dernier = doc->findBlock(borneFin());
+      for (QTextBlock b = doc->findBlock(borneDebut()); b.isValid(); b = b.next()) {
+        if (QTextList* l = b.textList())
+          l->remove(b);
+        QTextCursor cb(b);
+        QTextBlockFormat bf = b.blockFormat();
+        bf.setIndent(0);
+        cb.setBlockFormat(bf);
+        if (b == dernier)
+          break;
+      }
+    } else {
+      QTextListFormat lf;
+      lf.setStyle(style);
+      lf.setIndent(1);
+      c.createList(lf);
+    }
+    c.endEditBlock();
+    Q_EMIT etatChange();
+  }
+
+  /// Fait de la sélection un lien vers `url`. Sans sélection, insère l'adresse
+  /// elle-même, en lien.
+  Q_INVOKABLE void poserLien(const QString& url)
+  {
+    const QString cible = url.trimmed();
+    if (cible.isEmpty() || !texte_())
+      return;
+    QTextCharFormat f;
+    f.setAnchor(true);
+    f.setAnchorHref(cible);
+    f.setFontUnderline(true);
+    f.setForeground(QColor(0x1a, 0x44, 0x80));
+    QTextCursor c = curseur();
+    if (c.hasSelection())
+      c.mergeCharFormat(f);
+    else
+      c.insertText(cible, f);
+    Q_EMIT etatChange();
+  }
+
+  /// Retire gras, italique, soulignement et liens de la sélection.
+  Q_INVOKABLE void effacerMiseEnForme()
+  {
+    QTextCursor c = curseur();
+    if (!c.hasSelection())
+      c.select(QTextCursor::WordUnderCursor);
+    c.setCharFormat(QTextCharFormat());
+    Q_EMIT etatChange();
+  }
+
+  /// Remplace tout le contenu par du texte brut, ou par du HTML.
+  Q_INVOKABLE void poserTexte(const QString& texte)
+  {
+    if (QTextDocument* doc = texte_())
+      doc->setPlainText(texte);
+  }
+  Q_INVOKABLE void poserHtml(const QString& html)
+  {
+    if (QTextDocument* doc = texte_())
+      doc->setHtml(html);
+  }
+
+  /// Insère du texte brut (une signature) à la position donnée.
+  Q_INVOKABLE void inserer(int position, const QString& texte)
+  {
+    QTextDocument* doc = texte_();
+    if (!doc)
+      return;
+    QTextCursor c(doc);
+    c.setPosition(qBound(0, position, doc->characterCount() - 1));
+    c.insertText(texte);
+  }
+
+  /// HTML à envoyer. La police d'affichage — celle de l'utilisateur, zoom
+  /// compris — ne part pas : le corps est rendu dans une police courante, à
+  /// taille normale, chez le destinataire.
+  Q_INVOKABLE QString html() const
+  {
+    QTextDocument* doc = texte_();
+    if (!doc)
+      return QString();
+    std::unique_ptr<QTextDocument> copie(doc->clone());
+    QFont police(QStringLiteral("Arial"));
+    police.setPointSizeF(11);
+    copie->setDefaultFont(police);
+    return copie->toHtml();
+  }
+
+  /// Version en texte brut : chaque paragraphe sur sa ligne, les listes avec
+  /// leurs puces ou leurs numéros, les liens suivis de leur adresse.
+  Q_INVOKABLE QString texte() const
+  {
+    QTextDocument* doc = texte_();
+    if (!doc)
+      return QString();
+    QStringList lignes;
+    for (QTextBlock b = doc->begin(); b.isValid(); b = b.next()) {
+      QString ligne;
+      for (auto it = b.begin(); !it.atEnd(); ++it) {
+        const QTextFragment fragment = it.fragment();
+        if (!fragment.isValid())
+          continue;
+        ligne += fragment.text();
+        const QString href = fragment.charFormat().anchorHref();
+        if (!href.isEmpty() && href != fragment.text())
+          ligne += QStringLiteral(" <") + href + QLatin1Char('>');
+      }
+      if (QTextList* l = b.textList()) {
+        const bool numerotee = l->format().style() == QTextListFormat::ListDecimal;
+        ligne = (numerotee ? QString::number(l->itemNumber(b) + 1) + QStringLiteral(". ")
+                           : QStringLiteral("• "))
+                + ligne;
+      }
+      lignes << ligne;
+    }
+    QString sortie = lignes.join(QLatin1Char('\n'));
+    sortie.replace(QChar::LineSeparator, QLatin1Char('\n'));
+    sortie.replace(QChar::Nbsp, QLatin1Char(' '));
+    return sortie;
+  }
+
+  /// Vrai si le message porte une mise en forme que le texte brut perdrait.
+  Q_INVOKABLE bool enrichi() const
+  {
+    QTextDocument* doc = texte_();
+    if (!doc)
+      return false;
+    for (QTextBlock b = doc->begin(); b.isValid(); b = b.next()) {
+      if (b.textList())
+        return true;
+      for (auto it = b.begin(); !it.atEnd(); ++it) {
+        const QTextCharFormat f = it.fragment().charFormat();
+        if (f.fontWeight() >= QFont::Bold || f.fontItalic() || f.fontUnderline() || f.isAnchor())
+          return true;
+      }
+    }
+    return false;
+  }
+
+Q_SIGNALS:
+  void documentChange();
+  void etatChange();
+
+private:
+  QTextDocument* texte_() const { return m_document ? m_document->textDocument() : nullptr; }
+
+  /// Bornes de la sélection, ou le curseur deux fois s'il n'y en a pas.
+  int borneDebut() const { return m_debut != m_fin ? qMin(m_debut, m_fin) : m_curseur; }
+  int borneFin() const { return m_debut != m_fin ? qMax(m_debut, m_fin) : m_curseur; }
+
+  QTextCursor curseur() const
+  {
+    QTextDocument* doc = texte_();
+    QTextCursor c(doc);
+    if (!doc)
+      return c;
+    const int dernier = doc->characterCount() - 1;
+    if (m_debut != m_fin) {
+      c.setPosition(qBound(0, m_debut, dernier));
+      c.setPosition(qBound(0, m_fin, dernier), QTextCursor::KeepAnchor);
+    } else {
+      c.setPosition(qBound(0, m_curseur, dernier));
+    }
+    return c;
+  }
+
+  /// Format du caractère sous le curseur, ou du début de la sélection.
+  QTextCharFormat format() const
+  {
+    QTextDocument* doc = texte_();
+    if (!doc)
+      return QTextCharFormat();
+    QTextCursor c(doc);
+    const int dernier = doc->characterCount() - 1;
+    // Le format « au curseur » est celui du caractère qui précède : c'est ce
+    // que prolonge la frappe.
+    const int position = m_debut != m_fin ? qMin(m_debut, m_fin) + 1 : m_curseur;
+    c.setPosition(qBound(0, position, dernier));
+    return c.charFormat();
+  }
+
+  QTextListFormat::Style styleDeListe() const
+  {
+    QTextDocument* doc = texte_();
+    if (!doc)
+      return QTextListFormat::ListStyleUndefined;
+    QTextList* l = doc->findBlock(borneDebut()).textList();
+    return l ? l->format().style() : QTextListFormat::ListStyleUndefined;
+  }
+
+  /// Applique un format à la sélection ; sans sélection, au mot sous le
+  /// curseur, comme le fait un traitement de texte.
+  void fusionner(const QTextCharFormat& f)
+  {
+    QTextCursor c = curseur();
+    if (!c.hasSelection())
+      c.select(QTextCursor::WordUnderCursor);
+    c.mergeCharFormat(f);
+    Q_EMIT etatChange();
+  }
+
+  QPointer<QQuickTextDocument> m_document;
+  int m_curseur = 0;
+  int m_debut = 0;
+  int m_fin = 0;
+};

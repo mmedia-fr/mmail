@@ -229,6 +229,12 @@ pub mod qobject {
         #[cxx_name = "decrireFichier"]
         fn decrire_fichier(&self, url: &QString) -> QString;
 
+        /// Adresses proposées à la saisie d'un destinataire, en JSON
+        /// `[{nom, adresse}]` : celles à qui l'on a écrit, puis les expéditeurs.
+        #[qinvokable]
+        #[cxx_name = "adressesConnues"]
+        fn adresses_connues(&self, filtre: &QString) -> QString;
+
         /// Rôle SPECIAL-USE du dossier ouvert (« Drafts », « Sent »…), vide
         /// s'il n'en a pas.
         #[qinvokable]
@@ -913,6 +919,15 @@ impl qobject::Boite {
             texte_json(&nom),
             meta.len()
         ))
+    }
+
+    pub fn adresses_connues(&self, filtre: &QString) -> QString {
+        let contacts = self.magasin.as_ref().and_then(|m| m.contacts(&filtre.to_string(), 8).ok()).unwrap_or_default();
+        let lignes: Vec<String> = contacts
+            .iter()
+            .map(|(nom, adresse)| format!(r#"{{"nom":{},"adresse":{}}}"#, texte_json(nom), texte_json(adresse)))
+            .collect();
+        QString::from(&format!("[{}]", lignes.join(",")))
     }
 
     pub fn role_courant(&self) -> QString {
@@ -1601,6 +1616,13 @@ impl Travail {
         }
         smtp::envoyer(&id.hote, &id.utilisateur, &id.mot_de_passe, &r.de, &f.destinataires, &f.envoi)
             .map_err(|x| format!("envoi : {x}"))?;
+        // Ceux à qui l'on écrit seront proposés à la prochaine saisie.
+        let destinataires: Vec<(String, String)> = [&r.a, &r.cc, &r.cci]
+            .iter()
+            .filter_map(|liste| redaction::adresses(liste).ok())
+            .flatten()
+            .collect();
+        let _ = e.magasin.noter_correspondants(&destinataires, maintenant());
         // Le message est parti : ce qui suit ne peut plus le faire échouer,
         // seulement donner lieu à un avertissement.
         let mut avertissements = Vec::new();

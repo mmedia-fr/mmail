@@ -16,9 +16,9 @@ Le cadrage complet — exigences, décisions actées (les « décisions » numé
 citées dans le code), pistes écartées et leur motif — est tenu dans un dossier
 de projet interne.
 
-## État — 0.2.0
+## État — 0.2.1
 
-**Lecture, tri, rédaction et envoi** en texte brut.
+**Lecture, tri, rédaction et envoi.**
 
 - **rédaction** dans une fenêtre à part (un volet sur téléphone) : nouveau
   message, réponse, réponse à tous, transfert — à la manière d'Outlook, avec
@@ -28,6 +28,13 @@ de projet interne.
   SMTP du serveur (port 465), copie dans « Éléments envoyés », original marqué
   « répondu » ou « transféré » ; brouillons enregistrés sur le serveur et
   repris d'un double clic ;
+- **mise en forme** à la rédaction — gras, italique, souligné, listes à
+  puces ou numérotées, liens — envoyée en HTML avec sa version en texte brut ;
+  « Mise en forme » décochée, le message part en texte brut ;
+- **nom affiché et signature** par compte (menu « Comptes », « Nom et
+  signature… »), ajoutée aux nouveaux messages, aux réponses, ou sur demande ;
+- **adresses proposées** en tapant un destinataire : celles à qui l'on a
+  écrit, puis les expéditeurs connus ;
 - **plusieurs comptes dans une seule arborescence**, repliables, avec la
   rubrique **Favoris** au-dessus : on l'alimente en y **glissant un dossier**,
   et l'on réordonne ses favoris de la même façon ; un blanc et un trait
@@ -133,8 +140,8 @@ passe n'est confié au coffre qu'une fois accepté par le serveur.
   images ni mise en forme.
 - Sous Android, les pièces jointes s'ouvrent mais ne s'enregistrent pas
   ailleurs ; leur ouverture n'a pas été éprouvée sur un téléphone.
-- Rédaction en texte brut seulement : ni mise en forme, ni signatures, ni
-  adresses proposées à la saisie (prévus en 0.2.1) ; pas de filtres.
+- Pas d'images insérées dans le corps d'un message rédigé, ni de signature
+  mise en forme ; pas de filtres.
 - L'envoi passe par le même serveur que la lecture, sur le port 465.
 - Sous Android, les autorités de certification sont celles de Mozilla,
   embarquées dans l'application — et non celles du téléphone.

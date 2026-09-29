@@ -18,7 +18,7 @@ use crate::protocole::{Dossier, EtatDossier, Statut};
 pub type Resultat<T> = Result<T, Erreur>;
 
 /// Version du schéma, portée par `PRAGMA user_version`.
-const VERSION_SCHEMA: i32 = 2;
+const VERSION_SCHEMA: i32 = 3;
 
 #[derive(Debug)]
 pub struct Erreur(pub String);
@@ -85,6 +85,9 @@ pub struct MessageLocal {
     pub taille: u32,
     pub lu: bool,
     pub repondu: bool,
+    /// Pièces jointes : supposées d'après les en-têtes, puis constatées à la
+    /// lecture du message.
+    pub pieces: bool,
 }
 
 /// Étape d'un déplacement entre boîtes (décision 16).
@@ -240,6 +243,15 @@ impl Magasin {
              CREATE INDEX IF NOT EXISTS messages_par_horodatage
                  ON messages(folder_id, horodatage DESC, uid DESC);",
         )?;
+        // Version 3 : le marqueur de pièces jointes. Les en-têtes déjà indexés
+        // ont été lus sans Content-Type : UIDVALIDITY remise à zéro, chaque
+        // dossier est relu en entier à sa prochaine ouverture — en-têtes
+        // seulement, l'état local des dossiers (favoris, masquage) restant.
+        if version < 3 {
+            self.ajouter_colonne("messages", "pieces", "INTEGER NOT NULL DEFAULT 0")?;
+            self.ajouter_colonne("messages", "pieces_certain", "INTEGER NOT NULL DEFAULT 0")?;
+            self.base.execute("UPDATE folders SET uidvalidity = 0", [])?;
+        }
         self.base.pragma_update(None, "user_version", VERSION_SCHEMA)?;
         Ok(())
     }
@@ -533,10 +545,11 @@ impl Magasin {
             let mut insertion = transaction.prepare(
                 "INSERT INTO messages
                    (folder_id, uid, message_id, expediteur, adresse, sujet, date, horodatage,
-                    taille, lu, repondu)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                    taille, lu, repondu, pieces)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
                  ON CONFLICT(folder_id, uid)
-                 DO UPDATE SET lu = ?10, repondu = ?11",
+                 DO UPDATE SET lu = ?10, repondu = ?11,
+                    pieces = CASE WHEN pieces_certain = 1 THEN pieces ELSE ?12 END",
             )?;
             for m in messages {
                 insertion.execute(params![
@@ -550,7 +563,8 @@ impl Magasin {
                     m.horodatage,
                     m.taille,
                     m.lu as i32,
-                    m.repondu as i32
+                    m.repondu as i32,
+                    m.pieces as i32
                 ])?;
             }
         }
@@ -570,6 +584,16 @@ impl Magasin {
             )?;
         }
         transaction.commit()?;
+        Ok(())
+    }
+
+    /// Pièces jointes constatées à la lecture d'un message : elles priment
+    /// désormais sur ce que les en-têtes laissaient supposer.
+    pub fn poser_pieces(&self, dossier: i64, uid: u32, pieces: bool) -> Resultat<()> {
+        self.base.execute(
+            "UPDATE messages SET pieces = ?3, pieces_certain = 1 WHERE folder_id = ?1 AND uid = ?2",
+            params![dossier, uid, pieces as i32],
+        )?;
         Ok(())
     }
 
@@ -742,7 +766,7 @@ fn lire_dossier(l: &rusqlite::Row<'_>) -> rusqlite::Result<DossierLocal> {
 }
 
 const SELECT_MESSAGE: &str = "SELECT uid, message_id, expediteur, adresse, sujet, date,
-        horodatage, taille, lu, repondu
+        horodatage, taille, lu, repondu, pieces
      FROM messages";
 
 fn lire_message(l: &rusqlite::Row<'_>) -> rusqlite::Result<MessageLocal> {
@@ -757,6 +781,7 @@ fn lire_message(l: &rusqlite::Row<'_>) -> rusqlite::Result<MessageLocal> {
         taille: l.get(7)?,
         lu: l.get::<_, i32>(8)? != 0,
         repondu: l.get::<_, i32>(9)? != 0,
+        pieces: l.get::<_, i32>(10)? != 0,
     })
 }
 
@@ -1007,6 +1032,42 @@ mod tests {
         let messages = m.messages(1).unwrap();
         assert_eq!(messages.len(), 1, "l'index existant est conservé");
         assert_eq!(messages[0].sujet, "ancien");
+        assert!(!messages[0].pieces);
         assert!(m.dossier(1).unwrap().unwrap().selectionnable);
+    }
+
+    #[test]
+    fn migration_version_3_fait_relire_les_en_tetes() {
+        let m = Magasin::en_memoire().unwrap();
+        let compte = m.compte("a@b.fr", "h", 993, "a@b.fr").unwrap();
+        m.poser_dossiers(compte, &[dossier("INBOX", &[])]).unwrap();
+        let id = m.dossier_id(compte, "INBOX").unwrap();
+        m.poser_etat(id, &EtatDossier { uid_validity: 42, ..Default::default() }).unwrap();
+        // Retour à un index de version 2, sans les colonnes de pièces jointes.
+        m.base
+            .execute_batch(
+                "ALTER TABLE messages DROP COLUMN pieces;
+                 ALTER TABLE messages DROP COLUMN pieces_certain;
+                 PRAGMA user_version = 2;",
+            )
+            .unwrap();
+        m.migrer().unwrap();
+        assert_eq!(m.dossier(id).unwrap().unwrap().uid_validity, 0, "dossier à relire");
+        m.poser_messages(id, &[MessageLocal { uid: 1, pieces: true, ..Default::default() }]).unwrap();
+        assert!(m.messages(id).unwrap()[0].pieces);
+    }
+
+    #[test]
+    fn pieces_constatees_priment_sur_les_en_tetes() {
+        let m = Magasin::en_memoire().unwrap();
+        let compte = m.compte("a@b.fr", "h", 993, "a@b.fr").unwrap();
+        m.poser_dossiers(compte, &[dossier("INBOX", &[])]).unwrap();
+        let id = m.dossier_id(compte, "INBOX").unwrap();
+        // Supposé d'après un multipart/mixed, démenti à la lecture.
+        m.poser_messages(id, &[MessageLocal { uid: 1, pieces: true, ..Default::default() }]).unwrap();
+        m.poser_pieces(id, 1, false).unwrap();
+        // Une relecture des en-têtes ne rétablit pas la supposition.
+        m.poser_messages(id, &[MessageLocal { uid: 1, pieces: true, ..Default::default() }]).unwrap();
+        assert!(!m.messages(id).unwrap()[0].pieces);
     }
 }

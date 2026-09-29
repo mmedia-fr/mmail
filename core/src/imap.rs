@@ -48,7 +48,9 @@ pub struct MessageComplet {
 }
 
 /// En-têtes demandés pour l'index : de quoi afficher une liste de messages.
-const CHAMPS_ENTETE: &str = "FROM TO CC SUBJECT DATE MESSAGE-ID IN-REPLY-TO REFERENCES";
+/// `CONTENT-TYPE` : de quoi supposer des pièces jointes sans lire le corps.
+const CHAMPS_ENTETE: &str =
+    "FROM TO CC SUBJECT DATE MESSAGE-ID IN-REPLY-TO REFERENCES CONTENT-TYPE";
 
 pub type Resultat<T> = Result<T, Erreur>;
 

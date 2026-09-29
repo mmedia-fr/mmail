@@ -939,7 +939,20 @@ ApplicationWindow {
                         elide: Text.ElideRight
                         Layout.fillWidth: true
                     }
+                    // Trombone : le message porte des pièces jointes.
+                    Canvas {
+                        visible: model.pieces === true
+                        Layout.preferredHeight: dateLigne.implicitHeight
+                        Layout.preferredWidth: Math.round(dateLigne.implicitHeight * 0.62)
+                        property color encre: ligne.highlighted ? fenetre.palette.highlightedText
+                                                                : fenetre.palette.windowText
+                        onEncreChanged: requestPaint()
+                        onWidthChanged: requestPaint()
+                        onHeightChanged: requestPaint()
+                        onPaint: fenetre.dessinerTrombone(getContext("2d"), width, height, encre)
+                    }
                     Label {
+                        id: dateLigne
                         text: fenetre.dateCourte(model.date)
                         color: ligne.highlighted ? fenetre.palette.highlightedText : fenetre.palette.windowText
                         opacity: 0.7
@@ -1113,6 +1126,8 @@ ApplicationWindow {
 
     Menu {
         id: menuPiece
+        font.pointSize: fenetre.tailleColonne("message")
+        onAboutToShow: width = fenetre.largeurMenu(menuPiece)
         property var piece: null
         function ouvrir(p, bouton) {
             piece = p
@@ -1144,6 +1159,8 @@ ApplicationWindow {
 
     Menu {
         id: menuCorps
+        font.pointSize: fenetre.tailleColonne("message")
+        onAboutToShow: width = fenetre.largeurMenu(menuCorps)
         MenuItem {
             text: qsTr("Copier")
             enabled: vueCorps.selectedText.length > 0
@@ -1164,6 +1181,8 @@ ApplicationWindow {
 
     Menu {
         id: menuMessage
+        font.pointSize: fenetre.tailleColonne("liste")
+        onAboutToShow: width = fenetre.largeurMenu(menuMessage)
         MenuItem { text: qsTr("Déplacer vers…"); onTriggered: fenetre.ouvrirDeplacer() }
         MenuSeparator {}
         MenuItem { text: qsTr("Marquer comme lu"); onTriggered: fenetre.marquerSelection(true) }
@@ -1193,6 +1212,8 @@ ApplicationWindow {
 
     Menu {
         id: menuDossier
+        font.pointSize: fenetre.tailleColonne("arborescence")
+        onAboutToShow: width = fenetre.largeurMenu(menuDossier)
         property int compte: 0
         property string chemin: ""
         property bool favori: false
@@ -1213,6 +1234,8 @@ ApplicationWindow {
 
     Menu {
         id: menuCompte
+        font.pointSize: fenetre.tailleColonne("arborescence")
+        onAboutToShow: width = fenetre.largeurMenu(menuCompte)
         property int compte: 0
         property string adresse: ""
         property string hote: ""
@@ -1424,8 +1447,12 @@ ApplicationWindow {
         title: qsTr("Déplacer %1 vers…").arg(fenetre.accord(Object.keys(fenetre.selection).length, qsTr("message"), qsTr("messages")))
         modal: true
         anchors.centerIn: Overlay.overlay
-        width: Math.min(520, fenetre.width - 24)
-        height: Math.min(560, fenetre.height - 40)
+        // Zoom de la colonne d'où il est ouvert (liste, message), fixé à
+        // l'ouverture ; les dimensions suivent, dans la limite de la fenêtre.
+        property real zoom: 1
+        font.pointSize: fenetre.tailleBase * zoom
+        width: Math.min(520 * zoom, fenetre.width - 24)
+        height: Math.min(560 * zoom, fenetre.height - 40)
         standardButtons: Dialog.Ok | Dialog.Cancel
         property var cibles: []
         onOpened: {
@@ -1483,7 +1510,7 @@ ApplicationWindow {
                         Label {
                             text: model.adresse
                             opacity: 0.6
-                            Layout.preferredWidth: 170
+                            Layout.preferredWidth: 170 * dlgDeplacer.zoom
                             elide: Text.ElideRight
                         }
                         Item { Layout.preferredWidth: model.profondeur * 12 }
@@ -1716,8 +1743,13 @@ ApplicationWindow {
                 return
             vueCorps.text = texte
             vueCorps.cursorPosition = 0
-            if (!brut)
+            if (!brut) {
                 fenetre.pieces = JSON.parse(pieces)
+                // Le message entier dit s'il porte des pièces : la ligne suit.
+                var i = fenetre.indexDe(uid)
+                if (i >= 0)
+                    modeleMessages.setProperty(i, "pieces", fenetre.pieces.length > 0)
+            }
             if (fenetre.essai && fenetre.essai.scenario === "pieces")
                 fenetre.etapeScenarioPieces()
         }
@@ -1797,6 +1829,36 @@ ApplicationWindow {
             if (comptes[i].id === id)
                 return comptes[i]
         return null
+    }
+
+    /// Trombone de la liste des messages, tracé plutôt que pris d'une police :
+    /// le caractère 📎 n'existe pas partout, et une icône en couleur ne
+    /// suivrait ni l'apparence ni la surbrillance. Dessiné sur une grille de
+    /// 10 × 16, mise à l'échelle de la ligne.
+    function dessinerTrombone(ctx, w, h, encre) {
+        var x = function(v) { return v * w / 10 }
+        var y = function(v) { return v * h / 16 }
+        ctx.reset()
+        ctx.strokeStyle = encre
+        ctx.lineWidth = Math.max(1.2, w * 0.13)
+        ctx.lineCap = "round"
+        ctx.lineJoin = "round"
+        ctx.beginPath()
+        ctx.moveTo(x(7.5), y(5))
+        ctx.lineTo(x(7.5), y(11.5))
+        ctx.arc(x(5), y(11.5), x(2.5), 0, Math.PI, false)
+        ctx.lineTo(x(2.5), y(3.5))
+        ctx.arc(x(4.25), y(3.5), x(1.75), Math.PI, 0, false)
+        ctx.lineTo(x(6), y(10.5))
+        ctx.arc(x(5), y(10.5), x(1), 0, Math.PI, false)
+        ctx.lineTo(x(4), y(5.5))
+        ctx.stroke()
+    }
+
+    /// Taille de police d'une colonne, zoom compris : les menus et dialogues
+    /// ouverts depuis une colonne la reprennent.
+    function tailleColonne(colonne) {
+        return tailleBase * zoomDe(colonne)
     }
 
     /// Largeur d'un menu : celle de sa plus longue entrée. Le style Fusion la
@@ -2070,7 +2132,8 @@ ApplicationWindow {
         if (memeForme) {
             for (var j = 0; j < messages.length; ++j) {
                 var avant = modeleMessages.get(j)
-                if (avant.lu !== messages[j].lu || avant.repondu !== messages[j].repondu)
+                if (avant.lu !== messages[j].lu || avant.repondu !== messages[j].repondu
+                        || avant.pieces !== messages[j].pieces)
                     modeleMessages.set(j, messages[j])
             }
             majInfoDossier()
@@ -2198,6 +2261,7 @@ ApplicationWindow {
         if (uidsChoisis().length === 0)
             return
         dlgDeplacer.cibles = JSON.parse(boite.dossiersCibles())
+        dlgDeplacer.zoom = zoomDe(colonneActive)
         dlgDeplacer.open()
     }
 

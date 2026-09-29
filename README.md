@@ -16,7 +16,7 @@ Le cadrage complet — exigences, décisions actées (les « décisions » numé
 citées dans le code), pistes écartées et leur motif — est tenu dans un dossier
 de projet interne.
 
-## État — 0.1.3
+## État — 0.1.4
 
 **Lecture et tri.** Pas encore de rédaction ni d'envoi.
 
@@ -31,6 +31,12 @@ de projet interne.
 - **menu « ? »** : aide (F1) et « À propos » — versions de MMail, du noyau et
   de Qt ;
 - **ascenseurs toujours visibles** dès qu'une colonne a de quoi défiler ;
+- **trombone** dans la liste pour un message à pièces jointes : supposé
+  d'après les en-têtes (`multipart/mixed`, ou corps entier qui n'est pas du
+  texte ; mot-clé `$HasAttachment` du serveur s'il existe), puis constaté à
+  l'ouverture du message ;
+- **menus contextuels et « Déplacer vers… » au zoom de la colonne** d'où ils
+  sont ouverts ;
 - **déplacement par glisser-déposer ou par clic droit**, vers un dossier de la
   même boîte ou de n'importe quelle autre boîte connectée ; dialogue
   « Déplacer vers… » avec filtre (Ctrl+Maj+V) ;

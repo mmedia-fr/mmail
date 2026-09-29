@@ -1383,10 +1383,14 @@ fn lire_corps(
     } else {
         crate::index::corps_affichable(&octets)
     };
-    let pieces = json_pieces(&crate::index::pieces_jointes(&octets));
+    let liste = crate::index::pieces_jointes(&octets);
+    let pieces = json_pieces(&liste);
+    let id = e.magasin.dossier_id(compte, chemin)?;
+    // Le message entier dit s'il porte des pièces jointes : cela prime sur ce
+    // que ses en-têtes laissaient supposer dans la liste.
+    e.magasin.poser_pieces(id, uid, !liste.is_empty())?;
     let mut marque = false;
     if !brut {
-        let id = e.magasin.dossier_id(compte, chemin)?;
         if matches!(e.magasin.message(id, uid)?, Some(m) if !m.lu) {
             synchro::marquer_lu(&mut e.client, &e.magasin, compte, chemin, &[uid], true)?;
             marque = true;
@@ -1483,7 +1487,7 @@ fn json_messages(messages: &[MessageLocal]) -> String {
         .iter()
         .map(|m| {
             format!(
-                r#"{{"uid":{},"expediteur":{},"adresse":{},"sujet":{},"date":{},"taille":{},"lu":{},"repondu":{}}}"#,
+                r#"{{"uid":{},"expediteur":{},"adresse":{},"sujet":{},"date":{},"taille":{},"lu":{},"repondu":{},"pieces":{}}}"#,
                 m.uid,
                 texte_json(&m.expediteur),
                 texte_json(&m.adresse),
@@ -1491,7 +1495,8 @@ fn json_messages(messages: &[MessageLocal]) -> String {
                 texte_json(&m.date),
                 m.taille,
                 m.lu,
-                m.repondu
+                m.repondu,
+                m.pieces
             )
         })
         .collect();
@@ -1670,6 +1675,7 @@ mod tests {
         }]);
         assert!(json.contains(r#""uid":3"#));
         assert!(json.contains(r#""lu":true"#));
+        assert!(json.contains(r#""pieces":false"#));
         assert!(json.contains("Réunion"));
         assert!(json.contains(r#"Service \"compta\""#));
     }

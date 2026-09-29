@@ -19,7 +19,7 @@ use std::time::Duration;
 use crate::protocole::{self, Dossier, Entete, EtatDossier, Statut, MARQUEUR};
 
 /// Délai au-delà duquel une opération réseau est abandonnée.
-const DELAI: Duration = Duration::from_secs(30);
+pub(crate) const DELAI: Duration = Duration::from_secs(30);
 
 /// Délai d'établissement de la connexion : un serveur injoignable doit être
 /// signalé vite, pas au bout des deux minutes du système.
@@ -48,7 +48,10 @@ pub struct MessageComplet {
 }
 
 /// En-têtes demandés pour l'index : de quoi afficher une liste de messages.
-const CHAMPS_ENTETE: &str = "FROM TO CC SUBJECT DATE MESSAGE-ID IN-REPLY-TO REFERENCES";
+/// `CONTENT-TYPE` : de quoi supposer des pièces jointes sans lire le corps.
+/// `IMPORTANCE`, `X-PRIORITY`, `PRIORITY` : l'importance annoncée par l'expéditeur.
+const CHAMPS_ENTETE: &str = "FROM TO CC SUBJECT DATE MESSAGE-ID IN-REPLY-TO REFERENCES CONTENT-TYPE \
+     IMPORTANCE X-PRIORITY PRIORITY";
 
 pub type Resultat<T> = Result<T, Erreur>;
 
@@ -249,6 +252,24 @@ impl Client {
              BODY.PEEK[HEADER.FIELDS ({CHAMPS_ENTETE})])"
         ))?;
         Ok(protocole::analyser_fetch(&texte, &litteraux))
+    }
+
+    /// Quelques champs d'en-tête, désignés, des messages d'un intervalle.
+    pub fn champs(&mut self, intervalle: &str, champs: &str) -> Resultat<Vec<Entete>> {
+        let (texte, litteraux) = self.commande(&format!(
+            "UID FETCH {intervalle} (UID FLAGS INTERNALDATE RFC822.SIZE BODY.PEEK[HEADER.FIELDS ({champs})])"
+        ))?;
+        Ok(protocole::analyser_fetch(&texte, &litteraux))
+    }
+
+    /// Crée un dossier (nom en UTF-7 modifié). Un dossier qui existe déjà
+    /// n'est pas une erreur.
+    pub fn creer(&mut self, chemin: &str) -> Resultat<()> {
+        match self.commande(&format!("CREATE {}", citer(chemin))) {
+            Ok(_) => Ok(()),
+            Err(Erreur::Refuse(m)) if m.to_ascii_uppercase().contains("ALREADYEXISTS") => Ok(()),
+            Err(e) => Err(e),
+        }
     }
 
     /// Message entier, tel que le serveur le conserve (décision 6 du dossier).
@@ -472,7 +493,7 @@ impl Client {
 /// Configuration TLS du bureau : le vérificateur de la plateforme, qui lit le
 /// magasin de certificats du système (Windows, Linux, macOS).
 #[cfg(not(target_os = "android"))]
-fn configuration_tls() -> Resultat<rustls::ClientConfig> {
+pub(crate) fn configuration_tls() -> Resultat<rustls::ClientConfig> {
     use rustls_platform_verifier::ConfigVerifierExt;
     rustls::ClientConfig::with_platform_verifier().map_err(|e| Erreur::Reseau(e.to_string()))
 }
@@ -481,13 +502,13 @@ fn configuration_tls() -> Resultat<rustls::ClientConfig> {
 /// programme. Le vérificateur de plateforme y exigerait un composant Java et une
 /// initialisation JNI que l'APK n'embarque pas — toute connexion échouerait.
 #[cfg(target_os = "android")]
-fn configuration_tls() -> Resultat<rustls::ClientConfig> {
+pub(crate) fn configuration_tls() -> Resultat<rustls::ClientConfig> {
     let racines = rustls::RootCertStore { roots: webpki_roots::TLS_SERVER_ROOTS.to_vec() };
     Ok(rustls::ClientConfig::builder().with_root_certificates(racines).with_no_client_auth())
 }
 
 /// Établit la connexion TCP, adresse par adresse, avec un délai borné.
-fn joindre(hote: &str, port: u16) -> Resultat<TcpStream> {
+pub(crate) fn joindre(hote: &str, port: u16) -> Resultat<TcpStream> {
     let adresses = (hote, port)
         .to_socket_addrs()
         .map_err(|e| Erreur::Reseau(format!("{hote} : {e}")))?;

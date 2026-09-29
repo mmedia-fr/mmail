@@ -182,6 +182,24 @@ pub mod qobject {
         #[cxx_name = "marquerLu"]
         fn marquer_lu(self: Pin<&mut Boite>, uids: &QString, lu: bool) -> bool;
 
+        /// Pose ou retire le drapeau de suivi sur des messages du dossier
+        /// ouvert — UID séparés par des virgules.
+        #[qinvokable]
+        #[cxx_name = "marquerSuivi"]
+        fn marquer_suivi(self: Pin<&mut Boite>, uids: &QString, suivi: bool) -> bool;
+
+        /// Répond à une demande de confirmation de lecture : l'envoie, ou
+        /// l'ignore ; dans les deux cas, la demande ne sera plus posée.
+        #[qinvokable]
+        #[cxx_name = "repondreConfirmation"]
+        fn repondre_confirmation(self: Pin<&mut Boite>, uid: i32, envoyer: bool) -> bool;
+
+        /// Envoie, sur chaque compte connecté, les messages différés arrivés à
+        /// échéance. Issue : `differesEnvoyes`, s'il y en avait.
+        #[qinvokable]
+        #[cxx_name = "envoyerDifferes"]
+        fn envoyer_differes(self: Pin<&mut Boite>);
+
         /// Déplace des messages du dossier ouvert vers un dossier de n'importe
         /// quel compte connecté. Issue : `deplacementTermine`.
         #[qinvokable]
@@ -203,6 +221,43 @@ pub mod qobject {
         #[qinvokable]
         #[cxx_name = "actualiser"]
         fn actualiser(self: Pin<&mut Boite>);
+
+        /// Prépare une rédaction à partir d'un message du dossier ouvert.
+        /// `mode` : « repondre », « repondre_tous », « transferer » ou
+        /// « brouillon ». Issue : `preparation`, ou `echecRedaction`.
+        #[qinvokable]
+        #[cxx_name = "preparer"]
+        fn preparer(self: Pin<&mut Boite>, uid: i32, mode: &QString, jeton: &QString) -> bool;
+
+        /// Envoie un message rédigé (JSON, cf. `redaction::Redaction`) depuis
+        /// le compte `compte`. Issue : `envoye`, ou `echecRedaction`.
+        #[qinvokable]
+        #[cxx_name = "envoyerMessage"]
+        fn envoyer_message(self: Pin<&mut Boite>, compte: i32, redaction: &QString) -> bool;
+
+        /// Enregistre un brouillon dans le dossier des brouillons du compte.
+        /// Issue : `brouillonEnregistre`, ou `echecRedaction`.
+        #[qinvokable]
+        #[cxx_name = "enregistrerBrouillon"]
+        fn enregistrer_brouillon(self: Pin<&mut Boite>, compte: i32, redaction: &QString) -> bool;
+
+        /// Fichier à joindre, désigné par son URL (`file:…`) ou son chemin :
+        /// `{chemin, nom, taille}` en JSON, ou une chaîne vide s'il n'existe pas.
+        #[qinvokable]
+        #[cxx_name = "decrireFichier"]
+        fn decrire_fichier(&self, url: &QString) -> QString;
+
+        /// Adresses proposées à la saisie d'un destinataire, en JSON
+        /// `[{nom, adresse}]` : celles à qui l'on a écrit, puis les expéditeurs.
+        #[qinvokable]
+        #[cxx_name = "adressesConnues"]
+        fn adresses_connues(&self, filtre: &QString) -> QString;
+
+        /// Rôle SPECIAL-USE du dossier ouvert (« Drafts », « Sent »…), vide
+        /// s'il n'en a pas.
+        #[qinvokable]
+        #[cxx_name = "roleCourant"]
+        fn role_courant(&self) -> QString;
     }
 
     impl cxx_qt::Threading for Boite {}
@@ -225,7 +280,14 @@ pub mod qobject {
         /// taille, risquee}]`).
         #[qsignal]
         #[cxx_name = "corpsRecu"]
-        fn corps_recu(self: Pin<&mut Boite>, uid: i32, texte: &QString, brut: bool, pieces: &QString);
+        fn corps_recu(
+            self: Pin<&mut Boite>,
+            uid: i32,
+            texte: &QString,
+            brut: bool,
+            pieces: &QString,
+            confirmation: &QString,
+        );
 
         /// Une pièce jointe est écrite sur le disque : `url` la désigne pour
         /// l'ouvrir, `chemin` pour l'afficher.
@@ -250,6 +312,39 @@ pub mod qobject {
         #[qsignal]
         #[cxx_name = "echec"]
         fn echec(self: Pin<&mut Boite>, compte: i32, etape: &QString, message: &QString);
+
+        /// Rédaction préparée (JSON, cf. `redaction::Preparation`) pour la
+        /// fenêtre désignée par `jeton`.
+        #[qsignal]
+        #[cxx_name = "preparation"]
+        fn preparation(self: Pin<&mut Boite>, jeton: &QString, contenu: &QString);
+
+        /// Message envoyé ; `avertissement` non vide si une suite a échoué
+        /// (copie dans « Éléments envoyés », marquage de l'original).
+        #[qsignal]
+        #[cxx_name = "envoye"]
+        fn envoye(self: Pin<&mut Boite>, jeton: &QString, avertissement: &QString);
+
+        /// Brouillon enregistré sous l'UID `uid` du dossier des brouillons.
+        #[qsignal]
+        #[cxx_name = "brouillonEnregistre"]
+        fn brouillon_enregistre(self: Pin<&mut Boite>, jeton: &QString, uid: i32);
+
+        /// Message rangé dans « Envoi différé », pour partir à `echeance`
+        /// (secondes Unix, en texte : QML n'a pas d'entier sur 64 bits).
+        #[qsignal]
+        #[cxx_name = "programme"]
+        fn programme(self: Pin<&mut Boite>, jeton: &QString, echeance: &QString);
+
+        /// Messages différés partis ; `erreurs` non vide si certains ont échoué.
+        #[qsignal]
+        #[cxx_name = "differesEnvoyes"]
+        fn differes_envoyes(self: Pin<&mut Boite>, nombre: i32, erreurs: &QString);
+
+        /// Préparation, envoi ou enregistrement impossible.
+        #[qsignal]
+        #[cxx_name = "echecRedaction"]
+        fn echec_redaction(self: Pin<&mut Boite>, jeton: &QString, message: &QString);
     }
 }
 
@@ -257,11 +352,19 @@ use core::pin::Pin;
 use cxx_qt::{CxxQtThread, CxxQtType, Threading};
 use cxx_qt_lib::{QString, QUrl};
 
+use crate::redaction::{self, Fichier, Preparation, Redaction};
+use crate::smtp;
+
 /// Délai sans commande au bout duquel un fil de travail relit ses compteurs.
 const VEILLE: Duration = Duration::from_secs(120);
 
 /// Port IMAPS : le seul que vise le client (TLS implicite).
 const PORT_IMAPS: u16 = 993;
+
+/// Dossier des messages qui attendent leur heure d'envoi, créé au premier
+/// envoi différé. Il vit sur le serveur : tout MMail ouvert sur le compte les
+/// envoie à l'échéance.
+const DOSSIER_DIFFERE: &str = "Envoi différé";
 
 /// De quoi ouvrir une session sur un compte. Ne vit qu'en mémoire : le mot de
 /// passe est au coffre du système, jamais dans l'index.
@@ -292,9 +395,21 @@ enum Commande {
     /// dans le dossier de travail, pour l'ouvrir.
     Piece { chemin: String, uid: u32, indice: usize, destination: Option<PathBuf> },
     MarquerLu { chemin: String, uids: Vec<u32>, lu: bool },
+    MarquerSuivi { chemin: String, uids: Vec<u32>, suivi: bool },
+    /// Envoyer une confirmation de lecture (identifiants présents) ou
+    /// l'ignorer (absents) ; le message reçoit `$MDNSent` dans les deux cas.
+    Confirmer { chemin: String, uid: u32, identifiants: Option<Identifiants> },
+    /// Envoyer les messages différés arrivés à échéance.
+    EnvoyerDifferes { identifiants: Identifiants },
     Deplacer { source: String, uids: Vec<u32>, cible: Cible },
     /// Reprendre les déplacements interrompus dont ce compte est la source.
     Reprendre(HashMap<i64, Identifiants>),
+    /// Préparer une réponse, un transfert ou la reprise d'un brouillon.
+    Preparer { chemin: String, uid: u32, mode: String, jeton: String },
+    /// Envoyer : il faut le mot de passe, que le fil a oublié une fois la
+    /// session IMAP ouverte — il revient avec la commande.
+    Envoyer { redaction: Redaction, identifiants: Identifiants },
+    Brouillon { redaction: Redaction },
     /// Veille périodique, émise par le fil lui-même.
     Veille,
 }
@@ -309,13 +424,15 @@ impl Commande {
                 | (OuvrirDossier(_), Corps { .. })
                 | (Corps { .. }, Corps { .. })
                 | (Arborescence, Arborescence)
+                | (EnvoyerDifferes { .. }, EnvoyerDifferes { .. })
                 | (_, Veille)
         )
     }
 
     /// Vrai si la commande vient de l'interface et compte dans `occupe`.
     fn comptee(&self) -> bool {
-        !matches!(self, Commande::Veille)
+        // Les tâches de fond ne font pas tourner l'indicateur d'activité.
+        !matches!(self, Commande::Veille | Commande::EnvoyerDifferes { .. })
     }
 }
 
@@ -344,7 +461,7 @@ enum Issue {
     Connecte,
     Arborescence,
     Dossier { chemin: String, veille: bool },
-    Corps { uid: u32, texte: String, brut: bool, marque: bool, pieces: String },
+    Corps { uid: u32, texte: String, brut: bool, marque: bool, pieces: String, confirmation: String },
     Piece { fichier: PathBuf, ouvrir: bool },
     Marque,
     Deplace { cible: i64, chemin_cible: String, rapport: Rapport },
@@ -352,6 +469,12 @@ enum Issue {
     /// ni attendus par l'interface, qui n'a qu'à relire ses compteurs.
     Repris { rapport: Rapport },
     Echec { etape: &'static str, message: String, session_perdue: bool },
+    Prepare { jeton: String, contenu: String },
+    Envoye { jeton: String, avertissement: String },
+    BrouillonEnregistre { jeton: String, uid: u32 },
+    Programme { jeton: String, echeance: i64 },
+    DifferesEnvoyes { nombre: usize, erreurs: String },
+    EchecRedaction { jeton: String, message: String },
 }
 
 /// Session d'un compte, vue de l'interface.
@@ -702,6 +825,51 @@ impl qobject::Boite {
         self.as_mut().envoyer(compte, Commande::MarquerLu { chemin, uids, lu })
     }
 
+    pub fn marquer_suivi(mut self: Pin<&mut Self>, uids: &QString, suivi: bool) -> bool {
+        let uids = lire_uids(uids);
+        let Some((compte, chemin, id)) = self.courant.clone() else {
+            return false;
+        };
+        if uids.is_empty() {
+            return false;
+        }
+        if let Some(magasin) = self.magasin.as_ref() {
+            let _ = magasin.marquer_suivi(id, &uids, suivi);
+        }
+        self.as_mut().reviser();
+        self.as_mut().envoyer(compte, Commande::MarquerSuivi { chemin, uids, suivi })
+    }
+
+    pub fn repondre_confirmation(mut self: Pin<&mut Self>, uid: i32, envoyer: bool) -> bool {
+        let Some((compte, chemin, _)) = self.courant.clone() else {
+            return false;
+        };
+        let identifiants = if envoyer {
+            match self.identites.get(&compte).cloned() {
+                Some(i) => Some(i),
+                None => {
+                    self.as_mut().set_erreur(QString::from("ce compte n'est pas connecté"));
+                    return false;
+                }
+            }
+        } else {
+            None
+        };
+        self.as_mut().envoyer(compte, Commande::Confirmer { chemin, uid: uid as u32, identifiants })
+    }
+
+    pub fn envoyer_differes(mut self: Pin<&mut Self>) {
+        let comptes: Vec<(i64, Identifiants)> = self
+            .identites
+            .iter()
+            .filter(|(c, _)| self.sessions.contains_key(c))
+            .map(|(c, i)| (*c, i.clone()))
+            .collect();
+        for (compte, identifiants) in comptes {
+            self.as_mut().envoyer(compte, Commande::EnvoyerDifferes { identifiants });
+        }
+    }
+
     pub fn deplacer(
         mut self: Pin<&mut Self>,
         uids: &QString,
@@ -785,6 +953,96 @@ impl qobject::Boite {
                 self.as_mut().lancer(compte, commandes);
             }
         }
+    }
+
+    pub fn preparer(mut self: Pin<&mut Self>, uid: i32, mode: &QString, jeton: &QString) -> bool {
+        let Some((compte, chemin, _)) = self.courant.clone() else {
+            return false;
+        };
+        let commande =
+            Commande::Preparer { chemin, uid: uid as u32, mode: mode.to_string(), jeton: jeton.to_string() };
+        self.as_mut().envoyer(compte, commande)
+    }
+
+    /// Lit la rédaction transmise par l'interface ; `None` (et l'erreur posée)
+    /// si le JSON est illisible.
+    fn lire_redaction(mut self: Pin<&mut Self>, redaction: &QString) -> Option<Redaction> {
+        match serde_json::from_str::<Redaction>(&redaction.to_string()) {
+            Ok(r) => Some(r),
+            Err(e) => {
+                self.as_mut().set_erreur(QString::from(&format!("rédaction illisible : {e}")));
+                None
+            }
+        }
+    }
+
+    pub fn envoyer_message(mut self: Pin<&mut Self>, compte: i32, redaction: &QString) -> bool {
+        let compte = compte as i64;
+        let Some(redaction) = self.as_mut().lire_redaction(redaction) else {
+            return false;
+        };
+        let Some(identifiants) = self.identites.get(&compte).cloned() else {
+            self.as_mut().set_erreur(QString::from("ce compte n'est pas connecté"));
+            return false;
+        };
+        self.as_mut().envoyer(compte, Commande::Envoyer { redaction, identifiants })
+    }
+
+    pub fn enregistrer_brouillon(mut self: Pin<&mut Self>, compte: i32, redaction: &QString) -> bool {
+        let Some(redaction) = self.as_mut().lire_redaction(redaction) else {
+            return false;
+        };
+        self.as_mut().envoyer(compte as i64, Commande::Brouillon { redaction })
+    }
+
+    pub fn decrire_fichier(&self, url: &QString) -> QString {
+        let texte = url.to_string();
+        let chemin = if texte.starts_with("file:") {
+            QUrl::from(url).to_local_file().map(|c| c.to_string()).unwrap_or_default()
+        } else {
+            texte
+        };
+        let Ok(meta) = std::fs::metadata(&chemin) else {
+            return QString::from("");
+        };
+        if !meta.is_file() {
+            return QString::from("");
+        }
+        let nom = Path::new(&chemin).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        QString::from(&format!(
+            r#"{{"chemin":{},"nom":{},"taille":{}}}"#,
+            texte_json(&chemin),
+            texte_json(&nom),
+            meta.len()
+        ))
+    }
+
+    pub fn adresses_connues(&self, filtre: &QString) -> QString {
+        let contacts = self.magasin.as_ref().and_then(|m| m.contacts(&filtre.to_string(), 8).ok()).unwrap_or_default();
+        let lignes: Vec<String> = contacts
+            .iter()
+            .map(|(nom, adresse)| format!(r#"{{"nom":{},"adresse":{}}}"#, texte_json(nom), texte_json(adresse)))
+            .collect();
+        QString::from(&format!("[{}]", lignes.join(",")))
+    }
+
+    pub fn role_courant(&self) -> QString {
+        let role = match (&self.courant, &self.magasin) {
+            (Some((_, _, id)), Some(m)) => m
+                .dossier(*id)
+                .ok()
+                .flatten()
+                .map(|d| {
+                    if d.role.is_empty() && d.profondeur == 0 && d.nom == DOSSIER_DIFFERE {
+                        "Differe".to_string()
+                    } else {
+                        d.role
+                    }
+                })
+                .unwrap_or_default(),
+            _ => String::new(),
+        };
+        QString::from(&role)
     }
 
     // ----------------------------------------------------------------- privé
@@ -961,12 +1219,26 @@ impl qobject::Boite {
                 self.as_mut().reviser();
                 self.as_mut().dossier_ouvert(compte_qt, &QString::from(&chemin), veille);
             }
-            Issue::Corps { uid, texte, brut, marque, pieces } => {
+            Issue::Corps { uid, texte, brut, marque, pieces, confirmation } => {
                 if marque {
                     self.as_mut().reviser();
                     self.as_mut().drapeaux_modifies();
                 }
-                self.as_mut().corps_recu(uid as i32, &QString::from(&texte), brut, &QString::from(&pieces));
+                self.as_mut().corps_recu(
+                    uid as i32,
+                    &QString::from(&texte),
+                    brut,
+                    &QString::from(&pieces),
+                    &QString::from(&confirmation),
+                );
+            }
+            Issue::Programme { jeton, echeance } => {
+                self.as_mut().reviser();
+                self.as_mut().programme(&QString::from(&jeton), &QString::from(&echeance.to_string()));
+            }
+            Issue::DifferesEnvoyes { nombre, erreurs } => {
+                self.as_mut().reviser();
+                self.as_mut().differes_envoyes(nombre as i32, &QString::from(&erreurs));
             }
             Issue::Piece { fichier, ouvrir } => {
                 let chemin = QString::from(fichier.to_string_lossy().as_ref());
@@ -997,6 +1269,21 @@ impl qobject::Boite {
                 }
                 self.as_mut()
                     .deplacement_termine(rapport.deplaces as i32, &QString::from(&erreurs));
+            }
+            Issue::Prepare { jeton, contenu } => {
+                self.as_mut().preparation(&QString::from(&jeton), &QString::from(&contenu));
+            }
+            Issue::Envoye { jeton, avertissement } => {
+                // « Éléments envoyés » et l'original (répondu) ont changé.
+                self.as_mut().reviser();
+                self.as_mut().envoye(&QString::from(&jeton), &QString::from(&avertissement));
+            }
+            Issue::BrouillonEnregistre { jeton, uid } => {
+                self.as_mut().reviser();
+                self.as_mut().brouillon_enregistre(&QString::from(&jeton), uid as i32);
+            }
+            Issue::EchecRedaction { jeton, message } => {
+                self.as_mut().echec_redaction(&QString::from(&jeton), &QString::from(&message));
             }
             Issue::Repris { rapport } => {
                 // Les cibles ont reçu des messages : leurs compteurs aussi.
@@ -1202,7 +1489,9 @@ impl Travail {
                 })
             }
             Commande::Corps { chemin, uid, brut } => Some(match lire_corps(e, compte, &chemin, uid, brut) {
-                Ok((texte, marque, pieces)) => Issue::Corps { uid, texte, brut, marque, pieces },
+                Ok((texte, marque, pieces, confirmation)) => {
+                    Issue::Corps { uid, texte, brut, marque, pieces, confirmation }
+                }
                 Err(err) => echec("message", format!("lecture du message {uid} : {err}"), &err),
             }),
             Commande::Piece { chemin, uid, indice, destination } => {
@@ -1213,6 +1502,21 @@ impl Travail {
                     Err(err) => echec("piece", format!("pièce jointe : {err}"), &err),
                 })
             }
+            Commande::MarquerSuivi { chemin, uids, suivi } => {
+                Some(match synchro::marquer_suivi(&mut e.client, &e.magasin, compte, &chemin, &uids, suivi) {
+                    Ok(()) => Issue::Marque,
+                    Err(err) => echec("tri", format!("drapeau de suivi : {err}"), &err),
+                })
+            }
+            Commande::Confirmer { chemin, uid, identifiants } => Some(match self.confirmer(e, &chemin, uid, identifiants) {
+                Ok(()) => Issue::Marque,
+                Err(message) => Issue::Echec { etape: "message", message, session_perdue: false },
+            }),
+            Commande::EnvoyerDifferes { identifiants } => match self.envoyer_differes(e, &identifiants) {
+                Ok((0, _)) => None,
+                Ok((nombre, erreurs)) => Some(Issue::DifferesEnvoyes { nombre, erreurs: erreurs.join(" ; ") }),
+                Err(message) => Some(Issue::DifferesEnvoyes { nombre: 0, erreurs: message }),
+            },
             Commande::MarquerLu { chemin, uids, lu } => {
                 Some(match synchro::marquer_lu(&mut e.client, &e.magasin, compte, &chemin, &uids, lu) {
                     Ok(()) => Issue::Marque,
@@ -1238,6 +1542,31 @@ impl Travail {
             Commande::Reprendre(identites) => {
                 e.identites.extend(identites);
                 self.reprendre(e)
+            }
+            Commande::Preparer { chemin, uid, mode, jeton } => Some(match self.preparer(e, &chemin, uid, &mode) {
+                Ok(p) => Issue::Prepare { jeton, contenu: serde_json::to_string(&p).unwrap_or_default() },
+                Err(message) => Issue::EchecRedaction { jeton, message },
+            }),
+            Commande::Envoyer { redaction, identifiants: _ } if redaction.envoi_differe > maintenant() => {
+                let jeton = redaction.jeton.clone();
+                Some(match self.programmer(e, &redaction) {
+                    Ok(()) => Issue::Programme { jeton, echeance: redaction.envoi_differe },
+                    Err(message) => Issue::EchecRedaction { jeton, message },
+                })
+            }
+            Commande::Envoyer { redaction, identifiants } => {
+                let jeton = redaction.jeton.clone();
+                Some(match self.envoyer_redaction(e, &redaction, &identifiants) {
+                    Ok(avertissement) => Issue::Envoye { jeton, avertissement },
+                    Err(message) => Issue::EchecRedaction { jeton, message },
+                })
+            }
+            Commande::Brouillon { redaction } => {
+                let jeton = redaction.jeton.clone();
+                Some(match self.enregistrer_brouillon(e, &redaction) {
+                    Ok(uid) => Issue::BrouillonEnregistre { jeton, uid },
+                    Err(message) => Issue::EchecRedaction { jeton, message },
+                })
             }
             Commande::Veille => {
                 if let Err(err) = synchro::arborescence(&mut e.client, &e.magasin, compte) {
@@ -1366,6 +1695,277 @@ fn annexe(e: &mut Etabli, compte: i64) -> Result<Client, Echec> {
     Ok(client)
 }
 
+// ------------------------------------------------------------- rédaction
+
+impl Travail {
+    /// Chemin du dossier de ce compte qui porte un rôle SPECIAL-USE.
+    fn dossier_de_role(&self, e: &Etabli, role: &str) -> Option<String> {
+        e.magasin.dossiers(self.compte).ok()?.into_iter().find(|d| d.role == role).map(|d| d.chemin)
+    }
+
+    /// Fait une opération dans un autre dossier que celui qui est sélectionné,
+    /// puis y revient : la veille relit le dossier sélectionné, qui doit rester
+    /// celui que l'utilisateur regarde.
+    fn ailleurs<T>(
+        &self,
+        e: &mut Etabli,
+        chemin: &str,
+        operation: impl FnOnce(&mut Client) -> Result<T, Erreur>,
+    ) -> Result<T, String> {
+        let avant = e.client.selection().map(str::to_string);
+        assurer_selection(&mut e.client, chemin).map_err(|x| x.to_string())?;
+        let resultat = operation(&mut e.client).map_err(|x| x.to_string());
+        if let Some(avant) = avant {
+            let _ = assurer_selection(&mut e.client, &avant);
+        }
+        resultat
+    }
+
+    /// Dossier des envois différés (« Envoi différé », à la racine), créé au
+    /// besoin si `creer`.
+    fn dossier_differe(&self, e: &mut Etabli, creer: bool) -> Result<Option<String>, String> {
+        let trouve = e
+            .magasin
+            .dossiers(self.compte)
+            .map_err(|x| x.to_string())?
+            .into_iter()
+            .find(|d| d.profondeur == 0 && d.nom == DOSSIER_DIFFERE)
+            .map(|d| d.chemin);
+        if trouve.is_some() || !creer {
+            return Ok(trouve);
+        }
+        let chemin = crate::protocole::encoder_utf7(DOSSIER_DIFFERE);
+        e.client.creer(&chemin).map_err(|x| format!("création de « {DOSSIER_DIFFERE} » : {x}"))?;
+        synchro::arborescence(&mut e.client, &e.magasin, self.compte).map_err(|x| x.to_string())?;
+        Ok(Some(chemin))
+    }
+
+    /// Retire définitivement un message repris (brouillon, envoi différé) :
+    /// il est remplacé par ce qui vient d'être enregistré ou envoyé.
+    fn effacer_repris(&self, e: &mut Etabli, r: &Redaction) -> Result<(), String> {
+        if r.brouillon_uid == 0 {
+            return Ok(());
+        }
+        let chemin = if r.brouillon_chemin.is_empty() {
+            self.dossier_de_role(e, "Drafts").ok_or("ce compte n'a pas de dossier des brouillons")?
+        } else {
+            r.brouillon_chemin.clone()
+        };
+        let uid = r.brouillon_uid;
+        self.ailleurs(e, &chemin, |c| c.supprimer(&[uid]))
+    }
+
+    /// Répond à une demande de confirmation de lecture, puis pose `$MDNSent`
+    /// pour qu'elle ne soit plus posée — ici ni ailleurs.
+    fn confirmer(&self, e: &mut Etabli, chemin: &str, uid: u32, id: Option<Identifiants>) -> Result<(), String> {
+        if let Some(id) = id {
+            assurer_selection(&mut e.client, chemin).map_err(|x| x.to_string())?;
+            let octets = e.client.corps(uid).map_err(|x| x.to_string())?;
+            let (destinataire, rapport) =
+                redaction::confirmation_lecture(&octets, &id.utilisateur, "", maintenant())
+                    .ok_or("ce message ne demande pas de confirmation de lecture")?;
+            smtp::envoyer(&id.hote, &id.utilisateur, &id.mot_de_passe, &id.utilisateur, &[destinataire], &rapport, false)
+                .map_err(|x| format!("confirmation de lecture : {x}"))?;
+        }
+        self.ailleurs(e, chemin, |c| c.marquer(&[uid], "$MDNSent", true))
+    }
+
+    /// Envoie les messages différés arrivés à échéance. Rend combien, et les
+    /// erreurs de ceux qui n'ont pas pu partir (ils restent pour la prochaine
+    /// fois).
+    fn envoyer_differes(&self, e: &mut Etabli, id: &Identifiants) -> Result<(usize, Vec<String>), String> {
+        let Some(dossier) = self.dossier_differe(e, false)? else {
+            return Ok((0, Vec::new()));
+        };
+        let avant = e.client.selection().map(str::to_string);
+        let resultat = (|| -> Result<(usize, Vec<String>), String> {
+            let selection = e.client.selectionner(&dossier, None).map_err(|x| x.to_string())?;
+            if selection.etat.messages == 0 {
+                return Ok((0, Vec::new()));
+            }
+            let maintenant = maintenant();
+            let echus: Vec<u32> = e
+                .client
+                .champs("1:*", &redaction::ENTETE_DIFFERE.to_ascii_uppercase())
+                .map_err(|x| x.to_string())?
+                .into_iter()
+                .filter(|en| redaction::echeance(&en.brut).is_some_and(|t| t <= maintenant))
+                .map(|en| en.uid)
+                .collect();
+            let envoyes = self.dossier_de_role(e, "Sent");
+            let (mut nombre, mut erreurs) = (0, Vec::new());
+            for uid in echus {
+                let envoi = e
+                    .client
+                    .corps(uid)
+                    .map_err(|x| x.to_string())
+                    .and_then(|brut| redaction::preparer_envoi_differe(&brut, maintenant));
+                let envoi = match envoi {
+                    Ok(envoi) => envoi,
+                    Err(x) => {
+                        erreurs.push(format!("message {uid} : {x}"));
+                        continue;
+                    }
+                };
+                if let Err(x) = smtp::envoyer(
+                    &id.hote,
+                    &id.utilisateur,
+                    &id.mot_de_passe,
+                    &envoi.de,
+                    &envoi.destinataires,
+                    &envoi.envoi,
+                    envoi.accuse,
+                ) {
+                    erreurs.push(format!("message {uid} : {x}"));
+                    continue;
+                }
+                nombre += 1;
+                if let Some(envoyes) = &envoyes {
+                    let _ = e.client.deposer(envoyes, &["\\Seen".into()], "", &envoi.copie);
+                }
+                // Parti : il quitte « Envoi différé » pour ne pas repartir.
+                if let Err(x) = e.client.supprimer(&[uid]) {
+                    erreurs.push(format!("message {uid} envoyé mais resté dans « {DOSSIER_DIFFERE} » : {x}"));
+                }
+            }
+            Ok((nombre, erreurs))
+        })();
+        if let Some(avant) = avant {
+            let _ = assurer_selection(&mut e.client, &avant);
+        }
+        if resultat.as_ref().is_ok_and(|(n, _)| *n > 0) {
+            let _ = synchro::arborescence(&mut e.client, &e.magasin, self.compte);
+        }
+        resultat
+    }
+
+    fn preparer(&self, e: &mut Etabli, chemin: &str, uid: u32, mode: &str) -> Result<Preparation, String> {
+        assurer_selection(&mut e.client, chemin).map_err(|x| x.to_string())?;
+        let octets = e.client.corps(uid).map_err(|x| format!("lecture du message : {x}"))?;
+        let propres: Vec<String> =
+            e.magasin.compte_par_id(self.compte).ok().flatten().map(|c| vec![c.adresse]).unwrap_or_default();
+        let mut p = redaction::preparer(&octets, mode, &propres);
+        if mode == "brouillon" {
+            p.brouillon_uid = uid;
+            p.brouillon_chemin = chemin.to_string();
+        } else {
+            p.origine_chemin = chemin.to_string();
+            p.origine_uid = uid;
+        }
+        if mode == "transferer" || mode == "brouillon" {
+            // Pièces reprises : écrites à part, elles se joignent ensuite comme
+            // n'importe quel fichier.
+            let racine = dossier_pieces(&self.profil)
+                .join(format!("redaction-{}-{uid}-{}", self.compte, maintenant()));
+            for piece in crate::index::pieces_jointes(&octets) {
+                let Some((nom, contenu)) = crate::index::extraire_piece(&octets, piece.indice) else {
+                    continue;
+                };
+                let dossier = racine.join(piece.indice.to_string());
+                let fichier = dossier.join(&nom);
+                std::fs::create_dir_all(&dossier)
+                    .and_then(|_| std::fs::write(&fichier, contenu))
+                    .map_err(|x| format!("pièce jointe {nom} : {x}"))?;
+                p.pieces.push(fichier.to_string_lossy().into_owned());
+            }
+        }
+        Ok(p)
+    }
+
+    /// Range un message dans « Envoi différé », daté de son heure d'envoi.
+    fn programmer(&self, e: &mut Etabli, r: &Redaction) -> Result<(), String> {
+        let fichiers = lire_fichiers(&r.pieces)?;
+        let f = redaction::fabriquer(r, r.envoi_differe, &fichiers)?;
+        if f.destinataires.is_empty() {
+            return Err("aucun destinataire".into());
+        }
+        let dossier = self.dossier_differe(e, true)?.ok_or("dossier des envois différés introuvable")?;
+        e.client
+            .deposer(&dossier, &["\\Seen".into()], "", &f.copie)
+            .map_err(|x| format!("mise en attente : {x}"))?;
+        let _ = self.effacer_repris(e, r);
+        let _ = synchro::arborescence(&mut e.client, &e.magasin, self.compte);
+        Ok(())
+    }
+
+    fn envoyer_redaction(&self, e: &mut Etabli, r: &Redaction, id: &Identifiants) -> Result<String, String> {
+        let fichiers = lire_fichiers(&r.pieces)?;
+        let f = redaction::fabriquer(r, maintenant(), &fichiers)?;
+        if f.destinataires.is_empty() {
+            return Err("aucun destinataire".into());
+        }
+        smtp::envoyer(&id.hote, &id.utilisateur, &id.mot_de_passe, &r.de, &f.destinataires, &f.envoi, r.accuse_remise)
+            .map_err(|x| format!("envoi : {x}"))?;
+        // Ceux à qui l'on écrit seront proposés à la prochaine saisie.
+        let destinataires: Vec<(String, String)> = [&r.a, &r.cc, &r.cci]
+            .iter()
+            .filter_map(|liste| redaction::adresses(liste).ok())
+            .flatten()
+            .collect();
+        let _ = e.magasin.noter_correspondants(&destinataires, maintenant());
+        // Le message est parti : ce qui suit ne peut plus le faire échouer,
+        // seulement donner lieu à un avertissement.
+        let mut avertissements = Vec::new();
+        match self.dossier_de_role(e, "Sent") {
+            Some(envoyes) => {
+                if let Err(x) = e.client.deposer(&envoyes, &["\\Seen".into()], "", &f.copie) {
+                    avertissements.push(format!("copie dans « {envoyes} » : {x}"));
+                }
+            }
+            None => avertissements.push("aucun dossier des éléments envoyés : pas de copie gardée".into()),
+        }
+        if let Err(x) = self.effacer_repris(e, r) {
+            avertissements.push(format!("brouillon non effacé : {x}"));
+        }
+        if r.origine_uid > 0 && !r.origine_chemin.is_empty() {
+            let drapeau = if r.origine_mode == "transferer" { "$Forwarded" } else { "\\Answered" };
+            let uid = r.origine_uid;
+            if let Err(x) = self.ailleurs(e, &r.origine_chemin, |c| c.marquer(&[uid], drapeau, true)) {
+                avertissements.push(format!("marquage du message d'origine : {x}"));
+            }
+        }
+        let _ = synchro::arborescence(&mut e.client, &e.magasin, self.compte);
+        Ok(avertissements.join(" ; "))
+    }
+
+    fn enregistrer_brouillon(&self, e: &mut Etabli, r: &Redaction) -> Result<u32, String> {
+        let fichiers = lire_fichiers(&r.pieces)?;
+        let f = redaction::fabriquer(r, maintenant(), &fichiers)?;
+        let brouillons =
+            self.dossier_de_role(e, "Drafts").ok_or("ce compte n'a pas de dossier des brouillons")?;
+        let uid = e
+            .client
+            .deposer(&brouillons, &["\\Draft".into(), "\\Seen".into()], "", &f.copie)
+            .map_err(|x| format!("enregistrement du brouillon : {x}"))?;
+        // La version précédente s'efface une fois la nouvelle en place.
+        let _ = self.effacer_repris(e, r);
+        let _ = synchro::arborescence(&mut e.client, &e.magasin, self.compte);
+        Ok(uid.unwrap_or(0))
+    }
+
+}
+
+/// Lit les fichiers à joindre. Un fichier disparu entre-temps arrête tout : un
+/// message qui partirait sans l'une de ses pièces serait pire qu'un refus.
+fn lire_fichiers(chemins: &[String]) -> Result<Vec<Fichier>, String> {
+    chemins
+        .iter()
+        .map(|chemin| {
+            let nom = Path::new(chemin).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            std::fs::read(chemin)
+                .map(|contenu| Fichier { nom: nom.clone(), contenu })
+                .map_err(|x| format!("pièce jointe « {nom} » illisible : {x}"))
+        })
+        .collect()
+}
+
+fn maintenant() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
 /// Lit le corps d'un message du dossier ouvert ; un message affiché (et non sa
 /// source) est marqué comme lu, comme le fait Outlook. Rend le texte, vrai si
 /// le marquage a eu lieu, et les pièces jointes en JSON.
@@ -1375,24 +1975,35 @@ fn lire_corps(
     chemin: &str,
     uid: u32,
     brut: bool,
-) -> Result<(String, bool, String), Echec> {
+) -> Result<(String, bool, String, String), Echec> {
     assurer_selection(&mut e.client, chemin)?;
-    let octets = e.client.corps(uid)?;
+    let complet = e
+        .client
+        .message_complet(uid)?
+        .ok_or_else(|| Echec::Imap(Erreur::Refuse(format!("message {uid} disparu"))))?;
+    let octets = complet.octets;
+    // Demande de confirmation de lecture, sauf si l'on y a déjà répondu.
+    let deja = complet.drapeaux.iter().any(|d| d.eq_ignore_ascii_case("$MDNSent"));
+    let confirmation = if brut || deja { String::new() } else { redaction::confirmation_demandee(&octets).unwrap_or_default() };
     let texte = if brut {
         String::from_utf8_lossy(&octets).into_owned()
     } else {
         crate::index::corps_affichable(&octets)
     };
-    let pieces = json_pieces(&crate::index::pieces_jointes(&octets));
+    let liste = crate::index::pieces_jointes(&octets);
+    let pieces = json_pieces(&liste);
+    let id = e.magasin.dossier_id(compte, chemin)?;
+    // Le message entier dit s'il porte des pièces jointes : cela prime sur ce
+    // que ses en-têtes laissaient supposer dans la liste.
+    e.magasin.poser_pieces(id, uid, !liste.is_empty())?;
     let mut marque = false;
     if !brut {
-        let id = e.magasin.dossier_id(compte, chemin)?;
         if matches!(e.magasin.message(id, uid)?, Some(m) if !m.lu) {
             synchro::marquer_lu(&mut e.client, &e.magasin, compte, chemin, &[uid], true)?;
             marque = true;
         }
     }
-    Ok((texte, marque, pieces))
+    Ok((texte, marque, pieces, confirmation))
 }
 
 /// Relit un message et écrit l'une de ses pièces jointes : à l'emplacement
@@ -1483,7 +2094,7 @@ fn json_messages(messages: &[MessageLocal]) -> String {
         .iter()
         .map(|m| {
             format!(
-                r#"{{"uid":{},"expediteur":{},"adresse":{},"sujet":{},"date":{},"taille":{},"lu":{},"repondu":{}}}"#,
+                r#"{{"uid":{},"expediteur":{},"adresse":{},"sujet":{},"date":{},"taille":{},"lu":{},"repondu":{},"pieces":{},"suivi":{},"importance":{}}}"#,
                 m.uid,
                 texte_json(&m.expediteur),
                 texte_json(&m.adresse),
@@ -1491,7 +2102,10 @@ fn json_messages(messages: &[MessageLocal]) -> String {
                 texte_json(&m.date),
                 m.taille,
                 m.lu,
-                m.repondu
+                m.repondu,
+                m.pieces,
+                m.suivi,
+                m.importance
             )
         })
         .collect();
@@ -1539,10 +2153,16 @@ mod tests {
                 Commande::Corps { uid, .. } => format!("corps {uid}"),
                 Commande::Piece { uid, .. } => format!("piece {uid}"),
                 Commande::MarquerLu { .. } => "marquer".into(),
+                Commande::MarquerSuivi { .. } => "suivi".into(),
+                Commande::Confirmer { .. } => "confirmer".into(),
+                Commande::EnvoyerDifferes { .. } => "differes".into(),
                 Commande::Deplacer { .. } => "deplacer".into(),
                 Commande::Arborescence => "arborescence".into(),
                 Commande::Reprendre(_) => "reprendre".into(),
                 Commande::Veille => "veille".into(),
+                Commande::Preparer { .. } => "preparer".into(),
+                Commande::Envoyer { .. } => "envoyer".into(),
+                Commande::Brouillon { .. } => "brouillon".into(),
             })
             .collect()
     }
@@ -1670,6 +2290,7 @@ mod tests {
         }]);
         assert!(json.contains(r#""uid":3"#));
         assert!(json.contains(r#""lu":true"#));
+        assert!(json.contains(r#""pieces":false"#));
         assert!(json.contains("Réunion"));
         assert!(json.contains(r#"Service \"compta\""#));
     }

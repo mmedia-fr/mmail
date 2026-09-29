@@ -417,3 +417,49 @@ fn base64_simple(octets: &[u8]) -> String {
         .collect::<Vec<_>>()
         .join("\r\n")
 }
+
+/// Envoi par la soumission SMTP de la boîte A vers la boîte B, pièce jointe
+/// comprise ; le message doit arriver dans la boîte de réception de B, intact,
+/// puis il est retiré. Deux boîtes du même serveur : rien ne sort.
+#[test]
+#[ignore = "exige un serveur IMAP/SMTP et deux comptes"]
+fn envoi_smtp_d_une_boite_a_l_autre() {
+    use crate::redaction::{fabriquer, Fichier, Redaction};
+    use mail_parser::{MessageParser, MimeHeaders};
+
+    let hote = variable("MMAIL_HOTE");
+    let (ua, ub) = (variable("MMAIL_UTILISATEUR"), variable("MMAIL_UTILISATEUR2"));
+    let maintenant = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
+    let r = Redaction {
+        de: ua.clone(),
+        nom: "Essai MMail".into(),
+        a: ub.clone(),
+        objet: format!("Essai d'envoi MMail {maintenant} — accentué"),
+        texte: "Bonjour,\n.ligne qui commence par un point\nFin.".into(),
+        ..Default::default()
+    };
+    let pj = [Fichier { nom: "piece jointe é.txt".into(), contenu: "contenu d'essai €".as_bytes().to_vec() }];
+    let f = fabriquer(&r, maintenant, &pj).expect("fabrication");
+    crate::smtp::envoyer(&hote, &ua, &variable("MMAIL_MOTDEPASSE"), &ua, &f.destinataires, &f.envoi, false)
+        .expect("envoi SMTP");
+
+    let mut b = session2();
+    let mut trouves = Vec::new();
+    for _ in 0..30 {
+        b.selectionner("INBOX", None).expect("sélection");
+        trouves = b.chercher_message_id(&f.message_id).expect("recherche");
+        if !trouves.is_empty() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    }
+    assert_eq!(trouves.len(), 1, "message arrivé dans la boîte B");
+    let recu = b.corps(trouves[0]).expect("lecture");
+    let m = MessageParser::default().parse(&recu).expect("analyse");
+    assert_eq!(m.subject(), Some(r.objet.as_str()));
+    assert!(m.body_text(0).unwrap().contains(".ligne qui commence par un point"));
+    let piece = m.attachments().next().expect("pièce jointe");
+    assert_eq!(piece.attachment_name(), Some("piece jointe é.txt"));
+    assert_eq!(piece.contents(), "contenu d'essai €".as_bytes());
+    b.supprimer(&trouves).expect("nettoyage");
+}

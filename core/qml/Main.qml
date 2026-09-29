@@ -16,6 +16,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Dialogs
 import QtQuick.Layouts
+import QtQuick.Window
 import Qt.labs.settings
 import fr.mmedia.mmail
 import fr.mmedia.mmail.natif
@@ -31,7 +32,25 @@ ApplicationWindow {
            : "MMail"
 
     Socle { id: socle }
+    // Envois différés : chaque minute, les messages arrivés à échéance partent.
+    Timer {
+        interval: 60000
+        running: true
+        repeat: true
+        onTriggered: boite.envoyerDifferes()
+    }
     Boite { id: boite }
+    // Configuration automatique du serveur, et lien de configuration.
+    Configuration {
+        id: configuration
+        onServeurDecouvert: function(adresse, hote) { fenetre.serveurDecouvert(adresse, hote) }
+        onLienLu: function(contenu) { fenetre.appliquerLien(contenu) }
+        onLienEchoue: function(message) {
+            var lien = fenetre.lienEnCours
+            fenetre.lienEnCours = ""
+            dlgLien.ouvrir(lien, qsTr("Ce lien n'a pas pu être lu — %1").arg(message))
+        }
+    }
     PressePapier { id: pressePapier }
     ReglePressePapier { id: reglePresse }
 
@@ -43,6 +62,22 @@ ApplicationWindow {
         property bool copieAuto: true
     }
     readonly property string noyau: socle.noyau
+    // Comptes du profil, pour le menu « Comptes » : { compte, adresse, hote }.
+    property var comptesConnus: []
+    // Lien de configuration en cours de lecture, rendu au dialogue s'il échoue.
+    property string lienEnCours: ""
+    // Rôle SPECIAL-USE du dossier ouvert : « Drafts » change le double clic.
+    property string roleCourant: ""
+    // Dossier dont les messages se reprennent plutôt qu'on n'y répond :
+    // brouillons, envois différés.
+    readonly property bool dossierDeReprise: roleCourant === "Drafts" || roleCourant === "Differe"
+    // Importance du message affiché, et adresse qui demande une confirmation
+    // de lecture (vide si aucune, ou déjà répondu).
+    property int importanceCourante: 0
+    property string confirmationDemandee: ""
+    // Rédactions ouvertes : jeton → contenu de la fenêtre de rédaction.
+    property int compteurRedactions: 0
+    property var redactions: ({})
 
     // Un seul volet à la fois sous cette largeur : 0 arborescence, 1 liste,
     // 2 message.
@@ -61,6 +96,15 @@ ApplicationWindow {
     property int deplacementsEnVol: 0
     // Pièces jointes du message affiché, telles que le noyau les rend.
     property var pieces: []
+
+    // Rédaction : identité et signature de chaque compte, en JSON
+    // (adresse → {nom, signature, nouveaux, reponses}) ; mise en forme par défaut.
+    Settings {
+        id: reglagesRedaction
+        category: "redaction"
+        property string identites: "{}"
+        property bool miseEnForme: true
+    }
 
     Settings {
         id: reglages
@@ -203,7 +247,10 @@ ApplicationWindow {
             if (!boite.occupe)
                 fenetre.derniereSynchro = new Date()
         }
-        function onDossierCourantChanged() { fenetre.majInfoDossier() }
+        function onDossierCourantChanged() {
+            fenetre.roleCourant = boite.roleCourant()
+            fenetre.majInfoDossier()
+        }
     }
 
     // ------------------------------------------------------------- en-tête
@@ -221,9 +268,15 @@ ApplicationWindow {
                 onClicked: fenetre.vue = fenetre.vue - 1
             }
             ToolButton {
-                text: qsTr("Ajouter un compte…")
+                text: qsTr("Nouveau message")
+                font.bold: true
+                onClicked: fenetre.rediger("nouveau")
+            }
+            ToolButton {
+                id: boutonComptes
+                text: qsTr("Comptes")
                 visible: !fenetre.compact || fenetre.vue === 0
-                onClicked: fenetre.demanderCompte(null, "")
+                onClicked: menuComptes.popup(boutonComptes, 0, boutonComptes.height)
             }
             ToolButton {
                 text: qsTr("Actualiser")
@@ -243,6 +296,12 @@ ApplicationWindow {
                 id: boutonAffichage
                 text: qsTr("Affichage")
                 onClicked: menuAffichage.popup(boutonAffichage, 0, boutonAffichage.height)
+            }
+            ToolButton {
+                id: boutonAide
+                text: "?"
+                font.bold: true
+                onClicked: menuAide.popup(boutonAide, 0, boutonAide.height)
             }
             Label {
                 text: fenetre.compact && fenetre.vue > 0 ? fenetre.libelleCourant() : ""
@@ -269,6 +328,13 @@ ApplicationWindow {
         ScrollView {
             id: voletArborescence
             visible: !fenetre.compact || fenetre.vue === 0
+            // Ascenseurs toujours visibles dès qu'il y a de quoi défiler, et non
+            // seulement pendant le défilement (demande Manu du 2026-09-29). Leur
+            // place est réservée : posés par-dessus, ils masquaient les compteurs
+            // de non-lus. La réserve suit `size`, pas `visible` : un ascenseur
+            // qui n'a rien à faire défiler reste `visible`, seulement transparent.
+            ScrollBar.vertical.policy: ScrollBar.vertical.size < 1 ? ScrollBar.AlwaysOn : ScrollBar.AsNeeded
+            rightPadding: ScrollBar.vertical.size < 1 ? ScrollBar.vertical.width : 0
             SplitView.preferredWidth: fenetre.compact ? fenetre.width : reglages.largeurArborescence
             SplitView.minimumWidth: 160
             SplitView.fillWidth: fenetre.compact
@@ -286,6 +352,26 @@ ApplicationWindow {
                 model: ListModel { id: modeleArborescence }
                 boundsBehavior: Flickable.StopAtBounds
                 delegate: ligneArborescence
+
+                // Un blanc et un trait au-dessus de chaque compte : la rubrique
+                // Favoris et les boîtes ne se lisent plus comme une seule liste.
+                section.property: "groupe"
+                section.delegate: Item {
+                    required property string section
+                    width: vueArborescence.width
+                    height: section === "favoris" ? 0 : 16
+                    Rectangle {
+                        visible: parent.section !== "favoris"
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.leftMargin: 6
+                        anchors.rightMargin: 6
+                        anchors.verticalCenter: parent.verticalCenter
+                        height: 2
+                        color: fenetre.palette.windowText
+                        opacity: 0.3
+                    }
+                }
 
                 HoverHandler { onHoveredChanged: if (hovered) fenetre.colonneActive = "arborescence" }
 
@@ -308,6 +394,8 @@ ApplicationWindow {
         ScrollView {
             id: voletListe
             visible: !fenetre.compact || fenetre.vue === 1
+            ScrollBar.vertical.policy: ScrollBar.vertical.size < 1 ? ScrollBar.AlwaysOn : ScrollBar.AsNeeded
+            rightPadding: ScrollBar.vertical.size < 1 ? ScrollBar.vertical.width : 0
             SplitView.preferredWidth: fenetre.compact ? fenetre.width : reglages.largeurListe
             SplitView.minimumWidth: 240
             SplitView.fillWidth: fenetre.compact
@@ -371,38 +459,102 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 visible: fenetre.uidCourant > 0
                 font.pointSize: fenetre.tailleMessage
-                RowLayout {
-                    anchors.fill: parent
-                    anchors.leftMargin: 8
-                    anchors.rightMargin: 8
-                    ColumnLayout {
+                leftPadding: 8
+                rightPadding: 8
+                // Les actions sur leur ligne, au-dessus de l'objet, comme dans
+                // le volet de lecture d'Outlook : à côté, elles tronquaient
+                // l'objet et l'expéditeur. Elles passent à la ligne si la
+                // colonne est étroite.
+                ColumnLayout {
+                    width: parent.width
+                    spacing: 0
+                    Flow {
                         Layout.fillWidth: true
-                        spacing: 0
-                        Label {
-                            id: sujetAffiche
-                            font.bold: true
-                            elide: Text.ElideRight
-                            Layout.fillWidth: true
+                        // Un brouillon se reprend ; un message reçu reçoit une réponse.
+                        ToolButton {
+                            visible: fenetre.dossierDeReprise
+                            text: qsTr("Reprendre")
+                            onClicked: fenetre.rediger("brouillon")
                         }
-                        Label {
-                            id: auteurAffiche
-                            opacity: 0.8
-                            elide: Text.ElideRight
-                            Layout.fillWidth: true
+                        ToolButton {
+                            visible: !fenetre.dossierDeReprise
+                            text: qsTr("Répondre")
+                            onClicked: fenetre.rediger("repondre")
+                        }
+                        ToolButton {
+                            visible: !fenetre.dossierDeReprise
+                            text: qsTr("Répondre à tous")
+                            onClicked: fenetre.rediger("repondre_tous")
+                        }
+                        ToolButton {
+                            visible: !fenetre.dossierDeReprise
+                            text: qsTr("Transférer")
+                            onClicked: fenetre.rediger("transferer")
+                        }
+                        ToolButton {
+                            text: qsTr("Déplacer…")
+                            onClicked: fenetre.ouvrirDeplacer()
+                        }
+                        ToolButton {
+                            text: qsTr("Supprimer")
+                            onClicked: fenetre.supprimerSelection()
+                        }
+                        // Décision 6 : voir le message brut, en-têtes compris, en un geste.
+                        ToolButton {
+                            text: fenetre.sourceVisible ? qsTr("Message") : qsTr("Source")
+                            onClicked: fenetre.basculerSource()
                         }
                     }
-                    ToolButton {
-                        text: qsTr("Déplacer…")
-                        onClicked: fenetre.ouvrirDeplacer()
+                    Label {
+                        id: sujetAffiche
+                        font.bold: true
+                        elide: Text.ElideRight
+                        Layout.fillWidth: true
                     }
-                    ToolButton {
-                        text: qsTr("Supprimer")
-                        onClicked: fenetre.supprimerSelection()
+                    Label {
+                        id: auteurAffiche
+                        opacity: 0.8
+                        elide: Text.ElideRight
+                        Layout.fillWidth: true
                     }
-                    // Décision 6 : voir le message brut, en-têtes compris, en un geste.
-                    ToolButton {
-                        text: fenetre.sourceVisible ? qsTr("Message") : qsTr("Source")
-                        onClicked: fenetre.basculerSource()
+                    Label {
+                        visible: fenetre.uidCourant > 0 && fenetre.importanceCourante !== 0
+                        text: fenetre.importanceCourante > 0 ? qsTr("Importance haute") : qsTr("Importance basse")
+                        color: fenetre.importanceCourante > 0 ? "#c42b1c" : "#1a4480"
+                        font.bold: true
+                    }
+                }
+            }
+
+            // L'expéditeur demande une confirmation de lecture : on la propose,
+            // sans l'envoyer d'office — comme Outlook.
+            Pane {
+                Layout.fillWidth: true
+                visible: fenetre.uidCourant > 0 && !fenetre.sourceVisible && fenetre.confirmationDemandee.length > 0
+                padding: 4
+                background: Rectangle { color: "#fff8e1" }
+                RowLayout {
+                    width: parent.width
+                    Label {
+                        text: qsTr("L'expéditeur demande une confirmation de lecture (à %1).").arg(fenetre.confirmationDemandee)
+                        color: "#1c1f24"
+                        wrapMode: Text.Wrap
+                        Layout.fillWidth: true
+                    }
+                    Button {
+                        text: qsTr("Envoyer")
+                        onClicked: {
+                            boite.repondreConfirmation(fenetre.uidCourant, true)
+                            fenetre.confirmationDemandee = ""
+                            messageEtat.texte = qsTr("Confirmation de lecture envoyée.")
+                        }
+                    }
+                    Button {
+                        text: qsTr("Ignorer")
+                        onClicked: {
+                            boite.repondreConfirmation(fenetre.uidCourant, false)
+                            fenetre.confirmationDemandee = ""
+                        }
                     }
                 }
             }
@@ -443,6 +595,13 @@ ApplicationWindow {
                 id: cadreCorps
                 Layout.fillWidth: true
                 Layout.fillHeight: true
+                ScrollBar.vertical.policy: ScrollBar.vertical.size < 1 ? ScrollBar.AlwaysOn : ScrollBar.AsNeeded
+                // Réserve fixe : le texte se replie, sa hauteur dépend donc de la
+                // largeur, et une réserve qui suivrait le débordement bouclerait.
+                rightPadding: ScrollBar.vertical.width
+                // La source n'est pas repliée : elle défile aussi en largeur.
+                ScrollBar.horizontal.policy: ScrollBar.horizontal.size < 1 ? ScrollBar.AlwaysOn : ScrollBar.AsNeeded
+                bottomPadding: fenetre.sourceVisible ? ScrollBar.horizontal.height : 0
                 clip: true
                 contentWidth: fenetre.sourceVisible ? -1 : availableWidth
 
@@ -677,6 +836,939 @@ ApplicationWindow {
         onTexteChanged: fenetre.annoncer(texte, false)
     }
 
+    // ------------------------------------------------------------- rédaction
+    Component {
+        id: composantFenetreRedaction
+        // ApplicationWindow et non Window : c'est elle qui transmet police et
+        // palette aux éléments flottants (listes, menus, dialogues) — une
+        // simple Window les laisse aux valeurs par défaut du système.
+        ApplicationWindow {
+            id: fenetreRedaction
+            font: fenetre.font
+            palette: fenetre.palette
+            width: Math.min(900, Screen.desktopAvailableWidth - 40)
+            height: Math.min(700, Screen.desktopAvailableHeight - 60)
+            minimumWidth: 480
+            minimumHeight: 360
+            // Fenêtre indépendante, qui peut passer derrière la principale.
+            transientParent: null
+            visible: true
+            color: fenetre.palette.window
+            title: redaction ? redaction.titre : ""
+            property alias redaction: chargeurFenetre.item
+            function fermerRedaction() {
+                redaction.fermetureConfirmee = true
+                fenetreRedaction.close()
+            }
+            Loader {
+                id: chargeurFenetre
+                anchors.fill: parent
+                sourceComponent: composantRedaction
+                onLoaded: item.conteneur = fenetreRedaction
+            }
+            onClosing: function(fermeture) {
+                if (redaction && redaction.modifie && !redaction.fermetureConfirmee) {
+                    fermeture.accepted = false
+                    redaction.demanderFermeture()
+                    return
+                }
+                fenetre.oublierRedaction(redaction ? redaction.jeton : "")
+                Qt.callLater(function() { fenetreRedaction.destroy() })
+            }
+        }
+    }
+
+    Component {
+        id: composantVoletRedaction
+        Popup {
+            id: voletRedaction
+            parent: Overlay.overlay
+            x: 0
+            y: 0
+            width: parent ? parent.width : 0
+            height: parent ? parent.height : 0
+            modal: true
+            padding: 0
+            closePolicy: Popup.NoAutoClose
+            property alias redaction: chargeurVolet.item
+            function fermerRedaction() {
+                redaction.fermetureConfirmee = true
+                voletRedaction.close()
+            }
+            Loader {
+                id: chargeurVolet
+                anchors.fill: parent
+                sourceComponent: composantRedaction
+                onLoaded: item.conteneur = voletRedaction
+            }
+            onClosed: {
+                fenetre.oublierRedaction(redaction ? redaction.jeton : "")
+                Qt.callLater(function() { voletRedaction.destroy() })
+            }
+        }
+    }
+
+    Component {
+        id: composantRedaction
+        Page {
+            id: redac
+            // Une fenêtre à part ne reçoit ni la palette ni la police de la
+            // fenêtre principale : l'apparence choisie les lui transmet.
+            palette: fenetre.palette
+            font: fenetre.font
+
+            property string jeton: ""
+            property var conteneur: null
+            property int brouillonUid: 0
+            property string origineChemin: ""
+            property int origineUid: 0
+            property string origineMode: ""
+            property string enReponseA: ""
+            property var references: []
+            // Fichiers joints : [{chemin, nom, taille}].
+            property var pieces: []
+            property bool modifie: false
+            property bool occupe: false
+            property bool chargement: false
+            property bool fermetureConfirmee: false
+            property bool fermerApresEnregistrement: false
+            property bool afficherCopies: false
+            property bool miseEnForme: reglagesRedaction.miseEnForme
+            property string brouillonChemin: ""
+            // Options d'envoi (menu « Options ») : importance 1 / 0 / -1,
+            // accusés, heure d'envoi (secondes Unix, 0 : tout de suite).
+            property int importance: 0
+            property bool accuseRemise: false
+            property bool confirmationLecture: false
+            property real envoiDiffere: 0
+            readonly property string resumeOptions: {
+                var t = []
+                if (importance > 0) t.push(qsTr("Importance haute"))
+                if (importance < 0) t.push(qsTr("Importance basse"))
+                if (accuseRemise) t.push(qsTr("Accusé de réception"))
+                if (confirmationLecture) t.push(qsTr("Confirmation de lecture"))
+                if (envoiDiffere > 0) t.push(qsTr("Envoi %1").arg(fenetre.heureEnvoi(envoiDiffere)))
+                return t.join("  ·  ")
+            }
+            property string note: ""
+            property bool noteErreur: false
+            readonly property string titre: champObjet.text.length > 0 ? champObjet.text : qsTr("Nouveau message")
+
+            function choisirCompte(compte) {
+                for (var i = 0; i < fenetre.comptesConnus.length; ++i)
+                    if (fenetre.comptesConnus[i].compte === compte)
+                        choixCompte.currentIndex = i
+            }
+            function compteChoisi() {
+                return fenetre.comptesConnus[choixCompte.currentIndex] || null
+            }
+
+            function identiteChoisie() {
+                var c = compteChoisi()
+                return fenetre.identite(c ? c.adresse : "")
+            }
+
+            function pret() {
+                chargement = true
+                var i = identiteChoisie()
+                mef.poserTexte(i.nouveaux && i.signature.length > 0 ? "\n\n" + i.signature : "")
+                corpsRedaction.cursorPosition = 0
+                chargement = false
+                occupe = false
+                modifie = false
+                champA.forceActiveFocus()
+            }
+
+            function insererSignature() {
+                var i = identiteChoisie()
+                if (i.signature.length === 0) {
+                    signaler(qsTr("Aucune signature pour ce compte : menu « Comptes », « Nom et signature… »."), true)
+                    return
+                }
+                mef.inserer(corpsRedaction.cursorPosition, i.signature)
+            }
+
+            /// Mise en forme coupée : le texte est ramené au brut, puces et
+            /// numéros compris, pour que ce qui s'affiche soit ce qui part.
+            function basculerMiseEnForme(active) {
+                miseEnForme = active
+                if (!active && mef.enrichi())
+                    mef.poserTexte(mef.texte())
+            }
+
+            function attendre(texte) {
+                chargement = true
+                occupe = true
+                signaler(texte, false)
+            }
+
+            function signaler(texte, erreur) {
+                note = texte
+                noteErreur = erreur
+            }
+
+            /// Pré-remplit la rédaction (réponse, transfert, brouillon repris).
+            function remplir(p) {
+                chargement = true
+                champA.text = p.a || ""
+                champCc.text = p.cc || ""
+                champCci.text = p.cci || ""
+                champObjet.text = p.objet || ""
+                if (p.html && p.html.length > 0) {
+                    miseEnForme = true
+                    mef.poserHtml(p.html)
+                } else {
+                    var i = identiteChoisie()
+                    var signature = p.mode !== "brouillon" && i.reponses && i.signature.length > 0
+                                  ? "\n\n" + i.signature : ""
+                    mef.poserTexte(signature + (p.texte || ""))
+                }
+                brouillonUid = p.brouillonUid || 0
+                brouillonChemin = p.brouillonChemin || ""
+                importance = p.importance || 0
+                accuseRemise = p.accuseRemise === true
+                confirmationLecture = p.confirmationLecture === true
+                envoiDiffere = p.envoiDiffere || 0
+                origineChemin = p.origineChemin || ""
+                origineUid = p.origineUid || 0
+                origineMode = p.origineMode || ""
+                enReponseA = p.enReponseA || ""
+                references = p.references || []
+                var liste = []
+                var chemins = p.pieces || []
+                for (var i = 0; i < chemins.length; ++i) {
+                    var d = boite.decrireFichier(chemins[i])
+                    if (d.length > 0)
+                        liste.push(JSON.parse(d))
+                }
+                pieces = liste
+                afficherCopies = champCc.text.length > 0 || champCci.text.length > 0
+                chargement = false
+                occupe = false
+                modifie = false
+                signaler("", false)
+                if (champA.text.length === 0) {
+                    champA.forceActiveFocus()
+                } else {
+                    corpsRedaction.forceActiveFocus()
+                    corpsRedaction.cursorPosition = 0
+                }
+            }
+
+            function contenu() {
+                var c = compteChoisi()
+                return {
+                    jeton: jeton, de: c ? c.adresse : "", nom: identiteChoisie().nom,
+                    a: champA.text, cc: champCc.text, cci: champCci.text,
+                    objet: champObjet.text, texte: mef.texte(), html: miseEnForme ? mef.html() : "",
+                    pieces: pieces.map(function(f) { return f.chemin }),
+                    enReponseA: enReponseA, references: references, brouillonUid: brouillonUid,
+                    brouillonChemin: brouillonChemin,
+                    origineChemin: origineChemin, origineUid: origineUid, origineMode: origineMode,
+                    importance: importance, accuseRemise: accuseRemise,
+                    confirmationLecture: confirmationLecture, envoiDiffere: Math.round(envoiDiffere)
+                }
+            }
+
+            function ajouterFichiers(urls) {
+                var liste = pieces.slice()
+                for (var i = 0; i < urls.length; ++i) {
+                    var d = boite.decrireFichier(urls[i].toString())
+                    if (d.length === 0)
+                        continue
+                    var f = JSON.parse(d)
+                    if (!liste.some(function(x) { return x.chemin === f.chemin }))
+                        liste.push(f)
+                }
+                if (liste.length !== pieces.length) {
+                    pieces = liste
+                    modifie = true
+                }
+            }
+
+            function retirerPiece(i) {
+                var liste = pieces.slice()
+                liste.splice(i, 1)
+                pieces = liste
+                modifie = true
+            }
+
+            function envoyer(sansObjet) {
+                if (occupe)
+                    return
+                var c = compteChoisi()
+                if (!c) {
+                    signaler(qsTr("Aucun compte pour envoyer ce message."), true)
+                    return
+                }
+                if ((champA.text + champCc.text + champCci.text).trim().length === 0) {
+                    signaler(qsTr("Indiquez au moins un destinataire."), true)
+                    champA.forceActiveFocus()
+                    return
+                }
+                if (champObjet.text.trim().length === 0 && !sansObjet) {
+                    dlgSansObjet.open()
+                    return
+                }
+                if (envoiDiffere > 0 && envoiDiffere * 1000 <= Date.now())
+                    envoiDiffere = 0
+                occupe = true
+                signaler(envoiDiffere > 0 ? qsTr("Mise en attente…") : qsTr("Envoi…"), false)
+                if (!boite.envoyerMessage(c.compte, JSON.stringify(contenu())))
+                    echouer(boite.erreur.length > 0 ? boite.erreur : qsTr("Envoi impossible."))
+            }
+
+            function enregistrer() {
+                if (occupe)
+                    return
+                var c = compteChoisi()
+                if (!c)
+                    return
+                occupe = true
+                signaler(qsTr("Enregistrement du brouillon…"), false)
+                if (!boite.enregistrerBrouillon(c.compte, JSON.stringify(contenu())))
+                    echouer(boite.erreur.length > 0 ? boite.erreur : qsTr("Enregistrement impossible."))
+            }
+
+            function brouillonEnregistre(uid) {
+                brouillonUid = uid
+                occupe = false
+                modifie = false
+                signaler(qsTr("Brouillon enregistré à %1.").arg(Qt.formatTime(new Date(), "hh:mm")), false)
+                if (fermerApresEnregistrement)
+                    conteneur.fermerRedaction()
+            }
+
+            function echouer(message) {
+                occupe = false
+                chargement = false
+                fermerApresEnregistrement = false
+                signaler(message, true)
+            }
+
+            // ---- adresses proposées à la saisie
+            function proposer(champ) {
+                var avant = champ.text.substring(0, champ.cursorPosition)
+                var coupure = Math.max(avant.lastIndexOf(","), avant.lastIndexOf(";"))
+                var morceau = avant.substring(coupure + 1).trim()
+                if (morceau.length < 2) {
+                    suggestions.close()
+                    return
+                }
+                var liste = JSON.parse(boite.adressesConnues(morceau))
+                if (liste.length === 0) {
+                    suggestions.close()
+                    return
+                }
+                suggestions.champ = champ
+                suggestions.liste = liste
+                vueSuggestions.currentIndex = 0
+                if (!suggestions.opened)
+                    suggestions.open()
+            }
+
+            function affichable(s) {
+                if (!s.nom || s.nom.toLowerCase() === s.adresse.toLowerCase())
+                    return s.adresse
+                var nom = s.nom.replace(/"/g, "")
+                return /[,;<>]/.test(nom) ? "\"" + nom + "\" <" + s.adresse + ">" : nom + " <" + s.adresse + ">"
+            }
+
+            function accepterSuggestion(i) {
+                var champ = suggestions.champ
+                var s = suggestions.liste[i]
+                suggestions.close()
+                if (!champ || !s)
+                    return
+                var avant = champ.text.substring(0, champ.cursorPosition)
+                var apres = champ.text.substring(champ.cursorPosition).replace(/^[^,;]*[,;]?\s*/, "")
+                var coupure = Math.max(avant.lastIndexOf(","), avant.lastIndexOf(";"))
+                var tete = avant.substring(0, coupure + 1)
+                var nouveau = (tete.length > 0 ? tete + " " : "") + affichable(s) + "; "
+                champ.text = nouveau + apres
+                champ.cursorPosition = nouveau.length
+                modifie = true
+            }
+
+            /// Flèches, Entrée, Tab et Échap pilotent la liste quand elle est ouverte.
+            function toucheAdresse(ev) {
+                if (!suggestions.opened)
+                    return
+                if (ev.key === Qt.Key_Down) {
+                    vueSuggestions.incrementCurrentIndex()
+                } else if (ev.key === Qt.Key_Up) {
+                    vueSuggestions.decrementCurrentIndex()
+                } else if (ev.key === Qt.Key_Return || ev.key === Qt.Key_Enter || ev.key === Qt.Key_Tab) {
+                    accepterSuggestion(vueSuggestions.currentIndex)
+                } else if (ev.key === Qt.Key_Escape) {
+                    suggestions.close()
+                } else {
+                    return
+                }
+                ev.accepted = true
+            }
+
+            function demanderFermeture() {
+                if (!modifie || fermetureConfirmee) {
+                    conteneur.fermerRedaction()
+                    return
+                }
+                dlgFermer.open()
+            }
+
+            header: ToolBar {
+                RowLayout {
+                    anchors.fill: parent
+                    anchors.leftMargin: 6
+                    anchors.rightMargin: 6
+                    ToolButton {
+                        text: redac.envoiDiffere > 0 ? qsTr("Programmer") : qsTr("Envoyer")
+                        font.bold: true
+                        enabled: !redac.occupe
+                        onClicked: redac.envoyer(false)
+                    }
+                    ToolButton {
+                        text: qsTr("Enregistrer")
+                        enabled: !redac.occupe
+                        onClicked: redac.enregistrer()
+                    }
+                    ToolButton {
+                        text: qsTr("Joindre…")
+                        enabled: !redac.occupe
+                        onClicked: choixFichiers.open()
+                    }
+                    ToolButton {
+                        text: qsTr("Cc / Cci")
+                        checkable: true
+                        checked: redac.afficherCopies
+                        onToggled: redac.afficherCopies = checked
+                    }
+                    ToolButton {
+                        id: boutonOptions
+                        text: qsTr("Options ▾")
+                        onClicked: menuOptions.popup(boutonOptions, 0, boutonOptions.height)
+                    }
+                    Label {
+                        text: redac.note
+                        color: redac.noteErreur ? "#b00020" : fenetre.palette.windowText
+                        opacity: redac.noteErreur ? 1 : 0.75
+                        elide: Text.ElideRight
+                        Layout.fillWidth: true
+                        horizontalAlignment: Text.AlignRight
+                    }
+                    ToolButton {
+                        text: qsTr("Fermer")
+                        onClicked: redac.demanderFermeture()
+                    }
+                }
+            }
+
+            ColumnLayout {
+                anchors.fill: parent
+                anchors.margins: 8
+                spacing: 6
+
+                GridLayout {
+                    columns: 2
+                    columnSpacing: 8
+                    rowSpacing: 4
+                    Layout.fillWidth: true
+                    enabled: !redac.chargement
+
+                    Label { text: qsTr("De :") }
+                    ComboBox {
+                        id: choixCompte
+                        model: fenetre.comptesConnus
+                        displayText: currentIndex >= 0 && fenetre.comptesConnus[currentIndex]
+                                     ? fenetre.comptesConnus[currentIndex].adresse : ""
+                        delegate: ItemDelegate {
+                            required property var modelData
+                            width: ListView.view ? ListView.view.width : implicitWidth
+                            text: modelData.adresse
+                        }
+                        Layout.fillWidth: true
+                        onActivated: redac.modifie = true
+                    }
+                    Label { text: qsTr("À :") }
+                    TextField {
+                        id: champA
+                        onTextEdited: {
+                            redac.modifie = true
+                            redac.proposer(champA)
+                        }
+                        Keys.onPressed: function(ev) { redac.toucheAdresse(ev) }
+                        onActiveFocusChanged: if (!activeFocus && suggestions.champ === champA) suggestions.close()
+                        placeholderText: qsTr("nom@exemple.fr ; autre@exemple.fr")
+                        inputMethodHints: Qt.ImhEmailCharactersOnly | Qt.ImhNoAutoUppercase
+                        Layout.fillWidth: true
+                    }
+                    Label { text: qsTr("Cc :"); visible: redac.afficherCopies }
+                    TextField {
+                        id: champCc
+                        onTextEdited: {
+                            redac.modifie = true
+                            redac.proposer(champCc)
+                        }
+                        Keys.onPressed: function(ev) { redac.toucheAdresse(ev) }
+                        onActiveFocusChanged: if (!activeFocus && suggestions.champ === champCc) suggestions.close()
+                        visible: redac.afficherCopies
+                        inputMethodHints: Qt.ImhEmailCharactersOnly | Qt.ImhNoAutoUppercase
+                        Layout.fillWidth: true
+                    }
+                    Label { text: qsTr("Cci :"); visible: redac.afficherCopies }
+                    TextField {
+                        id: champCci
+                        onTextEdited: {
+                            redac.modifie = true
+                            redac.proposer(champCci)
+                        }
+                        Keys.onPressed: function(ev) { redac.toucheAdresse(ev) }
+                        onActiveFocusChanged: if (!activeFocus && suggestions.champ === champCci) suggestions.close()
+                        visible: redac.afficherCopies
+                        inputMethodHints: Qt.ImhEmailCharactersOnly | Qt.ImhNoAutoUppercase
+                        Layout.fillWidth: true
+                    }
+                    Label { text: qsTr("Objet :") }
+                    TextField {
+                        id: champObjet
+                        Layout.fillWidth: true
+                        onTextEdited: redac.modifie = true
+                    }
+                }
+
+                // Options d'envoi choisies, rappelées en clair.
+                Label {
+                    Layout.fillWidth: true
+                    visible: redac.resumeOptions.length > 0
+                    text: redac.resumeOptions
+                    color: redac.importance > 0 ? "#c42b1c" : fenetre.palette.windowText
+                    elide: Text.ElideRight
+                }
+
+                // Mise en forme : les boutons ne prennent pas le focus, pour que
+                // la sélection du texte reste celle sur laquelle ils agissent.
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 2
+                    CheckBox {
+                        text: qsTr("Mise en forme")
+                        checked: redac.miseEnForme
+                        focusPolicy: Qt.NoFocus
+                        onToggled: redac.basculerMiseEnForme(checked)
+                    }
+                    ToolButton {
+                        visible: redac.miseEnForme
+                        text: qsTr("G")
+                        font.bold: true
+                        checkable: true
+                        checked: mef.gras
+                        focusPolicy: Qt.NoFocus
+                        onClicked: mef.basculerGras()
+                        ToolTip.visible: hovered
+                        ToolTip.text: qsTr("Gras (Ctrl+B)")
+                    }
+                    ToolButton {
+                        visible: redac.miseEnForme
+                        text: qsTr("I")
+                        font.italic: true
+                        checkable: true
+                        checked: mef.italique
+                        focusPolicy: Qt.NoFocus
+                        onClicked: mef.basculerItalique()
+                        ToolTip.visible: hovered
+                        ToolTip.text: qsTr("Italique (Ctrl+I)")
+                    }
+                    ToolButton {
+                        visible: redac.miseEnForme
+                        text: qsTr("S")
+                        font.underline: true
+                        checkable: true
+                        checked: mef.souligne
+                        focusPolicy: Qt.NoFocus
+                        onClicked: mef.basculerSouligne()
+                        ToolTip.visible: hovered
+                        ToolTip.text: qsTr("Souligné (Ctrl+U)")
+                    }
+                    ToolButton {
+                        visible: redac.miseEnForme
+                        text: qsTr("• Liste")
+                        checkable: true
+                        checked: mef.puces
+                        focusPolicy: Qt.NoFocus
+                        onClicked: mef.basculerListe(false)
+                    }
+                    ToolButton {
+                        visible: redac.miseEnForme
+                        text: qsTr("1. Liste")
+                        checkable: true
+                        checked: mef.numeros
+                        focusPolicy: Qt.NoFocus
+                        onClicked: mef.basculerListe(true)
+                    }
+                    ToolButton {
+                        visible: redac.miseEnForme
+                        text: qsTr("Lien…")
+                        focusPolicy: Qt.NoFocus
+                        onClicked: dlgAdresseLien.open()
+                    }
+                    ToolButton {
+                        visible: redac.miseEnForme
+                        text: qsTr("Effacer la mise en forme")
+                        focusPolicy: Qt.NoFocus
+                        onClicked: mef.effacerMiseEnForme()
+                    }
+                    Item { Layout.fillWidth: true }
+                    ToolButton {
+                        text: qsTr("Signature")
+                        focusPolicy: Qt.NoFocus
+                        onClicked: redac.insererSignature()
+                    }
+                }
+
+                // Fichiers joints, chacun retirable.
+                Flow {
+                    Layout.fillWidth: true
+                    spacing: 6
+                    visible: redac.pieces.length > 0
+                    Repeater {
+                        model: redac.pieces
+                        delegate: Rectangle {
+                            required property var modelData
+                            required property int index
+                            radius: 4
+                            color: fenetre.palette.base
+                            border.color: fenetre.palette.mid
+                            width: lignePiece.implicitWidth + 8
+                            height: lignePiece.implicitHeight + 4
+                            RowLayout {
+                                id: lignePiece
+                                anchors.centerIn: parent
+                                spacing: 2
+                                Label {
+                                    text: modelData.nom + "  (" + fenetre.tailleLisible(modelData.taille) + ")"
+                                    Layout.leftMargin: 6
+                                }
+                                ToolButton {
+                                    text: "×"
+                                    enabled: !redac.occupe
+                                    onClicked: redac.retirerPiece(index)
+                                }
+                            }
+                        }
+                    }
+                }
+
+                ScrollView {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    ScrollBar.vertical.policy: ScrollBar.vertical.size < 1 ? ScrollBar.AlwaysOn : ScrollBar.AsNeeded
+                    rightPadding: ScrollBar.vertical.width
+                    TextArea {
+                        id: corpsRedaction
+                        textFormat: TextEdit.RichText
+                        wrapMode: TextEdit.Wrap
+                        selectByMouse: true
+                        persistentSelection: true
+                        font.pointSize: fenetre.tailleColonne("message")
+                        enabled: !redac.chargement
+                        placeholderText: qsTr("Votre message")
+                        background: Rectangle { color: fenetre.palette.base }
+                        onTextChanged: if (!redac.chargement) redac.modifie = true
+                    }
+                }
+            }
+
+            // Fichiers glissés depuis l'explorateur : joints.
+            DropArea {
+                anchors.fill: parent
+                onEntered: function(glisse) { glisse.accepted = glisse.hasUrls }
+                onDropped: function(depose) {
+                    if (depose.hasUrls) {
+                        redac.ajouterFichiers(depose.urls)
+                        depose.accept(Qt.CopyAction)
+                    }
+                }
+            }
+
+            Menu {
+                id: menuOptions
+                onAboutToShow: width = fenetre.largeurMenu(menuOptions)
+                MenuItem {
+                    text: qsTr("Importance haute")
+                    checkable: true
+                    checked: redac.importance > 0
+                    onTriggered: { redac.importance = checked ? 1 : 0; redac.modifie = true }
+                }
+                MenuItem {
+                    text: qsTr("Importance basse")
+                    checkable: true
+                    checked: redac.importance < 0
+                    onTriggered: { redac.importance = checked ? -1 : 0; redac.modifie = true }
+                }
+                MenuSeparator {}
+                MenuItem {
+                    text: qsTr("Demander un accusé de réception")
+                    checkable: true
+                    checked: redac.accuseRemise
+                    onTriggered: { redac.accuseRemise = checked; redac.modifie = true }
+                }
+                MenuItem {
+                    text: qsTr("Demander une confirmation de lecture")
+                    checkable: true
+                    checked: redac.confirmationLecture
+                    onTriggered: { redac.confirmationLecture = checked; redac.modifie = true }
+                }
+                MenuSeparator {}
+                MenuItem {
+                    text: qsTr("Différer l'envoi…")
+                    onTriggered: dlgDiffere.open()
+                }
+                MenuItem {
+                    visible: redac.envoiDiffere > 0
+                    height: visible ? implicitHeight : 0
+                    text: qsTr("Envoyer sans attendre")
+                    onTriggered: { redac.envoiDiffere = 0; redac.modifie = true }
+                }
+            }
+
+            // Heure d'envoi : quelques choix courants, ou une date et une heure.
+            Dialog {
+                id: dlgDiffere
+                title: qsTr("Différer l'envoi")
+                modal: true
+                anchors.centerIn: parent
+                width: Math.min(460, redac.width - 24)
+                standardButtons: Dialog.Ok | Dialog.Cancel
+                function proposer(d) {
+                    champJourDiffere.text = Qt.formatDate(d, "dd/MM/yyyy")
+                    champHeureDiffere.text = Qt.formatTime(d, "HH:mm")
+                    noteDiffere.text = ""
+                }
+                function lire() {
+                    var j = champJourDiffere.text.trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/)
+                    var h = champHeureDiffere.text.trim().match(/^(\d{1,2})[:h](\d{2})$/)
+                    if (!j || !h)
+                        return 0
+                    var d = new Date(Number(j[3]), Number(j[2]) - 1, Number(j[1]), Number(h[1]), Number(h[2]))
+                    return isNaN(d.getTime()) ? 0 : d.getTime() / 1000
+                }
+                onOpened: {
+                    var d = redac.envoiDiffere > 0 ? new Date(redac.envoiDiffere * 1000)
+                                                   : new Date(Date.now() + 3600 * 1000)
+                    proposer(d)
+                }
+                onAccepted: {
+                    var t = lire()
+                    if (t * 1000 <= Date.now() + 30000) {
+                        redac.signaler(qsTr("Heure d'envoi invalide ou déjà passée."), true)
+                        return
+                    }
+                    redac.envoiDiffere = t
+                    redac.modifie = true
+                }
+                ColumnLayout {
+                    anchors.fill: parent
+                    spacing: 6
+                    Flow {
+                        Layout.fillWidth: true
+                        spacing: 6
+                        Button {
+                            text: qsTr("Dans une heure")
+                            onClicked: dlgDiffere.proposer(new Date(Date.now() + 3600 * 1000))
+                        }
+                        Button {
+                            text: qsTr("Demain 8 h")
+                            onClicked: {
+                                var d = new Date()
+                                d.setDate(d.getDate() + 1)
+                                d.setHours(8, 0, 0, 0)
+                                dlgDiffere.proposer(d)
+                            }
+                        }
+                        Button {
+                            text: qsTr("Lundi 8 h")
+                            onClicked: {
+                                var d = new Date()
+                                d.setDate(d.getDate() + ((8 - d.getDay()) % 7 || 7))
+                                d.setHours(8, 0, 0, 0)
+                                dlgDiffere.proposer(d)
+                            }
+                        }
+                    }
+                    GridLayout {
+                        columns: 2
+                        Label { text: qsTr("Jour :") }
+                        TextField { id: champJourDiffere; placeholderText: "30/09/2026"; Layout.fillWidth: true }
+                        Label { text: qsTr("Heure :") }
+                        TextField { id: champHeureDiffere; placeholderText: "08:00"; Layout.fillWidth: true }
+                    }
+                    Label {
+                        id: noteDiffere
+                        Layout.fillWidth: true
+                        wrapMode: Text.Wrap
+                        opacity: 0.75
+                        font.pixelSize: 11
+                        text: ""
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        wrapMode: Text.Wrap
+                        opacity: 0.75
+                        font.pixelSize: 11
+                        text: qsTr("Le message attend sur le serveur, dans « Envoi différé ». Il part à l'heure dite si MMail est ouvert à ce moment-là, sur ce poste ou un autre ; sinon, à la prochaine ouverture.")
+                    }
+                }
+            }
+
+            MiseEnForme {
+                id: mef
+                document: corpsRedaction.textDocument
+                curseur: corpsRedaction.cursorPosition
+                debut: corpsRedaction.selectionStart
+                fin: corpsRedaction.selectionEnd
+            }
+
+            Popup {
+                id: suggestions
+                property var champ: null
+                property var liste: []
+                x: champ ? champ.mapToItem(redac, 0, 0).x : 0
+                y: champ ? champ.mapToItem(redac, 0, champ.height).y : 0
+                width: champ ? champ.width : 200
+                padding: 1
+                closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutsideParent
+                contentItem: ListView {
+                    id: vueSuggestions
+                    implicitHeight: contentHeight
+                    clip: true
+                    model: suggestions.liste
+                    delegate: ItemDelegate {
+                        required property var modelData
+                        required property int index
+                        width: ListView.view.width
+                        highlighted: ListView.isCurrentItem
+                        // Sans focus : le champ garderait sinon la main… et
+                        // fermerait la liste avant que le clic ne compte.
+                        focusPolicy: Qt.NoFocus
+                        text: modelData.nom.length > 0 ? modelData.nom + "  —  " + modelData.adresse : modelData.adresse
+                        onClicked: redac.accepterSuggestion(index)
+                    }
+                }
+            }
+
+            Dialog {
+                id: dlgAdresseLien
+                title: qsTr("Insérer un lien")
+                modal: true
+                anchors.centerIn: parent
+                width: Math.min(520, redac.width - 24)
+                standardButtons: Dialog.Ok | Dialog.Cancel
+                onOpened: {
+                    champAdresseLien.text = "https://"
+                    champAdresseLien.forceActiveFocus()
+                    champAdresseLien.cursorPosition = champAdresseLien.text.length
+                }
+                onAccepted: mef.poserLien(champAdresseLien.text)
+                ColumnLayout {
+                    anchors.fill: parent
+                    Label {
+                        Layout.fillWidth: true
+                        wrapMode: Text.Wrap
+                        text: qsTr("Adresse du lien, posée sur le texte sélectionné — ou insérée telle quelle s'il n'y en a pas :")
+                    }
+                    TextField {
+                        id: champAdresseLien
+                        Layout.fillWidth: true
+                        inputMethodHints: Qt.ImhUrlCharactersOnly | Qt.ImhNoAutoUppercase
+                        onAccepted: dlgAdresseLien.accept()
+                    }
+                }
+            }
+
+            Shortcut {
+                sequences: [StandardKey.Bold]
+                enabled: redac.miseEnForme
+                onActivated: mef.basculerGras()
+            }
+            Shortcut {
+                sequences: [StandardKey.Italic]
+                enabled: redac.miseEnForme
+                onActivated: mef.basculerItalique()
+            }
+            Shortcut {
+                sequences: [StandardKey.Underline]
+                enabled: redac.miseEnForme
+                onActivated: mef.basculerSouligne()
+            }
+
+            FileDialog {
+                id: choixFichiers
+                title: qsTr("Joindre des fichiers")
+                fileMode: FileDialog.OpenFiles
+                onAccepted: redac.ajouterFichiers(selectedFiles)
+            }
+
+            Dialog {
+                id: dlgSansObjet
+                title: qsTr("Envoyer sans objet ?")
+                modal: true
+                anchors.centerIn: parent
+                width: Math.min(420, redac.width - 24)
+                standardButtons: Dialog.Yes | Dialog.No
+                Label {
+                    width: dlgSansObjet.availableWidth
+                    wrapMode: Text.Wrap
+                    text: qsTr("Ce message n'a pas d'objet.")
+                }
+                onAccepted: redac.envoyer(true)
+            }
+
+            Dialog {
+                id: dlgFermer
+                title: qsTr("Fermer ce message ?")
+                modal: true
+                anchors.centerIn: parent
+                width: Math.min(520, redac.width - 24)
+                Label {
+                    width: dlgFermer.availableWidth
+                    wrapMode: Text.Wrap
+                    text: qsTr("Le message a été modifié depuis son dernier enregistrement.")
+                }
+                footer: DialogButtonBox {
+                    Button {
+                        text: qsTr("Enregistrer le brouillon")
+                        DialogButtonBox.buttonRole: DialogButtonBox.AcceptRole
+                    }
+                    Button {
+                        text: qsTr("Abandonner")
+                        DialogButtonBox.buttonRole: DialogButtonBox.DestructiveRole
+                    }
+                    Button {
+                        text: qsTr("Continuer")
+                        DialogButtonBox.buttonRole: DialogButtonBox.RejectRole
+                    }
+                }
+                onAccepted: {
+                    redac.fermerApresEnregistrement = true
+                    redac.enregistrer()
+                }
+                onDiscarded: {
+                    dlgFermer.close()
+                    redac.conteneur.fermerRedaction()
+                }
+            }
+
+            Shortcut {
+                sequences: ["Ctrl+Return", "Ctrl+Enter"]
+                onActivated: redac.envoyer(false)
+            }
+            Shortcut {
+                sequences: [StandardKey.Save]
+                onActivated: redac.enregistrer()
+            }
+        }
+    }
+
     // ------------------------------------------------ ligne d'arborescence
     Component {
         id: ligneArborescence
@@ -816,8 +1908,13 @@ ApplicationWindow {
                 }
                 Label {
                     text: fenetre.libelleLigne(model)
-                    color: ligne.highlighted ? fenetre.palette.highlightedText : fenetre.palette.windowText
+                    color: ligne.highlighted ? fenetre.palette.highlightedText
+                         : model.genre === "rubrique" ? fenetre.palette.highlight
+                         : fenetre.palette.windowText
                     font.bold: model.genre === "compte" || model.genre === "rubrique" || model.nonLus > 0
+                    // Les en-têtes, rubrique et comptes, un cran au-dessus des dossiers.
+                    font.pointSize: model.genre === "compte" || model.genre === "rubrique"
+                                    ? fenetre.tailleArborescence * 1.12 : fenetre.tailleArborescence
                     font.italic: model.masque || model.genre === "favori-vide"
                     opacity: model.masque || model.genre === "favori-vide"
                              || (ligne.estDossier && !model.selectionnable) ? 0.5 : 1
@@ -861,10 +1958,20 @@ ApplicationWindow {
                 color: fenetre.palette.highlight
             }
 
-            topPadding: 5
-            bottomPadding: 5
+            // Des lignes plus aérées, séparées d'un trait (retour de Fabienne,
+            // 29/09 : les messages se distinguaient mal les uns des autres).
+            topPadding: 7
+            bottomPadding: 7
+            Rectangle {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                height: 1
+                color: fenetre.palette.windowText
+                opacity: 0.18
+            }
             contentItem: ColumnLayout {
-                spacing: 1
+                spacing: 2
                 RowLayout {
                     Layout.fillWidth: true
                     Layout.leftMargin: 10
@@ -876,22 +1983,48 @@ ApplicationWindow {
                         elide: Text.ElideRight
                         Layout.fillWidth: true
                     }
+                    // Trombone : le message porte des pièces jointes.
+                    Canvas {
+                        visible: model.pieces === true
+                        Layout.preferredHeight: dateLigne.implicitHeight
+                        Layout.preferredWidth: Math.round(dateLigne.implicitHeight * 0.62)
+                        property color encre: ligne.highlighted ? fenetre.palette.highlightedText
+                                                                : fenetre.palette.windowText
+                        onEncreChanged: requestPaint()
+                        onWidthChanged: requestPaint()
+                        onHeightChanged: requestPaint()
+                        onPaint: fenetre.dessinerTrombone(getContext("2d"), width, height, encre)
+                    }
                     Label {
+                        id: dateLigne
                         text: fenetre.dateCourte(model.date)
                         color: ligne.highlighted ? fenetre.palette.highlightedText : fenetre.palette.windowText
                         opacity: 0.7
                         font.pointSize: fenetre.tailleListe * 0.85
                     }
                 }
-                Label {
-                    Layout.leftMargin: 10
-                    Layout.rightMargin: 8
-                    text: model.sujet
-                    font.bold: !model.lu
-                    color: ligne.highlighted ? fenetre.palette.highlightedText
-                         : model.lu ? fenetre.palette.windowText : fenetre.palette.highlight
-                    elide: Text.ElideRight
+                RowLayout {
                     Layout.fillWidth: true
+                    Layout.leftMargin: 10
+                    // Place du drapeau, posé par-dessus en bout de ligne.
+                    Layout.rightMargin: 8 + drapeauLigne.width
+                    spacing: 4
+                    // Importance annoncée par l'expéditeur : « ! » haute, « ↓ » basse.
+                    Label {
+                        visible: model.importance !== 0
+                        text: model.importance > 0 ? "!" : "↓"
+                        font.bold: true
+                        color: ligne.highlighted ? fenetre.palette.highlightedText
+                             : model.importance > 0 ? "#c42b1c" : "#1a4480"
+                    }
+                    Label {
+                        text: model.sujet
+                        font.bold: !model.lu
+                        color: ligne.highlighted ? fenetre.palette.highlightedText
+                             : model.lu ? fenetre.palette.windowText : fenetre.palette.highlight
+                        elide: Text.ElideRight
+                        Layout.fillWidth: true
+                    }
                 }
             }
 
@@ -957,9 +2090,43 @@ ApplicationWindow {
                         fenetre.choisir(index, 0)
                     menuMessage.popup()
                 }
+                onDoubleClicked: function(souris) {
+                    if (souris.button === Qt.LeftButton)
+                        fenetre.rediger(fenetre.dossierDeReprise ? "brouillon" : "repondre")
+                }
                 onReleased: {
                     if (drag.active)
                         etiquette.Drag.drop()
+                }
+            }
+
+            // Drapeau de suivi, en bout de seconde ligne, comme Outlook : plein
+            // s'il est posé ; en creux au survol, pour montrer qu'un clic le pose.
+            Canvas {
+                id: drapeauLigne
+                anchors.right: parent.right
+                anchors.rightMargin: 8
+                anchors.bottom: parent.bottom
+                anchors.bottomMargin: 7
+                height: dateLigne.implicitHeight
+                width: Math.round(height * 0.8)
+                visible: model.suivi === true || ligne.hovered || survolDrapeau.containsMouse
+                property color encre: model.suivi === true
+                                      ? (ligne.highlighted ? fenetre.palette.highlightedText : "#c42b1c")
+                                      : (ligne.highlighted ? fenetre.palette.highlightedText : fenetre.palette.windowText)
+                property bool plein: model.suivi === true
+                opacity: plein ? 1 : 0.45
+                onEncreChanged: requestPaint()
+                onPleinChanged: requestPaint()
+                onWidthChanged: requestPaint()
+                onHeightChanged: requestPaint()
+                onPaint: fenetre.dessinerDrapeau(getContext("2d"), width, height, encre, plein)
+                MouseArea {
+                    id: survolDrapeau
+                    anchors.fill: parent
+                    anchors.margins: -4
+                    hoverEnabled: true
+                    onClicked: fenetre.basculerSuivi([model.uid], model.suivi !== true)
                 }
             }
         }
@@ -967,7 +2134,63 @@ ApplicationWindow {
 
     // ---------------------------------------------------------------- menus
     Menu {
+        id: menuComptes
+        onAboutToShow: width = fenetre.largeurMenu(menuComptes)
+        MenuItem {
+            text: qsTr("Ajouter un compte…")
+            onTriggered: fenetre.demanderCompte(null, "")
+        }
+        MenuItem {
+            text: qsTr("Ajouter avec un lien de configuration…")
+            onTriggered: dlgLien.ouvrir("", "")
+        }
+        MenuItem {
+            text: qsTr("Nom et signature…")
+            enabled: fenetre.comptesConnus.length > 0
+            onTriggered: dlgIdentite.ouvrir(boite.compteCourant)
+        }
+        MenuSeparator {}
+        // Le retrait est aussi au clic droit sur le compte ; il est repris ici
+        // pour qu'on le trouve sans le connaître.
+        Menu {
+            id: menuRetrait
+            title: qsTr("Retirer un compte")
+            onAboutToShow: width = fenetre.largeurMenu(menuRetrait)
+            Instantiator {
+                model: fenetre.comptesConnus
+                delegate: MenuItem {
+                    required property var modelData
+                    text: modelData.adresse + "…"
+                    onTriggered: dlgRetrait.ouvrir(modelData.compte, modelData.adresse, modelData.hote)
+                }
+                onObjectAdded: function(indice, objet) { menuRetrait.insertItem(indice, objet) }
+                onObjectRemoved: function(indice, objet) { menuRetrait.removeItem(objet) }
+            }
+            MenuItem {
+                text: qsTr("Aucun compte")
+                enabled: false
+                visible: fenetre.comptesConnus.length === 0
+                height: visible ? implicitHeight : 0
+            }
+        }
+    }
+
+    Menu {
+        id: menuAide
+        onAboutToShow: width = fenetre.largeurMenu(menuAide)
+        MenuItem {
+            text: qsTr("Aide (F1)")
+            onTriggered: dlgAide.open()
+        }
+        MenuItem {
+            text: qsTr("À propos de MMail…")
+            onTriggered: dlgAPropos.open()
+        }
+    }
+
+    Menu {
         id: menuAffichage
+        onAboutToShow: width = fenetre.largeurMenu(menuAffichage)
         Repeater {
             model: fenetre.nomsApparence
             MenuItem {
@@ -999,6 +2222,8 @@ ApplicationWindow {
 
     Menu {
         id: menuPiece
+        font.pointSize: fenetre.tailleColonne("message")
+        onAboutToShow: width = fenetre.largeurMenu(menuPiece)
         property var piece: null
         function ouvrir(p, bouton) {
             piece = p
@@ -1030,6 +2255,8 @@ ApplicationWindow {
 
     Menu {
         id: menuCorps
+        font.pointSize: fenetre.tailleColonne("message")
+        onAboutToShow: width = fenetre.largeurMenu(menuCorps)
         MenuItem {
             text: qsTr("Copier")
             enabled: vueCorps.selectedText.length > 0
@@ -1050,6 +2277,40 @@ ApplicationWindow {
 
     Menu {
         id: menuMessage
+        font.pointSize: fenetre.tailleColonne("liste")
+        onAboutToShow: width = fenetre.largeurMenu(menuMessage)
+        MenuItem {
+            visible: fenetre.dossierDeReprise
+            height: visible ? implicitHeight : 0
+            text: qsTr("Reprendre")
+            onTriggered: fenetre.rediger("brouillon")
+        }
+        MenuItem {
+            visible: !fenetre.dossierDeReprise
+            height: visible ? implicitHeight : 0
+            text: qsTr("Répondre")
+            onTriggered: fenetre.rediger("repondre")
+        }
+        MenuItem {
+            visible: !fenetre.dossierDeReprise
+            height: visible ? implicitHeight : 0
+            text: qsTr("Répondre à tous")
+            onTriggered: fenetre.rediger("repondre_tous")
+        }
+        MenuItem {
+            text: qsTr("Transférer")
+            onTriggered: fenetre.rediger("transferer")
+        }
+        MenuSeparator {}
+        MenuItem {
+            text: qsTr("Poser un drapeau de suivi")
+            onTriggered: fenetre.basculerSuivi(fenetre.uidsChoisis(), true)
+        }
+        MenuItem {
+            text: qsTr("Retirer le drapeau")
+            onTriggered: fenetre.basculerSuivi(fenetre.uidsChoisis(), false)
+        }
+        MenuSeparator {}
         MenuItem { text: qsTr("Déplacer vers…"); onTriggered: fenetre.ouvrirDeplacer() }
         MenuSeparator {}
         MenuItem { text: qsTr("Marquer comme lu"); onTriggered: fenetre.marquerSelection(true) }
@@ -1079,6 +2340,8 @@ ApplicationWindow {
 
     Menu {
         id: menuDossier
+        font.pointSize: fenetre.tailleColonne("arborescence")
+        onAboutToShow: width = fenetre.largeurMenu(menuDossier)
         property int compte: 0
         property string chemin: ""
         property bool favori: false
@@ -1099,6 +2362,8 @@ ApplicationWindow {
 
     Menu {
         id: menuCompte
+        font.pointSize: fenetre.tailleColonne("arborescence")
+        onAboutToShow: width = fenetre.largeurMenu(menuCompte)
         property int compte: 0
         property string adresse: ""
         property string hote: ""
@@ -1153,6 +2418,43 @@ ApplicationWindow {
         sequences: [StandardKey.Refresh]
         onActivated: boite.actualiser()
     }
+    // Insertion : pose ou retire le drapeau, comme dans Outlook.
+    Shortcut {
+        sequence: "Ins"
+        enabled: !fenetre.dialogueOuvert() && Object.keys(fenetre.selection).length > 0
+        onActivated: {
+            var uids = fenetre.uidsChoisis()
+            var i = fenetre.indexDe(uids[0])
+            fenetre.basculerSuivi(uids, !(i >= 0 && modeleMessages.get(i).suivi))
+        }
+    }
+
+    // Raccourcis d'Outlook pour la rédaction.
+    Shortcut {
+        sequences: [StandardKey.New]
+        enabled: !fenetre.dialogueOuvert()
+        onActivated: fenetre.rediger("nouveau")
+    }
+    Shortcut {
+        sequence: "Ctrl+R"
+        enabled: !fenetre.dialogueOuvert() && fenetre.uidCourant > 0
+        onActivated: fenetre.rediger(fenetre.dossierDeReprise ? "brouillon" : "repondre")
+    }
+    Shortcut {
+        sequence: "Ctrl+Shift+R"
+        enabled: !fenetre.dialogueOuvert() && fenetre.uidCourant > 0
+        onActivated: fenetre.rediger("repondre_tous")
+    }
+    Shortcut {
+        sequence: "Ctrl+F"
+        enabled: !fenetre.dialogueOuvert() && fenetre.uidCourant > 0
+        onActivated: fenetre.rediger("transferer")
+    }
+    Shortcut {
+        sequences: [StandardKey.HelpContents]
+        enabled: !fenetre.dialogueOuvert()
+        onActivated: dlgAide.open()
+    }
     Shortcut {
         sequences: [StandardKey.ZoomIn, "Ctrl+="]
         onActivated: fenetre.zoomer(fenetre.colonneActive, 1.1)
@@ -1180,6 +2482,10 @@ ApplicationWindow {
         anchors.centerIn: Overlay.overlay
         width: Math.min(460, fenetre.width - 24)
         standardButtons: Dialog.Ok | Dialog.Cancel
+        // Vrai dès que la personne a touché au serveur : la configuration
+        // automatique ne réécrit plus ce champ.
+        property bool hoteSaisi: false
+        property string infoServeur: ""
         onAccepted: fenetre.validerCompte()
         onRejected: fenetre.demandeSuivante()
         onOpened: (champAdresse.text.length > 0 ? champMotDePasse : champAdresse).forceActiveFocus()
@@ -1205,6 +2511,7 @@ ApplicationWindow {
                 enabled: dlgCompte.compteId === 0
                 inputMethodHints: Qt.ImhEmailCharactersOnly | Qt.ImhNoAutoUppercase
                 Layout.fillWidth: true
+                onEditingFinished: fenetre.chercherServeur()
             }
             Label { text: qsTr("Serveur IMAP :") }
             TextField {
@@ -1213,6 +2520,16 @@ ApplicationWindow {
                 enabled: dlgCompte.compteId === 0
                 inputMethodHints: Qt.ImhUrlCharactersOnly | Qt.ImhNoAutoUppercase
                 Layout.fillWidth: true
+                onTextEdited: dlgCompte.hoteSaisi = text.length > 0
+            }
+            Label {
+                Layout.columnSpan: 2
+                Layout.fillWidth: true
+                visible: text.length > 0
+                wrapMode: Text.Wrap
+                opacity: 0.75
+                font.pixelSize: 11
+                text: dlgCompte.infoServeur
             }
             Label { text: qsTr("Mot de passe :") }
             TextField {
@@ -1239,12 +2556,138 @@ ApplicationWindow {
     }
 
     Dialog {
+        id: dlgIdentite
+        title: qsTr("Nom et signature")
+        modal: true
+        anchors.centerIn: Overlay.overlay
+        width: Math.min(560, fenetre.width - 24)
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        function ouvrir(compte) {
+            var i = 0
+            for (var k = 0; k < fenetre.comptesConnus.length; ++k)
+                if (fenetre.comptesConnus[k].compte === compte)
+                    i = k
+            choixIdentite.currentIndex = i
+            charger()
+            open()
+        }
+        function adresse() {
+            var c = fenetre.comptesConnus[choixIdentite.currentIndex]
+            return c ? c.adresse : ""
+        }
+        function charger() {
+            var i = fenetre.identite(adresse())
+            champNomAffiche.text = i.nom
+            champSignature.text = i.signature
+            caseSignatureNouveaux.checked = i.nouveaux
+            caseSignatureReponses.checked = i.reponses
+        }
+        onAccepted: fenetre.poserIdentite(adresse(), {
+            nom: champNomAffiche.text.trim(), signature: champSignature.text,
+            nouveaux: caseSignatureNouveaux.checked, reponses: caseSignatureReponses.checked })
+
+        ColumnLayout {
+            anchors.fill: parent
+            spacing: 6
+            ComboBox {
+                id: choixIdentite
+                Layout.fillWidth: true
+                model: fenetre.comptesConnus
+                displayText: currentIndex >= 0 && fenetre.comptesConnus[currentIndex]
+                             ? fenetre.comptesConnus[currentIndex].adresse : ""
+                delegate: ItemDelegate {
+                    required property var modelData
+                    width: ListView.view ? ListView.view.width : implicitWidth
+                    text: modelData.adresse
+                }
+                onActivated: dlgIdentite.charger()
+            }
+            Label { text: qsTr("Nom affiché chez les destinataires :") }
+            TextField {
+                id: champNomAffiche
+                Layout.fillWidth: true
+                placeholderText: qsTr("Prénom Nom")
+            }
+            Label { text: qsTr("Signature :") }
+            ScrollView {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 140
+                TextArea {
+                    id: champSignature
+                    wrapMode: TextEdit.Wrap
+                    placeholderText: qsTr("Prénom Nom\nFonction — Société\nTéléphone")
+                    background: Rectangle { color: fenetre.palette.base; border.color: fenetre.palette.mid }
+                }
+            }
+            CheckBox {
+                id: caseSignatureNouveaux
+                text: qsTr("L'ajouter aux nouveaux messages")
+            }
+            CheckBox {
+                id: caseSignatureReponses
+                text: qsTr("L'ajouter aux réponses et aux transferts")
+            }
+        }
+    }
+
+    Dialog {
+        id: dlgLien
+        title: qsTr("Ajouter avec un lien de configuration")
+        modal: true
+        anchors.centerIn: Overlay.overlay
+        width: Math.min(520, fenetre.width - 24)
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        function ouvrir(lien, note) {
+            champLien.text = lien
+            noteLien.text = note
+            open()
+        }
+        onOpened: champLien.forceActiveFocus()
+        onAccepted: fenetre.lireLien(champLien.text.trim())
+
+        ColumnLayout {
+            anchors.fill: parent
+            spacing: 6
+            Label {
+                id: noteLien
+                Layout.fillWidth: true
+                visible: text.length > 0
+                wrapMode: Text.Wrap
+                color: "#b00020"
+            }
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                text: qsTr("Collez le lien de configuration que vous avez reçu :")
+            }
+            TextField {
+                id: champLien
+                placeholderText: "https://…"
+                inputMethodHints: Qt.ImhUrlCharactersOnly | Qt.ImhNoAutoUppercase
+                Layout.fillWidth: true
+                onAccepted: dlgLien.accept()
+            }
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                opacity: 0.75
+                font.pixelSize: 11
+                text: qsTr("Le lien ne sert qu'une fois. Il apporte l'adresse, le serveur et le mot de passe de chaque compte ; le mot de passe va directement au coffre du système, sans être affiché.")
+            }
+        }
+    }
+
+    Dialog {
         id: dlgDeplacer
         title: qsTr("Déplacer %1 vers…").arg(fenetre.accord(Object.keys(fenetre.selection).length, qsTr("message"), qsTr("messages")))
         modal: true
         anchors.centerIn: Overlay.overlay
-        width: Math.min(520, fenetre.width - 24)
-        height: Math.min(560, fenetre.height - 40)
+        // Zoom de la colonne d'où il est ouvert (liste, message), fixé à
+        // l'ouverture ; les dimensions suivent, dans la limite de la fenêtre.
+        property real zoom: 1
+        font.pointSize: fenetre.tailleBase * zoom
+        width: Math.min(520 * zoom, fenetre.width - 24)
+        height: Math.min(560 * zoom, fenetre.height - 40)
         standardButtons: Dialog.Ok | Dialog.Cancel
         property var cibles: []
         onOpened: {
@@ -1288,9 +2731,13 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 clip: true
+                ScrollBar.vertical: ScrollBar {
+                    policy: size < 1 ? ScrollBar.AlwaysOn : ScrollBar.AsNeeded
+                }
                 model: ListModel { id: modeleCibles }
                 delegate: ItemDelegate {
                     width: ListView.view.width
+                           - (vueCibles.ScrollBar.vertical.size < 1 ? vueCibles.ScrollBar.vertical.width : 0)
                     highlighted: ListView.isCurrentItem
                     onClicked: vueCibles.currentIndex = index
                     onDoubleClicked: dlgDeplacer.accept()
@@ -1298,7 +2745,7 @@ ApplicationWindow {
                         Label {
                             text: model.adresse
                             opacity: 0.6
-                            Layout.preferredWidth: 170
+                            Layout.preferredWidth: 170 * dlgDeplacer.zoom
                             elide: Text.ElideRight
                         }
                         Item { Layout.preferredWidth: model.profondeur * 12 }
@@ -1309,6 +2756,132 @@ ApplicationWindow {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    // Aide : ce que l'interface ne dit pas d'elle-même — gestes, raccourcis,
+    // et ce qu'un geste fait ou ne fait pas sur le serveur.
+    Dialog {
+        id: dlgAide
+        title: qsTr("Aide de MMail")
+        modal: true
+        anchors.centerIn: Overlay.overlay
+        // Taille fixée, et non déduite du texte : même raison que plus bas pour
+        // le dialogue de retrait.
+        width: Math.min(620, fenetre.width - 24)
+        height: Math.min(620, fenetre.height - 24)
+        standardButtons: Dialog.Close
+        ScrollView {
+            id: defilementAide
+            anchors.fill: parent
+            ScrollBar.vertical.policy: ScrollBar.vertical.size < 1 ? ScrollBar.AlwaysOn : ScrollBar.AsNeeded
+            // Réserve fixe, comme pour le corps du message : texte replié.
+            rightPadding: ScrollBar.vertical.width
+            contentWidth: availableWidth
+            clip: true
+            Label {
+                width: defilementAide.availableWidth
+                wrapMode: Text.Wrap
+                textFormat: Text.StyledText
+                text: qsTr(
+                    "<b>Comptes</b><br>"
+                    + "Menu « Comptes » : ajouter ou retirer un compte. À l'ajout, le serveur est "
+                    + "cherché d'après l'adresse, si son domaine publie sa configuration. Un lien de "
+                    + "configuration, reçu de votre administrateur, ajoute un ou plusieurs comptes "
+                    + "sans rien saisir ; il ne sert qu'une fois. Retirer un compte efface de ce "
+                    + "poste son index et son mot de passe mémorisé ; rien n'est supprimé sur le serveur. "
+                    + "Clic droit sur un compte : se connecter, se déconnecter, oublier le mot de passe. "
+                    + "Un clic sur le compte replie ou déplie ses dossiers.<br><br>"
+                    + "<b>Rédaction</b><br>"
+                    + "« Nouveau message » (Ctrl+N), « Répondre » (Ctrl+R), « Répondre à tous » "
+                    + "(Ctrl+Maj+R), « Transférer » (Ctrl+F) — boutons au-dessus du message, ou clic "
+                    + "droit. Un double clic répond ; dans les brouillons, il reprend le brouillon. "
+                    + "Dans la fenêtre de rédaction : Ctrl+Entrée envoie, Ctrl+S enregistre le "
+                    + "brouillon sur le serveur ; « Joindre… » ou un glisser-déposer de fichiers "
+                    + "ajoute des pièces jointes. Une copie de chaque message envoyé est gardée dans "
+                    + "« Éléments envoyés ». Mise en forme : gras (Ctrl+B), italique (Ctrl+I), souligné "
+                    + "(Ctrl+U), listes, liens ; décochez « Mise en forme » pour un message en texte "
+                    + "brut. En tapant un destinataire, les adresses connues sont proposées : flèches "
+                    + "et Entrée pour choisir. Nom affiché et signature de chaque compte : menu "
+                    + "« Comptes », « Nom et signature… ». Menu « Options » : importance, accusé "
+                    + "de réception, confirmation de lecture, envoi différé — le message attend "
+                    + "dans « Envoi différé » et part à l'heure dite si MMail est ouvert.<br><br>"
+                    + "<b>Suivi</b><br>"
+                    + "Un clic au bout de la seconde ligne d'un message, ou la touche Insertion, pose "
+                    + "ou retire un drapeau de suivi, que les autres logiciels de messagerie voient "
+                    + "aussi. « ! » signale un message d'importance haute, « ↓ » d'importance basse. "
+                    + "Quand un expéditeur demande une confirmation de lecture, MMail propose de "
+                    + "l'envoyer ou de l'ignorer.<br><br>"
+                    + "<b>Favoris</b><br>"
+                    + "Glissez un dossier sur la rubrique Favoris pour l'y épingler ; glissez un favori "
+                    + "sur un autre pour le placer avant lui. Clic droit sur un dossier : ajouter aux "
+                    + "favoris ou les retirer, masquer le dossier. Le bouton « Dossiers masqués » les "
+                    + "réaffiche.<br><br>"
+                    + "<b>Trier</b><br>"
+                    + "Glissez un ou plusieurs messages sur un dossier, de n'importe quel compte. Clic "
+                    + "droit sur un message, ou Ctrl+Maj+V : « Déplacer vers… », avec un filtre sur le "
+                    + "nom du dossier. Entre deux boîtes, le message n'est retiré de la source qu'une "
+                    + "fois déposé dans la cible ; un déplacement interrompu reprend à la connexion "
+                    + "suivante.<br><br>"
+                    + "<b>Clavier</b><br>"
+                    + "Suppr : envoyer à la corbeille de la boîte, rien n'est détruit · Ctrl+Q : marquer "
+                    + "comme lu · Ctrl+U : marquer comme non lu · Ctrl+Maj+V : déplacer vers… · "
+                    + "Ctrl+A : tout sélectionner · F5 : actualiser · F1 : cette aide. "
+                    + "Ctrl+clic et Maj+clic sélectionnent plusieurs messages.<br><br>"
+                    + "<b>Affichage</b><br>"
+                    + "Chaque colonne a son propre zoom : Ctrl + molette sur la colonne, ou Ctrl +, "
+                    + "Ctrl − et Ctrl 0 sur la dernière colonne survolée ; pincement au doigt. Le menu "
+                    + "« Affichage » propose trois apparences.<br><br>"
+                    + "<b>Message</b><br>"
+                    + "Le bouton « Source » affiche le message brut, en-têtes compris. Un texte "
+                    + "sélectionné part au presse-papier, sauf ce qu'un autre logiciel vient d'y "
+                    + "déposer, protégé une minute.<br><br>"
+                    + "<b>Pièces jointes</b><br>"
+                    + "Listées sous l'en-tête du message : « Ouvrir » avec le logiciel du système, "
+                    + "« Enregistrer sous… ». Un programme ou un script ne s'ouvre pas depuis MMail, il "
+                    + "s'enregistre.")
+            }
+        }
+    }
+
+    Dialog {
+        id: dlgAPropos
+        title: qsTr("À propos de MMail")
+        modal: true
+        anchors.centerIn: Overlay.overlay
+        width: Math.min(460, fenetre.width - 24)
+        standardButtons: Dialog.Close
+        ColumnLayout {
+            width: dlgAPropos.availableWidth
+            spacing: 8
+            Label {
+                text: "MMail " + Qt.application.version
+                font.bold: true
+                font.pointSize: fenetre.font.pointSize * 1.4
+            }
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                text: qsTr("Client de messagerie IMAP pour Windows, Linux et Android.")
+            }
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                text: qsTr("© M-Media — logiciel libre, distribué sous licence GNU GPL version 3.")
+            }
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                textFormat: Text.StyledText
+                text: qsTr("Sources : %1").arg("<a href=\"https://github.com/mmedia-fr/mmail\">github.com/mmedia-fr/mmail</a>")
+                onLinkActivated: function(lien) { Qt.openUrlExternally(lien) }
+            }
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                opacity: 0.7
+                text: fenetre.noyau + " · Qt " + versionQt
             }
         }
     }
@@ -1420,15 +2993,69 @@ ApplicationWindow {
             fenetre.rafraichirListe()
         }
 
-        function onCorpsRecu(uid, texte, brut, pieces) {
+        function onCorpsRecu(uid, texte, brut, pieces, confirmation) {
             if (uid !== fenetre.uidCourant || brut !== fenetre.sourceVisible)
                 return
             vueCorps.text = texte
             vueCorps.cursorPosition = 0
-            if (!brut)
+            if (!brut) {
+                fenetre.confirmationDemandee = confirmation
                 fenetre.pieces = JSON.parse(pieces)
+                // Le message entier dit s'il porte des pièces : la ligne suit.
+                var i = fenetre.indexDe(uid)
+                if (i >= 0)
+                    modeleMessages.setProperty(i, "pieces", fenetre.pieces.length > 0)
+            }
             if (fenetre.essai && fenetre.essai.scenario === "pieces")
                 fenetre.etapeScenarioPieces()
+        }
+
+        function onPreparation(jeton, contenu) {
+            var r = fenetre.redactions[jeton]
+            if (r)
+                r.remplir(JSON.parse(contenu))
+        }
+
+        function onEnvoye(jeton, avertissement) {
+            var r = fenetre.redactions[jeton]
+            if (r)
+                r.conteneur.fermerRedaction()
+            messageEtat.texte = avertissement.length > 0
+                    ? qsTr("Message envoyé — %1").arg(avertissement)
+                    : qsTr("Message envoyé.")
+            fenetre.rafraichirListe()
+        }
+
+        function onProgramme(jeton, echeance) {
+            var r = fenetre.redactions[jeton]
+            if (r)
+                r.conteneur.fermerRedaction()
+            messageEtat.texte = qsTr("Message programmé pour %1, dans « Envoi différé ». Il partira si MMail est ouvert à ce moment-là.")
+                                .arg(fenetre.heureEnvoi(Number(echeance)))
+        }
+
+        function onDifferesEnvoyes(nombre, erreurs) {
+            var texte = nombre > 0 ? qsTr("Envoi différé : %1.").arg(fenetre.accord(nombre, qsTr("message parti"), qsTr("messages partis"))) : ""
+            if (erreurs.length > 0)
+                texte += (texte.length > 0 ? " " : "") + qsTr("Échec : %1").arg(erreurs)
+            if (texte.length > 0)
+                messageEtat.texte = texte
+            fenetre.rafraichirListe()
+        }
+
+        function onBrouillonEnregistre(jeton, uid) {
+            var r = fenetre.redactions[jeton]
+            if (!r)
+                return
+            r.brouillonEnregistre(uid)
+        }
+
+        function onEchecRedaction(jeton, message) {
+            var r = fenetre.redactions[jeton]
+            if (r)
+                r.echouer(message)
+            else
+                messageEtat.texte = message
         }
 
         function onPieceEcrite(url, chemin, ouvrir) {
@@ -1508,8 +3135,95 @@ ApplicationWindow {
         return null
     }
 
+    /// Trombone de la liste des messages, tracé plutôt que pris d'une police :
+    /// le caractère 📎 n'existe pas partout, et une icône en couleur ne
+    /// suivrait ni l'apparence ni la surbrillance. Dessiné sur une grille de
+    /// 10 × 16, mise à l'échelle de la ligne.
+    function dessinerTrombone(ctx, w, h, encre) {
+        var x = function(v) { return v * w / 10 }
+        var y = function(v) { return v * h / 16 }
+        ctx.reset()
+        ctx.strokeStyle = encre
+        ctx.lineWidth = Math.max(1.2, w * 0.13)
+        ctx.lineCap = "round"
+        ctx.lineJoin = "round"
+        ctx.beginPath()
+        ctx.moveTo(x(7.5), y(5))
+        ctx.lineTo(x(7.5), y(11.5))
+        ctx.arc(x(5), y(11.5), x(2.5), 0, Math.PI, false)
+        ctx.lineTo(x(2.5), y(3.5))
+        ctx.arc(x(4.25), y(3.5), x(1.75), Math.PI, 0, false)
+        ctx.lineTo(x(6), y(10.5))
+        ctx.arc(x(5), y(10.5), x(1), 0, Math.PI, false)
+        ctx.lineTo(x(4), y(5.5))
+        ctx.stroke()
+    }
+
+    /// Drapeau de suivi : une hampe et une flamme, pleine ou en creux.
+    function dessinerDrapeau(ctx, w, h, encre, plein) {
+        ctx.reset()
+        ctx.strokeStyle = encre
+        ctx.fillStyle = encre
+        ctx.lineWidth = Math.max(1.2, w * 0.12)
+        ctx.lineJoin = "round"
+        ctx.beginPath()
+        ctx.moveTo(w * 0.22, h * 0.08)
+        ctx.lineTo(w * 0.22, h * 0.96)
+        ctx.stroke()
+        ctx.beginPath()
+        ctx.moveTo(w * 0.22, h * 0.1)
+        ctx.lineTo(w * 0.9, h * 0.3)
+        ctx.lineTo(w * 0.22, h * 0.52)
+        ctx.closePath()
+        if (plein)
+            ctx.fill()
+        else
+            ctx.stroke()
+    }
+
+    function basculerSuivi(uids, suivi) {
+        if (uids.length === 0)
+            return
+        boite.marquerSuivi(uids.join(","), suivi)
+        for (var i = 0; i < uids.length; ++i) {
+            var j = indexDe(uids[i])
+            if (j >= 0)
+                modeleMessages.setProperty(j, "suivi", suivi)
+        }
+    }
+
+    /// « mardi 30 septembre à 08:00 » pour une heure d'envoi (secondes Unix).
+    function heureEnvoi(secondes) {
+        var d = new Date(secondes * 1000)
+        return d.toLocaleDateString(Qt.locale("fr_FR"), "dddd d MMMM") + qsTr(" à ")
+             + Qt.formatTime(d, "hh:mm")
+    }
+
+    /// Taille de police d'une colonne, zoom compris : les menus et dialogues
+    /// ouverts depuis une colonne la reprennent.
+    function tailleColonne(colonne) {
+        return tailleBase * zoomDe(colonne)
+    }
+
+    /// Largeur d'un menu : celle de sa plus longue entrée. Le style Fusion la
+    /// fixe sinon à 200 pixels, et tronque ce qui dépasse. Appelée avant
+    /// l'affichage : les entrées n'y sont pas encore visibles, d'où aucun tri
+    /// sur `visible`.
+    function largeurMenu(menu) {
+        var largeur = 0
+        for (var i = 0; i < menu.count; ++i) {
+            var entree = menu.itemAt(i)
+            if (entree)
+                largeur = Math.max(largeur, entree.implicitWidth)
+        }
+        return Math.max(200, largeur + menu.leftPadding + menu.rightPadding)
+    }
+
     function dialogueOuvert() {
         return dlgCompte.visible || dlgDeplacer.visible || dlgRetrait.visible
+            || dlgAide.visible || dlgAPropos.visible || dlgLien.visible || dlgIdentite.visible
+            // Sur téléphone, la rédaction couvre la fenêtre principale.
+            || (compact && Object.keys(redactions).length > 0)
     }
 
     /// Ouvre le dialogue de compte : `compte` nul pour un nouveau compte.
@@ -1526,7 +3240,89 @@ ApplicationWindow {
         champMotDePasse.text = ""
         caseMemoriser.checked = reglages.memoriser
         noteCompte.text = note
+        dlgCompte.hoteSaisi = champHote.text.length > 0
+        dlgCompte.infoServeur = ""
         dlgCompte.open()
+    }
+
+    /// Configuration automatique : le serveur se déduit de l'adresse, tant que
+    /// la personne ne l'a pas saisi elle-même.
+    function chercherServeur() {
+        var adresse = champAdresse.text.trim()
+        if (dlgCompte.compteId > 0 || dlgCompte.hoteSaisi || adresse.indexOf("@") < 1)
+            return
+        dlgCompte.infoServeur = qsTr("Recherche du serveur…")
+        configuration.decouvrir(adresse)
+    }
+
+    function serveurDecouvert(adresse, hote) {
+        // Réponse tardive : l'adresse a changé, ou le serveur a été saisi.
+        if (!dlgCompte.visible || dlgCompte.hoteSaisi || champAdresse.text.trim() !== adresse)
+            return
+        if (hote.length > 0) {
+            champHote.text = hote
+            dlgCompte.infoServeur = qsTr("Serveur trouvé automatiquement.")
+        } else {
+            dlgCompte.infoServeur = qsTr("Serveur introuvable automatiquement : saisissez-le.")
+        }
+    }
+
+    function lireLien(lien) {
+        if (lien.length === 0)
+            return
+        lienEnCours = lien
+        messageEtat.texte = qsTr("Lecture du lien de configuration…")
+        configuration.lireLien(lien)
+    }
+
+    /// Document d'un lien de configuration (cf. README) :
+    /// `{"mmail": 1, "comptes": [{"adresse", "hote", "motDePasse"}]}`.
+    function appliquerLien(contenu) {
+        var lien = lienEnCours
+        lienEnCours = ""
+        var document = null
+        try {
+            document = JSON.parse(contenu)
+        } catch (e) {
+            document = null
+        }
+        var comptes = document && document.mmail === 1 && Array.isArray(document.comptes)
+                ? document.comptes : []
+        var retenus = []
+        var ecartes = []
+        for (var i = 0; i < comptes.length; ++i) {
+            var c = comptes[i]
+            var valide = c !== null && typeof c === "object"
+                    && typeof c.adresse === "string" && c.adresse.trim().indexOf("@") > 0
+                    && typeof c.hote === "string" && c.hote.trim().length > 0
+                    && typeof c.motDePasse === "string" && c.motDePasse.length > 0
+                    && (c.port === undefined || c.port === 993)
+            if (!valide) {
+                ecartes.push(c && typeof c.adresse === "string" ? c.adresse : "?")
+                continue
+            }
+            retenus.push({ adresse: c.adresse.trim(), hote: c.hote.trim().toLowerCase(),
+                           motDePasse: c.motDePasse })
+        }
+        if (retenus.length === 0) {
+            // Le lien est consommé : le rendre au dialogue ne servirait qu'à
+            // montrer ce qui a été reçu.
+            dlgLien.ouvrir("", qsTr("Ce lien ne contient aucun compte utilisable par MMail."))
+            return
+        }
+        // Un compte venu d'un lien n'a pas de mot de passe connu de la
+        // personne : il ne vit que par le coffre.
+        reglages.memoriser = true
+        for (var j = 0; j < retenus.length; ++j) {
+            var r = retenus[j]
+            secretsAConserver[r.adresse] = { cle: cle(r.adresse, r.hote), motDePasse: r.motDePasse }
+            boite.connecter(r.hote, r.adresse, r.motDePasse)
+        }
+        var texte = qsTr("Lien de configuration : connexion de %1.")
+                .arg(retenus.map(function(r) { return r.adresse }).join(", "))
+        if (ecartes.length > 0)
+            texte += " " + qsTr("Écarté : %1.").arg(ecartes.join(", "))
+        messageEtat.texte = texte
     }
 
     function demandeSuivante() {
@@ -1579,7 +3375,10 @@ ApplicationWindow {
             messages: l.messages || 0,
             nonLus: l.nonLus || 0,
             masque: l.masque === true,
-            favori: l.favori === true
+            favori: l.favori === true,
+            // Section de la liste : la rubrique Favoris, puis un groupe par compte.
+            groupe: l.genre === "rubrique" || l.genre === "favori" || l.genre === "favori-vide"
+                    ? "favoris" : "compte-" + (l.compte || 0)
         }
     }
 
@@ -1601,6 +3400,12 @@ ApplicationWindow {
             modeleArborescence.clear()
             modeleArborescence.append(lignes)
         }
+        var comptes = lignes.filter(function(l) { return l.genre === "compte" })
+                            .map(function(l) { return { compte: l.compte, adresse: l.adresse, hote: l.hote } })
+        // Réaffecté seulement s'il change : le menu reconstruit ses entrées à
+        // chaque affectation, et l'arborescence est relue à chaque veille.
+        if (JSON.stringify(comptes) !== JSON.stringify(comptesConnus))
+            comptesConnus = comptes
         majInfoDossier()
     }
 
@@ -1673,7 +3478,8 @@ ApplicationWindow {
         if (memeForme) {
             for (var j = 0; j < messages.length; ++j) {
                 var avant = modeleMessages.get(j)
-                if (avant.lu !== messages[j].lu || avant.repondu !== messages[j].repondu)
+                if (avant.lu !== messages[j].lu || avant.repondu !== messages[j].repondu
+                        || avant.pieces !== messages[j].pieces)
                     modeleMessages.set(j, messages[j])
             }
             majInfoDossier()
@@ -1753,6 +3559,71 @@ ApplicationWindow {
         selection = nouvelle
     }
 
+    // ---- rédaction
+
+    /// Nom affiché et signature d'un compte, avec leurs valeurs par défaut.
+    function identite(adresse) {
+        var table = {}
+        try { table = JSON.parse(reglagesRedaction.identites) } catch (e) { table = {} }
+        var i = table[adresse] || {}
+        return { nom: i.nom || "", signature: i.signature || "",
+                 nouveaux: i.nouveaux !== false, reponses: i.reponses !== false }
+    }
+
+    function poserIdentite(adresse, valeur) {
+        var table = {}
+        try { table = JSON.parse(reglagesRedaction.identites) } catch (e) { table = {} }
+        table[adresse] = valeur
+        reglagesRedaction.identites = JSON.stringify(table)
+    }
+
+    /// Ouvre une rédaction : une fenêtre à part sur le bureau, comme Outlook ;
+    /// en vue compacte (téléphone), un volet qui couvre la fenêtre principale.
+    function ouvrirRedaction(compte) {
+        compteurRedactions += 1
+        var jeton = "r" + compteurRedactions
+        var conteneur = compact ? composantVoletRedaction.createObject(fenetre)
+                                : composantFenetreRedaction.createObject(fenetre)
+        if (compact)
+            conteneur.open()
+        var r = conteneur.redaction
+        r.jeton = jeton
+        r.choisirCompte(compte)
+        var table = redactions
+        table[jeton] = r
+        redactions = table
+        return r
+    }
+
+    function oublierRedaction(jeton) {
+        if (jeton && redactions[jeton]) {
+            var table = redactions
+            delete table[jeton]
+            redactions = table
+        }
+    }
+
+    /// `mode` : « nouveau », « repondre », « repondre_tous », « transferer »
+    /// ou « brouillon » (reprise d'un brouillon du dossier ouvert).
+    function rediger(mode) {
+        var compte = boite.compteCourant > 0 ? boite.compteCourant
+                   : (comptesConnus.length > 0 ? comptesConnus[0].compte : 0)
+        if (mode === "nouveau") {
+            ouvrirRedaction(compte).pret()
+            return
+        }
+        var uids = uidsChoisis()
+        var uid = uids.length === 1 ? uids[0] : uidCourant
+        if (!uid) {
+            messageEtat.texte = qsTr("Choisissez d'abord un message.")
+            return
+        }
+        var r = ouvrirRedaction(compte)
+        r.attendre(mode === "brouillon" ? qsTr("Reprise du brouillon…") : qsTr("Préparation…"))
+        if (!boite.preparer(uid, mode, r.jeton))
+            r.echouer(boite.erreur.length > 0 ? boite.erreur : qsTr("Préparation impossible."))
+    }
+
     function uidsChoisis() {
         return Object.keys(selection).map(function(u) { return parseInt(u) })
     }
@@ -1765,11 +3636,13 @@ ApplicationWindow {
         if (i >= 0) {
             var ligne = modeleMessages.get(i)
             sujetAffiche.text = ligne.sujet
+            importanceCourante = ligne.importance
             auteurAffiche.text = ligne.expediteur
                     + (ligne.adresse.length > 0 && ligne.adresse !== ligne.expediteur
                        ? " <" + ligne.adresse + ">" : "")
                     + "  ·  " + dateLongue(ligne.date)
         }
+        confirmationDemandee = ""
         vueCorps.text = qsTr("Chargement…")
         boite.demanderCorps(uid)
         if (compact)
@@ -1801,6 +3674,7 @@ ApplicationWindow {
         if (uidsChoisis().length === 0)
             return
         dlgDeplacer.cibles = JSON.parse(boite.dossiersCibles())
+        dlgDeplacer.zoom = zoomDe(colonneActive)
         dlgDeplacer.open()
     }
 

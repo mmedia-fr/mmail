@@ -6,7 +6,7 @@
 //! une date au format courrier. L'analyse est confiée à `mail-parser` : c'est
 //! la surface d'attaque du client, et elle n'a pas à être écrite à la main.
 
-use mail_parser::{Address, MessageParser, MimeHeaders};
+use mail_parser::{Address, Message, MessageParser, MimeHeaders};
 
 use crate::magasin::MessageLocal;
 use crate::protocole::Entete;
@@ -26,8 +26,13 @@ pub fn ligne_index(entete: &Entete) -> MessageLocal {
         // message incompréhensible ne doit pas disparaître de la liste.
         ligne.sujet = "(message illisible)".to_string();
         ligne.horodatage = horodatage(entete, None);
+        ligne.pieces = pieces_annoncees(None, &entete.drapeaux);
+        ligne.suivi = entete.suivi();
         return ligne;
     };
+    ligne.pieces = pieces_annoncees(Some(&message), &entete.drapeaux);
+    ligne.suivi = entete.suivi();
+    ligne.importance = importance(&message);
 
     ligne.sujet = message.subject().unwrap_or("(sans objet)").to_string();
     ligne.message_id = message.message_id().unwrap_or_default().to_string();
@@ -45,6 +50,57 @@ pub fn ligne_index(entete: &Entete) -> MessageLocal {
     };
     ligne.horodatage = horodatage(entete, message.date().map(|d| d.to_timestamp()));
     ligne
+}
+
+/// Pièces jointes probables, d'après les seuls en-têtes : c'est tout ce que la
+/// liste peut savoir sans télécharger le message. Le mot-clé `$HasAttachment`
+/// (ou `$HasNoAttachment`), quand le serveur le pose, fait foi ; à défaut, un
+/// message `multipart/mixed`, ou dont le corps entier n'est pas du texte, est
+/// tenu pour en porter — la règle de Thunderbird. La lecture du message corrige
+/// (cf. `Magasin::poser_pieces`).
+fn pieces_annoncees(message: Option<&Message<'_>>, drapeaux: &[String]) -> bool {
+    let a = |mot: &str| drapeaux.iter().any(|d| d.eq_ignore_ascii_case(mot));
+    if a("$HasNoAttachment") {
+        return false;
+    }
+    if a("$HasAttachment") {
+        return true;
+    }
+    let Some(ct) = message.and_then(|m| m.content_type()) else {
+        return false;
+    };
+    let sous = ct.subtype().unwrap_or("").to_ascii_lowercase();
+    match ct.ctype().to_ascii_lowercase().as_str() {
+        "multipart" => sous == "mixed",
+        "text" => false,
+        _ => true,
+    }
+}
+
+/// Importance annoncée par l'expéditeur : 1 haute, -1 basse, 0 normale.
+/// `Importance` (Outlook), à défaut `X-Priority` (1-2 haute, 4-5 basse), à
+/// défaut `Priority` (RFC 2156).
+pub fn importance(message: &Message<'_>) -> i8 {
+    let champ = |nom: &str| message.header_raw(nom).map(|t| t.trim().to_ascii_lowercase());
+    if let Some(v) = champ("Importance") {
+        return match v.as_str() {
+            "high" => 1,
+            "low" => -1,
+            _ => 0,
+        };
+    }
+    if let Some(v) = champ("X-Priority") {
+        return match v.chars().next() {
+            Some('1') | Some('2') => 1,
+            Some('4') | Some('5') => -1,
+            _ => 0,
+        };
+    }
+    match champ("Priority").as_deref() {
+        Some("urgent") => 1,
+        Some("non-urgent") => -1,
+        _ => 0,
+    }
 }
 
 /// Clef de tri : la date de réception du serveur, à défaut celle de l'en-tête.
@@ -423,6 +479,46 @@ mod tests {
             date_interne: "16-Sep-2026 18:00:00 +0200".to_string(),
             brut: brut.as_bytes().to_vec(),
         }
+    }
+
+    #[test]
+    fn importance_et_suivi() {
+        let avec = |champs: &str| ligne_index(&entete(&format!("Subject: a\r\n{champs}\r\n\r\n")));
+        assert_eq!(avec("Importance: High").importance, 1);
+        assert_eq!(avec("Importance: low").importance, -1);
+        assert_eq!(avec("X-Priority: 1 (Highest)").importance, 1);
+        assert_eq!(avec("X-Priority: 5 (Lowest)").importance, -1);
+        assert_eq!(avec("X-Priority: 3 (Normal)").importance, 0);
+        assert_eq!(avec("Priority: urgent").importance, 1);
+        assert_eq!(avec("X-Mailer: rien").importance, 0);
+        // Importance prime sur X-Priority.
+        assert_eq!(avec("Importance: normal\r\nX-Priority: 1").importance, 0);
+        let mut e = entete("Subject: a\r\n\r\n");
+        assert!(!ligne_index(&e).suivi);
+        e.drapeaux.push("\\Flagged".into());
+        assert!(ligne_index(&e).suivi);
+    }
+
+    #[test]
+    fn pieces_supposees_d_apres_les_en_tetes() {
+        let avec = |ct: &str| ligne_index(&entete(&format!("Subject: a\r\nContent-Type: {ct}\r\n\r\n"))).pieces;
+        assert!(avec("multipart/mixed; boundary=\"x\""));
+        assert!(avec("Multipart/Mixed; boundary=x"));
+        assert!(avec("application/pdf; name=\"f.pdf\""));
+        assert!(avec("image/jpeg"));
+        assert!(!avec("multipart/alternative; boundary=x"));
+        assert!(!avec("multipart/related; boundary=x"));
+        assert!(!avec("text/plain; charset=utf-8"));
+        assert!(!avec("text/html"));
+        // Sans Content-Type : texte, par défaut.
+        assert!(!ligne_index(&entete("Subject: a\r\n\r\n")).pieces);
+        // Le mot-clé du serveur fait foi.
+        let mut e = entete("Subject: a\r\nContent-Type: text/plain\r\n\r\n");
+        e.drapeaux.push("$HasAttachment".into());
+        assert!(ligne_index(&e).pieces);
+        let mut e = entete("Subject: a\r\nContent-Type: multipart/mixed; boundary=x\r\n\r\n");
+        e.drapeaux.push("$HasNoAttachment".into());
+        assert!(!ligne_index(&e).pieces);
     }
 
     #[test]

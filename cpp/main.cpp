@@ -19,6 +19,7 @@
 
 #include "coffre.h"
 #include "presse_papier.h"
+#include "mise_en_forme.h"
 
 #ifdef Q_OS_WIN
 #  include <windows.h>  // GetCommandLineW / CommandLineToArgvW
@@ -94,11 +95,18 @@ int main(int argc, char* argv[])
   // Presse-papier du système, que QML ne sait pas lire : la copie automatique
   // de la sélection en a besoin pour ne pas écraser ce qu'un tiers y a déposé.
   qmlRegisterType<PressePapier>("fr.mmedia.mmail.natif", 1, 0, "PressePapier");
+  // Mise en forme du message en cours de rédaction (gras, listes, liens…).
+  qmlRegisterType<MiseEnForme>("fr.mmedia.mmail.natif", 1, 0, "MiseEnForme");
 
   QQmlApplicationEngine engine;
   // En contrôle de fabrication, l'interface ne touche ni au coffre ni au réseau
   // de sa propre initiative.
   engine.rootContext()->setContextProperty(QStringLiteral("modeControle"), smoke);
+  // Version de Qt réellement chargée, pour « À propos » : elle diffère d'une
+  // cible à l'autre, et c'est la première chose à demander sur un défaut
+  // d'affichage.
+  engine.rootContext()->setContextProperty(QStringLiteral("versionQt"),
+                                           QString::fromLatin1(qVersion()));
   // Commodité de développement : des variables d'environnement ouvrent une ou
   // deux sessions au démarrage, ce qui permet de saisir l'interface en image
   // sans personne devant l'écran. Rien n'est lu si elles sont absentes.

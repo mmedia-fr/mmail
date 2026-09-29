@@ -16,13 +16,54 @@ Le cadrage complet — exigences, décisions actées (les « décisions » numé
 citées dans le code), pistes écartées et leur motif — est tenu dans un dossier
 de projet interne.
 
-## État — 0.1.1
+## État — 0.2.2
 
-**Lecture et tri.** Pas encore de rédaction ni d'envoi.
+**Lecture, tri, rédaction et envoi.**
 
+- **rédaction** dans une fenêtre à part (un volet sur téléphone) : nouveau
+  message, réponse, réponse à tous, transfert — à la manière d'Outlook, avec
+  « RE : », « TR : » et le message d'origine sous un bloc « De / Envoyé / À /
+  Objet » ; Cc et Cci ; pièces jointes par « Joindre… » ou glisser-déposer,
+  celles d'un message transféré reprises d'office ; envoi par la soumission
+  SMTP du serveur (port 465), copie dans « Éléments envoyés », original marqué
+  « répondu » ou « transféré » ; brouillons enregistrés sur le serveur et
+  repris d'un double clic ;
+- **mise en forme** à la rédaction — gras, italique, souligné, listes à
+  puces ou numérotées, liens — envoyée en HTML avec sa version en texte brut ;
+  « Mise en forme » décochée, le message part en texte brut ;
+- **nom affiché et signature** par compte (menu « Comptes », « Nom et
+  signature… »), ajoutée aux nouveaux messages, aux réponses, ou sur demande ;
+- **adresses proposées** en tapant un destinataire : celles à qui l'on a
+  écrit, puis les expéditeurs connus ;
+- **options d'envoi** : importance haute ou basse (`Importance`,
+  `X-Priority`), accusé de réception demandé au serveur (DSN, RFC 3461),
+  confirmation de lecture demandée au destinataire (`Disposition-Notification-To`) ;
+- **envoi différé** : le message attend sur le serveur, dans un dossier
+  « Envoi différé » créé au besoin, et part à l'heure dite si MMail est ouvert
+  — sur ce poste ou un autre ; sinon à la prochaine ouverture ;
+- **drapeau de suivi** (`\Flagged`) posé ou retiré d'un clic en bout de ligne,
+  par le menu ou la touche Insertion ; importance des messages reçus signalée
+  dans la liste (« ! », « ↓ ») et dans l'en-tête ;
+- **confirmation de lecture** demandée par un expéditeur : proposée, jamais
+  envoyée d'office ; la réponse — envoi ou refus — n'est demandée qu'une fois
+  (`$MDNSent`) ;
 - **plusieurs comptes dans une seule arborescence**, repliables, avec la
   rubrique **Favoris** au-dessus : on l'alimente en y **glissant un dossier**,
-  et l'on réordonne ses favoris de la même façon ;
+  et l'on réordonne ses favoris de la même façon ; un blanc et un trait
+  séparent chaque compte de ce qui le précède ;
+- **menu « Comptes »** : ajouter un compte — le serveur est trouvé d'après
+  l'adresse quand le domaine publie sa configuration —, en ajouter un ou
+  plusieurs par un **lien de configuration**, ou en retirer un (voir
+  « Configuration d'un compte ») ;
+- **menu « ? »** : aide (F1) et « À propos » — versions de MMail, du noyau et
+  de Qt ;
+- **ascenseurs toujours visibles** dès qu'une colonne a de quoi défiler ;
+- **trombone** dans la liste pour un message à pièces jointes : supposé
+  d'après les en-têtes (`multipart/mixed`, ou corps entier qui n'est pas du
+  texte ; mot-clé `$HasAttachment` du serveur s'il existe), puis constaté à
+  l'ouverture du message ;
+- **menus contextuels et « Déplacer vers… » au zoom de la colonne** d'où ils
+  sont ouverts ;
 - **déplacement par glisser-déposer ou par clic droit**, vers un dossier de la
   même boîte ou de n'importe quelle autre boîte connectée ; dialogue
   « Déplacer vers… » avec filtre (Ctrl+Maj+V) ;
@@ -58,6 +99,51 @@ qu'une fois le dépôt accepté**. Une coupure au milieu ne perd rien : le
 déplacement reprend à la connexion suivante, et la cible est d'abord interrogée
 par `Message-ID` pour ne pas créer de doublon.
 
+## Configuration d'un compte
+
+### Configuration automatique
+
+À l'ajout d'un compte, dès que l'adresse est saisie, MMail cherche le serveur
+IMAP dans le document de configuration que publie le domaine, au format
+« autoconfig » de Thunderbird. Il interroge, dans l'ordre :
+
+1. `https://autoconfig.<domaine>/mail/config-v1.1.xml?emailaddress=<adresse>`
+2. `https://<domaine>/.well-known/autoconfig/mail/config-v1.1.xml?emailaddress=<adresse>`
+
+Il retient le premier serveur `imap` en `SSL` sur le port 993 dont
+l'identifiant est l'adresse elle-même. Aucun annuaire tiers n'est interrogé.
+Mailcow sert ce document : il suffit que `autoconfig.<domaine>` désigne le
+serveur. Un serveur saisi à la main n'est jamais remplacé.
+
+### Lien de configuration
+
+Un administrateur peut préparer un ou plusieurs comptes, mot de passe compris,
+derrière une adresse HTTPS **à usage unique**. La personne la colle dans
+« Comptes › Ajouter avec un lien de configuration… », sans rien saisir
+d'autre ; les mots de passe vont au coffre du système sans être affichés.
+
+Ce que MMail attend du serveur qui sert le lien :
+
+- MMail l'interroge en **`POST`**, sans corps, avec `Accept: application/json`,
+  et ne suit aucune redirection ;
+- `200` : le document ci-dessous, que le serveur **détruit en le remettant** ;
+  `404` ou `410` : lien inconnu, déjà utilisé ou expiré ;
+- un `GET` — la même adresse ouverte dans un navigateur — ne doit pas le
+  consommer ; le serveur peut y afficher le mode d'emploi.
+
+```json
+{
+  "mmail": 1,
+  "comptes": [
+    { "adresse": "nom@exemple.fr", "hote": "mail.exemple.fr", "motDePasse": "…" }
+  ]
+}
+```
+
+`port`, facultatif, ne peut valoir que 993. Un compte incomplet est écarté, et
+signalé ; les autres sont ajoutés. Comme pour une saisie à la main, un mot de
+passe n'est confié au coffre qu'une fois accepté par le serveur.
+
 ## Limites connues
 
 - Connexion en **IMAPS (port 993)** seulement ; pas de STARTTLS ni d'OAuth2.
@@ -66,7 +152,9 @@ par `Message-ID` pour ne pas créer de doublon.
   images ni mise en forme.
 - Sous Android, les pièces jointes s'ouvrent mais ne s'enregistrent pas
   ailleurs ; leur ouverture n'a pas été éprouvée sur un téléphone.
-- Pas encore de rédaction, de réponse, de signatures ni de filtres.
+- Pas d'images insérées dans le corps d'un message rédigé, ni de signature
+  mise en forme ; pas de filtres.
+- L'envoi passe par le même serveur que la lecture, sur le port 465.
 - Sous Android, les autorités de certification sont celles de Mozilla,
   embarquées dans l'application — et non celles du téléphone.
 

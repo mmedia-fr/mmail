@@ -224,6 +224,12 @@ pub mod qobject {
         #[cxx_name = "viderCorbeilles"]
         fn vider_corbeilles(self: Pin<&mut Boite>);
 
+        /// Vide entièrement un dossier précis d'un compte (clic droit « Vider »).
+        /// Purge définitive côté serveur. Issue : `corbeillesVidees`.
+        #[qinvokable]
+        #[cxx_name = "viderDossier"]
+        fn vider_dossier(self: Pin<&mut Boite>, compte: i32, chemin: &QString);
+
         /// Relit compteurs et dossier ouvert de chaque compte ; reconnecte les
         /// comptes dont la session est tombée.
         #[qinvokable]
@@ -974,6 +980,14 @@ impl qobject::Boite {
                 self.as_mut().envoyer(compte, Commande::ViderDossiers { chemins });
             }
         }
+    }
+
+    pub fn vider_dossier(mut self: Pin<&mut Self>, compte: i32, chemin: &QString) {
+        let chemin = chemin.to_string();
+        if chemin.is_empty() {
+            return;
+        }
+        self.as_mut().envoyer(compte as i64, Commande::ViderDossiers { chemins: vec![chemin] });
     }
 
     pub fn actualiser(mut self: Pin<&mut Self>) {

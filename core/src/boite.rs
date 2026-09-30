@@ -2258,6 +2258,7 @@ mod tests {
                 Commande::Confirmer { .. } => "confirmer".into(),
                 Commande::EnvoyerDifferes { .. } => "differes".into(),
                 Commande::Deplacer { .. } => "deplacer".into(),
+                Commande::ViderDossiers { .. } => "vider".into(),
                 Commande::Arborescence => "arborescence".into(),
                 Commande::Reprendre(_) => "reprendre".into(),
                 Commande::Veille => "veille".into(),

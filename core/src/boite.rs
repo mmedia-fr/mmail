@@ -216,6 +216,14 @@ pub mod qobject {
         #[cxx_name = "supprimer"]
         fn supprimer(self: Pin<&mut Boite>, uids: &QString) -> bool;
 
+        /// Vide, sur TOUS les comptes connectés, la corbeille et les dossiers
+        /// d'indésirables (rôles SPECIAL-USE `Trash` et `Junk`, ou dont le nom
+        /// évoque le pourriel). Purge définitive côté serveur. Issue par compte :
+        /// `corbeillesVidees` avec le nombre de messages effacés.
+        #[qinvokable]
+        #[cxx_name = "viderCorbeilles"]
+        fn vider_corbeilles(self: Pin<&mut Boite>);
+
         /// Relit compteurs et dossier ouvert de chaque compte ; reconnecte les
         /// comptes dont la session est tombée.
         #[qinvokable]
@@ -305,6 +313,12 @@ pub mod qobject {
         #[qsignal]
         #[cxx_name = "deplacementTermine"]
         fn deplacement_termine(self: Pin<&mut Boite>, nombre: i32, erreurs: &QString);
+
+        /// Corbeille et indésirables d'un compte vidés : `nombre` messages
+        /// effacés définitivement. Émis une fois par compte concerné.
+        #[qsignal]
+        #[cxx_name = "corbeillesVidees"]
+        fn corbeilles_videes(self: Pin<&mut Boite>, nombre: i32);
 
         /// Une opération a échoué. `etape` : « connexion », « identifiants »,
         /// « dossier », « message », « tri » ou « reseau » (la session du
@@ -402,6 +416,9 @@ enum Commande {
     /// Envoyer les messages différés arrivés à échéance.
     EnvoyerDifferes { identifiants: Identifiants },
     Deplacer { source: String, uids: Vec<u32>, cible: Cible },
+    /// Vider entièrement les dossiers désignés (corbeille, indésirables) de ce
+    /// compte : purge définitive côté serveur.
+    ViderDossiers { chemins: Vec<String> },
     /// Reprendre les déplacements interrompus dont ce compte est la source.
     Reprendre(HashMap<i64, Identifiants>),
     /// Préparer une réponse, un transfert ou la reprise d'un brouillon.
@@ -465,6 +482,8 @@ enum Issue {
     Piece { fichier: PathBuf, ouvrir: bool },
     Marque,
     Deplace { cible: i64, chemin_cible: String, rapport: Rapport },
+    /// Corbeille et indésirables de ce compte vidés : `nombre` messages effacés.
+    Vide { nombre: u32 },
     /// Des déplacements interrompus ont été repris : ni demandés à l'instant,
     /// ni attendus par l'interface, qui n'a qu'à relire ses compteurs.
     Repris { rapport: Rapport },
@@ -928,6 +947,35 @@ impl qobject::Boite {
         }
     }
 
+    pub fn vider_corbeilles(mut self: Pin<&mut Self>) {
+        // On enumère les comptes connus de l'index, puis, pour chacun, ses
+        // dossiers de corbeille et d'indésirables. La commande n'est envoyée
+        // qu'aux comptes qui en ont ; `envoyer` rouvrira au besoin une session
+        // tombée dont on connaît les identifiants.
+        let comptes: Vec<i64> = self
+            .magasin
+            .as_ref()
+            .and_then(|m| m.comptes().ok())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|c| c.id)
+            .collect();
+        for compte in comptes {
+            let chemins: Vec<String> = self
+                .magasin
+                .as_ref()
+                .and_then(|m| m.dossiers(compte).ok())
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|d| d.selectionnable && est_indesirable(&d.role, &d.nom))
+                .map(|d| d.chemin)
+                .collect();
+            if !chemins.is_empty() {
+                self.as_mut().envoyer(compte, Commande::ViderDossiers { chemins });
+            }
+        }
+    }
+
     pub fn actualiser(mut self: Pin<&mut Self>) {
         let comptes: Vec<i64> = self
             .magasin
@@ -1285,6 +1333,13 @@ impl qobject::Boite {
             Issue::EchecRedaction { jeton, message } => {
                 self.as_mut().echec_redaction(&QString::from(&jeton), &QString::from(&message));
             }
+            Issue::Vide { nombre } => {
+                // Le fil a déjà relu l'arborescence : les compteurs des dossiers
+                // vidés sont à jour dans l'index, il ne reste qu'à rafraîchir.
+                self.as_mut().rafraichir_attente();
+                self.as_mut().reviser();
+                self.as_mut().corbeilles_videes(nombre as i32);
+            }
             Issue::Repris { rapport } => {
                 // Les cibles ont reçu des messages : leurs compteurs aussi.
                 let connectes: Vec<i64> =
@@ -1360,6 +1415,30 @@ fn lire_uids(texte: &QString) -> Vec<u32> {
         .filter_map(|u| u.trim().parse().ok())
         .filter(|&u: &u32| u > 0)
         .collect()
+}
+
+/// Vrai si un dossier est une corbeille ou un dossier d'indésirables, donc
+/// candidat au vidage en masse. On se fie d'abord au rôle SPECIAL-USE (`Trash`,
+/// `Junk`), fiable sur les serveurs qui l'annoncent ; à défaut, on reconnaît
+/// les noms usuels, en français comme en anglais, car tous les serveurs ne
+/// posent pas ces attributs.
+fn est_indesirable(role: &str, nom: &str) -> bool {
+    if role == "Trash" || role == "Junk" {
+        return true;
+    }
+    let nom = nom.to_lowercase();
+    [
+        "indésirable",
+        "indesirable",
+        "pourriel",
+        "spam",
+        "junk",
+        "corbeille",
+        "trash",
+        "deleted items",
+    ]
+    .iter()
+    .any(|motif| nom.contains(motif))
 }
 
 // -------------------------------------------------------------- fil de travail
@@ -1537,6 +1616,28 @@ impl Travail {
                 Some(match resultat {
                     Ok(rapport) => Issue::Deplace { cible: cible.compte, chemin_cible: cible.chemin, rapport },
                     Err(err) => self.echec_de_tri(e, cible.compte, err),
+                })
+            }
+            Commande::ViderDossiers { chemins } => {
+                let mut nombre = 0u32;
+                let mut echec_dossier = None;
+                for chemin in &chemins {
+                    match e.client.vider(chemin) {
+                        Ok(k) => nombre += k,
+                        Err(err) => {
+                            echec_dossier = Some((chemin.clone(), err));
+                            break;
+                        }
+                    }
+                }
+                // Les compteurs des dossiers vidés ont changé.
+                let _ = synchro::arborescence(&mut e.client, &e.magasin, compte);
+                Some(match echec_dossier {
+                    None => Issue::Vide { nombre },
+                    Some((chemin, err)) => {
+                        let echec_imap = Echec::Imap(err);
+                        echec("tri", format!("vidage de {chemin} : {echec_imap}"), &echec_imap)
+                    }
                 })
             }
             Commande::Reprendre(identites) => {

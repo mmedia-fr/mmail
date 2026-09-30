@@ -94,6 +94,9 @@ ApplicationWindow {
     // l'interface reflète le tri tout de suite, le serveur suit (décision 16).
     property var enDeplacement: ({})
     property int deplacementsEnVol: 0
+    // Cumul des messages effacés par « Vider les corbeilles » (un compte par
+    // signal), remis à zéro à chaque lancement.
+    property int messagesVides: 0
     // Pièces jointes du message affiché, telles que le noyau les rend.
     property var pieces: []
 
@@ -2173,6 +2176,12 @@ ApplicationWindow {
                 height: visible ? implicitHeight : 0
             }
         }
+        MenuSeparator {}
+        MenuItem {
+            text: qsTr("Vider les corbeilles et indésirables…")
+            enabled: fenetre.comptesConnus.length > 0
+            onTriggered: dlgViderCorbeilles.open()
+        }
     }
 
     Menu {
@@ -2911,6 +2920,25 @@ ApplicationWindow {
         }
     }
 
+    Dialog {
+        id: dlgViderCorbeilles
+        title: qsTr("Vider les corbeilles et indésirables ?")
+        modal: true
+        anchors.centerIn: Overlay.overlay
+        width: Math.min(480, fenetre.width - 24)
+        standardButtons: Dialog.Yes | Dialog.No
+        Label {
+            width: dlgViderCorbeilles.availableWidth
+            wrapMode: Text.Wrap
+            text: qsTr("Vider définitivement la corbeille et les dossiers d'indésirables (spam) de TOUS les comptes ? Les messages qui s'y trouvent sont effacés du serveur, sans repasser par une corbeille : l'action est irréversible.")
+        }
+        onAccepted: {
+            fenetre.messagesVides = 0
+            boite.viderCorbeilles()
+            messageEtat.texte = qsTr("Vidage des corbeilles et indésirables en cours…")
+        }
+    }
+
     // ------------------------------------------------------ coffre et session
     Coffre {
         id: coffre
@@ -3084,6 +3112,14 @@ ApplicationWindow {
                 if (fenetre.essai.scenario === "glisser")
                     fenetre.etapeScenarioGlisser()
             }
+        }
+
+        function onCorbeillesVidees(nombre) {
+            fenetre.messagesVides += nombre
+            fenetre.rafraichirListe()
+            messageEtat.texte = fenetre.accord(fenetre.messagesVides,
+                qsTr("message effacé des corbeilles et indésirables."),
+                qsTr("messages effacés des corbeilles et indésirables."))
         }
 
         function onEchec(compte, etape, message) {

@@ -348,6 +348,22 @@ impl Client {
         Ok(())
     }
 
+    /// Vide entièrement un dossier : sélection, marquage `\Deleted` de tous
+    /// ses messages (par numéro de séquence, `1:*`), puis `EXPUNGE`. Rend le
+    /// nombre de messages purgés. Contrairement à `supprimer`, l'`EXPUNGE` est
+    /// volontairement global : on veut le dossier vide, pas quelques UID — c'est
+    /// le geste attendu pour une corbeille ou un dossier d'indésirables.
+    pub fn vider(&mut self, chemin: &str) -> Resultat<u32> {
+        let selection = self.selectionner(chemin, None)?;
+        let nombre = selection.etat.messages;
+        if nombre == 0 {
+            return Ok(0);
+        }
+        self.commande("STORE 1:* +FLAGS.SILENT (\\Deleted)")?;
+        self.commande("EXPUNGE")?;
+        Ok(nombre)
+    }
+
     /// Dépose un message dans un dossier, avec ses drapeaux et sa date interne
     /// d'origine (décision 16). Rend l'UID attribué quand le serveur le dit
     /// (UIDPLUS).

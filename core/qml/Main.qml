@@ -1799,7 +1799,7 @@ ApplicationWindow {
                 if (model.genre === "compte")
                     menuCompte.ouvrir(model.compte, model.adresse, model.hote, model.etat)
                 else if (estDossier)
-                    menuDossier.ouvrir(model.compte, model.chemin, model.favori, model.masque)
+                    menuDossier.ouvrir(model.compte, model.chemin, model.favori, model.masque, model.nom, model.selectionnable)
             }
 
             // Cible de dépôt : des messages glissés depuis la liste (sur un
@@ -2355,8 +2355,10 @@ ApplicationWindow {
         property string chemin: ""
         property bool favori: false
         property bool masque: false
-        function ouvrir(c, ch, f, m) {
-            compte = c; chemin = ch; favori = f; masque = m
+        property string nom: ""
+        property bool selectionnable: true
+        function ouvrir(c, ch, f, m, n, sel) {
+            compte = c; chemin = ch; favori = f; masque = m; nom = n; selectionnable = sel
             popup()
         }
         MenuItem {
@@ -2366,6 +2368,12 @@ ApplicationWindow {
         MenuItem {
             text: menuDossier.masque ? qsTr("Réafficher ce dossier") : qsTr("Masquer ce dossier")
             onTriggered: boite.masquerDossier(menuDossier.compte, menuDossier.chemin, !menuDossier.masque)
+        }
+        MenuSeparator {}
+        MenuItem {
+            text: qsTr("Vider ce dossier…")
+            enabled: menuDossier.selectionnable
+            onTriggered: dlgViderDossier.ouvrir(menuDossier.compte, menuDossier.chemin, menuDossier.nom)
         }
     }
 
@@ -2920,6 +2928,28 @@ ApplicationWindow {
         }
     }
 
+    // Pictogramme d'avertissement (triangle ambre « ! »), dessiné pour ne
+    // dépendre d'aucune police d'émojis. Réutilisé par les dialogues de vidage.
+    component Avertissement: Canvas {
+        implicitWidth: 30
+        implicitHeight: 30
+        Layout.alignment: Qt.AlignTop
+        onPaint: {
+            var c = getContext("2d")
+            c.reset()
+            c.fillStyle = "#E6A100"
+            c.strokeStyle = "#9A6B00"
+            c.lineWidth = 1
+            c.beginPath()
+            c.moveTo(15, 2); c.lineTo(29, 27); c.lineTo(1, 27); c.closePath()
+            c.fill(); c.stroke()
+            c.fillStyle = "#1A1A1A"
+            c.font = "bold 19px sans-serif"
+            c.textAlign = "center"; c.textBaseline = "middle"
+            c.fillText("!", 15, 18)
+        }
+    }
+
     Dialog {
         id: dlgViderCorbeilles
         title: qsTr("Vider les corbeilles et indésirables ?")
@@ -2927,15 +2957,48 @@ ApplicationWindow {
         anchors.centerIn: Overlay.overlay
         width: Math.min(480, fenetre.width - 24)
         standardButtons: Dialog.Yes | Dialog.No
-        Label {
+        RowLayout {
             width: dlgViderCorbeilles.availableWidth
-            wrapMode: Text.Wrap
-            text: qsTr("Vider définitivement la corbeille et les dossiers d'indésirables (spam) de TOUS les comptes ? Les messages qui s'y trouvent sont effacés du serveur, sans repasser par une corbeille : l'action est irréversible.")
+            spacing: 12
+            Avertissement {}
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                text: qsTr("Vider définitivement la corbeille et les dossiers d'indésirables (spam) de TOUS les comptes ? Les messages qui s'y trouvent sont effacés du serveur, sans repasser par une corbeille : l'action est irréversible.")
+            }
         }
         onAccepted: {
             fenetre.messagesVides = 0
             boite.viderCorbeilles()
             messageEtat.texte = qsTr("Vidage des corbeilles et indésirables en cours…")
+        }
+    }
+
+    Dialog {
+        id: dlgViderDossier
+        property int compte: 0
+        property string chemin: ""
+        property string nom: ""
+        function ouvrir(c, ch, n) { compte = c; chemin = ch; nom = n; open() }
+        title: qsTr("Vider ce dossier ?")
+        modal: true
+        anchors.centerIn: Overlay.overlay
+        width: Math.min(480, fenetre.width - 24)
+        standardButtons: Dialog.Yes | Dialog.No
+        RowLayout {
+            width: dlgViderDossier.availableWidth
+            spacing: 12
+            Avertissement {}
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                text: qsTr("Vider définitivement le dossier « %1 » ? Tous ses messages sont effacés du serveur, sans repasser par une corbeille : l'action est irréversible.").arg(dlgViderDossier.nom)
+            }
+        }
+        onAccepted: {
+            fenetre.messagesVides = 0
+            boite.viderDossier(dlgViderDossier.compte, dlgViderDossier.chemin)
+            messageEtat.texte = qsTr("Vidage de « %1 » en cours…").arg(dlgViderDossier.nom)
         }
     }
 

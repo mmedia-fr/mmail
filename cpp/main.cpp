@@ -2,6 +2,8 @@
 #include <QtCore/QCoreApplication>
 #include <QtCore/QDir>
 #include <QtCore/QFileInfo>
+#include <QtCore/QRegularExpression>
+#include <QtCore/QSettings>
 #include <QtCore/QStandardPaths>
 #include <QtCore/QString>
 #include <QtCore/QStringList>
@@ -51,13 +53,52 @@ static QStringList argumentsUnicode()
 #endif
 }
 
-/// Dossier du profil, résolu par le système et jamais écrit en dur.
-///
-/// Décision 18 du dossier de projet : le profil vit sur un disque local, SQLite
-/// en WAL se comportant mal sur un partage réseau.
+/// Réglage de la machine, pour un serveur partagé (RDS) : la variable
+/// d'environnement l'emporte, puis la base de registre de la machine
+/// (HKLM\Software\M-Media\MMail sous Windows, /etc/xdg/M-Media/MMail.conf
+/// ailleurs). Vide s'il n'y en a pas.
+static QString reglageMachine(const char* variable, const QString& cle)
+{
+  const QString valeur = qEnvironmentVariable(variable);
+  if (!valeur.isEmpty())
+    return valeur;
+  QSettings machine(QSettings::NativeFormat, QSettings::SystemScope, QCoreApplication::organizationName(),
+                    QCoreApplication::applicationName());
+  return machine.value(cle).toString().trimmed();
+}
+
+/// Développe les variables d'un chemin réglé pour toute la machine :
+/// « %USERNAME% » comme « $USER » ou « ${USER} ».
+static QString developper(QString chemin)
+{
+  static const QRegularExpression variable(QStringLiteral(R"(%(\w+)%|\$\{(\w+)\}|\$(\w+))"));
+  QString sortie;
+  qsizetype debut = 0;
+  for (auto it = variable.globalMatch(chemin); it.hasNext();) {
+    const auto trouve = it.next();
+    sortie += chemin.mid(debut, trouve.capturedStart() - debut);
+    QString nom = trouve.captured(1);
+    if (nom.isEmpty())
+      nom = trouve.captured(2);
+    if (nom.isEmpty())
+      nom = trouve.captured(3);
+    sortie += qEnvironmentVariable(nom.toUtf8().constData());
+    debut = trouve.capturedEnd();
+  }
+  sortie += chemin.mid(debut);
+  return QDir::cleanPath(sortie);
+}
+
+/// Dossier du profil, résolu par le système et jamais écrit en dur — sauf
+/// réglage de la machine : sur un serveur RDS, un profil itinérant ou
+/// redirigé partirait sur le réseau, où SQLite en WAL se comporte mal
+/// (décision 18 du dossier de projet). L'administrateur pose alors
+/// « DossierProfil », par exemple D:\MMail\%USERNAME%.
 static QString dossierProfil()
 {
-  const QString base = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+  const QString impose = reglageMachine("MMAIL_DOSSIER_PROFIL", QStringLiteral("DossierProfil"));
+  const QString base = impose.isEmpty() ? QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
+                                        : developper(impose);
   QDir().mkpath(base);
   return base;
 }
@@ -70,6 +111,12 @@ int main(int argc, char* argv[])
   QCoreApplication::setOrganizationDomain(QStringLiteral("mmedia.fr"));
   QCoreApplication::setApplicationVersion(QStringLiteral(MMAIL_VERSION));
   QGuiApplication::setWindowIcon(QIcon(QStringLiteral(":/assets/mmail.ico")));
+
+  // Jours de messages gardés sur le poste (31 par défaut, 0 : aucun), réglables
+  // pour la machine : le noyau les lit dans l'environnement.
+  const QString joursCache = reglageMachine("MMAIL_JOURS_CACHE", QStringLiteral("JoursCache"));
+  if (!joursCache.isEmpty())
+    qputenv("MMAIL_JOURS_CACHE", joursCache.toUtf8());
 
   // Fusion : le seul style qui honore une palette sur les trois cibles livrées.
   QQuickStyle::setStyle(QStringLiteral("Fusion"));

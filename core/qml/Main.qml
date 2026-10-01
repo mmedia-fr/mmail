@@ -3937,9 +3937,11 @@ ApplicationWindow {
         if (compte !== boite.compteCourant || chemin !== boite.dossierCourant) {
             viderListe()
             if (boite.ouvrirDossier(compte, chemin)) {
-                // L'index s'affiche tout de suite ; la synchronisation suit.
+                // L'index s'affiche tout de suite ; la synchronisation suit —
+                // sauf hors connexion, que le noyau vient de signaler.
                 rafraichirListe()
-                messageEtat.texte = qsTr("Lecture de %1…").arg(libelleCourant())
+                if (boite.erreur.indexOf("compte hors ligne") !== 0)
+                    messageEtat.texte = qsTr("Lecture de %1…").arg(libelleCourant())
             }
         } else {
             boite.ouvrirDossier(compte, chemin)
@@ -4390,6 +4392,14 @@ ApplicationWindow {
                                        || identifiantsEssai.scenario.indexOf("signature") === 0,
                       connecter2: null, scenario: identifiantsEssai.scenario || "",
                       etape: 0, sujet: "", examines: 0 }
+            // Scénario « horsligne » : aucune connexion ; le profil d'une
+            // session précédente doit suffire à lire la boîte de réception.
+            if (essai.scenario === "horsligne") {
+                var attente = Qt.createQmlObject('import QtQuick; Timer { interval: 1500 }', fenetre)
+                attente.triggered.connect(etapeScenarioHorsLigne)
+                attente.start()
+                return
+            }
             if (identifiantsEssai.utilisateur2)
                 essai.connecter2 = { hote: identifiantsEssai.hote,
                                      adresse: identifiantsEssai.utilisateur2,
@@ -4407,6 +4417,23 @@ ApplicationWindow {
         }
         for (var i = 0; i < comptes.length; ++i)
             connecterCompte(comptes[i])
+    }
+
+    /// Scénario d'essai « horsligne » : sans connexion, la boîte de réception
+    /// s'ouvre sur l'index et son premier message s'affiche depuis le poste.
+    function etapeScenarioHorsLigne() {
+        var c = comptesConnus[0]
+        ouvrirDossier(c.compte, "INBOX")
+        console.log("scenario: hors ligne,", modeleMessages.count, "messages dans la liste")
+        if (modeleMessages.count > 0)
+            choisir(0, 0)
+        var attente = Qt.createQmlObject('import QtQuick; Timer { interval: 1500 }', fenetre)
+        attente.triggered.connect(function() {
+            console.log("scenario: affiché :", sujetAffiche.text, "| html :", corpsHtml, "|",
+                        vueCorps.text.length, "caractères",
+                        vueCorps.text.indexOf("Chargement") === 0 || vueCorps.text.length < 20 ? "ECHEC" : "OK")
+        })
+        attente.start()
     }
 
     /// Scénario d'essai « defilement » : l'arborescence, agrandie pour

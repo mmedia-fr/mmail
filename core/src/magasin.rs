@@ -11,6 +11,8 @@
 //! Le schéma reprend les noms décidés au dossier pour que la suite s'y pose
 //! sans renommer : `accounts`, `folders`, `messages`, `pending_ops`.
 
+use std::collections::HashSet;
+
 use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::protocole::{Dossier, EtatDossier, Statut};
@@ -798,6 +800,57 @@ impl Magasin {
         Ok(requete.query_row(params![dossier, uid], lire_message).optional()?)
     }
 
+    // -------------------------------------------- messages gardés sur le poste
+
+    /// Identifiant dans l'index, date de réception et état « lu » d'un message.
+    pub fn identite_message(&self, dossier: i64, uid: u32) -> Resultat<Option<(i64, i64, bool)>> {
+        Ok(self
+            .base
+            .query_row(
+                "SELECT id, horodatage, lu FROM messages WHERE folder_id = ?1 AND uid = ?2",
+                params![dossier, uid],
+                |l| Ok((l.get(0)?, l.get(1)?, l.get::<_, i32>(2)? != 0)),
+            )
+            .optional()?)
+    }
+
+    /// Note qu'un message est gardé sur le poste (`full`), ne l'est plus
+    /// (`headers`), ou n'a pas pu être lu (`echec` : il n'est pas réessayé).
+    pub fn poser_etat_corps(&self, id: i64, etat: &str) -> Resultat<()> {
+        self.base.execute("UPDATE messages SET body_state = ?2 WHERE id = ?1", params![id, etat])?;
+        Ok(())
+    }
+
+    /// Messages d'un dossier reçus depuis `depuis` et pas encore gardés, du
+    /// plus récent au plus ancien : identifiant et UID.
+    pub fn a_garder(&self, dossier: i64, depuis: i64, nombre: usize) -> Resultat<Vec<(i64, u32)>> {
+        let mut requete = self.base.prepare(
+            "SELECT id, uid FROM messages
+             WHERE folder_id = ?1 AND body_state = 'headers' AND horodatage >= ?2
+             ORDER BY horodatage DESC, uid DESC LIMIT ?3",
+        )?;
+        let liste = requete
+            .query_map(params![dossier, depuis, nombre as i64], |l| Ok((l.get(0)?, l.get(1)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(liste)
+    }
+
+    /// Messages gardés sur le poste mais reçus avant `avant` : sortis de la
+    /// fenêtre.
+    pub fn gardes_perimes(&self, avant: i64) -> Resultat<Vec<i64>> {
+        let mut requete =
+            self.base.prepare("SELECT id FROM messages WHERE body_state = 'full' AND horodatage < ?1")?;
+        let liste = requete.query_map(params![avant], |l| l.get(0))?.collect::<Result<Vec<_>, _>>()?;
+        Ok(liste)
+    }
+
+    /// Identifiants de tous les messages gardés sur le poste.
+    pub fn gardes(&self) -> Resultat<HashSet<i64>> {
+        let mut requete = self.base.prepare("SELECT id FROM messages WHERE body_state = 'full'")?;
+        let liste = requete.query_map([], |l| l.get(0))?.collect::<Result<HashSet<i64>, _>>()?;
+        Ok(liste)
+    }
+
     // ---------------------------------------------- déplacements en cours
 
     /// Inscrit un déplacement entre boîtes, une fois le message lu et copié.
@@ -949,6 +1002,31 @@ mod tests {
         m.poser_dossiers(compte, &[dossier("INBOX", &[])]).unwrap();
         let id = m.dossier_id(compte, "INBOX").unwrap();
         (m, compte, id)
+    }
+
+    #[test]
+    fn messages_gardes_sur_le_poste() {
+        let m = Magasin::en_memoire().unwrap();
+        let c = m.compte("a@exemple.fr", "imap.exemple.fr", 993, "a").unwrap();
+        m.poser_dossiers(c, &[Dossier { chemin: "INBOX".into(), separateur: "/".into(), attributs: vec![] }])
+            .unwrap();
+        let d = m.dossier_id(c, "INBOX").unwrap();
+        let msg = |uid: u32, horodatage: i64| MessageLocal { uid, horodatage, ..Default::default() };
+        m.poser_messages(d, &[msg(1, 100), msg(2, 5_000), msg(3, 9_000)]).unwrap();
+        let ids: Vec<i64> = m.a_garder(d, 1_000, 10).unwrap().into_iter().map(|(id, _)| id).collect();
+        let uids: Vec<u32> = m.a_garder(d, 1_000, 10).unwrap().into_iter().map(|(_, u)| u).collect();
+        // Les plus récents d'abord, rien d'avant la fenêtre.
+        assert_eq!(uids, vec![3, 2]);
+        m.poser_etat_corps(ids[0], "full").unwrap();
+        m.poser_etat_corps(ids[1], "echec").unwrap();
+        assert!(m.a_garder(d, 1_000, 10).unwrap().is_empty());
+        assert_eq!(m.gardes().unwrap(), HashSet::from([ids[0]]));
+        // Une synchronisation ne remet pas l'état à zéro.
+        m.poser_messages(d, &[msg(3, 9_000)]).unwrap();
+        assert_eq!(m.gardes().unwrap(), HashSet::from([ids[0]]));
+        assert_eq!(m.identite_message(d, 3).unwrap().map(|(id, h, _)| (id, h)), Some((ids[0], 9_000)));
+        assert!(m.gardes_perimes(9_000).unwrap().is_empty());
+        assert_eq!(m.gardes_perimes(9_001).unwrap(), vec![ids[0]]);
     }
 
     #[test]

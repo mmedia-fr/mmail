@@ -86,9 +86,15 @@ pub fn resoudre(depart: &str, location: &str) -> Resultat<String> {
 /// Envoie une requête sans corps et rend la réponse. Un GET suit les
 /// redirections vers HTTPS ; un POST, jamais — il n'a pas à être rejoué ailleurs.
 pub fn requete(methode: &str, url: &str, accepte: &str) -> Resultat<Reponse> {
+    requete_bornee(methode, url, accepte, TAILLE_MAX)
+}
+
+/// Comme `requete`, avec une autre limite de taille du corps : une image
+/// distante d'un message pèse plus qu'un document de configuration.
+pub fn requete_bornee(methode: &str, url: &str, accepte: &str, taille_max: usize) -> Resultat<Reponse> {
     let mut url = url.trim().to_string();
     for _ in 0..=REDIRECTIONS_MAX {
-        let reponse = une_requete(methode, &url, accepte)?;
+        let reponse = une_requete(methode, &url, accepte, taille_max)?;
         let redirige = matches!(reponse.statut, 301 | 302 | 303 | 307 | 308);
         match (&reponse.redirection, methode == "GET" && redirige) {
             (Some(location), true) => url = resoudre(&url, location)?,
@@ -98,7 +104,7 @@ pub fn requete(methode: &str, url: &str, accepte: &str) -> Resultat<Reponse> {
     Err(Erreur::Protocole("trop de redirections".into()))
 }
 
-fn une_requete(methode: &str, url: &str, accepte: &str) -> Resultat<Reponse> {
+fn une_requete(methode: &str, url: &str, accepte: &str, taille_max: usize) -> Resultat<Reponse> {
     let cible = analyser_url(url)?;
     let config = configuration_tls()?;
     let nom = rustls::pki_types::ServerName::try_from(cible.hote.clone())
@@ -131,9 +137,15 @@ fn une_requete(methode: &str, url: &str, accepte: &str) -> Resultat<Reponse> {
             Ok(0) => break,
             Ok(n) => {
                 brut.extend_from_slice(&tampon[..n]);
-                // Marge pour les en-têtes : c'est le corps que borne TAILLE_MAX.
-                if brut.len() > TAILLE_MAX + 64 * 1024 {
+                // Marge pour les en-têtes : c'est le corps que borne la limite.
+                if brut.len() > taille_max + 64 * 1024 {
                     return Err(Erreur::Refuse("réponse trop volumineuse".into()));
+                }
+                // Certains serveurs gardent la connexion ouverte malgré
+                // « Connection: close » (Apache qui propose HTTP/2) : on
+                // n'attend pas leur fermeture quand la réponse est complète.
+                if reponse_complete(&brut) {
+                    break;
                 }
             }
             // Bien des serveurs ferment sans la notification TLS de fin : ce
@@ -143,11 +155,35 @@ fn une_requete(methode: &str, url: &str, accepte: &str) -> Resultat<Reponse> {
             Err(e) => return Err(e.into()),
         }
     }
-    analyser_reponse(&brut)
+    analyser_reponse_bornee(&brut, taille_max)
+}
+
+/// Vrai si la réponse reçue est entière : corps de la longueur annoncée, ou
+/// dernier bloc reçu. Sans l'une ni l'autre, seule la fermeture le dira.
+fn reponse_complete(brut: &[u8]) -> bool {
+    let Some(fin) = brut.windows(4).position(|w| w == b"\r\n\r\n") else {
+        return false;
+    };
+    let tete = String::from_utf8_lossy(&brut[..fin]).to_ascii_lowercase();
+    let entete = |nom: &str| {
+        tete.split("\r\n").find_map(|l| l.split_once(':').filter(|(n, _)| n.trim() == nom).map(|(_, v)| v.trim().to_string()))
+    };
+    let corps = &brut[fin + 4..];
+    if entete("transfer-encoding").map(|v| v.contains("chunked")).unwrap_or(false) {
+        return corps.ends_with(b"\r\n0\r\n\r\n") || corps == b"0\r\n\r\n";
+    }
+    match entete("content-length").and_then(|v| v.parse::<usize>().ok()) {
+        Some(n) => corps.len() >= n,
+        None => false,
+    }
 }
 
 /// Découpe une réponse HTTP/1.x complète : statut, en-têtes utiles, corps.
 pub fn analyser_reponse(brut: &[u8]) -> Resultat<Reponse> {
+    analyser_reponse_bornee(brut, TAILLE_MAX)
+}
+
+fn analyser_reponse_bornee(brut: &[u8], taille_max: usize) -> Resultat<Reponse> {
     let fin = brut
         .windows(4)
         .position(|w| w == b"\r\n\r\n")
@@ -175,12 +211,12 @@ pub fn analyser_reponse(brut: &[u8]) -> Resultat<Reponse> {
         .map(|v| v.to_ascii_lowercase().contains("chunked"))
         .unwrap_or(false);
     let corps = if morcele {
-        rassembler(reste)?
+        rassembler(reste, taille_max)?
     } else if let Some(longueur) = entete("content-length") {
         let n: usize = longueur
             .parse()
             .map_err(|_| Erreur::Protocole(format!("longueur illisible : {longueur}")))?;
-        if n > TAILLE_MAX {
+        if n > taille_max {
             return Err(Erreur::Refuse("réponse trop volumineuse".into()));
         }
         if reste.len() < n {
@@ -190,7 +226,7 @@ pub fn analyser_reponse(brut: &[u8]) -> Resultat<Reponse> {
     } else {
         reste.to_vec()
     };
-    if corps.len() > TAILLE_MAX {
+    if corps.len() > taille_max {
         return Err(Erreur::Refuse("réponse trop volumineuse".into()));
     }
     Ok(Reponse {
@@ -203,7 +239,7 @@ pub fn analyser_reponse(brut: &[u8]) -> Resultat<Reponse> {
 
 /// Recompose un corps envoyé par blocs (`Transfer-Encoding: chunked`). Un
 /// corps sans son bloc final de taille nulle est tenu pour tronqué.
-fn rassembler(mut reste: &[u8]) -> Resultat<Vec<u8>> {
+fn rassembler(mut reste: &[u8], taille_max: usize) -> Resultat<Vec<u8>> {
     let tronque = || Erreur::Reseau("réponse tronquée".into());
     let mut corps = Vec::new();
     loop {
@@ -217,7 +253,7 @@ fn rassembler(mut reste: &[u8]) -> Resultat<Vec<u8>> {
         if taille == 0 {
             return Ok(corps);
         }
-        if taille > TAILLE_MAX || corps.len() + taille > TAILLE_MAX {
+        if taille > taille_max || corps.len() + taille > taille_max {
             return Err(Erreur::Refuse("réponse trop volumineuse".into()));
         }
         if reste.len() < taille + 2 {
@@ -234,6 +270,16 @@ fn rassembler(mut reste: &[u8]) -> Resultat<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fin_de_reponse_reconnue() {
+        assert!(!reponse_complete(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n"));
+        assert!(!reponse_complete(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nab"));
+        assert!(reponse_complete(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nabcd"));
+        assert!(!reponse_complete(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n4\r\nabcd\r\n"));
+        assert!(reponse_complete(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n4\r\nabcd\r\n0\r\n\r\n"));
+        assert!(!reponse_complete(b"HTTP/1.1 200 OK\r\n\r\nsans longueur"));
+    }
 
     #[test]
     fn adresses_acceptees() {

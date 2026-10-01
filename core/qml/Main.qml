@@ -99,6 +99,21 @@ ApplicationWindow {
     property int messagesVides: 0
     // Pièces jointes du message affiché, telles que le noyau les rend.
     property var pieces: []
+    // Le message affiché est du HTML assaini par le noyau, rendu en texte
+    // riche ; `htmlAffiche` le garde tel quel, avant la mise à l'échelle des
+    // polices par le zoom de la colonne.
+    property bool corpsHtml: false
+    property string htmlAffiche: ""
+    // Images distantes du message affiché laissées de côté.
+    property int imagesBloquees: 0
+    // Lien survolé dans le message : son adresse s'affiche dans la barre
+    // d'information, comme dans un navigateur — un lien trompeur s'y voit.
+    property string lienSurvole: ""
+    // Fond de la rubrique Favoris : un cran plus soutenu que celui des
+    // comptes, pour qu'elle s'en détache (retour de Manu, 01/10).
+    readonly property color fondFavoris: palette.base.hslLightness > 0.5
+            ? Qt.tint(Qt.darker(palette.base, 1.07), Qt.rgba(palette.highlight.r, palette.highlight.g, palette.highlight.b, 0.10))
+            : Qt.tint(palette.base, Qt.rgba(1, 1, 1, 0.08))
 
     // Rédaction : identité et signature de chaque compte, en JSON
     // (adresse → {nom, signature, nouveaux, reponses}) ; mise en forme par défaut.
@@ -471,39 +486,58 @@ ApplicationWindow {
                 ColumnLayout {
                     width: parent.width
                     spacing: 0
+                    // De vrais boutons, encadrés et espacés, en trois groupes —
+                    // répondre, ranger, voir la source — : des boutons plats de
+                    // barre d'outils se lisaient mal (retour de Manu, 01/10).
                     Flow {
                         Layout.fillWidth: true
+                        Layout.topMargin: 4
+                        Layout.bottomMargin: 6
+                        spacing: 6
                         // Un brouillon se reprend ; un message reçu reçoit une réponse.
-                        ToolButton {
+                        Button {
                             visible: fenetre.dossierDeReprise
                             text: qsTr("Reprendre")
                             onClicked: fenetre.rediger("brouillon")
                         }
-                        ToolButton {
+                        Button {
                             visible: !fenetre.dossierDeReprise
                             text: qsTr("Répondre")
                             onClicked: fenetre.rediger("repondre")
                         }
-                        ToolButton {
+                        Button {
                             visible: !fenetre.dossierDeReprise
                             text: qsTr("Répondre à tous")
                             onClicked: fenetre.rediger("repondre_tous")
                         }
-                        ToolButton {
+                        Button {
                             visible: !fenetre.dossierDeReprise
                             text: qsTr("Transférer")
                             onClicked: fenetre.rediger("transferer")
                         }
-                        ToolButton {
+                        ToolSeparator { height: boutonDeplacer.height }
+                        Button {
+                            id: boutonDeplacer
                             text: qsTr("Déplacer…")
                             onClicked: fenetre.ouvrirDeplacer()
                         }
-                        ToolButton {
+                        Button {
+                            visible: !fenetre.dossierDeReprise
+                            text: fenetre.roleCourant === "Junk" ? qsTr("Pas indésirable") : qsTr("Indésirable")
+                            onClicked: fenetre.signalerIndesirable()
+                            ToolTip.visible: hovered
+                            ToolTip.delay: 600
+                            ToolTip.text: fenetre.roleCourant === "Junk"
+                                          ? qsTr("Remettre en boîte de réception ; le filtre du serveur apprend que le message est légitime (Ctrl+Alt+J).")
+                                          : qsTr("Classer en courrier indésirable ; le filtre du serveur l'apprend (Ctrl+Alt+J).")
+                        }
+                        Button {
                             text: qsTr("Supprimer")
                             onClicked: fenetre.supprimerSelection()
                         }
+                        ToolSeparator { height: boutonDeplacer.height }
                         // Décision 6 : voir le message brut, en-têtes compris, en un geste.
-                        ToolButton {
+                        Button {
                             text: fenetre.sourceVisible ? qsTr("Message") : qsTr("Source")
                             onClicked: fenetre.basculerSource()
                         }
@@ -594,6 +628,36 @@ ApplicationWindow {
                 }
             }
 
+            // Images distantes : rien ne se télécharge sans le demander — une
+            // image distante dit à l'expéditeur que le message a été ouvert.
+            Pane {
+                Layout.fillWidth: true
+                visible: fenetre.uidCourant > 0 && !fenetre.sourceVisible && fenetre.corpsHtml
+                         && fenetre.imagesBloquees > 0
+                font.pointSize: fenetre.tailleMessage
+                padding: 4
+                background: Rectangle { color: "#e8f0fb" }
+                RowLayout {
+                    width: parent.width
+                    Label {
+                        text: (fenetre.imagesBloquees > 1
+                               ? qsTr("%1 images distantes non téléchargées").arg(fenetre.imagesBloquees)
+                               : qsTr("1 image distante non téléchargée"))
+                              + qsTr(" : l'expéditeur saurait que vous avez ouvert le message.")
+                        color: "#1c1f24"
+                        wrapMode: Text.Wrap
+                        Layout.fillWidth: true
+                    }
+                    Button {
+                        text: qsTr("Télécharger les images")
+                        onClicked: {
+                            messageEtat.texte = qsTr("Téléchargement des images…")
+                            boite.afficherImages(fenetre.uidCourant)
+                        }
+                    }
+                }
+            }
+
             ScrollView {
                 id: cadreCorps
                 Layout.fillWidth: true
@@ -612,11 +676,26 @@ ApplicationWindow {
                     id: vueCorps
                     readOnly: true
                     selectByMouse: true
+                    // Un message HTML en texte riche ; tout le reste — source,
+                    // texte brut, attente — en texte simple, où une balise
+                    // reste une balise.
+                    textFormat: fenetre.corpsHtml && !fenetre.sourceVisible ? TextEdit.RichText : TextEdit.PlainText
                     wrapMode: fenetre.sourceVisible ? TextEdit.NoWrap : TextEdit.Wrap
                     font.pointSize: fenetre.tailleMessage
                     font.family: fenetre.sourceVisible ? fenetre.policeMono : fenetre.font.family
-                    background: Rectangle { color: fenetre.palette.base }
+                    // Un message HTML se lit sur fond blanc, quelle que soit
+                    // l'apparence : ses couleurs supposent ce fond.
+                    color: fenetre.corpsHtml && !fenetre.sourceVisible ? "#1f1f1f" : fenetre.palette.text
+                    background: Rectangle {
+                        color: fenetre.corpsHtml && !fenetre.sourceVisible ? "#ffffff" : fenetre.palette.base
+                    }
                     text: qsTr("Aucun message sélectionné.")
+
+                    onLinkActivated: function(lien) { fenetre.ouvrirLien(lien) }
+                    onLinkHovered: function(lien) { fenetre.lienSurvole = lien }
+                    HoverHandler {
+                        cursorShape: vueCorps.hoveredLink.length > 0 ? Qt.PointingHandCursor : Qt.IBeamCursor
+                    }
 
                     onSelectedTextChanged: if (selectedText.length > 0) fenetre.selectionChangee()
                     // Un Ctrl+C explicite écrit par la même règle que la copie
@@ -663,7 +742,8 @@ ApplicationWindow {
             anchors.rightMargin: 8
             spacing: 14
             Label {
-                text: fenetre.infoDossier
+                text: fenetre.lienSurvole.length > 0 ? fenetre.lienSurvole : fenetre.infoDossier
+                color: fenetre.lienSurvole.length > 0 ? fenetre.palette.highlight : fenetre.palette.windowText
                 elide: Text.ElideRight
                 maximumLineCount: 1
                 Layout.fillWidth: true
@@ -1795,6 +1875,25 @@ ApplicationWindow {
                     fenetre.ouvrirDossier(model.compte, model.chemin)
             }
 
+            /// Vrai si le clic tombe sur le chevron d'un dossier parent (marge
+            /// comprise, pour le doigt comme pour la souris).
+            function surChevron(x) {
+                if (!chevronDossier.visible || !model.enfants)
+                    return false
+                var p = chevronDossier.mapToItem(zoneLigne, 0, 0)
+                return x >= p.x - 6 && x <= p.x + chevronDossier.width + 6
+            }
+
+            // La rubrique Favoris sur un fond plus soutenu que celui des
+            // comptes. Au-dessus du fond propre à la ligne (z -1, opaque dans
+            // le style Fusion), sauf quand la ligne est choisie ou pressée.
+            Rectangle {
+                z: -0.5
+                anchors.fill: parent
+                visible: model.groupe === "favoris" && !ligne.highlighted && !ligne.down
+                color: fenetre.fondFavoris
+            }
+
             function menuLigne() {
                 if (model.genre === "compte")
                     menuCompte.ouvrir(model.compte, model.adresse, model.hote, model.etat)
@@ -1805,13 +1904,18 @@ ApplicationWindow {
             // Cible de dépôt : des messages glissés depuis la liste (sur un
             // dossier), ou un dossier glissé depuis l'arborescence (sur la
             // rubrique Favoris ou l'un de ses favoris, décision 3).
+            // Un compte glissé sur un autre compte prend sa place (moitié haute)
+            // ou la suivante (moitié basse).
             DropArea {
                 id: depot
                 anchors.fill: parent
-                keys: ["mmail/messages", "mmail/dossier"]
+                keys: ["mmail/messages", "mmail/dossier", "mmail/compte"]
                 onEntered: function(glisse) {
                     var dossierGlisse = glisse.keys.indexOf("mmail/dossier") >= 0
-                    var accepte = dossierGlisse
+                    var compteGlisse = glisse.keys.indexOf("mmail/compte") >= 0
+                    var accepte = compteGlisse
+                            ? (model.genre === "compte" && glisse.source && glisse.source.compte !== model.compte)
+                            : dossierGlisse
                             ? (model.genre === "rubrique" || model.genre === "favori"
                                || model.genre === "favori-vide")
                             : (ligne.estDossier && model.selectionnable)
@@ -1821,7 +1925,10 @@ ApplicationWindow {
                 onExited: ligne.survol = false
                 onDropped: function(depose) {
                     ligne.survol = false
-                    if (depose.keys.indexOf("mmail/dossier") >= 0) {
+                    if (depose.keys.indexOf("mmail/compte") >= 0) {
+                        boite.placerCompte(depose.source.compte,
+                                           depose.y < height / 2 ? model.compte : fenetre.compteSuivant(model.compte))
+                    } else if (depose.keys.indexOf("mmail/dossier") >= 0) {
                         var source = depose.source
                         boite.placerFavori(source.compte, source.chemin,
                                            model.genre === "favori" ? model.compte : 0,
@@ -1853,7 +1960,7 @@ ApplicationWindow {
                 color: fenetre.palette.highlight
                 visible: zoneLigne.drag.active
                 Drag.active: zoneLigne.drag.active
-                Drag.keys: ["mmail/dossier"]
+                Drag.keys: model.genre === "compte" ? ["mmail/compte"] : ["mmail/dossier"]
                 Drag.hotSpot.x: 8
                 Drag.hotSpot.y: height / 2
                 Drag.supportedActions: Qt.MoveAction
@@ -1873,9 +1980,11 @@ ApplicationWindow {
                 id: zoneLigne
                 anchors.fill: parent
                 acceptedButtons: Qt.LeftButton | Qt.RightButton
-                // Seul un dossier se glisse, et pas au doigt : glisser y fait
-                // défiler l'arborescence.
-                drag.target: ligne.estDossier && !fenetre.compact ? etiquetteDossier : null
+                // Un dossier (vers les Favoris) ou un en-tête de compte (pour
+                // l'ordre des comptes) se glisse, et pas au doigt : glisser y
+                // fait défiler l'arborescence.
+                drag.target: (ligne.estDossier || model.genre === "compte") && !fenetre.compact
+                             ? etiquetteDossier : null
                 drag.threshold: 8
                 onPressed: function(souris) {
                     etiquetteDossier.x = souris.x
@@ -1884,6 +1993,8 @@ ApplicationWindow {
                 onClicked: function(souris) {
                     if (souris.button === Qt.RightButton)
                         ligne.menuLigne()
+                    else if (ligne.surChevron(souris.x))
+                        boite.replierDossier(model.compte, model.chemin, !model.replie)
                     else
                         ligne.cliquer()
                 }
@@ -1897,8 +2008,22 @@ ApplicationWindow {
             contentItem: RowLayout {
                 spacing: 6
                 Item {
-                    Layout.preferredWidth: model.genre === "dossier" ? 14 + model.profondeur * 14
+                    Layout.preferredWidth: model.genre === "dossier" ? model.profondeur * 14
                                          : model.genre === "favori" || model.genre === "favori-vide" ? 14 : 0
+                }
+                // Chevron d'un dossier qui a des sous-dossiers : un clic les
+                // replie ou les déplie (retour de Manu, 01/10). La place est
+                // gardée pour les autres, pour que les noms restent alignés.
+                Label {
+                    id: chevronDossier
+                    visible: model.genre === "dossier"
+                    text: model.enfants ? "›" : ""
+                    color: fenetre.palette.windowText
+                    font.bold: true
+                    rotation: model.replie ? 0 : 90
+                    opacity: 0.7
+                    horizontalAlignment: Text.AlignHCenter
+                    Layout.preferredWidth: 14
                 }
                 // « › » plutôt qu'un triangle : présent dans toutes les polices.
                 Label {
@@ -2321,6 +2446,12 @@ ApplicationWindow {
         }
         MenuSeparator {}
         MenuItem { text: qsTr("Déplacer vers…"); onTriggered: fenetre.ouvrirDeplacer() }
+        MenuItem {
+            visible: !fenetre.dossierDeReprise
+            height: visible ? implicitHeight : 0
+            text: fenetre.roleCourant === "Junk" ? qsTr("Pas indésirable") : qsTr("Courrier indésirable")
+            onTriggered: fenetre.signalerIndesirable()
+        }
         MenuSeparator {}
         MenuItem { text: qsTr("Marquer comme lu"); onTriggered: fenetre.marquerSelection(true) }
         MenuItem { text: qsTr("Marquer comme non lu"); onTriggered: fenetre.marquerSelection(false) }
@@ -2404,6 +2535,16 @@ ApplicationWindow {
             onTriggered: coffre.effacer(fenetre.cle(menuCompte.adresse, menuCompte.hote))
         }
         MenuSeparator {}
+        // L'ordre des comptes se règle aussi en glissant leur en-tête.
+        MenuItem {
+            text: qsTr("Monter ce compte")
+            onTriggered: boite.decalerCompte(menuCompte.compte, -1)
+        }
+        MenuItem {
+            text: qsTr("Descendre ce compte")
+            onTriggered: boite.decalerCompte(menuCompte.compte, 1)
+        }
+        MenuSeparator {}
         MenuItem {
             text: qsTr("Retirer ce compte de MMail…")
             onTriggered: dlgRetrait.ouvrir(menuCompte.compte, menuCompte.adresse, menuCompte.hote)
@@ -2434,6 +2575,12 @@ ApplicationWindow {
     Shortcut {
         sequences: [StandardKey.Refresh]
         onActivated: boite.actualiser()
+    }
+    // Courrier indésirable, comme dans Outlook.
+    Shortcut {
+        sequence: "Ctrl+Alt+J"
+        enabled: !fenetre.dialogueOuvert() && Object.keys(fenetre.selection).length > 0 && !fenetre.dossierDeReprise
+        onActivated: fenetre.signalerIndesirable()
     }
     // Insertion : pose ou retire le drapeau, comme dans Outlook.
     Shortcut {
@@ -2834,13 +2981,21 @@ ApplicationWindow {
                     + "Glissez un dossier sur la rubrique Favoris pour l'y épingler ; glissez un favori "
                     + "sur un autre pour le placer avant lui. Clic droit sur un dossier : ajouter aux "
                     + "favoris ou les retirer, masquer le dossier. Le bouton « Dossiers masqués » les "
-                    + "réaffiche.<br><br>"
+                    + "réaffiche. Le chevron d'un dossier replie ou déplie ses sous-dossiers.<br><br>"
+                    + "<b>Comptes</b><br>"
+                    + "Glissez l'en-tête d'un compte sur un autre pour changer leur ordre, ou clic droit "
+                    + "sur le compte : « Monter », « Descendre ».<br><br>"
                     + "<b>Trier</b><br>"
                     + "Glissez un ou plusieurs messages sur un dossier, de n'importe quel compte. Clic "
                     + "droit sur un message, ou Ctrl+Maj+V : « Déplacer vers… », avec un filtre sur le "
                     + "nom du dossier. Entre deux boîtes, le message n'est retiré de la source qu'une "
                     + "fois déposé dans la cible ; un déplacement interrompu reprend à la connexion "
                     + "suivante.<br><br>"
+                    + "<b>Courrier indésirable</b><br>"
+                    + "« Indésirable » (Ctrl+Alt+J) range le message dans le dossier d'indésirables de "
+                    + "sa boîte : le filtre du serveur l'apprend et reconnaîtra les messages semblables. "
+                    + "Depuis ce dossier, « Pas indésirable » le remet en boîte de réception, appris "
+                    + "comme légitime.<br><br>"
                     + "<b>Clavier</b><br>"
                     + "Suppr : envoyer à la corbeille de la boîte, rien n'est détruit · Ctrl+Q : marquer "
                     + "comme lu · Ctrl+U : marquer comme non lu · Ctrl+Maj+V : déplacer vers… · "
@@ -2851,6 +3006,10 @@ ApplicationWindow {
                     + "Ctrl − et Ctrl 0 sur la dernière colonne survolée ; pincement au doigt. Le menu "
                     + "« Affichage » propose trois apparences.<br><br>"
                     + "<b>Message</b><br>"
+                    + "Un message HTML s'affiche mis en page, sur fond blanc. Ses images distantes ne "
+                    + "sont téléchargées qu'à la demande (« Télécharger les images ») : les télécharger "
+                    + "dit à l'expéditeur que le message a été ouvert. L'adresse d'un lien survolé "
+                    + "s'affiche dans la barre du bas. "
                     + "Le bouton « Source » affiche le message brut, en-têtes compris. Un texte "
                     + "sélectionné part au presse-papier, sauf ce qu'un autre logiciel vient d'y "
                     + "déposer, protégé une minute.<br><br>"
@@ -3084,10 +3243,15 @@ ApplicationWindow {
             fenetre.rafraichirListe()
         }
 
-        function onCorpsRecu(uid, texte, brut, pieces, confirmation) {
+        function onCorpsRecu(uid, texte, brut, html, bloquees, pieces, confirmation) {
             if (uid !== fenetre.uidCourant || brut !== fenetre.sourceVisible)
                 return
-            vueCorps.text = texte
+            // Le format d'abord : le texte s'interprète selon lui.
+            fenetre.lienSurvole = ""
+            fenetre.corpsHtml = html
+            fenetre.htmlAffiche = html ? texte : ""
+            fenetre.imagesBloquees = bloquees
+            vueCorps.text = html ? fenetre.htmlAuZoom(texte) : texte
             vueCorps.cursorPosition = 0
             if (!brut) {
                 fenetre.confirmationDemandee = confirmation
@@ -3099,6 +3263,13 @@ ApplicationWindow {
             }
             if (fenetre.essai && fenetre.essai.scenario === "pieces")
                 fenetre.etapeScenarioPieces()
+            // Scénario « images » : le bouton « Télécharger les images »,
+            // pressé une fois.
+            if (fenetre.essai && fenetre.essai.scenario === "images" && html && bloquees > 0
+                    && !fenetre.essai.imagesDemandees) {
+                fenetre.essai.imagesDemandees = true
+                boite.afficherImages(uid)
+            }
         }
 
         function onPreparation(jeton, contenu) {
@@ -3202,7 +3373,7 @@ ApplicationWindow {
                 // on rouvre le dialogue tel qu'il était.
                 fenetre.demanderCompte(fenetre.dernierDemande, message)
             } else if (etape === "message") {
-                vueCorps.text = ""
+                fenetre.afficherTexte("")
             }
         }
     }
@@ -3475,6 +3646,7 @@ ApplicationWindow {
             nonLus: l.nonLus || 0,
             masque: l.masque === true,
             favori: l.favori === true,
+            enfants: l.enfants === true,
             // Section de la liste : la rubrique Favoris, puis un groupe par compte.
             groupe: l.genre === "rubrique" || l.genre === "favori" || l.genre === "favori-vide"
                     ? "favoris" : "compte-" + (l.compte || 0)
@@ -3562,7 +3734,7 @@ ApplicationWindow {
         uidCourant = 0
         sujetAffiche.text = ""
         auteurAffiche.text = ""
-        vueCorps.text = qsTr("Aucun message sélectionné.")
+        afficherTexte(qsTr("Aucun message sélectionné."))
     }
 
     /// Relit la liste depuis l'index. Mêmes messages dans le même ordre : mise
@@ -3601,7 +3773,7 @@ ApplicationWindow {
             uidCourant = 0
             sujetAffiche.text = ""
             auteurAffiche.text = ""
-            vueCorps.text = qsTr("Aucun message sélectionné.")
+            afficherTexte(qsTr("Aucun message sélectionné."))
         }
     }
 
@@ -3742,10 +3914,98 @@ ApplicationWindow {
                     + "  ·  " + dateLongue(ligne.date)
         }
         confirmationDemandee = ""
-        vueCorps.text = qsTr("Chargement…")
+        afficherTexte(qsTr("Chargement…"))
         boite.demanderCorps(uid)
         if (compact)
             vue = 2
+    }
+
+    /// Texte simple dans le volet du message : attente, absence, erreur.
+    function afficherTexte(texte) {
+        corpsHtml = false
+        htmlAffiche = ""
+        imagesBloquees = 0
+        lienSurvole = ""
+        vueCorps.text = texte
+    }
+
+    /// Le HTML du message, tailles de police mises à l'échelle du zoom de la
+    /// colonne : celles que l'expéditeur a écrites ne suivraient pas, sinon,
+    /// la taille du texte.
+    function htmlAuZoom(html) {
+        var z = reglages.zoomMessage
+        if (Math.abs(z - 1) < 0.01)
+            return html
+        return html.replace(/((?:font-size|line-height)\s*:\s*)([0-9]*\.?[0-9]+)(pt|px)/gi,
+                            function(tout, avant, valeur, unite) {
+                                return avant + (Math.round(parseFloat(valeur) * z * 10) / 10) + unite
+                            })
+    }
+
+    /// Réapplique le zoom à un message HTML affiché, sans perdre la position.
+    function reposerHtml() {
+        if (!corpsHtml || sourceVisible)
+            return
+        var position = cadreCorps.ScrollBar.vertical.position
+        vueCorps.text = htmlAuZoom(htmlAffiche)
+        cadreCorps.ScrollBar.vertical.position = position
+    }
+    onTailleMessageChanged: reposerHtml()
+
+    /// Un lien du message : une adresse de courriel ouvre une rédaction dans
+    /// MMail, une adresse web part au navigateur.
+    function ouvrirLien(lien) {
+        if (lien.toLowerCase().indexOf("mailto:") !== 0) {
+            Qt.openUrlExternally(lien)
+            return
+        }
+        var reste = lien.substring(7)
+        var q = reste.indexOf("?")
+        var adresse = q >= 0 ? reste.substring(0, q) : reste
+        var objet = ""
+        try {
+            adresse = decodeURIComponent(adresse)
+            var m = q >= 0 ? /(?:^|&)subject=([^&]*)/i.exec(reste.substring(q + 1)) : null
+            if (m)
+                objet = decodeURIComponent(m[1].replace(/\+/g, " "))
+        } catch (e) {
+        }
+        var compte = boite.compteCourant > 0 ? boite.compteCourant
+                   : (comptesConnus.length > 0 ? comptesConnus[0].compte : 0)
+        ouvrirRedaction(compte).remplir({ a: adresse, objet: objet, mode: "nouveau" })
+    }
+
+    /// Signale la sélection comme indésirable — ou, depuis le dossier des
+    /// indésirables, comme légitime. Le filtre du serveur l'apprend au
+    /// déplacement (Mailcow : Rspamd, par IMAPSieve).
+    function signalerIndesirable() {
+        var uids = uidsChoisis()
+        if (uids.length === 0)
+            return
+        var retour = roleCourant === "Junk"
+        if (!boite.signalerIndesirable(uids.join(",")))
+            return
+        retirerDeLaListe(uids)
+        var n = accord(uids.length, qsTr("message"), qsTr("messages"))
+        messageEtat.texte = retour
+                ? (uids.length > 1 ? qsTr("%1 remis en boîte de réception : le filtre du serveur apprend qu'ils sont légitimes.")
+                                   : qsTr("%1 remis en boîte de réception : le filtre du serveur apprend qu'il est légitime.")).arg(n)
+                : (uids.length > 1 ? qsTr("%1 classés indésirables : le filtre du serveur l'apprend.")
+                                   : qsTr("%1 classé indésirable : le filtre du serveur l'apprend.")).arg(n)
+    }
+
+    /// Compte qui suit `compte` dans l'arborescence, ou 0 s'il est le dernier.
+    function compteSuivant(compte) {
+        var vu = false
+        for (var i = 0; i < modeleArborescence.count; ++i) {
+            var l = modeleArborescence.get(i)
+            if (l.genre !== "compte")
+                continue
+            if (vu)
+                return l.compte
+            vu = l.compte === compte
+        }
+        return 0
     }
 
     function basculerSource() {
@@ -3756,7 +4016,7 @@ ApplicationWindow {
             uidCourant = uids[0]
         }
         sourceVisible = !sourceVisible
-        vueCorps.text = qsTr("Chargement…")
+        afficherTexte(qsTr("Chargement…"))
         if (sourceVisible)
             boite.demanderSource(uidCourant)
         else
@@ -3815,7 +4075,7 @@ ApplicationWindow {
         uidCourant = 0
         sujetAffiche.text = ""
         auteurAffiche.text = ""
-        vueCorps.text = qsTr("Aucun message sélectionné.")
+        afficherTexte(qsTr("Aucun message sélectionné."))
         // Comme Outlook : le message suivant prend la place.
         if (suivant >= 0 && modeleMessages.count > 0 && !compact)
             choisir(Math.min(suivant, modeleMessages.count - 1), 0)
@@ -3903,7 +4163,8 @@ ApplicationWindow {
         if (typeof identifiantsEssai !== "undefined" && identifiantsEssai
                 && identifiantsEssai.hote) {
             essai = { afficherPremier: !identifiantsEssai.scenario
-                                       || identifiantsEssai.scenario === "pieces",
+                                       || identifiantsEssai.scenario === "pieces"
+                                       || identifiantsEssai.scenario === "images",
                       connecter2: null, scenario: identifiantsEssai.scenario || "",
                       etape: 0, sujet: "", examines: 0 }
             if (identifiantsEssai.utilisateur2)

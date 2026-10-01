@@ -115,10 +115,26 @@ pub mod qobject {
         #[cxx_name = "replierCompte"]
         fn replier_compte(self: Pin<&mut Boite>, compte: i32, replie: bool);
 
+        /// Place un compte juste avant un autre dans l'arborescence, ou à la
+        /// fin si `avant` vaut 0. L'ordre est local au poste.
+        #[qinvokable]
+        #[cxx_name = "placerCompte"]
+        fn placer_compte(self: Pin<&mut Boite>, compte: i32, avant: i32);
+
+        /// Monte (`sens` négatif) ou descend un compte d'une place.
+        #[qinvokable]
+        #[cxx_name = "decalerCompte"]
+        fn decaler_compte(self: Pin<&mut Boite>, compte: i32, sens: i32);
+
         /// Masque un dossier dans l'arborescence, ou le réaffiche (décision 4).
         #[qinvokable]
         #[cxx_name = "masquerDossier"]
         fn masquer_dossier(self: Pin<&mut Boite>, compte: i32, chemin: &QString, masque: bool);
+
+        /// Replie ou déplie les sous-dossiers d'un dossier ; réglage local.
+        #[qinvokable]
+        #[cxx_name = "replierDossier"]
+        fn replier_dossier(self: Pin<&mut Boite>, compte: i32, chemin: &QString, replie: bool);
 
         /// Épingle un dossier dans la rubrique Favoris, ou l'en retire
         /// (décision 3).
@@ -155,6 +171,12 @@ pub mod qobject {
         #[qinvokable]
         #[cxx_name = "demanderCorps"]
         fn demander_corps(self: Pin<&mut Boite>, uid: i32) -> bool;
+
+        /// Réaffiche un message HTML avec ses images distantes, téléchargées
+        /// à cette demande seulement. Issue : `corpsRecu`.
+        #[qinvokable]
+        #[cxx_name = "afficherImages"]
+        fn afficher_images(self: Pin<&mut Boite>, uid: i32) -> bool;
 
         /// Demande le message brut, tel que le serveur le conserve (décision 6).
         /// Issue : `corpsRecu` avec `brut` à vrai.
@@ -215,6 +237,15 @@ pub mod qobject {
         #[qinvokable]
         #[cxx_name = "supprimer"]
         fn supprimer(self: Pin<&mut Boite>, uids: &QString) -> bool;
+
+        /// Signale des messages du dossier ouvert comme indésirables : ils vont
+        /// dans le dossier d'indésirables de leur compte, et le filtre du
+        /// serveur l'apprend (Mailcow : Rspamd, par IMAPSieve). Depuis ce
+        /// dossier, l'inverse : retour en boîte de réception, appris comme
+        /// légitime.
+        #[qinvokable]
+        #[cxx_name = "signalerIndesirable"]
+        fn signaler_indesirable(self: Pin<&mut Boite>, uids: &QString) -> bool;
 
         /// Vide, sur TOUS les comptes connectés, la corbeille et les dossiers
         /// d'indésirables (rôles SPECIAL-USE `Trash` et `Junk`, ou dont le nom
@@ -290,6 +321,8 @@ pub mod qobject {
         fn dossier_ouvert(self: Pin<&mut Boite>, compte: i32, chemin: &QString, veille: bool);
 
         /// Corps d'un message : affichable, ou brut si `brut` est vrai.
+        /// `html` : `texte` est du HTML assaini, à afficher en texte riche ;
+        /// `bloquees` : nombre d'images distantes non téléchargées.
         /// `pieces` : ses pièces jointes, en JSON (`[{indice, nom, type,
         /// taille, risquee}]`).
         #[qsignal]
@@ -299,6 +332,8 @@ pub mod qobject {
             uid: i32,
             texte: &QString,
             brut: bool,
+            html: bool,
+            bloquees: i32,
             pieces: &QString,
             confirmation: &QString,
         );
@@ -410,7 +445,9 @@ enum Commande {
     /// Relire l'arborescence et les compteurs.
     Arborescence,
     OuvrirDossier(String),
-    Corps { chemin: String, uid: u32, brut: bool },
+    /// Lire un message : sa source si `brut`, sinon de quoi l'afficher, avec
+    /// ses images distantes si `distantes`.
+    Corps { chemin: String, uid: u32, brut: bool, distantes: bool },
     /// Écrire une pièce jointe : dans `destination` si elle est donnée, sinon
     /// dans le dossier de travail, pour l'ouvrir.
     Piece { chemin: String, uid: u32, indice: usize, destination: Option<PathBuf> },
@@ -484,7 +521,7 @@ enum Issue {
     Connecte,
     Arborescence,
     Dossier { chemin: String, veille: bool },
-    Corps { uid: u32, texte: String, brut: bool, marque: bool, pieces: String, confirmation: String },
+    Corps { uid: u32, lu: Lu, marque: bool },
     Piece { fichier: PathBuf, ouvrir: bool },
     Marque,
     Deplace { cible: i64, chemin_cible: String, rapport: Rapport },
@@ -581,6 +618,7 @@ impl qobject::Boite {
                 // Les pièces jointes ouvertes lors d'une session précédente
                 // n'ont plus à traîner sur le disque.
                 let _ = std::fs::remove_dir_all(dossier_pieces(&chemin));
+                let _ = std::fs::remove_dir_all(dossier_affichage(&chemin));
                 let attente = magasin.nombre_operations().unwrap_or(0) as i32;
                 {
                     let mut noyau = self.as_mut().rust_mut();
@@ -704,7 +742,7 @@ impl qobject::Boite {
         }
         for d in &favoris {
             let adresse = adresses.get(&d.compte_id).cloned().unwrap_or_default();
-            lignes.push(json_dossier("favori", d, &adresse, 0));
+            lignes.push(json_dossier("favori", d, &adresse, 0, false));
         }
         for c in &comptes {
             lignes.push(format!(
@@ -718,11 +756,14 @@ impl qobject::Boite {
             if c.replie {
                 continue;
             }
-            for d in magasin.dossiers(c.id).unwrap_or_default() {
-                if d.masque && !masques {
-                    continue;
-                }
-                lignes.push(json_dossier("dossier", &d, &c.adresse, d.profondeur));
+            let visibles: Vec<DossierLocal> = magasin
+                .dossiers(c.id)
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|d| masques || !d.masque)
+                .collect();
+            for (d, enfants) in arbre_visible(&visibles) {
+                lignes.push(json_dossier("dossier", d, &c.adresse, d.profondeur, enfants));
             }
         }
         QString::from(&format!("[{}]", lignes.join(",")))
@@ -741,15 +782,38 @@ impl qobject::Boite {
                 if !d.selectionnable {
                     continue;
                 }
-                lignes.push(json_dossier("cible", &d, &c.adresse, d.profondeur));
+                lignes.push(json_dossier("cible", &d, &c.adresse, d.profondeur, false));
             }
         }
         QString::from(&format!("[{}]", lignes.join(",")))
     }
 
+    pub fn placer_compte(mut self: Pin<&mut Self>, compte: i32, avant: i32) {
+        if let Some(magasin) = self.magasin.as_ref() {
+            let _ = magasin.placer_compte(compte as i64, (avant > 0).then_some(avant as i64));
+        }
+        self.as_mut().reviser();
+    }
+
+    pub fn decaler_compte(mut self: Pin<&mut Self>, compte: i32, sens: i32) {
+        if let Some(magasin) = self.magasin.as_ref() {
+            let _ = magasin.decaler_compte(compte as i64, sens);
+        }
+        self.as_mut().reviser();
+    }
+
     pub fn replier_compte(mut self: Pin<&mut Self>, compte: i32, replie: bool) {
         if let Some(magasin) = self.magasin.as_ref() {
             let _ = magasin.replier_compte(compte as i64, replie);
+        }
+        self.as_mut().reviser();
+    }
+
+    pub fn replier_dossier(mut self: Pin<&mut Self>, compte: i32, chemin: &QString, replie: bool) {
+        if let Some(magasin) = self.magasin.as_ref() {
+            if let Ok(id) = magasin.dossier_id(compte as i64, &chemin.to_string()) {
+                let _ = magasin.replier_dossier(id, replie);
+            }
         }
         self.as_mut().reviser();
     }
@@ -814,11 +878,15 @@ impl qobject::Boite {
     }
 
     pub fn demander_corps(self: Pin<&mut Self>, uid: i32) -> bool {
-        self.demander(uid, false)
+        self.demander(uid, false, false)
+    }
+
+    pub fn afficher_images(self: Pin<&mut Self>, uid: i32) -> bool {
+        self.demander(uid, false, true)
     }
 
     pub fn demander_source(self: Pin<&mut Self>, uid: i32) -> bool {
-        self.demander(uid, true)
+        self.demander(uid, true, false)
     }
 
     pub fn ouvrir_piece(self: Pin<&mut Self>, uid: i32, indice: i32) -> bool {
@@ -951,6 +1019,19 @@ impl qobject::Boite {
                 false
             }
         }
+    }
+
+    pub fn signaler_indesirable(mut self: Pin<&mut Self>, uids: &QString) -> bool {
+        let Some((compte, source, _)) = self.courant.clone() else {
+            return false;
+        };
+        let dossiers = self.magasin.as_ref().and_then(|m| m.dossiers(compte).ok()).unwrap_or_default();
+        let Some(indesirables) = dossier_indesirables(&dossiers) else {
+            self.as_mut().set_erreur(QString::from("ce compte n'a pas de dossier de courrier indésirable"));
+            return false;
+        };
+        let cible = if source == indesirables { "INBOX".to_string() } else { indesirables };
+        self.deplacer(uids, compte as i32, &QString::from(&cible))
     }
 
     pub fn vider_corbeilles(mut self: Pin<&mut Self>) {
@@ -1090,13 +1171,19 @@ impl qobject::Boite {
 
     pub fn role_courant(&self) -> QString {
         let role = match (&self.courant, &self.magasin) {
-            (Some((_, _, id)), Some(m)) => m
+            (Some((compte, chemin, id)), Some(m)) => m
                 .dossier(*id)
                 .ok()
                 .flatten()
                 .map(|d| {
                     if d.role.is_empty() && d.profondeur == 0 && d.nom == DOSSIER_DIFFERE {
                         "Differe".to_string()
+                    } else if d.role.is_empty()
+                        && m.dossiers(*compte).ok().as_deref().and_then(dossier_indesirables).as_ref() == Some(chemin)
+                    {
+                        // Dossier d'indésirables reconnu à son nom, faute
+                        // d'attribut SPECIAL-USE.
+                        "Junk".to_string()
                     } else {
                         d.role
                     }
@@ -1141,14 +1228,14 @@ impl qobject::Boite {
         )
     }
 
-    fn demander(mut self: Pin<&mut Self>, uid: i32, brut: bool) -> bool {
+    fn demander(mut self: Pin<&mut Self>, uid: i32, brut: bool, distantes: bool) -> bool {
         if uid <= 0 {
             return false;
         }
         let Some((compte, chemin, _)) = self.courant.clone() else {
             return false;
         };
-        self.as_mut().envoyer(compte, Commande::Corps { chemin, uid: uid as u32, brut })
+        self.as_mut().envoyer(compte, Commande::Corps { chemin, uid: uid as u32, brut, distantes })
     }
 
     /// Lance le fil de travail d'un compte, avec des commandes à traiter dès la
@@ -1281,17 +1368,19 @@ impl qobject::Boite {
                 self.as_mut().reviser();
                 self.as_mut().dossier_ouvert(compte_qt, &QString::from(&chemin), veille);
             }
-            Issue::Corps { uid, texte, brut, marque, pieces, confirmation } => {
+            Issue::Corps { uid, lu, marque } => {
                 if marque {
                     self.as_mut().reviser();
                     self.as_mut().drapeaux_modifies();
                 }
                 self.as_mut().corps_recu(
                     uid as i32,
-                    &QString::from(&texte),
-                    brut,
-                    &QString::from(&pieces),
-                    &QString::from(&confirmation),
+                    &QString::from(&lu.texte),
+                    lu.brut,
+                    lu.html,
+                    lu.bloquees as i32,
+                    &QString::from(&lu.pieces),
+                    &QString::from(&lu.confirmation),
                 );
             }
             Issue::Programme { jeton, echeance } => {
@@ -1421,6 +1510,15 @@ fn dossier_pieces(profil: &str) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("pieces-jointes"))
 }
 
+/// Dossier de travail des images des messages affichés, à côté de l'index.
+/// Vidé à chaque ouverture du profil, et au fil des affichages.
+fn dossier_affichage(profil: &str) -> PathBuf {
+    Path::new(profil)
+        .parent()
+        .map(|p| p.join("affichage"))
+        .unwrap_or_else(|| PathBuf::from("affichage"))
+}
+
 /// « 3,5,7 » → [3, 5, 7] ; ce qui n'est pas un nombre est ignoré.
 fn lire_uids(texte: &QString) -> Vec<u32> {
     texte
@@ -1429,6 +1527,24 @@ fn lire_uids(texte: &QString) -> Vec<u32> {
         .filter_map(|u| u.trim().parse().ok())
         .filter(|&u: &u32| u > 0)
         .collect()
+}
+
+/// Dossier d'indésirables d'un compte : celui qui porte l'attribut `\Junk`,
+/// à défaut celui qui s'appelle « Junk » — c'est sur ce nom que Mailcow fait
+/// apprendre son filtre —, à défaut un nom usuel.
+fn dossier_indesirables(dossiers: &[DossierLocal]) -> Option<String> {
+    let selectionnables = || dossiers.iter().filter(|d| d.selectionnable);
+    selectionnables()
+        .find(|d| d.role == "Junk")
+        .or_else(|| selectionnables().find(|d| d.chemin.eq_ignore_ascii_case("Junk")))
+        .or_else(|| {
+            selectionnables().find(|d| {
+                let nom = d.nom.to_lowercase();
+                d.role.is_empty()
+                    && ["indésirable", "indesirable", "pourriel", "junk", "spam"].iter().any(|m| nom.contains(m))
+            })
+        })
+        .map(|d| d.chemin.clone())
 }
 
 /// Vrai si un dossier est une corbeille ou un dossier d'indésirables, donc
@@ -1581,12 +1697,13 @@ impl Travail {
                     Err(err) => echec("dossier", format!("ouverture de {chemin} : {err}"), &err),
                 })
             }
-            Commande::Corps { chemin, uid, brut } => Some(match lire_corps(e, compte, &chemin, uid, brut) {
-                Ok((texte, marque, pieces, confirmation)) => {
-                    Issue::Corps { uid, texte, brut, marque, pieces, confirmation }
-                }
-                Err(err) => echec("message", format!("lecture du message {uid} : {err}"), &err),
-            }),
+            Commande::Corps { chemin, uid, brut, distantes } => {
+                let atelier = dossier_affichage(&self.profil);
+                Some(match lire_corps(e, compte, &chemin, uid, brut, distantes, &atelier) {
+                    Ok((lu, marque)) => Issue::Corps { uid, lu, marque },
+                    Err(err) => echec("message", format!("lecture du message {uid} : {err}"), &err),
+                })
+            }
             Commande::Piece { chemin, uid, indice, destination } => {
                 let ouvrir = destination.is_none();
                 let dossier = dossier_pieces(&self.profil).join(format!("{compte}-{uid}-{indice}"));
@@ -2081,16 +2198,32 @@ fn maintenant() -> i64 {
         .unwrap_or(0)
 }
 
+/// Ce qu'il faut à l'interface pour afficher un message lu.
+struct Lu {
+    texte: String,
+    brut: bool,
+    /// `texte` est du HTML assaini.
+    html: bool,
+    /// Images distantes laissées de côté.
+    bloquees: usize,
+    /// Pièces jointes, en JSON.
+    pieces: String,
+    /// Adresse à qui confirmer la lecture, si l'expéditeur le demande.
+    confirmation: String,
+}
+
 /// Lit le corps d'un message du dossier ouvert ; un message affiché (et non sa
-/// source) est marqué comme lu, comme le fait Outlook. Rend le texte, vrai si
-/// le marquage a eu lieu, et les pièces jointes en JSON.
+/// source) est marqué comme lu, comme le fait Outlook. Rend de quoi l'afficher,
+/// et vrai si le marquage a eu lieu.
 fn lire_corps(
     e: &mut Etabli,
     compte: i64,
     chemin: &str,
     uid: u32,
     brut: bool,
-) -> Result<(String, bool, String, String), Echec> {
+    distantes: bool,
+    atelier: &Path,
+) -> Result<(Lu, bool), Echec> {
     assurer_selection(&mut e.client, chemin)?;
     let complet = e
         .client
@@ -2100,13 +2233,22 @@ fn lire_corps(
     // Demande de confirmation de lecture, sauf si l'on y a déjà répondu.
     let deja = complet.drapeaux.iter().any(|d| d.eq_ignore_ascii_case("$MDNSent"));
     let confirmation = if brut || deja { String::new() } else { redaction::confirmation_demandee(&octets).unwrap_or_default() };
-    let texte = if brut {
-        String::from_utf8_lossy(&octets).into_owned()
+    let mut lu = Lu { texte: String::new(), brut, html: false, bloquees: 0, pieces: String::new(), confirmation };
+    if brut {
+        lu.texte = String::from_utf8_lossy(&octets).into_owned();
+    } else if let Some(corps) = crate::rendu::corps_html(&octets) {
+        // Les images ne servent qu'à l'affichage : écrites sur le disque si
+        // l'écriture échoue, le message s'affiche sans elles plutôt que pas
+        // du tout.
+        let (html, bloquees) = poser_images(corps, compte, distantes, atelier);
+        lu.texte = html;
+        lu.html = true;
+        lu.bloquees = bloquees;
     } else {
-        crate::index::corps_affichable(&octets)
-    };
+        lu.texte = crate::index::corps_affichable(&octets);
+    }
     let liste = crate::index::pieces_jointes(&octets);
-    let pieces = json_pieces(&liste);
+    lu.pieces = json_pieces(&liste);
     let id = e.magasin.dossier_id(compte, chemin)?;
     // Le message entier dit s'il porte des pièces jointes : cela prime sur ce
     // que ses en-têtes laissaient supposer dans la liste.
@@ -2118,7 +2260,120 @@ fn lire_corps(
             marque = true;
         }
     }
-    Ok((texte, marque, pieces, confirmation))
+    Ok((lu, marque))
+}
+
+/// Numéro de série des affichages : chaque affichage a son propre dossier, et
+/// donc ses propres adresses de fichier — le moteur de Qt garde en cache une
+/// image par adresse, et montrerait sinon celle du message précédent.
+static SERIE_AFFICHAGE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Écrit les images d'un message HTML dans le dossier de travail du compte, et
+/// remplace leurs repères par l'adresse des fichiers. Les images distantes ne
+/// sont téléchargées que si `distantes` ; sinon elles cèdent la place à un
+/// aplat discret, aux dimensions annoncées. Rend le HTML et le nombre d'images
+/// distantes non affichées.
+fn poser_images(corps: crate::rendu::CorpsHtml, compte: i64, distantes: bool, atelier: &Path) -> (String, usize) {
+    use crate::rendu::{extension_image, REPERE_DISTANTE, REPERE_IMAGE};
+    let serie = SERIE_AFFICHAGE.fetch_add(1, Ordering::Relaxed);
+    let prefixe = format!("{compte}-");
+    // Seuls les affichages précédents de ce compte s'effacent : un autre
+    // compte peut être en train d'écrire les siens.
+    if let Ok(entrees) = std::fs::read_dir(atelier) {
+        for entree in entrees.flatten() {
+            if entree.file_name().to_string_lossy().starts_with(&prefixe) {
+                let _ = std::fs::remove_dir_all(entree.path());
+            }
+        }
+    }
+    let dossier = atelier.join(format!("{compte}-{serie}"));
+    let pret = std::fs::create_dir_all(&dossier).is_ok();
+    let ecrire = |nom: String, octets: &[u8]| -> Option<String> {
+        let fichier = dossier.join(nom);
+        (pret && std::fs::write(&fichier, octets).is_ok()).then(|| url_fichier(&fichier))
+    };
+
+    let mut html = corps.html;
+    for (rang, (type_mime, octets)) in corps.images.iter().enumerate() {
+        let adresse = ecrire(format!("i{rang}.{}", extension_image(type_mime)), octets).unwrap_or_default();
+        html = html.replace(&format!("\"{REPERE_IMAGE}{rang}\""), &format!("\"{adresse}\""));
+    }
+    let telechargees = if distantes { telecharger(&corps.distantes) } else { vec![None; corps.distantes.len()] };
+    let aplat = ecrire("aplat.png".to_string(), APLAT_PNG).unwrap_or_default();
+    let mut bloquees = 0;
+    for (rang, image) in telechargees.into_iter().enumerate() {
+        let adresse = match image.and_then(|(type_mime, octets)| {
+            ecrire(format!("d{rang}.{}", extension_image(&type_mime)), &octets)
+        }) {
+            Some(adresse) => adresse,
+            None => {
+                bloquees += 1;
+                aplat.clone()
+            }
+        };
+        html = html.replace(&format!("\"{REPERE_DISTANTE}{rang}\""), &format!("\"{adresse}\""));
+    }
+    (html, bloquees)
+}
+
+/// Une image PNG d'un pixel gris très clair : la place d'une image distante
+/// non téléchargée.
+const APLAT_PNG: &[u8] = &[
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53,
+    0xde, 0x00, 0x00, 0x00, 0x0c, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0x78, 0xf7, 0xee, 0x1d,
+    0x00, 0x05, 0x98, 0x02, 0xcb, 0x29, 0x7b, 0x1d, 0xb4, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e,
+    0x44, 0xae, 0x42, 0x60, 0x82,
+];
+
+/// Images distantes d'un message, à la demande de l'utilisateur : HTTPS seul,
+/// 5 Mo par image, quatre téléchargements à la fois. Une image qui ne vient
+/// pas reste un aplat — rien n'empêche l'affichage du message.
+fn telecharger(adresses: &[String]) -> Vec<Option<(String, Vec<u8>)>> {
+    const TAILLE: usize = 5 * 1024 * 1024;
+    const MAX: usize = 60;
+    const EN_PARALLELE: usize = 4;
+    let mut resultats: Vec<Option<(String, Vec<u8>)>> = vec![None; adresses.len()];
+    let a_faire: Vec<usize> = (0..adresses.len().min(MAX))
+        .filter(|&i| adresses[i].to_ascii_lowercase().starts_with("https://"))
+        .collect();
+    for lot in a_faire.chunks(EN_PARALLELE) {
+        let lus: Vec<(usize, Option<(String, Vec<u8>)>)> = thread::scope(|portee| {
+            let fils: Vec<_> = lot
+                .iter()
+                .map(|&i| {
+                    let adresse = adresses[i].replace("&amp;", "&");
+                    portee.spawn(move || {
+                        let reponse = crate::http::requete_bornee("GET", &adresse, "image/*", TAILLE).ok()?;
+                        let type_mime = reponse.type_contenu.split(';').next().unwrap_or("").trim().to_ascii_lowercase();
+                        (reponse.statut == 200 && type_mime.starts_with("image/") && !reponse.corps.is_empty())
+                            .then_some((type_mime, reponse.corps))
+                    })
+                })
+                .collect();
+            lot.iter().zip(fils).map(|(&i, f)| (i, f.join().ok().flatten())).collect()
+        });
+        for (i, image) in lus {
+            resultats[i] = image;
+        }
+    }
+    resultats
+}
+
+/// Adresse `file:` d'un fichier local, caractères réservés encodés : le
+/// profil peut vivre sous « C:\Users\Jean Dupont\… ».
+fn url_fichier(chemin: &Path) -> String {
+    let texte = chemin.to_string_lossy().replace('\\', "/");
+    let mut url = String::from(if texte.starts_with('/') { "file://" } else { "file:///" });
+    for octet in texte.bytes() {
+        match octet {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' | b':' => {
+                url.push(octet as char)
+            }
+            _ => url.push_str(&format!("%{octet:02X}")),
+        }
+    }
+    url
 }
 
 /// Relit un message et écrit l'une de ses pièces jointes : à l'emplacement
@@ -2166,9 +2421,27 @@ fn echec(etape: &'static str, message: String, erreur: &Echec) -> Issue {
 // ---------------------------------------------------------------- sérialisation
 
 /// Sérialise un dossier pour l'interface.
-fn json_dossier(genre: &str, d: &DossierLocal, adresse: &str, profondeur: u32) -> String {
+/// Dossiers d'un compte tels que l'arborescence les montre : sans les
+/// descendants d'un dossier replié, chacun avec l'indication qu'il a des
+/// sous-dossiers (le chevron). La parenté se lit au chemin — « A/B » est sous
+/// « A » —, pas à l'ordre de la liste, où les dossiers à rôle passent devant.
+fn arbre_visible(dossiers: &[DossierLocal]) -> Vec<(&DossierLocal, bool)> {
+    let sous = |parent: &DossierLocal, d: &DossierLocal| {
+        !parent.separateur.is_empty()
+            && d.chemin.len() > parent.chemin.len() + parent.separateur.len()
+            && d.chemin.starts_with(&parent.chemin)
+            && d.chemin[parent.chemin.len()..].starts_with(&parent.separateur)
+    };
+    dossiers
+        .iter()
+        .filter(|d| !dossiers.iter().any(|p| p.replie && sous(p, d)))
+        .map(|d| (d, dossiers.iter().any(|e| sous(d, e))))
+        .collect()
+}
+
+fn json_dossier(genre: &str, d: &DossierLocal, adresse: &str, profondeur: u32, enfants: bool) -> String {
     format!(
-        r#"{{"genre":{},"compte":{},"adresse":{},"chemin":{},"nom":{},"separateur":{},"profondeur":{},"role":{},"selectionnable":{},"messages":{},"nonLus":{},"masque":{},"favori":{}}}"#,
+        r#"{{"genre":{},"compte":{},"adresse":{},"chemin":{},"nom":{},"separateur":{},"profondeur":{},"role":{},"selectionnable":{},"messages":{},"nonLus":{},"masque":{},"favori":{},"enfants":{},"replie":{}}}"#,
         texte_json(genre),
         d.compte_id,
         texte_json(adresse),
@@ -2181,7 +2454,9 @@ fn json_dossier(genre: &str, d: &DossierLocal, adresse: &str, profondeur: u32) -
         d.messages,
         d.non_lus,
         d.masque,
-        d.favori.is_some()
+        d.favori.is_some(),
+        enfants,
+        d.replie
     )
 }
 
@@ -2259,7 +2534,7 @@ mod tests {
         Commande::OuvrirDossier(chemin.into())
     }
     fn corps(uid: u32) -> Commande {
-        Commande::Corps { chemin: "INBOX".into(), uid, brut: false }
+        Commande::Corps { chemin: "INBOX".into(), uid, brut: false, distantes: false }
     }
     fn noms(file: &[Commande]) -> Vec<String> {
         file.iter()
@@ -2368,8 +2643,10 @@ mod tests {
             },
             "a@b.fr",
             1,
+            true,
         );
         assert!(json.starts_with('{') && json.ends_with('}'));
+        assert!(json.contains(r#""enfants":true"#));
         assert!(json.contains(r#""nom":"Factures""#));
         assert!(json.contains(r#""nonLus":2"#));
         assert!(json.contains(r#""compte":2"#));
@@ -2409,5 +2686,41 @@ mod tests {
         assert!(json.contains(r#""pieces":false"#));
         assert!(json.contains("Réunion"));
         assert!(json.contains(r#"Service \"compta\""#));
+    }
+
+    #[test]
+    fn sous_dossiers_replies() {
+        let d = |chemin: &str, replie: bool| DossierLocal {
+            chemin: chemin.into(),
+            separateur: "/".into(),
+            replie,
+            ..Default::default()
+        };
+        let liste = [d("INBOX", false), d("Clients", true), d("Clients/A", false), d("Clients/A/x", false),
+                     d("ClientsB", false), d("Archives", false), d("Archives/2025", false)];
+        let vus: Vec<(&str, bool)> = arbre_visible(&liste).into_iter().map(|(d, e)| (d.chemin.as_str(), e)).collect();
+        assert_eq!(vus, vec![("INBOX", false), ("Clients", true), ("ClientsB", false), ("Archives", true), ("Archives/2025", false)]);
+    }
+
+    #[test]
+    fn dossier_des_indesirables() {
+        let d = |chemin: &str, role: &str| DossierLocal {
+            chemin: chemin.into(),
+            nom: chemin.rsplit('/').next().unwrap_or(chemin).into(),
+            role: role.into(),
+            selectionnable: true,
+            ..Default::default()
+        };
+        // L'attribut prime ; puis « Junk », sur lequel Mailcow apprend ; puis un nom usuel.
+        assert_eq!(dossier_indesirables(&[d("Spambox", ""), d("Junk", "Junk")]).as_deref(), Some("Junk"));
+        assert_eq!(dossier_indesirables(&[d("Spambox", ""), d("Junk", "")]).as_deref(), Some("Junk"));
+        assert_eq!(dossier_indesirables(&[d("INBOX", ""), d("Courrier indésirable", "")]).as_deref(), Some("Courrier indésirable"));
+        assert_eq!(dossier_indesirables(&[d("INBOX", ""), d("Trash", "Trash")]), None);
+    }
+
+    #[test]
+    fn adresse_de_fichier() {
+        assert_eq!(url_fichier(Path::new("/home/a b/é.png")), "file:///home/a%20b/%C3%A9.png");
+        assert_eq!(url_fichier(Path::new("C:\\Users\\x#1\\i0.png")), "file:///C:/Users/x%231/i0.png");
     }
 }

@@ -18,7 +18,7 @@ use crate::protocole::{Dossier, EtatDossier, Statut};
 pub type Resultat<T> = Result<T, Erreur>;
 
 /// Version du schéma, portée par `PRAGMA user_version`.
-const VERSION_SCHEMA: i32 = 4;
+const VERSION_SCHEMA: i32 = 5;
 
 #[derive(Debug)]
 pub struct Erreur(pub String);
@@ -69,6 +69,9 @@ pub struct DossierLocal {
     pub masque: bool,
     /// Rang dans la rubrique Favoris (décision 3), s'il y figure.
     pub favori: Option<i64>,
+    /// Sous-dossiers repliés dans l'arborescence : réglage local, comme le
+    /// repli d'un compte.
+    pub replie: bool,
 }
 
 /// Un message tel qu'il est rangé dans l'index : de quoi remplir une liste.
@@ -271,6 +274,13 @@ impl Magasin {
             self.ajouter_colonne("messages", "importance", "INTEGER NOT NULL DEFAULT 0")?;
             self.base.execute("UPDATE folders SET uidvalidity = 0", [])?;
         }
+        // Version 5 : l'ordre des comptes dans l'arborescence, choisi par
+        // l'utilisateur ; il part de l'ordre d'ajout.
+        if version < 5 {
+            self.ajouter_colonne("accounts", "rang", "INTEGER")?;
+            self.base.execute("UPDATE accounts SET rang = id WHERE rang IS NULL", [])?;
+            self.ajouter_colonne("folders", "replie_local", "INTEGER NOT NULL DEFAULT 0")?;
+        }
         self.base.pragma_update(None, "user_version", VERSION_SCHEMA)?;
         Ok(())
     }
@@ -304,6 +314,12 @@ impl Magasin {
              ON CONFLICT(adresse) DO UPDATE SET hote = ?2, port = ?3, utilisateur = ?4",
             params![adresse, hote, port, utilisateur],
         )?;
+        // Un compte nouveau prend place à la fin.
+        self.base.execute(
+            "UPDATE accounts SET rang = (SELECT COALESCE(MAX(rang), 0) + 1 FROM accounts)
+             WHERE adresse = ?1 AND rang IS NULL",
+            params![adresse],
+        )?;
         Ok(self.base.query_row(
             "SELECT id FROM accounts WHERE adresse = ?1",
             params![adresse],
@@ -311,11 +327,13 @@ impl Magasin {
         )?)
     }
 
-    /// Comptes du profil, dans l'ordre où ils ont été ajoutés.
+    /// Comptes du profil, dans l'ordre choisi par l'utilisateur — à défaut,
+    /// celui où ils ont été ajoutés.
     pub fn comptes(&self) -> Resultat<Vec<CompteLocal>> {
-        let mut requete = self
-            .base
-            .prepare("SELECT id, adresse, hote, port, utilisateur, replie FROM accounts ORDER BY id")?;
+        let mut requete = self.base.prepare(
+            "SELECT id, adresse, hote, port, utilisateur, replie FROM accounts
+             ORDER BY rang IS NULL, rang, id",
+        )?;
         let comptes = requete
             .query_map([], |l| {
                 Ok(CompteLocal {
@@ -339,6 +357,37 @@ impl Magasin {
     /// serveur.
     pub fn retirer_compte(&self, id: i64) -> Resultat<()> {
         self.base.execute("DELETE FROM accounts WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    /// Place un compte juste avant un autre, ou à la fin si `avant` est absent.
+    pub fn placer_compte(&self, id: i64, avant: Option<i64>) -> Resultat<()> {
+        let mut ordre: Vec<i64> = self.comptes()?.into_iter().map(|c| c.id).filter(|&c| c != id).collect();
+        let place = avant.and_then(|a| ordre.iter().position(|&c| c == a)).unwrap_or(ordre.len());
+        ordre.insert(place, id);
+        self.ranger_comptes(&ordre)
+    }
+
+    /// Monte (`sens` négatif) ou descend un compte d'une place.
+    pub fn decaler_compte(&self, id: i64, sens: i32) -> Resultat<()> {
+        let mut ordre: Vec<i64> = self.comptes()?.into_iter().map(|c| c.id).collect();
+        let Some(i) = ordre.iter().position(|&c| c == id) else {
+            return Ok(());
+        };
+        let j = if sens < 0 { i.checked_sub(1) } else { Some(i + 1).filter(|&j| j < ordre.len()) };
+        if let Some(j) = j {
+            ordre.swap(i, j);
+            self.ranger_comptes(&ordre)?;
+        }
+        Ok(())
+    }
+
+    fn ranger_comptes(&self, ordre: &[i64]) -> Resultat<()> {
+        let transaction = self.base.unchecked_transaction()?;
+        for (rang, id) in ordre.iter().enumerate() {
+            transaction.execute("UPDATE accounts SET rang = ?2 WHERE id = ?1", params![id, rang as i64 + 1])?;
+        }
+        transaction.commit()?;
         Ok(())
     }
 
@@ -484,6 +533,15 @@ impl Magasin {
             .query_map([], lire_dossier)?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(dossiers)
+    }
+
+    /// Replie — ou déplie — les sous-dossiers d'un dossier dans l'arborescence.
+    pub fn replier_dossier(&self, dossier: i64, replie: bool) -> Resultat<()> {
+        self.base.execute(
+            "UPDATE folders SET replie_local = ?2 WHERE id = ?1",
+            params![dossier, replie as i32],
+        )?;
+        Ok(())
     }
 
     /// Masque — ou réaffiche — un dossier dans l'arborescence (décision 4).
@@ -823,7 +881,7 @@ impl Magasin {
 
 const SELECT_DOSSIER: &str = "SELECT f.id, f.account_id, f.chemin, f.nom, f.separateur, f.profondeur,
         f.role, f.selectionnable, f.nb_messages, f.nb_non_lus, f.uidvalidity, f.uidnext,
-        f.highestmodseq, f.hidden_local, f.favorite_rank
+        f.highestmodseq, f.hidden_local, f.favorite_rank, f.replie_local
      FROM folders f";
 
 fn lire_dossier(l: &rusqlite::Row<'_>) -> rusqlite::Result<DossierLocal> {
@@ -843,6 +901,7 @@ fn lire_dossier(l: &rusqlite::Row<'_>) -> rusqlite::Result<DossierLocal> {
         highest_mod_seq: l.get(12)?,
         masque: l.get::<_, i32>(13)? != 0,
         favori: l.get(14)?,
+        replie: l.get::<_, i32>(15)? != 0,
     })
 }
 
@@ -890,6 +949,30 @@ mod tests {
         m.poser_dossiers(compte, &[dossier("INBOX", &[])]).unwrap();
         let id = m.dossier_id(compte, "INBOX").unwrap();
         (m, compte, id)
+    }
+
+    #[test]
+    fn ordre_des_comptes() {
+        let m = Magasin::en_memoire().unwrap();
+        let a = m.compte("a@exemple.fr", "imap.exemple.fr", 993, "a").unwrap();
+        let b = m.compte("b@exemple.fr", "imap.exemple.fr", 993, "b").unwrap();
+        let c = m.compte("c@exemple.fr", "imap.exemple.fr", 993, "c").unwrap();
+        let ordre = |m: &Magasin| m.comptes().unwrap().into_iter().map(|c| c.id).collect::<Vec<_>>();
+        assert_eq!(ordre(&m), vec![a, b, c]);
+        m.placer_compte(c, Some(a)).unwrap();
+        assert_eq!(ordre(&m), vec![c, a, b]);
+        m.placer_compte(c, None).unwrap();
+        assert_eq!(ordre(&m), vec![a, b, c]);
+        m.decaler_compte(b, -1).unwrap();
+        assert_eq!(ordre(&m), vec![b, a, c]);
+        m.decaler_compte(b, -1).unwrap();
+        assert_eq!(ordre(&m), vec![b, a, c]);
+        m.decaler_compte(c, 1).unwrap();
+        assert_eq!(ordre(&m), vec![b, a, c]);
+        // Un compte réenregistré garde sa place ; un nouveau va à la fin.
+        m.compte("b@exemple.fr", "autre.exemple.fr", 993, "b").unwrap();
+        let d = m.compte("d@exemple.fr", "imap.exemple.fr", 993, "d").unwrap();
+        assert_eq!(ordre(&m), vec![b, a, c, d]);
     }
 
     #[test]

@@ -9,6 +9,7 @@
 #include <QtCore/QUrl>
 #include <QtCore/QVariant>
 #include <QtCore/QVariantMap>
+#include <QtGui/QFont>
 #include <QtGui/QGuiApplication>
 #include <QtGui/QIcon>
 #include <QtQml/QQmlApplicationEngine>
@@ -72,6 +73,22 @@ int main(int argc, char* argv[])
 
   // Fusion : le seul style qui honore une palette sur les trois cibles livrées.
   QQuickStyle::setStyle(QStringLiteral("Fusion"));
+
+  // Polices de Windows demandées par les messages HTML (Outlook : Calibri),
+  // absentes sous Linux et Android : sans équivalent désigné, le repli du
+  // système peut tomber sur une police à chasse fixe. Sans effet là où la
+  // police existe.
+  QFont::insertSubstitutions(QStringLiteral("Calibri"),
+                             {QStringLiteral("Carlito"), QStringLiteral("Liberation Sans"),
+                              QStringLiteral("DejaVu Sans"), QStringLiteral("Noto Sans"),
+                              QStringLiteral("Roboto")});
+  QFont::insertSubstitutions(QStringLiteral("Cambria"),
+                             {QStringLiteral("Caladea"), QStringLiteral("Liberation Serif"),
+                              QStringLiteral("DejaVu Serif"), QStringLiteral("Noto Serif")});
+  for (const char* famille : {"Segoe UI", "Tahoma", "Verdana", "Helvetica", "Aptos"})
+    QFont::insertSubstitutions(QString::fromLatin1(famille),
+                               {QStringLiteral("Liberation Sans"), QStringLiteral("DejaVu Sans"),
+                                QStringLiteral("Noto Sans"), QStringLiteral("Roboto")});
 
   bool smoke = false;
   QString capture;

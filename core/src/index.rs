@@ -155,14 +155,20 @@ pub struct PieceJointe {
     pub risquee: bool,
 }
 
-/// Pièces jointes d'un message entier, dans l'ordre du message.
+/// Pièces jointes d'un message entier, dans l'ordre du message. Une image
+/// que le corps HTML affiche (`cid:`) — un logo de signature — n'en est pas
+/// une, comme dans Outlook ; elle garde son rang, qui désigne les suivantes.
 pub fn pieces_jointes(brut: &[u8]) -> Vec<PieceJointe> {
     let Some(message) = MessageParser::default().parse(brut) else {
         return Vec::new();
     };
+    let affichees = cid_affiches(&message);
     message
         .attachments()
         .enumerate()
+        .filter(|(_, partie)| {
+            partie.content_id().map(|c| !affichees.contains(&crate::rendu::normaliser_cid(c))).unwrap_or(true)
+        })
         .map(|(indice, partie)| {
             let type_mime = type_de(partie);
             let nom = nom_sur(partie.attachment_name().unwrap_or(""), indice, &type_mime);
@@ -175,6 +181,23 @@ pub fn pieces_jointes(brut: &[u8]) -> Vec<PieceJointe> {
             }
         })
         .collect()
+}
+
+/// Content-ID des parties que les corps HTML du message affichent.
+fn cid_affiches(message: &Message<'_>) -> std::collections::HashSet<String> {
+    let mut cids = std::collections::HashSet::new();
+    for partie in message.html_bodies().filter(|p| p.is_text_html()) {
+        let Some(html) = partie.text_contents() else { continue };
+        let minuscule = html.to_ascii_lowercase();
+        let mut reste = minuscule.as_str();
+        while let Some(i) = reste.find("cid:") {
+            let apres = &reste[i + 4..];
+            let fin = apres.find(|c: char| c == '"' || c == '\'' || c == ')' || c == '>' || c.is_whitespace()).unwrap_or(apres.len());
+            cids.insert(crate::rendu::normaliser_cid(&apres[..fin]));
+            reste = &apres[fin..];
+        }
+    }
+    cids
 }
 
 /// Nom sûr et contenu d'une pièce jointe désignée par son rang.
@@ -567,6 +590,23 @@ mod tests {
         );
         assert!(html.contains("Coût"), "html rendu : {html}");
         assert!(!html.contains('<'));
+    }
+
+    #[test]
+    fn image_affichee_par_le_corps_n_est_pas_une_piece() {
+        let brut = "From: a@exemple.fr\r\nSubject: x\r\nMIME-Version: 1.0\r\n\
+            Content-Type: multipart/mixed; boundary=\"M\"\r\n\r\n\
+            --M\r\nContent-Type: multipart/related; boundary=\"R\"\r\n\r\n\
+            --R\r\nContent-Type: text/html\r\n\r\n<img src=\"cid:logo@x\">\r\n\
+            --R\r\nContent-Type: image/png; name=\"logo.png\"\r\nContent-ID: <logo@x>\r\n\
+            Content-Disposition: inline; filename=\"logo.png\"\r\n\r\nPNG\r\n--R--\r\n\
+            --M\r\nContent-Type: application/pdf; name=\"facture.pdf\"\r\n\
+            Content-Disposition: attachment; filename=\"facture.pdf\"\r\n\r\n%PDF\r\n--M--\r\n";
+        let pieces = pieces_jointes(brut.as_bytes());
+        assert_eq!(pieces.len(), 1);
+        assert_eq!(pieces[0].nom, "facture.pdf");
+        // Le rang reste celui du message : c'est lui qui désigne la pièce.
+        assert_eq!(extraire_piece(brut.as_bytes(), pieces[0].indice).unwrap().0, "facture.pdf");
     }
 
     #[test]

@@ -1,6 +1,6 @@
 [package]
 name = "mmail_core"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2021"
 rust-version = "1.85"
 license = "GPL-3.0-or-later"
@@ -36,6 +36,11 @@ mail-builder = "0.4"
 # un analyseur éprouvé plutôt qu'écrit à la main.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+# Affichage des messages HTML : analyse HTML5 (celle de Servo) et tri des
+# balises et attributs. Le HTML d'un courriel est une donnée non fiable — un
+# assainisseur éprouvé plutôt qu'écrit à la main.
+ammonia = "4.2"
 
 # Document de configuration automatique (format « autoconfig ») : un analyseur
 # XML sans dépendance, qui refuse les DTD et donc les entités.

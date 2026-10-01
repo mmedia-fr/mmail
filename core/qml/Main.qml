@@ -346,107 +346,149 @@ ApplicationWindow {
         orientation: Qt.Horizontal
 
         // --- arborescence -------------------------------------------------
-        ScrollView {
-            id: voletArborescence
+        // Deux listes : la rubrique Favoris, fixée en haut — elle reste à
+        // l'écran quand les comptes défilent (demande de Manu du 01/10) —,
+        // puis les comptes, seuls à défiler.
+        ColumnLayout {
+            id: colonneArborescence
             visible: !fenetre.compact || fenetre.vue === 0
-            // Ascenseurs toujours visibles dès qu'il y a de quoi défiler, et non
-            // seulement pendant le défilement (demande Manu du 2026-09-29). Leur
-            // place est réservée : posés par-dessus, ils masquaient les compteurs
-            // de non-lus. La réserve suit `size`, pas `visible` : un ascenseur
-            // qui n'a rien à faire défiler reste `visible`, seulement transparent.
-            ScrollBar.vertical.policy: ScrollBar.vertical.size < 1 ? ScrollBar.AlwaysOn : ScrollBar.AsNeeded
-            rightPadding: ScrollBar.vertical.size < 1 ? ScrollBar.vertical.width : 0
             SplitView.preferredWidth: fenetre.compact ? fenetre.width : reglages.largeurArborescence
             SplitView.minimumWidth: 160
             SplitView.fillWidth: fenetre.compact
-            clip: true
-            contentWidth: availableWidth
-            font.pointSize: fenetre.tailleArborescence
-            background: Rectangle { color: fenetre.palette.base }
+            spacing: 0
             onWidthChanged: if (!fenetre.compact && visible) reglages.largeurArborescence = width
 
-            // Les gestionnaires vivent dans la liste, pas dans le ScrollView :
-            // celui-ci ne reconnaît sa liste comme contenu défilant que si elle
-            // est son seul enfant — sinon elle prend une largeur nulle.
-            ListView {
-                id: vueArborescence
-                model: ListModel { id: modeleArborescence }
-                boundsBehavior: Flickable.StopAtBounds
-                delegate: ligneArborescence
-                // Toutes les lignes restent construites : un dossier qu'on glisse
-                // vers les Favoris fait défiler la liste, et sa ligne d'origine,
-                // qui porte le glisser, ne doit pas être détruite en sortant de
-                // l'écran — le glisser serait annulé.
-                cacheBuffer: 100000
+            // Les Favoris ne défilent qu'au-delà de 40 % de la hauteur.
+            ScrollView {
+                id: voletFavoris
+                Layout.fillWidth: true
+                Layout.preferredHeight: Math.min(vueFavoris.contentHeight, colonneArborescence.height * 0.4)
+                ScrollBar.vertical.policy: ScrollBar.vertical.size < 1 ? ScrollBar.AlwaysOn : ScrollBar.AsNeeded
+                rightPadding: ScrollBar.vertical.size < 1 ? ScrollBar.vertical.width : 0
+                clip: true
+                contentWidth: availableWidth
+                font.pointSize: fenetre.tailleArborescence
+                background: Rectangle { color: fenetre.fondFavoris }
 
-                // Défilement au bord pendant un glisser-déposer (retour de Manu,
-                // 01/10 : les Favoris, en haut, étaient hors d'atteinte).
-                Timer {
-                    interval: 30
-                    repeat: true
-                    running: fenetre.glisse !== null
-                    onTriggered: {
-                        var g = fenetre.glisse
-                        if (!g)
-                            return
-                        var p = g.mapToItem(vueArborescence, g.width / 2, g.height / 2)
-                        if (p.x < 0 || p.x > vueArborescence.width)
-                            return
-                        var bord = 40
-                        var pas = 0
-                        // Plus vite à mesure qu'on s'approche du bord, ou qu'on le passe.
-                        if (p.y < bord && p.y > -2 * bord)
-                            pas = -Math.max(4, (bord - p.y) / 2)
-                        else if (p.y > vueArborescence.height - bord && p.y < vueArborescence.height + 2 * bord)
-                            pas = Math.max(4, (p.y - vueArborescence.height + bord) / 2)
-                        if (pas === 0)
-                            return
-                        var haut = vueArborescence.originY
-                        var bas = Math.max(haut, haut + vueArborescence.contentHeight - vueArborescence.height)
-                        var y = Math.min(bas, Math.max(haut, vueArborescence.contentY + pas))
-                        if (y === vueArborescence.contentY)
-                            return
-                        vueArborescence.contentY = y
-                        // Le contenu a bougé sous un pointeur immobile : la cible
-                        // du dépôt est réévaluée.
-                        g.y += 0.5
-                        g.y -= 0.5
+                ListView {
+                    id: vueFavoris
+                    model: ListModel { id: modeleFavoris }
+                    boundsBehavior: Flickable.StopAtBounds
+                    delegate: ligneArborescence
+
+                    HoverHandler { onHoveredChanged: if (hovered) fenetre.colonneActive = "arborescence" }
+                    WheelHandler {
+                        acceptedModifiers: Qt.ControlModifier
+                        onWheel: function(roue) {
+                            fenetre.zoomer("arborescence", roue.angleDelta.y > 0 ? 1.1 : 1 / 1.1)
+                        }
                     }
                 }
+            }
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 1
+                color: fenetre.palette.windowText
+                opacity: 0.25
+            }
 
-                // Un blanc et un trait au-dessus de chaque compte : la rubrique
-                // Favoris et les boîtes ne se lisent plus comme une seule liste.
-                section.property: "groupe"
-                section.delegate: Item {
-                    required property string section
-                    width: vueArborescence.width
-                    height: section === "favoris" ? 0 : 16
-                    Rectangle {
-                        visible: parent.section !== "favoris"
-                        anchors.left: parent.left
-                        anchors.right: parent.right
-                        anchors.leftMargin: 6
-                        anchors.rightMargin: 6
-                        anchors.verticalCenter: parent.verticalCenter
-                        height: 2
-                        color: fenetre.palette.windowText
-                        opacity: 0.3
+            ScrollView {
+                id: voletArborescence
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                // Ascenseurs toujours visibles dès qu'il y a de quoi défiler, et non
+                // seulement pendant le défilement (demande Manu du 2026-09-29). Leur
+                // place est réservée : posés par-dessus, ils masquaient les compteurs
+                // de non-lus. La réserve suit `size`, pas `visible` : un ascenseur
+                // qui n'a rien à faire défiler reste `visible`, seulement transparent.
+                ScrollBar.vertical.policy: ScrollBar.vertical.size < 1 ? ScrollBar.AlwaysOn : ScrollBar.AsNeeded
+                rightPadding: ScrollBar.vertical.size < 1 ? ScrollBar.vertical.width : 0
+                clip: true
+                contentWidth: availableWidth
+                font.pointSize: fenetre.tailleArborescence
+                background: Rectangle { color: fenetre.palette.base }
+
+                // Les gestionnaires vivent dans la liste, pas dans le ScrollView :
+                // celui-ci ne reconnaît sa liste comme contenu défilant que si elle
+                // est son seul enfant — sinon elle prend une largeur nulle.
+                ListView {
+                    id: vueArborescence
+                    model: ListModel { id: modeleArborescence }
+                    boundsBehavior: Flickable.StopAtBounds
+                    delegate: ligneArborescence
+                    // Toutes les lignes restent construites : un dossier qu'on glisse
+                    // vers les Favoris fait défiler la liste, et sa ligne d'origine,
+                    // qui porte le glisser, ne doit pas être détruite en sortant de
+                    // l'écran — le glisser serait annulé.
+                    cacheBuffer: 100000
+
+                    // Défilement au bord pendant un glisser-déposer (retour de Manu,
+                    // 01/10 : les Favoris, en haut, étaient hors d'atteinte).
+                    Timer {
+                        interval: 30
+                        repeat: true
+                        running: fenetre.glisse !== null
+                        onTriggered: {
+                            var g = fenetre.glisse
+                            if (!g)
+                                return
+                            var p = g.mapToItem(vueArborescence, g.width / 2, g.height / 2)
+                            if (p.x < 0 || p.x > vueArborescence.width)
+                                return
+                            var bord = 40
+                            var pas = 0
+                            // Plus vite à mesure qu'on s'approche du bord, ou qu'on le passe.
+                            if (p.y < bord && p.y > -2 * bord)
+                                pas = -Math.max(4, (bord - p.y) / 2)
+                            else if (p.y > vueArborescence.height - bord && p.y < vueArborescence.height + 2 * bord)
+                                pas = Math.max(4, (p.y - vueArborescence.height + bord) / 2)
+                            if (pas === 0)
+                                return
+                            var haut = vueArborescence.originY
+                            var bas = Math.max(haut, haut + vueArborescence.contentHeight - vueArborescence.height)
+                            var y = Math.min(bas, Math.max(haut, vueArborescence.contentY + pas))
+                            if (y === vueArborescence.contentY)
+                                return
+                            vueArborescence.contentY = y
+                            // Le contenu a bougé sous un pointeur immobile : la cible
+                            // du dépôt est réévaluée.
+                            g.y += 0.5
+                            g.y -= 0.5
+                        }
                     }
-                }
 
-                HoverHandler { onHoveredChanged: if (hovered) fenetre.colonneActive = "arborescence" }
-
-                WheelHandler {
-                    acceptedModifiers: Qt.ControlModifier
-                    onWheel: function(roue) {
-                        fenetre.zoomer("arborescence", roue.angleDelta.y > 0 ? 1.1 : 1 / 1.1)
+                    // Un blanc et un trait au-dessus de chaque compte.
+                    section.property: "groupe"
+                    section.delegate: Item {
+                        required property string section
+                        width: vueArborescence.width
+                        height: 16
+                        Rectangle {
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.leftMargin: 6
+                            anchors.rightMargin: 6
+                            anchors.verticalCenter: parent.verticalCenter
+                            height: 2
+                            color: fenetre.palette.windowText
+                            opacity: 0.3
+                        }
                     }
-                }
-                PinchHandler {
-                    target: null
-                    property real depart: 1
-                    onActiveChanged: if (active) depart = reglages.zoomArborescence
-                    onActiveScaleChanged: if (active) fenetre.poserZoom("arborescence", depart * activeScale)
+
+                    HoverHandler { onHoveredChanged: if (hovered) fenetre.colonneActive = "arborescence" }
+
+                    WheelHandler {
+                        acceptedModifiers: Qt.ControlModifier
+                        onWheel: function(roue) {
+                            fenetre.zoomer("arborescence", roue.angleDelta.y > 0 ? 1.1 : 1 / 1.1)
+                        }
+                    }
+                    PinchHandler {
+                        target: null
+                        property real depart: 1
+                        onActiveChanged: if (active) depart = reglages.zoomArborescence
+                        onActiveScaleChanged: if (active) fenetre.poserZoom("arborescence", depart * activeScale)
+                    }
                 }
             }
         }
@@ -3450,7 +3492,7 @@ ApplicationWindow {
                 fenetre.etapeScenarioGlisser()
             if (fenetre.essai && fenetre.essai.scenario === "chevron")
                 fenetre.etapeScenarioChevron()
-            if (fenetre.essai && fenetre.essai.scenario === "defilement")
+            if (fenetre.essai && (fenetre.essai.scenario === "defilement" || fenetre.essai.scenario === "favoris-fixes"))
                 fenetre.etapeScenarioDefilement()
             if (fenetre.essai && fenetre.essai.scenario.indexOf("signature") === 0)
                 fenetre.etapeScenarioSignature()
@@ -3883,16 +3925,8 @@ ApplicationWindow {
     /// place, sans que la vue ne revienne en haut.
     function rafraichirArborescence() {
         var lignes = JSON.parse(boite.arborescence(reglages.afficherMasques)).map(normaliser)
-        var memeForme = lignes.length === modeleArborescence.count
-        for (var i = 0; memeForme && i < lignes.length; ++i)
-            memeForme = clefLigne(lignes[i]) === clefLigne(modeleArborescence.get(i))
-        if (memeForme) {
-            for (var j = 0; j < lignes.length; ++j)
-                modeleArborescence.set(j, lignes[j])
-        } else {
-            modeleArborescence.clear()
-            modeleArborescence.append(lignes)
-        }
+        poserLignes(modeleFavoris, lignes.filter(function(l) { return l.groupe === "favoris" }))
+        poserLignes(modeleArborescence, lignes.filter(function(l) { return l.groupe !== "favoris" }))
         var comptes = lignes.filter(function(l) { return l.genre === "compte" })
                             .map(function(l) { return { compte: l.compte, adresse: l.adresse, hote: l.hote } })
         // Réaffecté seulement s'il change : le menu reconstruit ses entrées à
@@ -3900,6 +3934,21 @@ ApplicationWindow {
         if (JSON.stringify(comptes) !== JSON.stringify(comptesConnus))
             comptesConnus = comptes
         majInfoDossier()
+    }
+
+    /// Même structure : les lignes sont mises à jour en place, sans que la
+    /// vue ne revienne en haut.
+    function poserLignes(modele, lignes) {
+        var memeForme = lignes.length === modele.count
+        for (var i = 0; memeForme && i < lignes.length; ++i)
+            memeForme = clefLigne(lignes[i]) === clefLigne(modele.get(i))
+        if (memeForme) {
+            for (var j = 0; j < lignes.length; ++j)
+                modele.set(j, lignes[j])
+        } else {
+            modele.clear()
+            modele.append(lignes)
+        }
     }
 
     function libelleLigne(l) {
@@ -3937,9 +3986,11 @@ ApplicationWindow {
         if (compte !== boite.compteCourant || chemin !== boite.dossierCourant) {
             viderListe()
             if (boite.ouvrirDossier(compte, chemin)) {
-                // L'index s'affiche tout de suite ; la synchronisation suit.
+                // L'index s'affiche tout de suite ; la synchronisation suit —
+                // sauf hors connexion, que le noyau vient de signaler.
                 rafraichirListe()
-                messageEtat.texte = qsTr("Lecture de %1…").arg(libelleCourant())
+                if (boite.erreur.indexOf("compte hors ligne") !== 0)
+                    messageEtat.texte = qsTr("Lecture de %1…").arg(libelleCourant())
             }
         } else {
             boite.ouvrirDossier(compte, chemin)
@@ -4390,6 +4441,14 @@ ApplicationWindow {
                                        || identifiantsEssai.scenario.indexOf("signature") === 0,
                       connecter2: null, scenario: identifiantsEssai.scenario || "",
                       etape: 0, sujet: "", examines: 0 }
+            // Scénario « horsligne » : aucune connexion ; le profil d'une
+            // session précédente doit suffire à lire la boîte de réception.
+            if (essai.scenario === "horsligne") {
+                var attente = Qt.createQmlObject('import QtQuick; Timer { interval: 1500 }', fenetre)
+                attente.triggered.connect(etapeScenarioHorsLigne)
+                attente.start()
+                return
+            }
             if (identifiantsEssai.utilisateur2)
                 essai.connecter2 = { hote: identifiantsEssai.hote,
                                      adresse: identifiantsEssai.utilisateur2,
@@ -4409,6 +4468,23 @@ ApplicationWindow {
             connecterCompte(comptes[i])
     }
 
+    /// Scénario d'essai « horsligne » : sans connexion, la boîte de réception
+    /// s'ouvre sur l'index et son premier message s'affiche depuis le poste.
+    function etapeScenarioHorsLigne() {
+        var c = comptesConnus[0]
+        ouvrirDossier(c.compte, "INBOX")
+        console.log("scenario: hors ligne,", modeleMessages.count, "messages dans la liste")
+        if (modeleMessages.count > 0)
+            choisir(0, 0)
+        var attente = Qt.createQmlObject('import QtQuick; Timer { interval: 1500 }', fenetre)
+        attente.triggered.connect(function() {
+            console.log("scenario: affiché :", sujetAffiche.text, "| html :", corpsHtml, "|",
+                        vueCorps.text.length, "caractères",
+                        vueCorps.text.indexOf("Chargement") === 0 || vueCorps.text.length < 20 ? "ECHEC" : "OK")
+        })
+        attente.start()
+    }
+
     /// Scénario d'essai « defilement » : l'arborescence, agrandie pour
     /// déborder et défilée tout en bas, doit remonter d'elle-même quand un
     /// élément glissé se tient contre son bord haut.
@@ -4417,6 +4493,18 @@ ApplicationWindow {
             return
         essai.defilement = true
         reglages.zoomArborescence = 3
+        // « favoris-fixes » : les comptes défilés tout en bas, sans glisser —
+        // la capture montre les Favoris restés en haut.
+        if (essai.scenario === "favoris-fixes") {
+            var attente = Qt.createQmlObject('import QtQuick; Timer { interval: 1000 }', fenetre)
+            attente.triggered.connect(function() {
+                var v = vueArborescence
+                v.contentY = Math.max(v.originY, v.originY + v.contentHeight - v.height)
+                console.log("scenario: comptes défilés à", v.contentY, "; Favoris visibles :", vueFavoris.visible, vueFavoris.count, "lignes")
+            })
+            attente.start()
+            return
+        }
         Qt.callLater(function() {
             var v = vueArborescence
             v.contentY = Math.max(v.originY, v.originY + v.contentHeight - v.height)
@@ -4581,9 +4669,11 @@ ApplicationWindow {
     }
 
     /// Dépose la sonde sur la ligne `index` de l'arborescence.
-    function deposerSonde(index, clef, compte, chemin) {
-        vueArborescence.positionViewAtIndex(index, ListView.Contain)
-        var ligne = vueArborescence.itemAtIndex(index)
+    function deposerSonde(cible, clef, compte, chemin) {
+        if (!cible)
+            return false
+        cible.vue.positionViewAtIndex(cible.index, ListView.Contain)
+        var ligne = cible.vue.itemAtIndex(cible.index)
         if (!ligne)
             return false
         var point = ligne.mapToItem(fenetre.contentItem, 20, ligne.height / 2)
@@ -4599,13 +4689,16 @@ ApplicationWindow {
         return action !== Qt.IgnoreAction
     }
 
+    /// Ligne de l'arborescence : sa liste (Favoris ou comptes) et son rang.
     function indexLigne(genre, compte, chemin) {
-        for (var i = 0; i < modeleArborescence.count; ++i) {
-            var l = modeleArborescence.get(i)
+        var favoris = genre === "rubrique" || genre === "favori" || genre === "favori-vide"
+        var modele = favoris ? modeleFavoris : modeleArborescence
+        for (var i = 0; i < modele.count; ++i) {
+            var l = modele.get(i)
             if (l.genre === genre && (compte === 0 || l.compte === compte) && (chemin === "" || l.chemin === chemin))
-                return i
+                return { vue: favoris ? vueFavoris : vueArborescence, index: i }
         }
-        return -1
+        return null
     }
 
     function favorisActuels() {

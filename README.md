@@ -144,16 +144,38 @@ Ce que MMail attend du serveur qui sert le lien :
 signalé ; les autres sont ajoutés. Comme pour une saisie à la main, un mot de
 passe n'est confié au coffre qu'une fois accepté par le serveur.
 
+## Données sur le poste
+
+Le serveur reste la référence : MMail garde sur le poste un **index** (dossiers,
+en-têtes des messages, favoris, ordre des comptes) et, pour lire hors
+connexion, les **messages des 31 derniers jours**, entiers, en fichiers `.eml`.
+La boîte de réception et chaque dossier ouvert se préchargent en arrière-plan ;
+au-delà de la fenêtre, un message est relu sur le serveur.
+
+| | Windows | Linux |
+|---|---|---|
+| Profil (index, messages gardés, images des signatures) | `%APPDATA%\M-Media\MMail` | `~/.local/share/M-Media/MMail` |
+| Réglages (comptes, signatures, apparence) | `HKCU\Software\M-Media\MMail` | `~/.config/M-Media/MMail.conf` |
+| Mots de passe | Gestionnaire d'identification | Secret Service |
+
+**Serveur partagé (RDS).** Deux réglages valent pour toute la machine, dans
+`HKLM\Software\M-Media\MMail` (ou `/etc/xdg/M-Media/MMail.conf`), ou par
+variable d'environnement :
+
+| Valeur | Variable | Effet |
+|---|---|---|
+| `DossierProfil` | `MMAIL_DOSSIER_PROFIL` | emplacement du profil, variables développées — par exemple `D:\MMail\%USERNAME%`. Un profil itinérant ou redirigé partirait sur le réseau, où l'index SQLite se comporte mal |
+| `JoursCache` | `MMAIL_JOURS_CACHE` | jours de messages gardés sur le poste (31 par défaut ; 0 : aucun) |
+
 ## Limites connues
 
 - Connexion en **IMAPS (port 993)** seulement ; pas de STARTTLS ni d'OAuth2.
-- Le corps HTML est affiché **réduit au texte** : paragraphes, blocs, listes
-  et lignes de tableau sont respectés, styles et scripts écartés, mais ni
-  images ni mise en forme.
+- Le rendu HTML est celui du texte riche de Qt : pas de mise en page par
+  feuille de style élaborée ; une image plus large que la colonne est rognée.
 - Sous Android, les pièces jointes s'ouvrent mais ne s'enregistrent pas
   ailleurs ; leur ouverture n'a pas été éprouvée sur un téléphone.
-- Pas d'images insérées dans le corps d'un message rédigé, ni de signature
-  mise en forme ; pas de filtres.
+- Hors connexion, un message ouvert reste non lu sur le serveur ; pas de
+  filtres.
 - L'envoi passe par le même serveur que la lecture, sur le port 465.
 - Sous Android, les autorités de certification sont celles de Mozilla,
   embarquées dans l'application — et non celles du téléphone.

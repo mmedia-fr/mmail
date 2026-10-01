@@ -34,6 +34,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
+use crate::cache::Cache;
 use crate::deplacement::{self, Rapport};
 use crate::imap::{Client, Erreur};
 use crate::magasin::{DossierLocal, Magasin, MessageLocal};
@@ -485,12 +486,18 @@ enum Commande {
     Brouillon { redaction: Redaction },
     /// Veille périodique, émise par le fil lui-même.
     Veille,
+    /// Garder sur le poste les messages récents d'un dossier (décision 17),
+    /// par petits lots, après tout ce que l'utilisateur demande.
+    Precharger { chemin: String },
 }
 
 impl Commande {
     /// Vrai si `self`, arrivée après `anterieure`, la rend caduque.
     fn remplace(&self, anterieure: &Commande) -> bool {
         use Commande::*;
+        if let (Precharger { chemin: a }, Precharger { chemin: b }) = (self, anterieure) {
+            return a == b;
+        }
         matches!(
             (self, anterieure),
             (OuvrirDossier(_), OuvrirDossier(_))
@@ -505,7 +512,7 @@ impl Commande {
     /// Vrai si la commande vient de l'interface et compte dans `occupe`.
     fn comptee(&self) -> bool {
         // Les tâches de fond ne font pas tourner l'indicateur d'activité.
-        !matches!(self, Commande::Veille | Commande::EnvoyerDifferes { .. })
+        !matches!(self, Commande::Veille | Commande::EnvoyerDifferes { .. } | Commande::Precharger { .. })
     }
 }
 
@@ -535,6 +542,9 @@ enum Issue {
     Arborescence,
     Dossier { chemin: String, veille: bool },
     Corps { uid: u32, lu: Lu, marque: bool },
+    /// Un lot du préchargement est fait ; `reste` s'il en faut un autre. Reste
+    /// dans le fil : l'interface n'en sait rien.
+    Precharge { chemin: String, reste: bool },
     Piece { fichier: PathBuf, ouvrir: bool },
     Marque,
     Deplace { cible: i64, chemin_cible: String, rapport: Rapport },
@@ -637,6 +647,16 @@ impl qobject::Boite {
                 // n'ont plus à traîner sur le disque.
                 let _ = std::fs::remove_dir_all(dossier_pieces(&chemin));
                 let _ = std::fs::remove_dir_all(dossier_affichage(&chemin));
+                // Messages gardés sur le poste : ce qui est sorti de la fenêtre
+                // d'un mois, puis ce que l'index ne connaît plus.
+                let cache = Cache::du_profil(&chemin);
+                for id in magasin.gardes_perimes(crate::cache::limite(maintenant())).unwrap_or_default() {
+                    cache.retirer(id);
+                    let _ = magasin.poser_etat_corps(id, "headers");
+                }
+                if let Ok(gardes) = magasin.gardes() {
+                    cache.ranger(&gardes);
+                }
                 let attente = magasin.nombre_operations().unwrap_or(0) as i32;
                 {
                     let mut noyau = self.as_mut().rust_mut();
@@ -888,7 +908,12 @@ impl qobject::Boite {
             return false;
         };
         self.as_mut().poser_courant(Some((compte, chemin.clone(), id)));
-        self.as_mut().envoyer(compte, Commande::OuvrirDossier(chemin))
+        // Hors connexion, la liste de l'index s'affiche quand même, et les
+        // messages gardés sur le poste s'ouvrent.
+        if !self.as_mut().envoyer(compte, Commande::OuvrirDossier(chemin)) {
+            self.as_mut().set_erreur(QString::from("compte hors ligne : messages gardés sur le poste seulement"));
+        }
+        true
     }
 
     pub fn messages(&self) -> QString {
@@ -1273,9 +1298,24 @@ impl qobject::Boite {
         if uid <= 0 || indice < 0 {
             return false;
         }
-        let Some((compte, chemin, _)) = self.courant.clone() else {
+        let Some((compte, chemin, dossier)) = self.courant.clone() else {
             return false;
         };
+        // Pièce d'un message gardé sur le poste : écrite sans réseau.
+        if let Some((octets, _)) = self.sur_le_poste(dossier, uid as u32) {
+            let ouvrir = destination.is_none();
+            let travail = dossier_pieces(&self.profil).join(format!("{compte}-{uid}-{indice}"));
+            return match ecrire_piece_de(&octets, indice as usize, destination, &travail) {
+                Ok(fichier) => {
+                    self.as_mut().recevoir(compte, Issue::Piece { fichier, ouvrir });
+                    true
+                }
+                Err(m) => {
+                    self.as_mut().set_erreur(QString::from(&format!("pièce jointe : {m}")));
+                    false
+                }
+            };
+        }
         self.as_mut().envoyer(
             compte,
             Commande::Piece { chemin, uid: uid as u32, indice: indice as usize, destination },
@@ -1286,10 +1326,36 @@ impl qobject::Boite {
         if uid <= 0 {
             return false;
         }
-        let Some((compte, chemin, _)) = self.courant.clone() else {
+        let Some((compte, chemin, dossier)) = self.courant.clone() else {
             return false;
         };
-        self.as_mut().envoyer(compte, Commande::Corps { chemin, uid: uid as u32, brut, distantes })
+        let uid = uid as u32;
+        // Un message gardé sur le poste s'affiche sans réseau — sauf pour en
+        // télécharger les images distantes, que le fil du compte va chercher.
+        let en_ligne = self.sessions.contains_key(&compte);
+        if !(distantes && en_ligne) {
+            if let Some((octets, lu)) = self.sur_le_poste(dossier, uid) {
+                let atelier = dossier_affichage(&self.profil);
+                let preparation = preparer_lu(&octets, brut, distantes, compte, &atelier, !lu);
+                if let Some(magasin) = self.magasin.as_ref() {
+                    let _ = magasin.poser_pieces(dossier, uid, preparation.pieces != "[]");
+                }
+                self.as_mut().recevoir(compte, Issue::Corps { uid, lu: preparation, marque: false });
+                // Le marquage « lu » part au serveur s'il est joignable ; hors
+                // connexion, le message reste non lu.
+                if !brut && !lu && en_ligne {
+                    self.as_mut().envoyer(compte, Commande::MarquerLu { chemin, uids: vec![uid], lu: true });
+                }
+                return true;
+            }
+        }
+        self.as_mut().envoyer(compte, Commande::Corps { chemin, uid, brut, distantes })
+    }
+
+    /// Un message du dossier ouvert gardé sur le poste, et s'il est lu.
+    fn sur_le_poste(&self, dossier: i64, uid: u32) -> Option<(Vec<u8>, bool)> {
+        let (id, _, lu) = self.magasin.as_ref()?.identite_message(dossier, uid).ok()??;
+        Cache::du_profil(&self.profil).lire(id).map(|octets| (octets, lu))
     }
 
     /// Lance le fil de travail d'un compte, avec des commandes à traiter dès la
@@ -1391,6 +1457,7 @@ impl qobject::Boite {
     fn recevoir(mut self: Pin<&mut Self>, compte: i64, issue: Issue) {
         let compte_qt = compte as i32;
         match issue {
+            Issue::Precharge { .. } => {}
             Issue::Connecte => {
                 let adresse = self.identites.get(&compte).map(|i| i.utilisateur.clone()).unwrap_or_default();
                 {
@@ -1722,7 +1789,9 @@ impl Travail {
         self.terminer(1);
         self.remettre(Issue::Connecte);
 
-        let mut file: Vec<Commande> = Vec::new();
+        // La boîte de réception se lit hors connexion : elle se précharge dès
+        // la connexion ouverte.
+        let mut file: Vec<Commande> = vec![Commande::Precharger { chemin: "INBOX".into() }];
         loop {
             if file.is_empty() {
                 match reception.recv_timeout(VEILLE) {
@@ -1743,13 +1812,33 @@ impl Travail {
             }
             let (restantes, abandonnees) = regrouper(file);
             file = restantes;
+            // Le préchargement passe après tout ce que l'utilisateur demande.
+            file.sort_by_key(|c| matches!(c, Commande::Precharger { .. }));
             self.terminer(abandonnees);
 
             let commande = file.remove(0);
+            // Un dossier qu'on vient de lire se précharge ensuite.
+            let a_precharger = match &commande {
+                Commande::OuvrirDossier(chemin) => Some(chemin.clone()),
+                Commande::Veille => etabli.client.selection().map(str::to_string),
+                _ => None,
+            };
             let comptee = commande.comptee();
             let issue = self.traiter(commande, &mut etabli);
             let perdue = matches!(issue, Some(Issue::Echec { session_perdue: true, .. }));
             self.terminer(comptee as usize);
+            let issue = match issue {
+                Some(Issue::Precharge { chemin, reste }) => {
+                    if reste {
+                        file.push(Commande::Precharger { chemin });
+                    }
+                    None
+                }
+                autre => autre,
+            };
+            if let (false, Some(chemin)) = (perdue, a_precharger) {
+                file.push(Commande::Precharger { chemin });
+            }
             if let Some(issue) = issue {
                 self.remettre(issue);
             }
@@ -1792,9 +1881,17 @@ impl Travail {
                     Err(err) => echec("dossier", format!("ouverture de {chemin} : {err}"), &err),
                 })
             }
+            Commande::Precharger { chemin } => Some(match self.precharger(e, &chemin) {
+                Ok(reste) => Issue::Precharge { chemin, reste },
+                Err(err) if err.reseau() => echec("reseau", format!("préchargement de {chemin} : {err}"), &err),
+                // Une erreur d'index ou de disque n'arrête rien : le message se
+                // relira sur le serveur.
+                Err(_) => Issue::Precharge { chemin, reste: false },
+            }),
             Commande::Corps { chemin, uid, brut, distantes } => {
                 let atelier = dossier_affichage(&self.profil);
-                Some(match lire_corps(e, compte, &chemin, uid, brut, distantes, &atelier) {
+                let cache = Cache::du_profil(&self.profil);
+                Some(match lire_corps(e, compte, &chemin, uid, brut, distantes, &atelier, &cache) {
                     Ok((lu, marque)) => Issue::Corps { uid, lu, marque },
                     Err(err) => echec("message", format!("lecture du message {uid} : {err}"), &err),
                 })
@@ -2166,6 +2263,52 @@ impl Travail {
         resultat
     }
 
+    /// Garde sur le poste, par lot de quelques messages, ceux d'un dossier reçus
+    /// depuis moins d'un mois (décision 17), et retire ceux qui sont sortis de
+    /// la fenêtre. Le dossier ouvert reste sélectionné. Rend vrai s'il en
+    /// reste à garder.
+    fn precharger(&self, e: &mut Etabli, chemin: &str) -> Result<bool, Echec> {
+        const LOT: usize = 8;
+        const OCTETS_PAR_LOT: usize = 8 * 1024 * 1024;
+        let cache = Cache::du_profil(&self.profil);
+        let limite = crate::cache::limite(maintenant());
+        for id in e.magasin.gardes_perimes(limite)? {
+            cache.retirer(id);
+            e.magasin.poser_etat_corps(id, "headers")?;
+        }
+        let dossier = e.magasin.dossier_id(self.compte, chemin)?;
+        let a_faire = e.magasin.a_garder(dossier, limite, LOT + 1)?;
+        if a_faire.is_empty() {
+            return Ok(false);
+        }
+        let avant = e.client.selection().map(str::to_string);
+        assurer_selection(&mut e.client, chemin)?;
+        let mut faits = 0;
+        let mut octets_lus = 0;
+        for (id, uid) in a_faire.iter().take(LOT) {
+            match e.client.corps(*uid) {
+                Ok(octets) => {
+                    octets_lus += octets.len();
+                    let etat = if cache.ecrire(*id, &octets).is_ok() { "full" } else { "echec" };
+                    e.magasin.poser_etat_corps(*id, etat)?;
+                }
+                Err(Erreur::Reseau(m)) => return Err(Echec::Imap(Erreur::Reseau(m))),
+                // Disparu entre-temps, ou refusé : pas de nouvel essai.
+                Err(_) => e.magasin.poser_etat_corps(*id, "echec")?,
+            }
+            faits += 1;
+            if octets_lus > OCTETS_PAR_LOT {
+                break;
+            }
+        }
+        if let Some(avant) = avant {
+            if avant != chemin {
+                assurer_selection(&mut e.client, &avant)?;
+            }
+        }
+        Ok(a_faire.len() > faits)
+    }
+
     /// La rédaction, ses images locales autorisées remplacées par `cid:`, et
     /// ces images.
     fn avec_images(&self, r: &Redaction) -> (Redaction, Vec<redaction::ImageIntegree>) {
@@ -2333,8 +2476,10 @@ struct Lu {
 }
 
 /// Lit le corps d'un message du dossier ouvert ; un message affiché (et non sa
-/// source) est marqué comme lu, comme le fait Outlook. Rend de quoi l'afficher,
-/// et vrai si le marquage a eu lieu.
+/// source) est marqué comme lu, comme le fait Outlook. Un message de moins d'un
+/// mois est gardé sur le poste au passage. Rend de quoi l'afficher, et vrai si
+/// le marquage a eu lieu.
+#[allow(clippy::too_many_arguments)]
 fn lire_corps(
     e: &mut Etabli,
     compte: i64,
@@ -2343,6 +2488,7 @@ fn lire_corps(
     brut: bool,
     distantes: bool,
     atelier: &Path,
+    cache: &Cache,
 ) -> Result<(Lu, bool), Echec> {
     assurer_selection(&mut e.client, chemin)?;
     let complet = e
@@ -2350,29 +2496,18 @@ fn lire_corps(
         .message_complet(uid)?
         .ok_or_else(|| Echec::Imap(Erreur::Refuse(format!("message {uid} disparu"))))?;
     let octets = complet.octets;
+    let id = e.magasin.dossier_id(compte, chemin)?;
+    if let Some((mid, horodatage, _)) = e.magasin.identite_message(id, uid)? {
+        if horodatage >= crate::cache::limite(maintenant()) && cache.ecrire(mid, &octets).is_ok() {
+            e.magasin.poser_etat_corps(mid, "full")?;
+        }
+    }
     // Demande de confirmation de lecture, sauf si l'on y a déjà répondu.
     let deja = complet.drapeaux.iter().any(|d| d.eq_ignore_ascii_case("$MDNSent"));
-    let confirmation = if brut || deja { String::new() } else { redaction::confirmation_demandee(&octets).unwrap_or_default() };
-    let mut lu = Lu { texte: String::new(), brut, html: false, bloquees: 0, pieces: String::new(), confirmation };
-    if brut {
-        lu.texte = String::from_utf8_lossy(&octets).into_owned();
-    } else if let Some(corps) = crate::rendu::corps_html(&octets) {
-        // Les images ne servent qu'à l'affichage : écrites sur le disque si
-        // l'écriture échoue, le message s'affiche sans elles plutôt que pas
-        // du tout.
-        let (html, bloquees) = poser_images(corps, compte, distantes, atelier);
-        lu.texte = html;
-        lu.html = true;
-        lu.bloquees = bloquees;
-    } else {
-        lu.texte = crate::index::corps_affichable(&octets);
-    }
-    let liste = crate::index::pieces_jointes(&octets);
-    lu.pieces = json_pieces(&liste);
-    let id = e.magasin.dossier_id(compte, chemin)?;
+    let lu = preparer_lu(&octets, brut, distantes, compte, atelier, !deja);
     // Le message entier dit s'il porte des pièces jointes : cela prime sur ce
     // que ses en-têtes laissaient supposer dans la liste.
-    e.magasin.poser_pieces(id, uid, !liste.is_empty())?;
+    e.magasin.poser_pieces(id, uid, lu.pieces != "[]")?;
     let mut marque = false;
     if !brut {
         if matches!(e.magasin.message(id, uid)?, Some(m) if !m.lu) {
@@ -2381,6 +2516,32 @@ fn lire_corps(
         }
     }
     Ok((lu, marque))
+}
+
+/// De quoi afficher un message entier : sa source, son HTML assaini et ses
+/// images, ou son texte ; ses pièces jointes ; la confirmation de lecture
+/// demandée, si `confirmation_possible`.
+fn preparer_lu(octets: &[u8], brut: bool, distantes: bool, compte: i64, atelier: &Path, confirmation_possible: bool) -> Lu {
+    let confirmation = if brut || !confirmation_possible {
+        String::new()
+    } else {
+        redaction::confirmation_demandee(octets).unwrap_or_default()
+    };
+    let mut lu = Lu { texte: String::new(), brut, html: false, bloquees: 0, pieces: String::new(), confirmation };
+    if brut {
+        lu.texte = String::from_utf8_lossy(octets).into_owned();
+    } else if let Some(corps) = crate::rendu::corps_html(octets) {
+        // Les images ne servent qu'à l'affichage : si leur écriture échoue,
+        // le message s'affiche sans elles plutôt que pas du tout.
+        let (html, bloquees) = poser_images(corps, compte, distantes, atelier);
+        lu.texte = html;
+        lu.html = true;
+        lu.bloquees = bloquees;
+    } else {
+        lu.texte = crate::index::corps_affichable(octets);
+    }
+    lu.pieces = json_pieces(&crate::index::pieces_jointes(octets));
+    lu
 }
 
 /// Numéro de série des affichages : chaque affichage a son propre dossier, et
@@ -2493,24 +2654,29 @@ fn ecrire_piece(
     destination: Option<PathBuf>,
     dossier: &Path,
 ) -> Result<PathBuf, Echec> {
-    let erreur = |m: String| Echec::Index(crate::magasin::Erreur(m));
     assurer_selection(&mut e.client, chemin)?;
     let octets = e.client.corps(uid)?;
-    let (nom, contenu) = crate::index::extraire_piece(&octets, indice)
-        .ok_or_else(|| erreur(format!("pièce jointe {indice} introuvable")))?;
+    ecrire_piece_de(&octets, indice, destination, dossier).map_err(|m| Echec::Index(crate::magasin::Erreur(m)))
+}
+
+/// Écrit l'une des pièces jointes d'un message entier : à l'emplacement
+/// choisi, ou dans `dossier` pour l'ouvrir. Une pièce exécutable n'est jamais
+/// écrite pour être ouverte — le refus est ici, et pas seulement dans
+/// l'interface.
+fn ecrire_piece_de(octets: &[u8], indice: usize, destination: Option<PathBuf>, dossier: &Path) -> Result<PathBuf, String> {
+    let (nom, contenu) =
+        crate::index::extraire_piece(octets, indice).ok_or_else(|| format!("pièce jointe {indice} introuvable"))?;
     let fichier = match destination {
         Some(destination) => destination,
         None => {
             if crate::index::ouverture_risquee(&nom) {
-                return Err(erreur(format!(
-                    "{nom} est un programme ou un script : enregistrez-le plutôt que de l'ouvrir"
-                )));
+                return Err(format!("{nom} est un programme ou un script : enregistrez-le plutôt que de l'ouvrir"));
             }
-            std::fs::create_dir_all(dossier).map_err(|x| erreur(format!("{} : {x}", dossier.display())))?;
+            std::fs::create_dir_all(dossier).map_err(|x| format!("{} : {x}", dossier.display()))?;
             dossier.join(&nom)
         }
     };
-    std::fs::write(&fichier, &contenu).map_err(|x| erreur(format!("{} : {x}", fichier.display())))?;
+    std::fs::write(&fichier, &contenu).map_err(|x| format!("{} : {x}", fichier.display()))?;
     Ok(fichier)
 }
 
@@ -2690,6 +2856,7 @@ mod tests {
                 Commande::Arborescence => "arborescence".into(),
                 Commande::Reprendre(_) => "reprendre".into(),
                 Commande::Veille => "veille".into(),
+                Commande::Precharger { chemin } => format!("precharger {chemin}"),
                 Commande::Preparer { .. } => "preparer".into(),
                 Commande::Envoyer { .. } => "envoyer".into(),
                 Commande::Brouillon { .. } => "brouillon".into(),
@@ -2825,6 +2992,17 @@ mod tests {
         assert!(json.contains(r#""pieces":false"#));
         assert!(json.contains("Réunion"));
         assert!(json.contains(r#"Service \"compta\""#));
+    }
+
+    #[test]
+    fn prechargement_regroupe_et_non_compte() {
+        let pre = |c: &str| Commande::Precharger { chemin: c.into() };
+        // Deux préchargements du même dossier n'en font qu'un ; deux dossiers
+        // différents restent.
+        let (file, abandonnees) = regrouper(vec![pre("INBOX"), corps(1), pre("INBOX"), pre("Sent")]);
+        assert_eq!(noms(&file), vec!["corps 1", "precharger INBOX", "precharger Sent"]);
+        assert_eq!(abandonnees, 0);
+        assert!(!pre("INBOX").comptee());
     }
 
     #[test]

@@ -110,7 +110,17 @@ pub fn corps_html(brut: &[u8]) -> Option<CorpsHtml> {
                 .then(|| (normaliser_cid(cid), (type_mime, partie.contents().to_vec())))
         })
         .collect();
+    Some(assainir(&source, move |adresse: &str| {
+        let cid = adresse.get(..4).filter(|p| p.eq_ignore_ascii_case("cid:")).map(|_| &adresse[4..])?;
+        integrees.get(&normaliser_cid(cid)).cloned()
+    }))
+}
 
+/// Assainit un HTML quelconque — corps de message, signature importée. Les
+/// images `data:` sont décodées ici, les adresses `http(s)` deviennent des
+/// images distantes ; toute autre adresse d'image (`cid:`, chemin relatif)
+/// est confiée à `resoudre`, qui rend l'image ou rien.
+pub fn assainir(source: &str, resoudre: impl Fn(&str) -> Option<Image> + Send + Sync + 'static) -> CorpsHtml {
     let collecte = Arc::new(Mutex::new(Collecte::default()));
     let html = {
         let partagee = Arc::clone(&collecte);
@@ -124,25 +134,27 @@ pub fn corps_html(brut: &[u8]) -> Option<CorpsHtml> {
                 ("img", HashSet::from(["src"])),
             ]))
             .url_schemes(HashSet::from(["http", "https", "mailto", "cid", "data"]))
-            .url_relative(ammonia::UrlRelative::Deny)
+            // Les adresses relatives passent jusqu'au filtre, qui les confie à
+            // `resoudre` (une image) ou les écarte (un lien).
+            .url_relative(ammonia::UrlRelative::PassThrough)
             .link_rel(None)
             .strip_comments(true)
             .attribute_filter(move |balise: &str, attribut: &str, valeur: &str| {
-                filtrer(balise, attribut, valeur, &partagee, &integrees).map(Cow::Owned)
+                filtrer(balise, attribut, valeur, &partagee, &resoudre).map(Cow::Owned)
             });
-        regles.clean(&source).to_string()
+        regles.clean(source).to_string()
     };
     let collecte = std::mem::take(&mut *collecte.lock().unwrap_or_else(|e| e.into_inner()));
     let html = retirer_elements(&html).trim().to_string();
 
     // Les feuilles de style de l'expéditeur, assainies, en tête.
-    let styles = feuilles_de_style(&source);
+    let styles = feuilles_de_style(source);
     let html = if styles.trim().is_empty() {
         html
     } else {
         format!("<style>{styles}</style>{html}")
     };
-    Some(CorpsHtml { html, images: collecte.images, distantes: collecte.distantes })
+    CorpsHtml { html, images: collecte.images, distantes: collecte.distantes }
 }
 
 #[derive(Default)]
@@ -153,7 +165,8 @@ struct Collecte {
     distantes: Vec<String>,
 }
 
-type Image = (String, Vec<u8>);
+/// Une image : type MIME et octets.
+pub type Image = (String, Vec<u8>);
 
 /// Valeur gardée d'un attribut, réécrite au besoin ; `None` l'écarte.
 fn filtrer(
@@ -161,7 +174,7 @@ fn filtrer(
     attribut: &str,
     valeur: &str,
     collecte: &Mutex<Collecte>,
-    integrees: &HashMap<String, Image>,
+    resoudre: &dyn Fn(&str) -> Option<Image>,
 ) -> Option<String> {
     // Le repérage des éléments retirés suppose qu'aucun « < » ni « > » ne
     // traîne dans un attribut : le moteur de Qt n'a besoin d'aucun.
@@ -179,14 +192,14 @@ fn filtrer(
                 .any(|s| minuscule.starts_with(s))
                 .then(|| valeur.trim().to_string())
         }
-        ("img", "src") => Some(source_image(valeur.trim(), collecte, integrees)),
+        ("img", "src") => Some(source_image(valeur.trim(), collecte, resoudre)),
         (_, "src") | (_, "href") => None,
         _ => Some(valeur.to_string()),
     }
 }
 
 /// Repère qui remplace l'adresse d'une image.
-fn source_image(valeur: &str, collecte: &Mutex<Collecte>, integrees: &HashMap<String, Image>) -> String {
+fn source_image(valeur: &str, collecte: &Mutex<Collecte>, resoudre: &dyn Fn(&str) -> Option<Image>) -> String {
     let Ok(mut c) = collecte.lock() else {
         return REPERE_VIDE.to_string();
     };
@@ -207,13 +220,7 @@ fn source_image(valeur: &str, collecte: &Mutex<Collecte>, integrees: &HashMap<St
     if c.distantes.len() + c.images.len() >= IMAGES_MAX {
         return REPERE_VIDE.to_string();
     }
-    let image = if minuscule.starts_with("cid:") {
-        integrees.get(&normaliser_cid(&valeur[4..])).cloned()
-    } else if minuscule.starts_with("data:") {
-        donnees(valeur)
-    } else {
-        None
-    };
+    let image = if minuscule.starts_with("data:") { donnees(valeur) } else { resoudre(valeur) };
     match image {
         Some((type_mime, octets))
             if type_mime.starts_with("image/") && !octets.is_empty() && octets.len() <= TAILLE_IMAGE_MAX =>
@@ -468,6 +475,75 @@ fn base64(texte: &str) -> Option<Vec<u8>> {
 
 fn echapper(texte: &str) -> String {
     texte.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+}
+
+/// Adresse `file:` d'un fichier local, caractères réservés encodés : le
+/// profil peut vivre sous « C:\\Users\\Jean Dupont\\… ».
+pub fn url_fichier(chemin: &std::path::Path) -> String {
+    let texte = chemin.to_string_lossy().replace('\\', "/");
+    let mut url = String::from(if texte.starts_with('/') { "file://" } else { "file:///" });
+    for octet in texte.bytes() {
+        match octet {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' | b':' => {
+                url.push(octet as char)
+            }
+            _ => url.push_str(&format!("%{octet:02X}")),
+        }
+    }
+    url
+}
+
+/// Chemin désigné par une adresse `file:`, ou `None` si ce n'en est pas une.
+/// « file:///C:/x » → « C:/x » ; « file:///home/x » → « /home/x ».
+pub fn chemin_de_url(url: &str) -> Option<std::path::PathBuf> {
+    let reste = url.get(..5).filter(|p| p.eq_ignore_ascii_case("file:")).map(|_| &url[5..])?;
+    let reste = reste.strip_prefix("//").unwrap_or(reste);
+    // « //hote/… » : un partage réseau, jamais un fichier du profil.
+    let reste = reste.strip_prefix("localhost").unwrap_or(reste);
+    let texte = decoder_pourcent(reste)?;
+    // « /C:/… » sous Windows : la lettre de lecteur suit la barre.
+    let b = texte.as_bytes();
+    let texte = if b.len() >= 3 && b[0] == b'/' && b[1].is_ascii_alphabetic() && b[2] == b':' {
+        texte[1..].to_string()
+    } else {
+        texte
+    };
+    let c = texte.as_bytes();
+    let absolu = texte.starts_with('/')
+        || (c.len() >= 3 && c[0].is_ascii_alphabetic() && c[1] == b':' && (c[2] == b'/' || c[2] == b'\\'));
+    absolu.then(|| std::path::PathBuf::from(texte))
+}
+
+/// Décode les « %XX » d'une adresse ; `None` si le résultat n'est pas de l'UTF-8.
+pub fn decoder_pourcent(texte: &str) -> Option<String> {
+    let octets = texte.as_bytes();
+    let mut decode = Vec::with_capacity(octets.len());
+    let mut i = 0;
+    while i < octets.len() {
+        if octets[i] == b'%' && i + 2 < octets.len() {
+            if let Some(v) = texte.get(i + 1..i + 3).and_then(|h| u8::from_str_radix(h, 16).ok()) {
+                decode.push(v);
+                i += 3;
+                continue;
+            }
+        }
+        decode.push(octets[i]);
+        i += 1;
+    }
+    String::from_utf8(decode).ok()
+}
+
+/// Type MIME d'une image d'après l'extension de son fichier.
+pub fn type_image(nom: &str) -> Option<&'static str> {
+    let extension = nom.rsplit_once('.')?.1.to_ascii_lowercase();
+    Some(match extension.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" | "jpe" => "image/jpeg",
+        "gif" => "image/gif",
+        "bmp" => "image/bmp",
+        "webp" => "image/webp",
+        _ => return None,
+    })
 }
 
 /// Extension de fichier d'une image d'après son type : le moteur de Qt la

@@ -14,6 +14,9 @@
 #include <QtCore/QStringList>
 #include <QtGui/QColor>
 #include <QtGui/QFont>
+#include <QtGui/QImageReader>
+#include <QtGui/QTextImageFormat>
+#include <QtCore/QUrl>
 #include <QtGui/QTextBlock>
 #include <QtGui/QTextCharFormat>
 #include <QtGui/QTextCursor>
@@ -155,6 +158,36 @@ public:
       doc->setHtml(html);
   }
 
+  /// Insère du HTML (une signature avec ses images) à la position donnée.
+  Q_INVOKABLE void insererHtml(int position, const QString& html)
+  {
+    QTextDocument* doc = texte_();
+    if (!doc)
+      return;
+    QTextCursor c(doc);
+    c.setPosition(qBound(0, position, doc->characterCount() - 1));
+    c.insertHtml(html);
+    Q_EMIT etatChange();
+  }
+
+  /// Insère une image au curseur, désignée par son adresse `file:`. Une image
+  /// plus large que `largeurMax` pixels y est ramenée, proportions gardées.
+  Q_INVOKABLE void insererImage(const QString& url, int largeurMax)
+  {
+    QTextDocument* doc = texte_();
+    if (!doc || url.isEmpty())
+      return;
+    QTextImageFormat f;
+    f.setName(url);
+    const QSize taille = QImageReader(QUrl(url).toLocalFile()).size();
+    if (taille.isValid() && largeurMax > 0 && taille.width() > largeurMax) {
+      f.setWidth(largeurMax);
+      f.setHeight(qRound(double(taille.height()) * largeurMax / taille.width()));
+    }
+    curseur().insertImage(f);
+    Q_EMIT etatChange();
+  }
+
   /// Insère du texte brut (une signature) à la position donnée.
   Q_INVOKABLE void inserer(int position, const QString& texte)
   {
@@ -211,6 +244,8 @@ public:
     QString sortie = lignes.join(QLatin1Char('\n'));
     sortie.replace(QChar::LineSeparator, QLatin1Char('\n'));
     sortie.replace(QChar::Nbsp, QLatin1Char(' '));
+    // Une image tient la place d'un caractère d'objet : rien dans le texte brut.
+    sortie.remove(QChar::ObjectReplacementCharacter);
     return sortie;
   }
 
@@ -225,7 +260,8 @@ public:
         return true;
       for (auto it = b.begin(); !it.atEnd(); ++it) {
         const QTextCharFormat f = it.fragment().charFormat();
-        if (f.fontWeight() >= QFont::Bold || f.fontItalic() || f.fontUnderline() || f.isAnchor())
+        if (f.fontWeight() >= QFont::Bold || f.fontItalic() || f.fontUnderline() || f.isAnchor()
+            || f.isImageFormat())
           return true;
       }
     }

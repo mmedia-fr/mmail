@@ -60,6 +60,15 @@ pub struct Redaction {
     pub origine_mode: String,
 }
 
+/// Une image que le corps HTML affiche (signature), intégrée au message et
+/// désignée par `cid:`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImageIntegree {
+    pub cid: String,
+    pub type_mime: String,
+    pub contenu: Vec<u8>,
+}
+
 /// Une pièce jointe lue sur le disque, prête à être jointe.
 pub struct Fichier {
     pub nom: String,
@@ -167,6 +176,18 @@ fn nouvel_identifiant(de: &str, maintenant: i64) -> String {
 /// Fabrique le message. `destinataires` peut être vide pour un brouillon ;
 /// l'envoi, lui, le refuse.
 pub fn fabriquer(r: &Redaction, maintenant: i64, fichiers: &[Fichier]) -> Result<Fabrique, String> {
+    fabriquer_avec_images(r, maintenant, fichiers, &[])
+}
+
+/// Comme `fabriquer`, avec les images que le HTML désigne par `cid:` : le HTML
+/// et ses images vont ensemble dans un `multipart/related`, que les logiciels
+/// de messagerie affichent dans le corps et non en pièces jointes.
+pub fn fabriquer_avec_images(
+    r: &Redaction,
+    maintenant: i64,
+    fichiers: &[Fichier],
+    images: &[ImageIntegree],
+) -> Result<Fabrique, String> {
     let lire = |champ: &str, valeur: &str| {
         adresses(valeur).map_err(|fautive| format!("{champ} : adresse invalide « {fautive} »"))
     };
@@ -234,12 +255,36 @@ pub fn fabriquer(r: &Redaction, maintenant: i64, fichiers: &[Fichier]) -> Result
         if copie && r.envoi_differe > 0 {
             m = m.header(ENTETE_DIFFERE, Raw::new(r.envoi_differe.to_string()));
         }
-        m = m.text_body(r.texte.clone());
-        if !r.html.is_empty() {
-            m = m.html_body(r.html.clone());
-        }
-        for f in fichiers {
-            m = m.attachment(type_de_fichier(&f.nom), f.nom.clone(), f.contenu.clone());
+        if !r.html.is_empty() && !images.is_empty() {
+            // texte | (HTML + images), puis les pièces jointes à côté.
+            let mut liees = vec![MimePart::new("text/html", r.html.as_str())];
+            for i in images {
+                liees.push(MimePart::new(i.type_mime.as_str(), i.contenu.as_slice()).inline().cid(i.cid.as_str()));
+            }
+            let alternative = MimePart::new(
+                "multipart/alternative",
+                vec![MimePart::new("text/plain", r.texte.as_str()), MimePart::new("multipart/related", liees)],
+            );
+            let corps = if fichiers.is_empty() {
+                alternative
+            } else {
+                let mut parties = vec![alternative];
+                for f in fichiers {
+                    parties.push(
+                        MimePart::new(type_de_fichier(&f.nom), f.contenu.as_slice()).attachment(f.nom.as_str()),
+                    );
+                }
+                MimePart::new("multipart/mixed", parties)
+            };
+            m = m.body(corps);
+        } else {
+            m = m.text_body(r.texte.clone());
+            if !r.html.is_empty() {
+                m = m.html_body(r.html.clone());
+            }
+            for f in fichiers {
+                m = m.attachment(type_de_fichier(&f.nom), f.nom.clone(), f.contenu.clone());
+            }
         }
         m.write_to_vec().map_err(|e| format!("fabrication du message : {e}"))
     };
@@ -249,6 +294,62 @@ pub fn fabriquer(r: &Redaction, maintenant: i64, fichiers: &[Fichier]) -> Result
         destinataires,
         message_id,
     })
+}
+
+/// Intègre au message les images locales que le HTML désigne (`src="file:…"`),
+/// en les remplaçant par `cid:`. `lire` décide : il rend l'image d'un fichier
+/// autorisé — ceux du profil —, ou rien, et l'image est alors retirée. Une
+/// adresse `http(s)` reste telle quelle.
+pub fn integrer_images(html: &str, lire: impl Fn(&str) -> Option<(String, Vec<u8>)>) -> (String, Vec<ImageIntegree>) {
+    let mut sortie = String::with_capacity(html.len());
+    let mut images: Vec<ImageIntegree> = Vec::new();
+    let mut vues: Vec<(String, String)> = Vec::new();
+    let graine = RandomState::new().build_hasher().finish();
+    let mut reste = html;
+    while let Some(i) = reste.find("src=\"") {
+        let debut = i + 5;
+        let Some(longueur) = reste[debut..].find('"') else { break };
+        let adresse = &reste[debut..debut + longueur];
+        sortie.push_str(&reste[..debut]);
+        if adresse.get(..5).is_some_and(|p| p.eq_ignore_ascii_case("file:")) {
+            let deja = vues.iter().find(|(a, _)| a == adresse).map(|(_, c)| c.clone());
+            let cid = deja.or_else(|| {
+                let (type_mime, contenu) = lire(&adresse.replace("&amp;", "&"))?;
+                let cid = format!("image{}.{:x}@mmail", images.len() + 1, graine);
+                images.push(ImageIntegree { cid: cid.clone(), type_mime, contenu });
+                vues.push((adresse.to_string(), cid.clone()));
+                Some(cid)
+            });
+            if let Some(cid) = cid {
+                sortie.push_str(&format!("cid:{cid}"));
+            }
+        } else {
+            sortie.push_str(adresse);
+        }
+        reste = &reste[debut + longueur..];
+    }
+    sortie.push_str(reste);
+    (sortie, images)
+}
+
+/// Images qu'un brouillon enregistré porte dans son corps (`cid:`) : de quoi
+/// les remettre dans la fenêtre de rédaction quand on le reprend.
+pub fn images_du_brouillon(brut: &[u8]) -> Vec<(String, String, Vec<u8>)> {
+    use mail_parser::MimeHeaders;
+    let Some(m) = MessageParser::default().parse(brut) else {
+        return Vec::new();
+    };
+    m.parts
+        .iter()
+        .filter_map(|partie| {
+            let cid = partie.content_id()?;
+            let ct = partie.content_type()?;
+            let type_mime = format!("{}/{}", ct.ctype(), ct.subtype().unwrap_or("")).to_ascii_lowercase();
+            type_mime.starts_with("image/").then(|| {
+                (cid.trim().trim_start_matches('<').trim_end_matches('>').to_string(), type_mime, partie.contents().to_vec())
+            })
+        })
+        .collect()
 }
 
 // ------------------------------------------------ réponses et transferts
@@ -715,6 +816,44 @@ mod tests {
         let b = preparer(&f.copie, "brouillon", &[]);
         assert!(b.html.contains("<b>gras</b>"));
         assert_eq!(b.texte.trim_end(), "Texte gras");
+    }
+
+    #[test]
+    fn signature_a_images_integrees() {
+        let (html, images) = integrer_images(
+            "<p>Bien à vous</p><img src=\"file:///p/signatures/logo.png\" width=\"344\" />\
+             <img src=\"file:///p/signatures/logo.png\" /><img src=\"file:///etc/passwd\" />\
+             <img src=\"https://exemple.fr/x.png\" />",
+            |adresse| adresse.contains("/p/signatures/").then(|| ("image/png".to_string(), b"\x89PNG".to_vec())),
+        );
+        assert_eq!(images.len(), 1);
+        let cid = &images[0].cid;
+        assert_eq!(html.matches(&format!("src=\"cid:{cid}\"")).count(), 2, "{html}");
+        assert!(html.contains("src=\"\""), "{html}");
+        assert!(!html.contains("passwd"), "{html}");
+        assert!(html.contains("src=\"https://exemple.fr/x.png\""), "{html}");
+
+        let r = Redaction {
+            de: "moi@exemple.fr".into(),
+            a: "toi@exemple.fr".into(),
+            objet: "Signature".into(),
+            texte: "Bien à vous".into(),
+            html: html.clone(),
+            ..Default::default()
+        };
+        let pj = [Fichier { nom: "note.txt".into(), contenu: b"note".to_vec() }];
+        let f = fabriquer_avec_images(&r, 1_790_000_000, &pj, &images).unwrap();
+        let brut = String::from_utf8_lossy(&f.envoi).to_string();
+        assert!(brut.contains("multipart/mixed") && brut.contains("multipart/related"), "{brut}");
+        let m = MessageParser::default().parse(&f.envoi).unwrap();
+        // Une seule pièce jointe : le logo est dans le corps, pas à côté.
+        assert_eq!(crate::index::pieces_jointes(&f.envoi).len(), 1);
+        assert!(m.body_html(0).unwrap().contains(&format!("cid:{cid}")));
+        // Repris comme brouillon, le logo se retrouve par son Content-ID.
+        let reprises = images_du_brouillon(&f.copie);
+        assert_eq!(reprises.len(), 1);
+        assert_eq!(&reprises[0].0, cid);
+        assert_eq!(reprises[0].2, b"\x89PNG");
     }
 
     #[test]

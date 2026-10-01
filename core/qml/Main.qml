@@ -1900,12 +1900,16 @@ ApplicationWindow {
             }
 
             /// Vrai si le clic tombe sur le chevron d'un dossier parent (marge
-            /// comprise, pour le doigt comme pour la souris).
+            /// comprise, pour le doigt comme pour la souris). Mesuré depuis le
+            /// centre du chevron : le chevron d'un dossier déplié est tourné
+            /// d'un quart de tour autour de ce centre, et son coin supérieur
+            /// gauche, lui, se déplace — le clic sur un dossier déplié tombait à
+            /// côté de la zone (retour de Manu, 01/10).
             function surChevron(x) {
                 if (!chevronDossier.visible || !model.enfants)
                     return false
-                var p = chevronDossier.mapToItem(zoneLigne, 0, 0)
-                return x >= p.x - 6 && x <= p.x + chevronDossier.width + 6
+                var centre = chevronDossier.mapToItem(zoneLigne, chevronDossier.width / 2, chevronDossier.height / 2)
+                return Math.abs(x - centre.x) <= chevronDossier.width / 2 + 6
             }
 
             // La rubrique Favoris sur un fond plus soutenu que celui des
@@ -4336,7 +4340,6 @@ ApplicationWindow {
             essai = { afficherPremier: !identifiantsEssai.scenario
                                        || identifiantsEssai.scenario === "pieces"
                                        || identifiantsEssai.scenario === "images"
-                                       || identifiantsEssai.scenario === "chevron"
                                        || identifiantsEssai.scenario.indexOf("signature") === 0,
                       connecter2: null, scenario: identifiantsEssai.scenario || "",
                       etape: 0, sujet: "", examines: 0 }
@@ -4392,7 +4395,8 @@ ApplicationWindow {
         // Trois clics, chacun à un tour de boucle d'événements du précédent :
         // replier « INBOX/Fournisseurs », le déplier, replier la boîte de
         // réception.
-        var cibles = ["INBOX/Fournisseurs", "INBOX/Fournisseurs", "INBOX"]
+        var cibles = identifiantsEssai.dossier ? [identifiantsEssai.dossier, identifiantsEssai.dossier]
+                                               : ["INBOX/Fournisseurs", "INBOX/Fournisseurs", "INBOX"]
         if (essai.etapeChevron >= cibles.length)
             return
         var present = function(chemin) {
@@ -4415,10 +4419,11 @@ ApplicationWindow {
         var cible = cibles[essai.etapeChevron]
         var i = present(cible)
         var ligne = i >= 0 ? vueArborescence.itemAtIndex(i) : null
-        var x = -1
-        for (var t = 0; ligne && t < 120 && x < 0; t += 2)
-            if (ligne.surChevron(t))
-                x = t
+        // Un clic au milieu de la place du chevron, où le doigt se pose :
+        // retrait du dossier plus la moitié de la largeur du chevron.
+        var x = ligne ? ligne.leftPadding + modeleArborescence.get(i).profondeur * 14 + 7 : -1
+        if (ligne && !ligne.surChevron(x))
+            x = -1
         console.log("scenario: clic sur le chevron de", cible, "à x =", x)
         if (x < 0)
             return

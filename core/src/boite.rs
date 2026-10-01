@@ -199,6 +199,12 @@ pub mod qobject {
         #[cxx_name = "enregistrerPiece"]
         fn enregistrer_piece(self: Pin<&mut Boite>, uid: i32, indice: i32, url: &QString) -> bool;
 
+        /// Écrit une pièce jointe pour la joindre à une rédaction — un
+        /// programme aussi, puisqu'il ne s'ouvre pas. Issue : `pieceAJoindre`.
+        #[qinvokable]
+        #[cxx_name = "joindrePiece"]
+        fn joindre_piece(self: Pin<&mut Boite>, uid: i32, indice: i32) -> bool;
+
         /// Marque des messages du dossier ouvert — UID séparés par des
         /// virgules — comme lus ou non lus.
         #[qinvokable]
@@ -358,6 +364,17 @@ pub mod qobject {
         #[cxx_name = "pieceEcrite"]
         fn piece_ecrite(self: Pin<&mut Boite>, url: &QString, chemin: &QString, ouvrir: bool);
 
+        /// Une pièce jointe est écrite pour être jointe à une rédaction.
+        #[qsignal]
+        #[cxx_name = "pieceAJoindre"]
+        fn piece_a_joindre(self: Pin<&mut Boite>, url: &QString);
+
+        /// Messages du dossier ouvert marqués lus ou non lus : l'interface met
+        /// à jour leurs seules lignes, sans relire la liste. `uids` : « 3,5,7 ».
+        #[qsignal]
+        #[cxx_name = "lusModifies"]
+        fn lus_modifies(self: Pin<&mut Boite>, uids: &QString, lu: bool);
+
         /// Des drapeaux ont changé dans le dossier ouvert.
         #[qsignal]
         #[cxx_name = "drapeauxModifies"]
@@ -464,8 +481,10 @@ enum Commande {
     Corps { chemin: String, uid: u32, brut: bool, distantes: bool },
     /// Écrire une pièce jointe : dans `destination` si elle est donnée, sinon
     /// dans le dossier de travail, pour l'ouvrir.
-    Piece { chemin: String, uid: u32, indice: usize, destination: Option<PathBuf> },
-    MarquerLu { chemin: String, uids: Vec<u32>, lu: bool },
+    Piece { chemin: String, uid: u32, indice: usize, destination: Option<PathBuf>, joindre: bool },
+    /// `discret` : marquage d'un message qu'on affiche ; l'interface a déjà
+    /// mis sa ligne à jour et ne relit pas la liste.
+    MarquerLu { chemin: String, uids: Vec<u32>, lu: bool, discret: bool },
     MarquerSuivi { chemin: String, uids: Vec<u32>, suivi: bool },
     /// Envoyer une confirmation de lecture (identifiants présents) ou
     /// l'ignorer (absents) ; le message reçoit `$MDNSent` dans les deux cas.
@@ -545,8 +564,8 @@ enum Issue {
     /// Un lot du préchargement est fait ; `reste` s'il en faut un autre. Reste
     /// dans le fil : l'interface n'en sait rien.
     Precharge { chemin: String, reste: bool },
-    Piece { fichier: PathBuf, ouvrir: bool },
-    Marque,
+    Piece { fichier: PathBuf, ouvrir: bool, joindre: bool },
+    Marque { discret: bool },
     Deplace { cible: i64, chemin_cible: String, rapport: Rapport },
     /// Corbeille et indésirables de ce compte vidés : `nombre` messages effacés.
     Vide { nombre: u32 },
@@ -800,12 +819,8 @@ impl qobject::Boite {
             if c.replie {
                 continue;
             }
-            let visibles: Vec<DossierLocal> = magasin
-                .dossiers(c.id)
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|d| masques || !d.masque)
-                .collect();
+            let tous = magasin.dossiers(c.id).unwrap_or_default();
+            let visibles = if masques { tous } else { sans_masques(tous) };
             for (d, enfants) in arbre_visible(&visibles) {
                 lignes.push(json_dossier("dossier", d, &c.adresse, d.profondeur, enfants));
             }
@@ -939,7 +954,11 @@ impl qobject::Boite {
     }
 
     pub fn ouvrir_piece(self: Pin<&mut Self>, uid: i32, indice: i32) -> bool {
-        self.demander_piece(uid, indice, None)
+        self.demander_piece(uid, indice, None, false)
+    }
+
+    pub fn joindre_piece(self: Pin<&mut Self>, uid: i32, indice: i32) -> bool {
+        self.demander_piece(uid, indice, None, true)
     }
 
     pub fn enregistrer_piece(mut self: Pin<&mut Self>, uid: i32, indice: i32, url: &QString) -> bool {
@@ -948,7 +967,7 @@ impl qobject::Boite {
             self.as_mut().set_erreur(QString::from("emplacement d'enregistrement invalide"));
             return false;
         }
-        self.demander_piece(uid, indice, Some(PathBuf::from(chemin)))
+        self.demander_piece(uid, indice, Some(PathBuf::from(chemin)), false)
     }
 
     pub fn marquer_lu(mut self: Pin<&mut Self>, uids: &QString, lu: bool) -> bool {
@@ -964,7 +983,7 @@ impl qobject::Boite {
             let _ = magasin.marquer_lu(id, &uids, lu);
         }
         self.as_mut().reviser();
-        self.as_mut().envoyer(compte, Commande::MarquerLu { chemin, uids, lu })
+        self.as_mut().envoyer(compte, Commande::MarquerLu { chemin, uids, lu, discret: false })
     }
 
     pub fn marquer_suivi(mut self: Pin<&mut Self>, uids: &QString, suivi: bool) -> bool {
@@ -1294,7 +1313,13 @@ impl qobject::Boite {
         self.as_mut().set_dossier_courant(chemin);
     }
 
-    fn demander_piece(mut self: Pin<&mut Self>, uid: i32, indice: i32, destination: Option<PathBuf>) -> bool {
+    fn demander_piece(
+        mut self: Pin<&mut Self>,
+        uid: i32,
+        indice: i32,
+        destination: Option<PathBuf>,
+        joindre: bool,
+    ) -> bool {
         if uid <= 0 || indice < 0 {
             return false;
         }
@@ -1303,11 +1328,11 @@ impl qobject::Boite {
         };
         // Pièce d'un message gardé sur le poste : écrite sans réseau.
         if let Some((octets, _)) = self.sur_le_poste(dossier, uid as u32) {
-            let ouvrir = destination.is_none();
-            let travail = dossier_pieces(&self.profil).join(format!("{compte}-{uid}-{indice}"));
-            return match ecrire_piece_de(&octets, indice as usize, destination, &travail) {
+            let ouvrir = destination.is_none() && !joindre;
+            let travail = dossier_travail_piece(&self.profil, compte, uid as u32, indice as usize, joindre);
+            return match ecrire_piece_de(&octets, indice as usize, destination, &travail, ouvrir) {
                 Ok(fichier) => {
-                    self.as_mut().recevoir(compte, Issue::Piece { fichier, ouvrir });
+                    self.as_mut().recevoir(compte, Issue::Piece { fichier, ouvrir, joindre });
                     true
                 }
                 Err(m) => {
@@ -1318,7 +1343,7 @@ impl qobject::Boite {
         }
         self.as_mut().envoyer(
             compte,
-            Commande::Piece { chemin, uid: uid as u32, indice: indice as usize, destination },
+            Commande::Piece { chemin, uid: uid as u32, indice: indice as usize, destination, joindre },
         )
     }
 
@@ -1342,9 +1367,15 @@ impl qobject::Boite {
                 }
                 self.as_mut().recevoir(compte, Issue::Corps { uid, lu: preparation, marque: false });
                 // Le marquage « lu » part au serveur s'il est joignable ; hors
-                // connexion, le message reste non lu.
+                // connexion, le message reste non lu. L'index et la ligne de la
+                // liste changent tout de suite, sans relire le dossier.
                 if !brut && !lu && en_ligne {
-                    self.as_mut().envoyer(compte, Commande::MarquerLu { chemin, uids: vec![uid], lu: true });
+                    if let Some(magasin) = self.magasin.as_ref() {
+                        let _ = magasin.marquer_lu(dossier, &[uid], true);
+                    }
+                    self.as_mut().reviser();
+                    self.as_mut().lus_modifies(&QString::from(&uid.to_string()), true);
+                    self.as_mut().envoyer(compte, Commande::MarquerLu { chemin, uids: vec![uid], lu: true, discret: true });
                 }
                 return true;
             }
@@ -1491,8 +1522,11 @@ impl qobject::Boite {
             }
             Issue::Corps { uid, lu, marque } => {
                 if marque {
+                    // Les compteurs de l'arborescence, et la seule ligne du
+                    // message : relire la liste entière ralentissait le passage
+                    // d'un message à l'autre.
                     self.as_mut().reviser();
-                    self.as_mut().drapeaux_modifies();
+                    self.as_mut().lus_modifies(&QString::from(&uid.to_string()), true);
                 }
                 self.as_mut().corps_recu(
                     uid as i32,
@@ -1512,14 +1546,20 @@ impl qobject::Boite {
                 self.as_mut().reviser();
                 self.as_mut().differes_envoyes(nombre as i32, &QString::from(&erreurs));
             }
-            Issue::Piece { fichier, ouvrir } => {
+            Issue::Piece { fichier, ouvrir, joindre } => {
                 let chemin = QString::from(fichier.to_string_lossy().as_ref());
                 let url = QUrl::from_local_file(&chemin).to_qstring();
-                self.as_mut().piece_ecrite(&url, &chemin, ouvrir);
+                if joindre {
+                    self.as_mut().piece_a_joindre(&url);
+                } else {
+                    self.as_mut().piece_ecrite(&url, &chemin, ouvrir);
+                }
             }
-            Issue::Marque => {
+            Issue::Marque { discret } => {
                 self.as_mut().reviser();
-                self.as_mut().drapeaux_modifies();
+                if !discret {
+                    self.as_mut().drapeaux_modifies();
+                }
             }
             Issue::Deplace { cible, chemin_cible, rapport } => {
                 // La cible a changé aussi : ses compteurs, et sa liste si c'est
@@ -1639,6 +1679,13 @@ fn dossier_affichage(profil: &str) -> PathBuf {
         .parent()
         .map(|p| p.join("affichage"))
         .unwrap_or_else(|| PathBuf::from("affichage"))
+}
+
+/// Dossier de travail d'une pièce jointe écrite pour être ouverte, ou jointe
+/// à une rédaction : un par pièce, le nom d'origine pouvant se répéter.
+fn dossier_travail_piece(profil: &str, compte: i64, uid: u32, indice: usize, joindre: bool) -> PathBuf {
+    let prefixe = if joindre { "joindre-" } else { "" };
+    dossier_pieces(profil).join(format!("{prefixe}{compte}-{uid}-{indice}"))
 }
 
 /// Images des signatures, à côté de l'index : l'un des deux seuls dossiers
@@ -1896,22 +1943,22 @@ impl Travail {
                     Err(err) => echec("message", format!("lecture du message {uid} : {err}"), &err),
                 })
             }
-            Commande::Piece { chemin, uid, indice, destination } => {
-                let ouvrir = destination.is_none();
-                let dossier = dossier_pieces(&self.profil).join(format!("{compte}-{uid}-{indice}"));
-                Some(match ecrire_piece(e, &chemin, uid, indice, destination, &dossier) {
-                    Ok(fichier) => Issue::Piece { fichier, ouvrir },
+            Commande::Piece { chemin, uid, indice, destination, joindre } => {
+                let ouvrir = destination.is_none() && !joindre;
+                let dossier = dossier_travail_piece(&self.profil, compte, uid, indice, joindre);
+                Some(match ecrire_piece(e, &chemin, uid, indice, destination, &dossier, ouvrir) {
+                    Ok(fichier) => Issue::Piece { fichier, ouvrir, joindre },
                     Err(err) => echec("piece", format!("pièce jointe : {err}"), &err),
                 })
             }
             Commande::MarquerSuivi { chemin, uids, suivi } => {
                 Some(match synchro::marquer_suivi(&mut e.client, &e.magasin, compte, &chemin, &uids, suivi) {
-                    Ok(()) => Issue::Marque,
+                    Ok(()) => Issue::Marque { discret: false },
                     Err(err) => echec("tri", format!("drapeau de suivi : {err}"), &err),
                 })
             }
             Commande::Confirmer { chemin, uid, identifiants } => Some(match self.confirmer(e, &chemin, uid, identifiants) {
-                Ok(()) => Issue::Marque,
+                Ok(()) => Issue::Marque { discret: false },
                 Err(message) => Issue::Echec { etape: "message", message, session_perdue: false },
             }),
             Commande::EnvoyerDifferes { identifiants } => match self.envoyer_differes(e, &identifiants) {
@@ -1919,9 +1966,9 @@ impl Travail {
                 Ok((nombre, erreurs)) => Some(Issue::DifferesEnvoyes { nombre, erreurs: erreurs.join(" ; ") }),
                 Err(message) => Some(Issue::DifferesEnvoyes { nombre: 0, erreurs: message }),
             },
-            Commande::MarquerLu { chemin, uids, lu } => {
+            Commande::MarquerLu { chemin, uids, lu, discret } => {
                 Some(match synchro::marquer_lu(&mut e.client, &e.magasin, compte, &chemin, &uids, lu) {
-                    Ok(()) => Issue::Marque,
+                    Ok(()) => Issue::Marque { discret },
                     Err(err) => echec("tri", format!("marquage : {err}"), &err),
                 })
             }
@@ -2653,23 +2700,31 @@ fn ecrire_piece(
     indice: usize,
     destination: Option<PathBuf>,
     dossier: &Path,
+    pour_ouvrir: bool,
 ) -> Result<PathBuf, Echec> {
     assurer_selection(&mut e.client, chemin)?;
     let octets = e.client.corps(uid)?;
-    ecrire_piece_de(&octets, indice, destination, dossier).map_err(|m| Echec::Index(crate::magasin::Erreur(m)))
+    ecrire_piece_de(&octets, indice, destination, dossier, pour_ouvrir)
+        .map_err(|m| Echec::Index(crate::magasin::Erreur(m)))
 }
 
 /// Écrit l'une des pièces jointes d'un message entier : à l'emplacement
-/// choisi, ou dans `dossier` pour l'ouvrir. Une pièce exécutable n'est jamais
-/// écrite pour être ouverte — le refus est ici, et pas seulement dans
-/// l'interface.
-fn ecrire_piece_de(octets: &[u8], indice: usize, destination: Option<PathBuf>, dossier: &Path) -> Result<PathBuf, String> {
+/// choisi, ou dans `dossier` pour l'ouvrir ou la joindre. Une pièce
+/// exécutable n'est jamais écrite pour être ouverte (`pour_ouvrir`) — le refus
+/// est ici, et pas seulement dans l'interface.
+fn ecrire_piece_de(
+    octets: &[u8],
+    indice: usize,
+    destination: Option<PathBuf>,
+    dossier: &Path,
+    pour_ouvrir: bool,
+) -> Result<PathBuf, String> {
     let (nom, contenu) =
         crate::index::extraire_piece(octets, indice).ok_or_else(|| format!("pièce jointe {indice} introuvable"))?;
     let fichier = match destination {
         Some(destination) => destination,
         None => {
-            if crate::index::ouverture_risquee(&nom) {
+            if pour_ouvrir && crate::index::ouverture_risquee(&nom) {
                 return Err(format!("{nom} est un programme ou un script : enregistrez-le plutôt que de l'ouvrir"));
             }
             std::fs::create_dir_all(dossier).map_err(|x| format!("{} : {x}", dossier.display()))?;
@@ -2692,6 +2747,26 @@ fn echec(etape: &'static str, message: String, erreur: &Echec) -> Issue {
 // ---------------------------------------------------------------- sérialisation
 
 /// Sérialise un dossier pour l'interface.
+/// Vrai si `d` est dans `parent`, à quelque profondeur que ce soit : la
+/// parenté se lit au chemin — « A/B/C » est sous « A ».
+fn est_sous(parent: &DossierLocal, d: &DossierLocal) -> bool {
+    !parent.separateur.is_empty()
+        && d.chemin.len() > parent.chemin.len() + parent.separateur.len()
+        && d.chemin.starts_with(&parent.chemin)
+        && d.chemin[parent.chemin.len()..].starts_with(&parent.separateur)
+}
+
+/// Dossiers montrés quand les dossiers masqués sont cachés : ni un dossier
+/// masqué, ni rien de ce qu'il contient — ses sous-dossiers réapparaissaient
+/// seuls, à la racine (retour de Manu, 01/10).
+fn sans_masques(dossiers: Vec<DossierLocal>) -> Vec<DossierLocal> {
+    let masques: Vec<DossierLocal> = dossiers.iter().filter(|d| d.masque).cloned().collect();
+    dossiers
+        .into_iter()
+        .filter(|d| !d.masque && !masques.iter().any(|p| est_sous(p, d)))
+        .collect()
+}
+
 /// Dossiers d'un compte tels que l'arborescence les montre : chacun suivi de
 /// ses sous-dossiers — et non plus à sa place dans l'ordre alphabétique, où
 /// « INBOX/Banque » tombait après « Eléments infectés » et semblait en
@@ -2701,12 +2776,7 @@ fn echec(etape: &'static str, message: String, erreur: &Echec) -> Issue {
 /// (boîte de réception, dossiers à rôle, puis les autres) ; les
 /// sous-dossiers suivent l'ordre alphabétique, sans égard aux majuscules.
 fn arbre_visible(dossiers: &[DossierLocal]) -> Vec<(&DossierLocal, bool)> {
-    let sous = |parent: &DossierLocal, d: &DossierLocal| {
-        !parent.separateur.is_empty()
-            && d.chemin.len() > parent.chemin.len() + parent.separateur.len()
-            && d.chemin.starts_with(&parent.chemin)
-            && d.chemin[parent.chemin.len()..].starts_with(&parent.separateur)
-    };
+    let sous = est_sous;
     // Parent direct : le plus long des dossiers qui contiennent celui-ci.
     let parents: Vec<Option<usize>> = dossiers
         .iter()
@@ -2887,7 +2957,7 @@ mod tests {
             uids: vec![1],
             cible: Cible { compte: 1, chemin: "Archives".into(), identifiants: None },
         };
-        let marquer = Commande::MarquerLu { chemin: "INBOX".into(), uids: vec![2], lu: true };
+        let marquer = Commande::MarquerLu { chemin: "INBOX".into(), uids: vec![2], lu: true, discret: false };
         let (file, abandonnees) =
             regrouper(vec![dossier("INBOX"), deplacer, marquer, dossier("Sent"), corps(9)]);
         assert_eq!(noms(&file), vec!["deplacer", "marquer", "ouvrir Sent", "corps 9"]);
@@ -3018,6 +3088,20 @@ mod tests {
                      d("ClientsB", false), d("Archives", false), d("Archives/2025", false)];
         let vus: Vec<(&str, bool)> = arbre_visible(&liste).into_iter().map(|(d, e)| (d.chemin.as_str(), e)).collect();
         assert_eq!(vus, vec![("INBOX", false), ("Clients", true), ("ClientsB", false), ("Archives", true), ("Archives/2025", false)]);
+    }
+
+    #[test]
+    fn masquer_un_dossier_masque_sa_descendance() {
+        let d = |chemin: &str, masque: bool| DossierLocal {
+            chemin: chemin.into(),
+            separateur: "/".into(),
+            masque,
+            ..Default::default()
+        };
+        let liste = vec![d("INBOX", false), d("Archives", true), d("Archives/2025", false),
+                         d("Archives/2025/Mars", false), d("ArchivesB", false)];
+        let restants: Vec<String> = sans_masques(liste).into_iter().map(|d| d.chemin).collect();
+        assert_eq!(restants, vec!["INBOX", "ArchivesB"]);
     }
 
     #[test]

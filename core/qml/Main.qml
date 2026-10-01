@@ -1054,7 +1054,14 @@ ApplicationWindow {
             function pret() {
                 chargement = true
                 var i = identiteChoisie()
-                mef.poserTexte(i.nouveaux && i.signature.length > 0 ? "\n\n" + i.signature : "")
+                if (i.nouveaux && i.html.length > 0) {
+                    // Signature avec images : elle exige la mise en forme.
+                    miseEnForme = true
+                    mef.poserTexte("\n\n")
+                    mef.insererHtml(2, i.html)
+                } else {
+                    mef.poserTexte(i.nouveaux && i.signature.length > 0 ? "\n\n" + i.signature : "")
+                }
                 corpsRedaction.cursorPosition = 0
                 chargement = false
                 occupe = false
@@ -1062,8 +1069,18 @@ ApplicationWindow {
                 champA.forceActiveFocus()
             }
 
+            /// HTML de la rédaction, tel qu'il partirait (scénarios d'essai).
+            function htmlActuel() {
+                return mef.html()
+            }
+
             function insererSignature() {
                 var i = identiteChoisie()
+                if (i.html.length > 0) {
+                    miseEnForme = true
+                    mef.insererHtml(corpsRedaction.cursorPosition, i.html)
+                    return
+                }
                 if (i.signature.length === 0) {
                     signaler(qsTr("Aucune signature pour ce compte : menu « Comptes », « Nom et signature… »."), true)
                     return
@@ -1102,9 +1119,16 @@ ApplicationWindow {
                     mef.poserHtml(p.html)
                 } else {
                     var i = identiteChoisie()
-                    var signature = p.mode !== "brouillon" && i.reponses && i.signature.length > 0
-                                  ? "\n\n" + i.signature : ""
-                    mef.poserTexte(signature + (p.texte || ""))
+                    var avecSignature = p.mode !== "brouillon" && i.reponses
+                    if (avecSignature && i.html.length > 0) {
+                        // La signature entre les deux lignes vides et le texte cité.
+                        miseEnForme = true
+                        mef.poserTexte("\n\n" + (p.texte || ""))
+                        mef.insererHtml(2, i.html)
+                    } else {
+                        var signature = avecSignature && i.signature.length > 0 ? "\n\n" + i.signature : ""
+                        mef.poserTexte(signature + (p.texte || ""))
+                    }
                 }
                 brouillonUid = p.brouillonUid || 0
                 brouillonChemin = p.brouillonChemin || ""
@@ -2056,6 +2080,11 @@ ApplicationWindow {
                     color: model.etat === "erreur" ? "#b00020" : fenetre.palette.windowText
                     opacity: 0.7
                     font.pointSize: fenetre.tailleArborescence * 0.85
+                    // Le motif de l'erreur reste lisible au survol, une fois le
+                    // message passager effacé.
+                    HoverHandler { id: survolEtat }
+                    ToolTip.visible: survolEtat.hovered && model.motif.length > 0
+                    ToolTip.text: model.motif
                 }
                 Label {
                     visible: ligne.estDossier && model.nonLus > 0
@@ -2724,8 +2753,9 @@ ApplicationWindow {
         title: qsTr("Nom et signature")
         modal: true
         anchors.centerIn: Overlay.overlay
-        width: Math.min(560, fenetre.width - 24)
+        width: Math.min(760, fenetre.width - 24)
         standardButtons: Dialog.Ok | Dialog.Cancel
+        property string note: ""
         function ouvrir(compte) {
             var i = 0
             for (var k = 0; k < fenetre.comptesConnus.length; ++k)
@@ -2742,12 +2772,20 @@ ApplicationWindow {
         function charger() {
             var i = fenetre.identite(adresse())
             champNomAffiche.text = i.nom
-            champSignature.text = i.signature
+            if (i.html.length > 0)
+                mefSignature.poserHtml(i.html)
+            else
+                mefSignature.poserTexte(i.signature)
+            champSignature.cursorPosition = 0
             caseSignatureNouveaux.checked = i.nouveaux
             caseSignatureReponses.checked = i.reponses
+            note = ""
         }
+        // Deux versions : le texte, pour les messages sans mise en forme, et
+        // le HTML s'il y a de quoi — images, gras, liens.
         onAccepted: fenetre.poserIdentite(adresse(), {
-            nom: champNomAffiche.text.trim(), signature: champSignature.text,
+            nom: champNomAffiche.text.trim(), signature: mefSignature.texte(),
+            html: mefSignature.enrichi() ? mefSignature.html() : "",
             nouveaux: caseSignatureNouveaux.checked, reponses: caseSignatureReponses.checked })
 
         ColumnLayout {
@@ -2773,15 +2811,85 @@ ApplicationWindow {
                 placeholderText: qsTr("Prénom Nom")
             }
             Label { text: qsTr("Signature :") }
+            // Barre de mise en forme de la signature ; les boutons ne prennent
+            // pas le focus, la sélection reste celle sur laquelle ils agissent.
+            Flow {
+                Layout.fillWidth: true
+                spacing: 4
+                ToolButton {
+                    text: qsTr("G")
+                    font.bold: true
+                    checkable: true
+                    checked: mefSignature.gras
+                    focusPolicy: Qt.NoFocus
+                    onClicked: mefSignature.basculerGras()
+                }
+                ToolButton {
+                    text: qsTr("I")
+                    font.italic: true
+                    checkable: true
+                    checked: mefSignature.italique
+                    focusPolicy: Qt.NoFocus
+                    onClicked: mefSignature.basculerItalique()
+                }
+                ToolButton {
+                    text: qsTr("S")
+                    font.underline: true
+                    checkable: true
+                    checked: mefSignature.souligne
+                    focusPolicy: Qt.NoFocus
+                    onClicked: mefSignature.basculerSouligne()
+                }
+                ToolButton {
+                    text: qsTr("Lien…")
+                    focusPolicy: Qt.NoFocus
+                    onClicked: dlgLienSignature.open()
+                }
+                ToolButton {
+                    text: qsTr("Image…")
+                    focusPolicy: Qt.NoFocus
+                    onClicked: choixImageSignature.open()
+                }
+                ToolButton {
+                    text: qsTr("Importer une signature Outlook…")
+                    focusPolicy: Qt.NoFocus
+                    onClicked: choixImportSignature.open()
+                    ToolTip.visible: hovered
+                    ToolTip.delay: 600
+                    ToolTip.text: qsTr("Le fichier .htm du dossier %APPDATA%\\Microsoft\\Signatures, avec ses images.")
+                }
+                ToolButton {
+                    text: qsTr("Effacer la mise en forme")
+                    focusPolicy: Qt.NoFocus
+                    onClicked: mefSignature.effacerMiseEnForme()
+                }
+            }
             ScrollView {
                 Layout.fillWidth: true
-                Layout.preferredHeight: 140
+                Layout.preferredHeight: Math.min(320, fenetre.height * 0.4)
                 TextArea {
                     id: champSignature
+                    textFormat: TextEdit.RichText
                     wrapMode: TextEdit.Wrap
+                    selectByMouse: true
                     placeholderText: qsTr("Prénom Nom\nFonction — Société\nTéléphone")
-                    background: Rectangle { color: fenetre.palette.base; border.color: fenetre.palette.mid }
+                    color: "#1f1f1f"
+                    background: Rectangle { color: "#ffffff"; border.color: fenetre.palette.mid }
                 }
+            }
+            MiseEnForme {
+                id: mefSignature
+                document: champSignature.textDocument
+                curseur: champSignature.cursorPosition
+                debut: champSignature.selectionStart
+                fin: champSignature.selectionEnd
+            }
+            Label {
+                visible: dlgIdentite.note.length > 0
+                text: dlgIdentite.note
+                color: "#b00020"
+                wrapMode: Text.Wrap
+                Layout.fillWidth: true
             }
             CheckBox {
                 id: caseSignatureNouveaux
@@ -2790,6 +2898,57 @@ ApplicationWindow {
             CheckBox {
                 id: caseSignatureReponses
                 text: qsTr("L'ajouter aux réponses et aux transferts")
+            }
+        }
+
+        FileDialog {
+            id: choixImageSignature
+            title: qsTr("Insérer une image dans la signature")
+            nameFilters: [qsTr("Images (*.png *.jpg *.jpeg *.gif *.bmp *.webp)")]
+            onAccepted: {
+                var url = boite.imageSignature(dlgIdentite.adresse(), selectedFile)
+                if (url.length > 0) {
+                    mefSignature.insererImage(url, 640)
+                    dlgIdentite.note = ""
+                } else {
+                    dlgIdentite.note = boite.erreur
+                }
+            }
+        }
+        FileDialog {
+            id: choixImportSignature
+            title: qsTr("Importer une signature Outlook")
+            nameFilters: [qsTr("Signatures (*.htm *.html)")]
+            onAccepted: {
+                var html = boite.importerSignature(dlgIdentite.adresse(), selectedFile)
+                if (html.length > 0) {
+                    mefSignature.poserHtml(html)
+                    champSignature.cursorPosition = 0
+                    dlgIdentite.note = ""
+                } else {
+                    dlgIdentite.note = boite.erreur
+                }
+            }
+        }
+        Dialog {
+            id: dlgLienSignature
+            title: qsTr("Insérer un lien")
+            modal: true
+            anchors.centerIn: parent
+            width: Math.min(520, dlgIdentite.width - 24)
+            standardButtons: Dialog.Ok | Dialog.Cancel
+            onOpened: {
+                champLienSignature.text = "https://"
+                champLienSignature.forceActiveFocus()
+                champLienSignature.cursorPosition = champLienSignature.text.length
+            }
+            onAccepted: mefSignature.poserLien(champLienSignature.text)
+            TextField {
+                id: champLienSignature
+                anchors.left: parent.left
+                anchors.right: parent.right
+                inputMethodHints: Qt.ImhUrlCharactersOnly | Qt.ImhNoAutoUppercase
+                onAccepted: dlgLienSignature.accept()
             }
         }
     }
@@ -2968,7 +3127,10 @@ ApplicationWindow {
                     + "(Ctrl+U), listes, liens ; décochez « Mise en forme » pour un message en texte "
                     + "brut. En tapant un destinataire, les adresses connues sont proposées : flèches "
                     + "et Entrée pour choisir. Nom affiché et signature de chaque compte : menu "
-                    + "« Comptes », « Nom et signature… ». Menu « Options » : importance, accusé "
+                    + "« Comptes », « Nom et signature… » — la signature peut porter des images "
+                    + "(« Image… ») ou reprendre celle d'Outlook (« Importer une signature "
+                    + "Outlook… », le fichier .htm de %APPDATA%\\Microsoft\\Signatures). "
+                    + "Menu « Options » : importance, accusé "
                     + "de réception, confirmation de lecture, envoi différé — le message attend "
                     + "dans « Envoi différé » et part à l'heure dite si MMail est ouvert.<br><br>"
                     + "<b>Suivi</b><br>"
@@ -3237,6 +3399,10 @@ ApplicationWindow {
                 fenetre.etapeScenario()
             if (fenetre.essai && fenetre.essai.scenario === "glisser")
                 fenetre.etapeScenarioGlisser()
+            if (fenetre.essai && fenetre.essai.scenario === "chevron")
+                fenetre.etapeScenarioChevron()
+            if (fenetre.essai && fenetre.essai.scenario.indexOf("signature") === 0)
+                fenetre.etapeScenarioSignature()
         }
 
         function onDrapeauxModifies() {
@@ -3279,6 +3445,8 @@ ApplicationWindow {
         }
 
         function onEnvoye(jeton, avertissement) {
+            if (fenetre.essai && fenetre.essai.scenario)
+                console.log("scenario: envoyé", avertissement)
             var r = fenetre.redactions[jeton]
             if (r)
                 r.conteneur.fermerRedaction()
@@ -3313,6 +3481,8 @@ ApplicationWindow {
         }
 
         function onEchecRedaction(jeton, message) {
+            if (fenetre.essai && fenetre.essai.scenario)
+                console.log("scenario: échec de la rédaction :", message)
             var r = fenetre.redactions[jeton]
             if (r)
                 r.echouer(message)
@@ -3637,6 +3807,7 @@ ApplicationWindow {
             hote: l.hote || "",
             etat: l.etat || "",
             replie: l.replie === true,
+            motif: l.motif || "",
             chemin: l.chemin || "",
             nom: l.nom || "",
             profondeur: l.profondeur || 0,
@@ -3837,7 +4008,7 @@ ApplicationWindow {
         var table = {}
         try { table = JSON.parse(reglagesRedaction.identites) } catch (e) { table = {} }
         var i = table[adresse] || {}
-        return { nom: i.nom || "", signature: i.signature || "",
+        return { nom: i.nom || "", signature: i.signature || "", html: i.html || "",
                  nouveaux: i.nouveaux !== false, reponses: i.reponses !== false }
     }
 
@@ -4164,7 +4335,9 @@ ApplicationWindow {
                 && identifiantsEssai.hote) {
             essai = { afficherPremier: !identifiantsEssai.scenario
                                        || identifiantsEssai.scenario === "pieces"
-                                       || identifiantsEssai.scenario === "images",
+                                       || identifiantsEssai.scenario === "images"
+                                       || identifiantsEssai.scenario === "chevron"
+                                       || identifiantsEssai.scenario.indexOf("signature") === 0,
                       connecter2: null, scenario: identifiantsEssai.scenario || "",
                       etape: 0, sujet: "", examines: 0 }
             if (identifiantsEssai.utilisateur2)
@@ -4184,6 +4357,75 @@ ApplicationWindow {
         }
         for (var i = 0; i < comptes.length; ++i)
             connecterCompte(comptes[i])
+    }
+
+    /// Scénario d'essai « signature » : importe la signature Outlook déposée
+    /// dans le dossier de sortie (signature.htm et ses images), la pose sur le
+    /// compte, rédige un message à `MMAIL_DESTINATAIRE` et l'envoie.
+    function etapeScenarioSignature() {
+        if (essai.signatureFaite)
+            return
+        essai.signatureFaite = true
+        var a = comptesConnus[0]
+        var html = boite.importerSignature(a.adresse, identifiantsEssai.sortie + "/signature.htm")
+        console.log("scenario: signature importée :", html.length, "caractères", boite.erreur)
+        poserIdentite(a.adresse, { nom: "Essai MMail", signature: "Essai MMail", html: html,
+                                   nouveaux: true, reponses: true })
+        if (essai.scenario === "signature-vue") {
+            dlgIdentite.ouvrir(a.compte)
+            return
+        }
+        var r = ouvrirRedaction(a.compte)
+        essai.objetSignature = "Essai signature HTML " + Date.now()
+        r.remplir({ a: identifiantsEssai.utilisateur2, objet: essai.objetSignature, mode: "nouveau" })
+        var corps = r.htmlActuel()
+        console.log("scenario: rédaction :", (corps.match(/<img[^>]*>/g) || []).join(" "))
+        r.envoyer(false)
+    }
+
+    /// Scénario d'essai « chevron » : un clic sur le chevron du dossier
+    /// « Essais », tel que la ligne le reçoit, doit replier ses sous-dossiers ;
+    /// un second, les déplier.
+    function etapeScenarioChevron() {
+        if (essai.etapeChevron === undefined)
+            essai.etapeChevron = 0
+        // Trois clics, chacun à un tour de boucle d'événements du précédent :
+        // replier « INBOX/Fournisseurs », le déplier, replier la boîte de
+        // réception.
+        var cibles = ["INBOX/Fournisseurs", "INBOX/Fournisseurs", "INBOX"]
+        if (essai.etapeChevron >= cibles.length)
+            return
+        var present = function(chemin) {
+            for (var k = 0; k < modeleArborescence.count; ++k) {
+                var l = modeleArborescence.get(k)
+                if (l.genre === "dossier" && l.chemin === chemin)
+                    return k
+            }
+            return -1
+        }
+        var etat = function() {
+            var noms = []
+            for (var k = 0; k < modeleArborescence.count; ++k) {
+                var l = modeleArborescence.get(k)
+                if (l.genre === "dossier")
+                    noms.push(l.chemin + (l.enfants ? (l.replie ? "[+]" : "[-]") : ""))
+            }
+            return noms.join(" | ")
+        }
+        var cible = cibles[essai.etapeChevron]
+        var i = present(cible)
+        var ligne = i >= 0 ? vueArborescence.itemAtIndex(i) : null
+        var x = -1
+        for (var t = 0; ligne && t < 120 && x < 0; t += 2)
+            if (ligne.surChevron(t))
+                x = t
+        console.log("scenario: clic sur le chevron de", cible, "à x =", x)
+        if (x < 0)
+            return
+        boite.replierDossier(modeleArborescence.get(i).compte, cible, !modeleArborescence.get(i).replie)
+        console.log("scenario: arbre :", etat())
+        essai.etapeChevron += 1
+        Qt.callLater(etapeScenarioChevron)
     }
 
     /// Scénario d'essai « aller-retour » (MMAIL_SCENARIO) : le premier message

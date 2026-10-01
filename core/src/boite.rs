@@ -286,6 +286,19 @@ pub mod qobject {
         #[cxx_name = "enregistrerBrouillon"]
         fn enregistrer_brouillon(self: Pin<&mut Boite>, compte: i32, redaction: &QString) -> bool;
 
+        /// Importe une signature HTML — celle d'Outlook, fichier `.htm` — pour
+        /// le compte `adresse` : HTML assaini, images copiées dans le profil.
+        /// Rend le HTML, ou une chaîne vide (motif dans `erreur`).
+        #[qinvokable]
+        #[cxx_name = "importerSignature"]
+        fn importer_signature(self: Pin<&mut Boite>, adresse: &QString, url: &QString) -> QString;
+
+        /// Copie une image dans le dossier des signatures du compte `adresse`,
+        /// et rend l'adresse `file:` de la copie (vide en cas d'échec).
+        #[qinvokable]
+        #[cxx_name = "imageSignature"]
+        fn image_signature(self: Pin<&mut Boite>, adresse: &QString, url: &QString) -> QString;
+
         /// Fichier à joindre, désigné par son URL (`file:…`) ou son chemin :
         /// `{chemin, nom, taille}` en JSON, ou une chaîne vide s'il n'existe pas.
         #[qinvokable]
@@ -579,6 +592,10 @@ pub struct BoiteRust {
     sessions: HashMap<i64, Session>,
     identites: HashMap<i64, Identifiants>,
     etats: HashMap<i64, Etat>,
+    /// Motif de la dernière perte de session de chaque compte : l'interface
+    /// le montre au survol de « erreur », quand le message passager s'est
+    /// effacé.
+    motifs: HashMap<i64, String>,
     /// Comptes créés par une connexion pas encore aboutie.
     nouveaux: HashSet<i64>,
     generation: u64,
@@ -600,6 +617,7 @@ impl Default for BoiteRust {
             sessions: HashMap::new(),
             identites: HashMap::new(),
             etats: HashMap::new(),
+            motifs: HashMap::new(),
             nouveaux: HashSet::new(),
             generation: 0,
             courant: None,
@@ -745,13 +763,19 @@ impl qobject::Boite {
             lignes.push(json_dossier("favori", d, &adresse, 0, false));
         }
         for c in &comptes {
+            let motif = if self.etat(c.id).code() == "erreur" {
+                self.motifs.get(&c.id).cloned().unwrap_or_default()
+            } else {
+                String::new()
+            };
             lignes.push(format!(
-                r#"{{"genre":"compte","compte":{},"adresse":{},"hote":{},"etat":{},"replie":{}}}"#,
+                r#"{{"genre":"compte","compte":{},"adresse":{},"hote":{},"etat":{},"replie":{},"motif":{}}}"#,
                 c.id,
                 texte_json(&c.adresse),
                 texte_json(&c.hote),
                 texte_json(self.etat(c.id).code()),
-                c.replie
+                c.replie,
+                texte_json(&motif)
             ));
             if c.replie {
                 continue;
@@ -1119,6 +1143,36 @@ impl qobject::Boite {
         }
     }
 
+    pub fn importer_signature(mut self: Pin<&mut Self>, adresse: &QString, url: &QString) -> QString {
+        let Some(fichier) = QUrl::from(url).to_local_file().map(|c| PathBuf::from(c.to_string())) else {
+            self.as_mut().set_erreur(QString::from("fichier de signature introuvable"));
+            return QString::from("");
+        };
+        let dossier = dossier_signatures(&self.profil).join(crate::signature::nom_de_dossier(&adresse.to_string()));
+        match crate::signature::importer(&fichier, &dossier, &serie_signature()) {
+            Ok(html) => QString::from(&html),
+            Err(e) => {
+                self.as_mut().set_erreur(QString::from(&format!("import de la signature : {e}")));
+                QString::from("")
+            }
+        }
+    }
+
+    pub fn image_signature(mut self: Pin<&mut Self>, adresse: &QString, url: &QString) -> QString {
+        let Some(source) = QUrl::from(url).to_local_file().map(|c| PathBuf::from(c.to_string())) else {
+            self.as_mut().set_erreur(QString::from("image introuvable"));
+            return QString::from("");
+        };
+        let dossier = dossier_signatures(&self.profil).join(crate::signature::nom_de_dossier(&adresse.to_string()));
+        match crate::signature::copier_image(&source, &dossier, &serie_signature()) {
+            Ok(copie) => QString::from(&crate::rendu::url_fichier(&copie)),
+            Err(e) => {
+                self.as_mut().set_erreur(QString::from(&e));
+                QString::from("")
+            }
+        }
+    }
+
     pub fn envoyer_message(mut self: Pin<&mut Self>, compte: i32, redaction: &QString) -> bool {
         let compte = compte as i64;
         let Some(redaction) = self.as_mut().lire_redaction(redaction) else {
@@ -1464,6 +1518,7 @@ impl qobject::Boite {
                         let mut noyau = self.as_mut().rust_mut();
                         noyau.sessions.remove(&compte);
                         noyau.etats.insert(compte, Etat::Erreur);
+                        noyau.motifs.insert(compte, format!("{etape} — {message}"));
                     }
                     if nouveau && (etape == "connexion" || etape == "identifiants") {
                         // Un compte dont la toute première connexion échoue
@@ -1517,6 +1572,46 @@ fn dossier_affichage(profil: &str) -> PathBuf {
         .parent()
         .map(|p| p.join("affichage"))
         .unwrap_or_else(|| PathBuf::from("affichage"))
+}
+
+/// Images des signatures, à côté de l'index : l'un des deux seuls dossiers
+/// d'où une image part intégrée à un message.
+fn dossier_signatures(profil: &str) -> PathBuf {
+    Path::new(profil).parent().map(|p| p.join("signatures")).unwrap_or_else(|| PathBuf::from("signatures"))
+}
+
+/// Images des brouillons repris, l'autre dossier autorisé.
+fn dossier_images_redaction(profil: &str) -> PathBuf {
+    Path::new(profil)
+        .parent()
+        .map(|p| p.join("images-redaction"))
+        .unwrap_or_else(|| PathBuf::from("images-redaction"))
+}
+
+/// Préfixe unique des fichiers d'une signature : une image remplacée ne
+/// réutilise jamais le nom d'une autre, que le moteur de Qt garde en cache.
+fn serie_signature() -> String {
+    format!("{}-{}", maintenant(), SERIE_AFFICHAGE.fetch_add(1, Ordering::Relaxed))
+}
+
+/// Image désignée par une adresse `file:` du HTML à envoyer, si elle est dans
+/// l'un des dossiers autorisés du profil. Le HTML vient de la fenêtre de
+/// rédaction, mais un brouillon repris ou un texte collé peut désigner
+/// n'importe quel fichier : il ne part jamais.
+fn image_autorisee(profil: &str, adresse: &str) -> Option<(String, Vec<u8>)> {
+    let chemin = crate::rendu::chemin_de_url(adresse)?.canonicalize().ok()?;
+    let autorise = [dossier_signatures(profil), dossier_images_redaction(profil)]
+        .iter()
+        .filter_map(|d| d.canonicalize().ok())
+        .any(|d| chemin.starts_with(d));
+    if !autorise {
+        return None;
+    }
+    let type_mime = crate::rendu::type_image(&chemin.to_string_lossy())?;
+    (std::fs::metadata(&chemin).ok()?.len() <= 10 * 1024 * 1024)
+        .then(|| std::fs::read(&chemin).ok())
+        .flatten()
+        .map(|octets| (type_mime.to_string(), octets))
 }
 
 /// « 3,5,7 » → [3, 5, 7] ; ce qui n'est pas un nombre est ignoré.
@@ -2071,6 +2166,17 @@ impl Travail {
         resultat
     }
 
+    /// La rédaction, ses images locales autorisées remplacées par `cid:`, et
+    /// ces images.
+    fn avec_images(&self, r: &Redaction) -> (Redaction, Vec<redaction::ImageIntegree>) {
+        if r.html.is_empty() {
+            return (r.clone(), Vec::new());
+        }
+        let profil = self.profil.clone();
+        let (html, images) = redaction::integrer_images(&r.html, |adresse| image_autorisee(&profil, adresse));
+        (Redaction { html, ..r.clone() }, images)
+    }
+
     fn preparer(&self, e: &mut Etabli, chemin: &str, uid: u32, mode: &str) -> Result<Preparation, String> {
         assurer_selection(&mut e.client, chemin).map_err(|x| x.to_string())?;
         let octets = e.client.corps(uid).map_err(|x| format!("lecture du message : {x}"))?;
@@ -2083,6 +2189,17 @@ impl Travail {
         } else {
             p.origine_chemin = chemin.to_string();
             p.origine_uid = uid;
+        }
+        if mode == "brouillon" && !p.html.is_empty() {
+            // Images du corps (signature) : remises en fichiers, que la
+            // fenêtre de rédaction affiche et que l'envoi réintégrera.
+            let dossier = dossier_images_redaction(&self.profil).join(format!("{}-{uid}-{}", self.compte, serie_signature()));
+            for (rang, (cid, type_mime, contenu)) in redaction::images_du_brouillon(&octets).into_iter().enumerate() {
+                let fichier = dossier.join(format!("i{rang}.{}", crate::rendu::extension_image(&type_mime)));
+                if std::fs::create_dir_all(&dossier).and_then(|_| std::fs::write(&fichier, contenu)).is_ok() {
+                    p.html = p.html.replace(&format!("cid:{cid}"), &crate::rendu::url_fichier(&fichier));
+                }
+            }
         }
         if mode == "transferer" || mode == "brouillon" {
             // Pièces reprises : écrites à part, elles se joignent ensuite comme
@@ -2107,7 +2224,8 @@ impl Travail {
     /// Range un message dans « Envoi différé », daté de son heure d'envoi.
     fn programmer(&self, e: &mut Etabli, r: &Redaction) -> Result<(), String> {
         let fichiers = lire_fichiers(&r.pieces)?;
-        let f = redaction::fabriquer(r, r.envoi_differe, &fichiers)?;
+        let (r_images, images) = self.avec_images(r);
+        let f = redaction::fabriquer_avec_images(&r_images, r.envoi_differe, &fichiers, &images)?;
         if f.destinataires.is_empty() {
             return Err("aucun destinataire".into());
         }
@@ -2122,7 +2240,8 @@ impl Travail {
 
     fn envoyer_redaction(&self, e: &mut Etabli, r: &Redaction, id: &Identifiants) -> Result<String, String> {
         let fichiers = lire_fichiers(&r.pieces)?;
-        let f = redaction::fabriquer(r, maintenant(), &fichiers)?;
+        let (r_images, images) = self.avec_images(r);
+        let f = redaction::fabriquer_avec_images(&r_images, maintenant(), &fichiers, &images)?;
         if f.destinataires.is_empty() {
             return Err("aucun destinataire".into());
         }
@@ -2162,7 +2281,8 @@ impl Travail {
 
     fn enregistrer_brouillon(&self, e: &mut Etabli, r: &Redaction) -> Result<u32, String> {
         let fichiers = lire_fichiers(&r.pieces)?;
-        let f = redaction::fabriquer(r, maintenant(), &fichiers)?;
+        let (r_images, images) = self.avec_images(r);
+        let f = redaction::fabriquer_avec_images(&r_images, maintenant(), &fichiers, &images)?;
         let brouillons =
             self.dossier_de_role(e, "Drafts").ok_or("ce compte n'a pas de dossier des brouillons")?;
         let uid = e
@@ -2290,7 +2410,7 @@ fn poser_images(corps: crate::rendu::CorpsHtml, compte: i64, distantes: bool, at
     let pret = std::fs::create_dir_all(&dossier).is_ok();
     let ecrire = |nom: String, octets: &[u8]| -> Option<String> {
         let fichier = dossier.join(nom);
-        (pret && std::fs::write(&fichier, octets).is_ok()).then(|| url_fichier(&fichier))
+        (pret && std::fs::write(&fichier, octets).is_ok()).then(|| crate::rendu::url_fichier(&fichier))
     };
 
     let mut html = corps.html;
@@ -2360,21 +2480,6 @@ fn telecharger(adresses: &[String]) -> Vec<Option<(String, Vec<u8>)>> {
     resultats
 }
 
-/// Adresse `file:` d'un fichier local, caractères réservés encodés : le
-/// profil peut vivre sous « C:\Users\Jean Dupont\… ».
-fn url_fichier(chemin: &Path) -> String {
-    let texte = chemin.to_string_lossy().replace('\\', "/");
-    let mut url = String::from(if texte.starts_with('/') { "file://" } else { "file:///" });
-    for octet in texte.bytes() {
-        match octet {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' | b':' => {
-                url.push(octet as char)
-            }
-            _ => url.push_str(&format!("%{octet:02X}")),
-        }
-    }
-    url
-}
 
 /// Relit un message et écrit l'une de ses pièces jointes : à l'emplacement
 /// choisi, ou dans `dossier` pour l'ouvrir. Une pièce exécutable n'est jamais
@@ -2421,10 +2526,14 @@ fn echec(etape: &'static str, message: String, erreur: &Echec) -> Issue {
 // ---------------------------------------------------------------- sérialisation
 
 /// Sérialise un dossier pour l'interface.
-/// Dossiers d'un compte tels que l'arborescence les montre : sans les
-/// descendants d'un dossier replié, chacun avec l'indication qu'il a des
-/// sous-dossiers (le chevron). La parenté se lit au chemin — « A/B » est sous
-/// « A » —, pas à l'ordre de la liste, où les dossiers à rôle passent devant.
+/// Dossiers d'un compte tels que l'arborescence les montre : chacun suivi de
+/// ses sous-dossiers — et non plus à sa place dans l'ordre alphabétique, où
+/// « INBOX/Banque » tombait après « Eléments infectés » et semblait en
+/// dépendre —, rien sous un dossier replié, et pour chacun l'indication
+/// qu'il a des sous-dossiers (le chevron). La parenté se lit au chemin :
+/// « A/B » est sous « A ». Les dossiers de tête gardent l'ordre de l'index
+/// (boîte de réception, dossiers à rôle, puis les autres) ; les
+/// sous-dossiers suivent l'ordre alphabétique, sans égard aux majuscules.
 fn arbre_visible(dossiers: &[DossierLocal]) -> Vec<(&DossierLocal, bool)> {
     let sous = |parent: &DossierLocal, d: &DossierLocal| {
         !parent.separateur.is_empty()
@@ -2432,11 +2541,41 @@ fn arbre_visible(dossiers: &[DossierLocal]) -> Vec<(&DossierLocal, bool)> {
             && d.chemin.starts_with(&parent.chemin)
             && d.chemin[parent.chemin.len()..].starts_with(&parent.separateur)
     };
-    dossiers
+    // Parent direct : le plus long des dossiers qui contiennent celui-ci.
+    let parents: Vec<Option<usize>> = dossiers
         .iter()
-        .filter(|d| !dossiers.iter().any(|p| p.replie && sous(p, d)))
-        .map(|d| (d, dossiers.iter().any(|e| sous(d, e))))
-        .collect()
+        .map(|d| {
+            (0..dossiers.len())
+                .filter(|&i| sous(&dossiers[i], d))
+                .max_by_key(|&i| dossiers[i].chemin.len())
+        })
+        .collect();
+    let enfants = |i: Option<usize>| -> Vec<usize> {
+        let mut liste: Vec<usize> = (0..dossiers.len()).filter(|&j| parents[j] == i).collect();
+        if i.is_some() {
+            liste.sort_by_key(|&j| (dossiers[j].nom.to_lowercase(), j));
+        }
+        liste
+    };
+    fn visiter<'a>(
+        i: usize,
+        dossiers: &'a [DossierLocal],
+        enfants: &dyn Fn(Option<usize>) -> Vec<usize>,
+        sortie: &mut Vec<(&'a DossierLocal, bool)>,
+    ) {
+        let directs = enfants(Some(i));
+        sortie.push((&dossiers[i], !directs.is_empty()));
+        if !dossiers[i].replie {
+            for j in directs {
+                visiter(j, dossiers, enfants, sortie);
+            }
+        }
+    }
+    let mut sortie = Vec::with_capacity(dossiers.len());
+    for racine in enfants(None) {
+        visiter(racine, dossiers, &enfants, &mut sortie);
+    }
+    sortie
 }
 
 fn json_dossier(genre: &str, d: &DossierLocal, adresse: &str, profondeur: u32, enfants: bool) -> String {
@@ -2692,6 +2831,7 @@ mod tests {
     fn sous_dossiers_replies() {
         let d = |chemin: &str, replie: bool| DossierLocal {
             chemin: chemin.into(),
+            nom: chemin.rsplit('/').next().unwrap_or(chemin).into(),
             separateur: "/".into(),
             replie,
             ..Default::default()
@@ -2700,6 +2840,40 @@ mod tests {
                      d("ClientsB", false), d("Archives", false), d("Archives/2025", false)];
         let vus: Vec<(&str, bool)> = arbre_visible(&liste).into_iter().map(|(d, e)| (d.chemin.as_str(), e)).collect();
         assert_eq!(vus, vec![("INBOX", false), ("Clients", true), ("ClientsB", false), ("Archives", true), ("Archives/2025", false)]);
+    }
+
+    #[test]
+    fn sous_dossiers_sous_leur_parent() {
+        // L'ordre de l'index : boîte de réception, rôles, puis l'alphabet
+        // binaire — qui plaçait les sous-dossiers de la boîte de réception
+        // après « Eléments infectés ».
+        let d = |chemin: &str, replie: bool| DossierLocal {
+            chemin: chemin.into(),
+            nom: chemin.rsplit('/').next().unwrap_or(chemin).into(),
+            separateur: "/".into(),
+            replie,
+            ..Default::default()
+        };
+        let liste = [d("INBOX", false), d("Sent", false), d("Eléments infectés", false), d("INBOX/Banque", false),
+                     d("INBOX/FRP2I", false), d("INBOX/clients", false), d("INBOX/fournisseurs", false),
+                     d("INBOX/fournisseurs/3CX", false), d("INBOX/fournisseurs/Althus", false), d("Spambox", false)];
+        let ordre = |l: &[DossierLocal]| -> Vec<String> { arbre_visible(l).into_iter().map(|(d, _)| d.chemin.clone()).collect() };
+        assert_eq!(
+            ordre(&liste),
+            vec!["INBOX", "INBOX/Banque", "INBOX/clients", "INBOX/fournisseurs", "INBOX/fournisseurs/3CX",
+                 "INBOX/fournisseurs/Althus", "INBOX/FRP2I", "Sent", "Eléments infectés", "Spambox"]
+        );
+        // Replier « fournisseurs » cache ses sous-dossiers, rien d'autre.
+        let mut repliee = liste.clone();
+        repliee[6].replie = true;
+        assert_eq!(
+            ordre(&repliee),
+            vec!["INBOX", "INBOX/Banque", "INBOX/clients", "INBOX/fournisseurs", "INBOX/FRP2I", "Sent", "Eléments infectés", "Spambox"]
+        );
+        // Replier la boîte de réception cache tout ce qu'elle contient.
+        let mut inbox = liste.clone();
+        inbox[0].replie = true;
+        assert_eq!(ordre(&inbox), vec!["INBOX", "Sent", "Eléments infectés", "Spambox"]);
     }
 
     #[test]
@@ -2720,7 +2894,12 @@ mod tests {
 
     #[test]
     fn adresse_de_fichier() {
+        use crate::rendu::{chemin_de_url, url_fichier};
         assert_eq!(url_fichier(Path::new("/home/a b/é.png")), "file:///home/a%20b/%C3%A9.png");
         assert_eq!(url_fichier(Path::new("C:\\Users\\x#1\\i0.png")), "file:///C:/Users/x%231/i0.png");
+        assert_eq!(chemin_de_url("file:///home/a%20b/%C3%A9.png"), Some(PathBuf::from("/home/a b/é.png")));
+        assert_eq!(chemin_de_url("file:///C:/Users/x%231/i0.png"), Some(PathBuf::from("C:/Users/x#1/i0.png")));
+        assert_eq!(chemin_de_url("file://serveur/partage/x.png"), None);
+        assert_eq!(chemin_de_url("https://exemple.fr/x.png"), None);
     }
 }

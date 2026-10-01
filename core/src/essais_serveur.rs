@@ -463,3 +463,22 @@ fn envoi_smtp_d_une_boite_a_l_autre() {
     assert_eq!(piece.contents(), "contenu d'essai €".as_bytes());
     b.supprimer(&trouves).expect("nettoyage");
 }
+
+#[test]
+#[ignore = "exige un serveur IMAP et un compte"]
+fn vidage_d_un_dossier_d_indesirables() {
+    // Comme le fil de travail : la session a d'abord synchronisé un dossier.
+    let mut a = session();
+    let (magasin, ca, _) = index(&mut a, None);
+    synchro::synchroniser(&mut a, &magasin, ca, "INBOX").expect("synchronisation de INBOX");
+    for i in 0..3 {
+        let (_, brut) = message_essai(&format!("Indésirable {i}"));
+        a.deposer("Junk", &[], DATE_ESSAI, &brut).expect("dépôt dans Junk");
+    }
+    let debut = std::time::Instant::now();
+    let nombre = a.vider("Junk").expect("vidage de Junk");
+    println!("vidage : {nombre} message(s) en {:?}", debut.elapsed());
+    assert!(nombre >= 3);
+    let reste = a.selectionner("Junk", None).expect("SELECT après vidage");
+    assert_eq!(reste.etat.messages, 0);
+}

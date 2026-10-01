@@ -109,6 +109,9 @@ ApplicationWindow {
     // Lien survolé dans le message : son adresse s'affiche dans la barre
     // d'information, comme dans un navigateur — un lien trompeur s'y voit.
     property string lienSurvole: ""
+    // Ce que l'on glisse en ce moment (dossier ou messages) : l'arborescence,
+    // où sont toutes les cibles de dépôt, défile quand il approche de son bord.
+    property var glisse: null
     // Fond de la rubrique Favoris : un cran plus soutenu que celui des
     // comptes, pour qu'elle s'en détache (retour de Manu, 01/10).
     readonly property color fondFavoris: palette.base.hslLightness > 0.5
@@ -370,6 +373,46 @@ ApplicationWindow {
                 model: ListModel { id: modeleArborescence }
                 boundsBehavior: Flickable.StopAtBounds
                 delegate: ligneArborescence
+                // Toutes les lignes restent construites : un dossier qu'on glisse
+                // vers les Favoris fait défiler la liste, et sa ligne d'origine,
+                // qui porte le glisser, ne doit pas être détruite en sortant de
+                // l'écran — le glisser serait annulé.
+                cacheBuffer: 100000
+
+                // Défilement au bord pendant un glisser-déposer (retour de Manu,
+                // 01/10 : les Favoris, en haut, étaient hors d'atteinte).
+                Timer {
+                    interval: 30
+                    repeat: true
+                    running: fenetre.glisse !== null
+                    onTriggered: {
+                        var g = fenetre.glisse
+                        if (!g)
+                            return
+                        var p = g.mapToItem(vueArborescence, g.width / 2, g.height / 2)
+                        if (p.x < 0 || p.x > vueArborescence.width)
+                            return
+                        var bord = 40
+                        var pas = 0
+                        // Plus vite à mesure qu'on s'approche du bord, ou qu'on le passe.
+                        if (p.y < bord && p.y > -2 * bord)
+                            pas = -Math.max(4, (bord - p.y) / 2)
+                        else if (p.y > vueArborescence.height - bord && p.y < vueArborescence.height + 2 * bord)
+                            pas = Math.max(4, (p.y - vueArborescence.height + bord) / 2)
+                        if (pas === 0)
+                            return
+                        var haut = vueArborescence.originY
+                        var bas = Math.max(haut, haut + vueArborescence.contentHeight - vueArborescence.height)
+                        var y = Math.min(bas, Math.max(haut, vueArborescence.contentY + pas))
+                        if (y === vueArborescence.contentY)
+                            return
+                        vueArborescence.contentY = y
+                        // Le contenu a bougé sous un pointeur immobile : la cible
+                        // du dépôt est réévaluée.
+                        g.y += 0.5
+                        g.y -= 0.5
+                    }
+                }
 
                 // Un blanc et un trait au-dessus de chaque compte : la rubrique
                 // Favoris et les boîtes ne se lisent plus comme une seule liste.
@@ -2027,6 +2070,7 @@ ApplicationWindow {
                         ligne.cliquer()
                 }
                 onPressAndHold: ligne.menuLigne()
+                drag.onActiveChanged: fenetre.glisse = drag.active ? etiquetteDossier : null
                 onReleased: {
                     if (drag.active)
                         etiquetteDossier.Drag.drop()
@@ -2255,6 +2299,7 @@ ApplicationWindow {
                     if (souris.button === Qt.LeftButton)
                         fenetre.rediger(fenetre.dossierDeReprise ? "brouillon" : "repondre")
                 }
+                drag.onActiveChanged: fenetre.glisse = drag.active ? etiquette : null
                 onReleased: {
                     if (drag.active)
                         etiquette.Drag.drop()
@@ -3405,6 +3450,8 @@ ApplicationWindow {
                 fenetre.etapeScenarioGlisser()
             if (fenetre.essai && fenetre.essai.scenario === "chevron")
                 fenetre.etapeScenarioChevron()
+            if (fenetre.essai && fenetre.essai.scenario === "defilement")
+                fenetre.etapeScenarioDefilement()
             if (fenetre.essai && fenetre.essai.scenario.indexOf("signature") === 0)
                 fenetre.etapeScenarioSignature()
         }
@@ -4360,6 +4407,33 @@ ApplicationWindow {
         }
         for (var i = 0; i < comptes.length; ++i)
             connecterCompte(comptes[i])
+    }
+
+    /// Scénario d'essai « defilement » : l'arborescence, agrandie pour
+    /// déborder et défilée tout en bas, doit remonter d'elle-même quand un
+    /// élément glissé se tient contre son bord haut.
+    function etapeScenarioDefilement() {
+        if (essai.defilement)
+            return
+        essai.defilement = true
+        reglages.zoomArborescence = 3
+        Qt.callLater(function() {
+            var v = vueArborescence
+            v.contentY = Math.max(v.originY, v.originY + v.contentHeight - v.height)
+            var avant = v.contentY
+            var sonde = Qt.createQmlObject('import QtQuick; Rectangle { width: 40; height: 16 }', fenetre.contentItem)
+            var p = v.mapToItem(fenetre.contentItem, 20, 4)
+            sonde.x = p.x
+            sonde.y = p.y
+            glisse = sonde
+            var attente = Qt.createQmlObject('import QtQuick; Timer { interval: 3000 }', fenetre)
+            attente.triggered.connect(function() {
+                glisse = null
+                console.log("scenario: défilement de", avant, "à", v.contentY, "(haut :", v.originY + ")",
+                            v.contentY <= v.originY + 1 ? "OK" : "ECHEC")
+            })
+            attente.start()
+        })
     }
 
     /// Scénario d'essai « signature » : importe la signature Outlook déposée

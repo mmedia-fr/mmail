@@ -112,6 +112,15 @@ ApplicationWindow {
     // Ce que l'on glisse en ce moment (dossier ou messages) : l'arborescence,
     // où sont toutes les cibles de dépôt, défile quand il approche de son bord.
     property var glisse: null
+    // Rang du message affiché dans la liste : le retrouver par son UID
+    // parcourait toute la liste à chaque changement de message.
+    property int indexCourant: -1
+    // Rédaction qui a reçu le focus en dernier : cible de « Joindre au
+    // message en cours ».
+    property string redactionActive: ""
+    // Rédaction qui attend une pièce jointe en cours d'écriture (« nouveau »
+    // pour en ouvrir une).
+    property string pieceCible: ""
     // Fond de la rubrique Favoris : un cran plus soutenu que celui des
     // comptes, pour qu'elle s'en détache (retour de Manu, 01/10).
     readonly property color fondFavoris: palette.base.hslLightness > 0.5
@@ -1024,6 +1033,7 @@ ApplicationWindow {
             color: fenetre.palette.window
             title: redaction ? redaction.titre : ""
             property alias redaction: chargeurFenetre.item
+            onActiveChanged: if (active && redaction) fenetre.redactionActive = redaction.jeton
             function fermerRedaction() {
                 redaction.fermetureConfirmee = true
                 fenetreRedaction.close()
@@ -1152,6 +1162,10 @@ ApplicationWindow {
                 occupe = false
                 modifie = false
                 champA.forceActiveFocus()
+            }
+
+            function objetActuel() {
+                return champObjet.text
             }
 
             /// HTML de la rédaction, tel qu'il partirait (scénarios d'essai).
@@ -2496,6 +2510,21 @@ ApplicationWindow {
             height: visible ? implicitHeight : 0
             onTriggered: fenetre.enregistrerPiece(menuPiece.piece)
         }
+        MenuSeparator {}
+        // Reprendre une pièce reçue dans un autre courrier (demande de Manu,
+        // 01/10) : la rédaction ouverte en dernier, ou une nouvelle.
+        MenuItem {
+            readonly property var cible: fenetre.redactions[fenetre.redactionActive] || null
+            visible: cible !== null
+            height: visible ? implicitHeight : 0
+            text: cible ? qsTr("Joindre au message en cours « %1 »").arg(cible.objetActuel() || qsTr("sans objet"))
+                        : ""
+            onTriggered: fenetre.joindrePiece(menuPiece.piece, fenetre.redactionActive)
+        }
+        MenuItem {
+            text: qsTr("Joindre à un nouveau message")
+            onTriggered: fenetre.joindrePiece(menuPiece.piece, "nouveau")
+        }
     }
 
     FileDialog {
@@ -3269,7 +3298,8 @@ ApplicationWindow {
                     + "<b>Pièces jointes</b><br>"
                     + "Listées sous l'en-tête du message : « Ouvrir » avec le logiciel du système, "
                     + "« Enregistrer sous… ». Un programme ou un script ne s'ouvre pas depuis MMail, il "
-                    + "s'enregistre.")
+                    + "s'enregistre. « Joindre au message en cours » ou « Joindre à un nouveau message » "
+                    + "reprend une pièce reçue dans un autre courrier.")
             }
         }
     }
@@ -3494,6 +3524,15 @@ ApplicationWindow {
                 fenetre.etapeScenarioChevron()
             if (fenetre.essai && (fenetre.essai.scenario === "defilement" || fenetre.essai.scenario === "favoris-fixes"))
                 fenetre.etapeScenarioDefilement()
+            if (fenetre.essai && fenetre.essai.scenario === "joindre" && !fenetre.essai.choisi) {
+                for (var k = 0; k < modeleMessages.count; ++k) {
+                    if (modeleMessages.get(k).pieces) {
+                        fenetre.essai.choisi = true
+                        fenetre.choisir(k, 0)
+                        break
+                    }
+                }
+            }
             if (fenetre.essai && fenetre.essai.scenario.indexOf("signature") === 0)
                 fenetre.etapeScenarioSignature()
         }
@@ -3516,12 +3555,20 @@ ApplicationWindow {
                 fenetre.confirmationDemandee = confirmation
                 fenetre.pieces = JSON.parse(pieces)
                 // Le message entier dit s'il porte des pièces : la ligne suit.
-                var i = fenetre.indexDe(uid)
-                if (i >= 0)
+                var i = fenetre.rangDe(uid)
+                if (i >= 0 && modeleMessages.get(i).pieces !== (fenetre.pieces.length > 0))
                     modeleMessages.setProperty(i, "pieces", fenetre.pieces.length > 0)
             }
             if (fenetre.essai && fenetre.essai.scenario === "pieces")
                 fenetre.etapeScenarioPieces()
+            // Scénario « joindre » : la première pièce du message affiché,
+            // jointe à un nouveau message.
+            if (fenetre.essai && fenetre.essai.scenario === "joindre" && !brut
+                    && fenetre.pieces.length > 0 && !fenetre.essai.joint) {
+                fenetre.essai.joint = true
+                console.log("scenario: message", fenetre.sujetCourant(), "pièce", fenetre.pieces[0].nom)
+                fenetre.joindrePiece(fenetre.pieces[0], "nouveau")
+            }
             // Scénario « images » : le bouton « Télécharger les images »,
             // pressé une fois.
             if (fenetre.essai && fenetre.essai.scenario === "images" && html && bloquees > 0
@@ -3581,6 +3628,35 @@ ApplicationWindow {
                 r.echouer(message)
             else
                 messageEtat.texte = message
+        }
+
+        // Seules les lignes marquées changent : la liste n'est pas relue.
+        function onLusModifies(uids, lu) {
+            var liste = uids.split(",")
+            for (var k = 0; k < liste.length; ++k) {
+                var i = fenetre.rangDe(parseInt(liste[k]))
+                if (i >= 0 && modeleMessages.get(i).lu !== lu)
+                    modeleMessages.setProperty(i, "lu", lu)
+            }
+            fenetre.majInfoDossier()
+        }
+
+        function onPieceAJoindre(url) {
+            var r = fenetre.redactions[fenetre.pieceCible]
+            if (!r) {
+                r = fenetre.ouvrirRedaction(boite.compteCourant > 0 ? boite.compteCourant
+                                                                    : fenetre.comptesConnus[0].compte)
+                r.pret()
+            }
+            fenetre.pieceCible = ""
+            r.ajouterFichiers([url])
+            if (fenetre.essai && fenetre.essai.scenario === "joindre")
+                console.log("scenario: pièces de la rédaction :", JSON.stringify(r.pieces.map(function(p) { return p.nom })))
+            if (r.conteneur && r.conteneur.raise) {
+                r.conteneur.raise()
+                r.conteneur.requestActivate()
+            }
+            messageEtat.texte = qsTr("Pièce jointe ajoutée au message « %1 ».").arg(r.objetActuel())
         }
 
         function onPieceEcrite(url, chemin, ouvrir) {
@@ -4085,7 +4161,7 @@ ApplicationWindow {
         vueMessages.forceActiveFocus()
         var nombre = Object.keys(nouvelle).length
         if (nombre === 1 && nouvelle[uid])
-            afficherMessage(uid)
+            afficherMessage(uid, index)
         else if (nombre > 1)
             messageEtat.texte = accord(nombre, qsTr("message sélectionné."), qsTr("messages sélectionnés."))
     }
@@ -4132,6 +4208,7 @@ ApplicationWindow {
             conteneur.open()
         var r = conteneur.redaction
         r.jeton = jeton
+        redactionActive = jeton
         r.choisirCompte(compte)
         var table = redactions
         table[jeton] = r
@@ -4172,11 +4249,13 @@ ApplicationWindow {
         return Object.keys(selection).map(function(u) { return parseInt(u) })
     }
 
-    function afficherMessage(uid) {
+    function afficherMessage(uid, rang) {
         uidCourant = uid
         sourceVisible = false
         pieces = []
-        var i = indexDe(uid)
+        var i = rang !== undefined && rang >= 0 && rang < modeleMessages.count
+                && modeleMessages.get(rang).uid === uid ? rang : indexDe(uid)
+        indexCourant = i
         if (i >= 0) {
             var ligne = modeleMessages.get(i)
             sujetAffiche.text = ligne.sujet
@@ -4188,9 +4267,30 @@ ApplicationWindow {
         }
         confirmationDemandee = ""
         afficherTexte(qsTr("Chargement…"))
-        boite.demanderCorps(uid)
+        // Le contenu après un court délai : en parcourant la liste au clavier,
+        // seul le message où l'on s'arrête est chargé (et marqué lu).
+        minuterieCorps.restart()
         if (compact)
             vue = 2
+    }
+
+    Timer {
+        id: minuterieCorps
+        interval: 60
+        onTriggered: if (fenetre.uidCourant > 0) boite.demanderCorps(fenetre.uidCourant)
+    }
+
+    /// Rang dans la liste d'un message du dossier ouvert, le message affiché
+    /// d'abord.
+    function rangDe(uid) {
+        if (indexCourant >= 0 && indexCourant < modeleMessages.count
+                && modeleMessages.get(indexCourant).uid === uid)
+            return indexCourant
+        return indexDe(uid)
+    }
+
+    function sujetCourant() {
+        return sujetAffiche.text
     }
 
     /// Texte simple dans le volet du message : attente, absence, erreur.
@@ -4359,6 +4459,16 @@ ApplicationWindow {
     function choisirApparence(nom) {
         apparence = nom
         messageEtat.texte = qsTr("Apparence : %1.").arg(jeuxApparence[nom].libelle)
+    }
+
+    /// Écrit une pièce jointe du message affiché pour la joindre à une
+    /// rédaction : `cible` est son jeton, ou « nouveau ».
+    function joindrePiece(piece, cible) {
+        if (!piece || uidCourant <= 0)
+            return
+        pieceCible = cible
+        if (!boite.joindrePiece(uidCourant, piece.indice))
+            messageEtat.texte = boite.erreur
     }
 
     function ouvrirPiece(piece) {

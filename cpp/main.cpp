@@ -136,6 +136,7 @@ int main(int argc, char* argv[])
     essai.insert(QStringLiteral("utilisateur2"), QString::fromUtf8(qgetenv("MMAIL_UTILISATEUR2")));
     essai.insert(QStringLiteral("motDePasse2"), QString::fromUtf8(qgetenv("MMAIL_MOTDEPASSE2")));
     essai.insert(QStringLiteral("scenario"), QString::fromUtf8(qgetenv("MMAIL_SCENARIO")));
+    essai.insert(QStringLiteral("dossier"), QString::fromUtf8(qgetenv("MMAIL_DOSSIER")));
     essai.insert(QStringLiteral("sortie"),
                  QUrl::fromLocalFile(QString::fromUtf8(qgetenv("MMAIL_SORTIE"))).toString());
   }

@@ -136,6 +136,20 @@ int main(int argc, char* argv[])
     QFont::insertSubstitutions(QString::fromLatin1(famille),
                                {QStringLiteral("Liberation Sans"), QStringLiteral("DejaVu Sans"),
                                 QStringLiteral("Noto Sans"), QStringLiteral("Roboto")});
+  // Familles génériques de CSS : le moteur de texte riche les cherche comme
+  // des polices ordinaires. Le noyau termine par « sans-serif » toute liste
+  // de polices d'un message qui n'en a pas ; chacune désigne ici des polices
+  // présentes sur l'une ou l'autre cible.
+  QFont::insertSubstitutions(QStringLiteral("sans-serif"),
+                             {QStringLiteral("Liberation Sans"), QStringLiteral("DejaVu Sans"),
+                              QStringLiteral("Noto Sans"), QStringLiteral("Roboto"), QStringLiteral("Arial")});
+  QFont::insertSubstitutions(QStringLiteral("serif"),
+                             {QStringLiteral("Liberation Serif"), QStringLiteral("DejaVu Serif"),
+                              QStringLiteral("Noto Serif"), QStringLiteral("Times New Roman")});
+  QFont::insertSubstitutions(QStringLiteral("monospace"),
+                             {QStringLiteral("Liberation Mono"), QStringLiteral("DejaVu Sans Mono"),
+                              QStringLiteral("Noto Sans Mono"), QStringLiteral("Consolas"),
+                              QStringLiteral("Courier New")});
 
   bool smoke = false;
   QString capture;

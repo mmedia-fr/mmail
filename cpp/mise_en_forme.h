@@ -188,6 +188,72 @@ public:
     Q_EMIT etatChange();
   }
 
+  /// Ramène à `largeurMax` pixels, proportions gardées, toute image plus
+  /// large ; une image déjà ramenée retrouve la taille voulue par le message
+  /// quand la place s'élargit. Pour la lecture : la page suit la largeur de
+  /// la colonne, une image qui la dépasserait serait rognée.
+  Q_INVOKABLE void bornerImages(int largeurMax)
+  {
+    QTextDocument* doc = texte_();
+    if (!doc || largeurMax <= 0)
+      return;
+    // Positions d'abord : changer un format redécoupe les fragments.
+    QList<int> positions;
+    for (QTextBlock b = doc->begin(); b.isValid(); b = b.next())
+      for (auto it = b.begin(); !it.atEnd(); ++it)
+        if (it.fragment().charFormat().isImageFormat())
+          for (int i = 0; i < it.fragment().length(); ++i)
+            positions.append(it.fragment().position() + i);
+
+    QTextCursor c(doc);
+    c.beginEditBlock();
+    for (int position : positions) {
+      c.setPosition(position);
+      c.setPosition(position + 1, QTextCursor::KeepAnchor);
+      QTextImageFormat f = c.charFormat().toImageFormat();
+      if (!f.isValid())
+        continue;
+      // Taille écrite dans le message, retenue à la première passe ; 0 : non
+      // précisée.
+      if (!f.hasProperty(LargeurVoulue)) {
+        f.setProperty(LargeurVoulue, f.hasProperty(QTextFormat::ImageWidth) ? f.width() : 0.0);
+        f.setProperty(HauteurVoulue, f.hasProperty(QTextFormat::ImageHeight) ? f.height() : 0.0);
+      }
+      const qreal largeur = f.property(LargeurVoulue).toReal();
+      const qreal hauteur = f.property(HauteurVoulue).toReal();
+      const QSize naturelle = QImageReader(QUrl(f.name()).toLocalFile()).size();
+      // Taille affichée sans contrainte : celle du message, l'autre côté
+      // suivant les proportions de l'image.
+      qreal l = largeur, h = hauteur;
+      if (naturelle.isValid() && naturelle.width() > 0 && naturelle.height() > 0) {
+        if (l <= 0 && h <= 0) {
+          l = naturelle.width();
+          h = naturelle.height();
+        } else if (l <= 0) {
+          l = h * naturelle.width() / naturelle.height();
+        } else if (h <= 0) {
+          h = l * naturelle.height() / naturelle.width();
+        }
+      }
+      if (l > largeurMax && h > 0) {
+        f.setWidth(largeurMax);
+        f.setHeight(h * largeurMax / l);
+      } else {
+        if (largeur > 0)
+          f.setWidth(largeur);
+        else
+          f.clearProperty(QTextFormat::ImageWidth);
+        if (hauteur > 0)
+          f.setHeight(hauteur);
+        else
+          f.clearProperty(QTextFormat::ImageHeight);
+      }
+      if (f != c.charFormat())
+        c.setCharFormat(f);
+    }
+    c.endEditBlock();
+  }
+
   /// Insère du texte brut (une signature) à la position donnée.
   Q_INVOKABLE void inserer(int position, const QString& texte)
   {
@@ -273,6 +339,10 @@ Q_SIGNALS:
   void etatChange();
 
 private:
+  /// Taille d'une image telle que le message l'écrit, gardée sur son format
+  /// pour que `bornerImages` puisse la rendre.
+  enum { LargeurVoulue = QTextFormat::UserProperty + 1, HauteurVoulue };
+
   QTextDocument* texte_() const { return m_document ? m_document->textDocument() : nullptr; }
 
   /// Bornes de la sélection, ou le curseur deux fois s'il n'y en a pas.

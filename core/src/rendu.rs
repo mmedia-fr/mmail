@@ -110,10 +110,12 @@ pub fn corps_html(brut: &[u8]) -> Option<CorpsHtml> {
                 .then(|| (normaliser_cid(cid), (type_mime, partie.contents().to_vec())))
         })
         .collect();
-    Some(assainir(&source, move |adresse: &str| {
+    let mut corps = assainir(&source, move |adresse: &str| {
         let cid = adresse.get(..4).filter(|p| p.eq_ignore_ascii_case("cid:")).map(|_| &adresse[4..])?;
         integrees.get(&normaliser_cid(cid)).cloned()
-    }))
+    });
+    corps.html = crate::mise_en_page::aplatir(&corps.html);
+    Some(corps)
 }
 
 /// Assainit un HTML quelconque — corps de message, signature importée. Les
@@ -184,7 +186,7 @@ fn filtrer(
     match (balise, attribut) {
         (_, "hidden") => Some("hidden".to_string()),
         (_, "style") if masque(valeur) => Some(REPERE_MASQUE.to_string()),
-        (_, "style") => Some(css_sur(valeur)),
+        (_, "style") => Some(repli_generique(&css_sur(valeur))),
         ("a", "href") => {
             let minuscule = valeur.trim().to_ascii_lowercase();
             ["http:", "https:", "mailto:"]
@@ -327,7 +329,7 @@ fn feuilles_de_style(html: &str) -> String {
         css.push('\n');
         depart = contenu + g;
     }
-    let css = css_sur(&sans_regles_at(&css.replace("<!--", "").replace("-->", "")));
+    let css = repli_generique(&css_sur(&sans_regles_at(&css.replace("<!--", "").replace("-->", ""))));
     // Une feuille ne doit pas pouvoir refermer l'élément qui la porte.
     css.replace('<', "")
 }
@@ -412,6 +414,55 @@ pub fn css_sur(css: &str) -> String {
         sortie.push(c);
         i += c.len_utf8();
     }
+    sortie
+}
+
+/// Familles génériques de CSS, et mots-clés qui ne nomment aucune police.
+const GENERIQUES: &[&str] =
+    &["serif", "sans-serif", "monospace", "cursive", "fantasy", "system-ui", "inherit", "initial", "unset"];
+
+/// Termine par `sans-serif` toute liste `font-family` sans famille générique.
+/// Quand aucune police nommée n'est installée (« Montserrat », « Ubuntu »), le
+/// moteur de Qt prend sinon la police de repli du système, qui peut être à
+/// chasse fixe ; l'application désigne, pour chaque famille générique, des
+/// polices présentes sur le poste.
+fn repli_generique(css: &str) -> String {
+    const PROPRIETE: &str = "font-family";
+    let minuscule = css.to_ascii_lowercase();
+    let mut sortie = String::with_capacity(css.len() + 16);
+    let mut copie = 0;
+    let mut cherche = 0;
+    while let Some(i) = minuscule[cherche..].find(PROPRIETE) {
+        let apres_nom = cherche + i + PROPRIETE.len();
+        cherche = apres_nom;
+        let espaces = minuscule[apres_nom..].len() - minuscule[apres_nom..].trim_start().len();
+        if !minuscule[apres_nom + espaces..].starts_with(':') {
+            continue;
+        }
+        let debut = apres_nom + espaces + 1;
+        let fin = minuscule[debut..].find([';', '}']).map_or(css.len(), |k| debut + k);
+        let valeur = &css[debut..fin];
+        let (familles, important) = match minuscule[debut..fin].find("!important") {
+            Some(k) => (&valeur[..k], &valeur[k..]),
+            None => (valeur, ""),
+        };
+        let generique = familles.split(',').any(|famille| {
+            let famille = famille.trim().trim_matches(['"', '\'']).to_ascii_lowercase();
+            GENERIQUES.contains(&famille.as_str())
+        });
+        if !generique && !familles.trim().is_empty() {
+            sortie.push_str(&css[copie..debut]);
+            sortie.push_str(familles.trim_end());
+            sortie.push_str(", sans-serif");
+            if !important.is_empty() {
+                sortie.push(' ');
+                sortie.push_str(important);
+            }
+            copie = fin;
+        }
+        cherche = fin;
+    }
+    sortie.push_str(&css[copie..]);
     sortie
 }
 
@@ -644,7 +695,8 @@ mod tests {
              <p>Visible</p><span hidden>non</span><table><tr><td style=\"mso-hide:all\">x</td><td>y</td></tr></table>",
         ))
         .unwrap();
-        assert_eq!(c.html, "<p>Visible</p><table><tbody><tr><td>y</td></tr></tbody></table>");
+        // Le tableau, réduit à une cellule, s'aplatit en blocs.
+        assert_eq!(c.html, "<p>Visible</p><div><div>y</div></div>");
     }
 
     #[test]
@@ -652,7 +704,7 @@ mod tests {
         let c = corps_html(&message(
             "<html><head><style>@import url(https://x/a.css); <!-- p.MsoNormal{margin:0;background:url('https://t/p.gif')}\
              @media only screen and (max-width:600px){ .m{display:none} } --></style></head>\
-             <body><table><tr><td style=\"background-image:url(https://x/fond.png); color:red\">a</td></tr></table></body></html>",
+             <body><table><tr><td style=\"background-image:url(https://x/fond.png); color:red\">a</td><td>b</td></tr></table></body></html>",
         ))
         .unwrap();
         assert!(c.html.starts_with("<style>"), "{}", c.html);
@@ -686,5 +738,33 @@ mod tests {
         assert_eq!(base64("TU1haWw=").unwrap(), b"MMail");
         assert_eq!(base64("TU1h\r\naWw").unwrap(), b"MMail");
         assert!(base64("T*").is_none());
+    }
+
+    #[test]
+    fn repli_sur_une_famille_generique() {
+        assert_eq!(repli_generique("font-family:Montserrat;font-size:16px"),
+                   "font-family:Montserrat, sans-serif;font-size:16px");
+        assert_eq!(repli_generique("p { font-family: 'Open Sans', Ubuntu !important }"),
+                   "p { font-family: 'Open Sans', Ubuntu, sans-serif !important }");
+        for gardee in ["font-family: Arial, sans-serif", "font-family:Georgia,serif", "font-family: inherit",
+                       "font-size:12px", "x-font-family-y: z"] {
+            assert_eq!(repli_generique(gardee), gardee);
+        }
+        // Dans un message entier : style d'élément et feuille de style.
+        let corps = corps_html(&message("<style>body{font-family:Ubuntu}</style><p style=\"font-family:Montserrat\">x</p>"))
+            .unwrap();
+        assert!(corps.html.contains("font-family:Ubuntu, sans-serif"), "{}", corps.html);
+        assert!(corps.html.contains("font-family:Montserrat, sans-serif"), "{}", corps.html);
+    }
+
+    #[test]
+    fn lettre_en_tableaux_imbriques_aplatie() {
+        let html = "<div style=\"max-width:600px\"><table align=\"center\" style=\"width:100%\"><tbody><tr>\
+                    <td style=\"font-size:0px;padding:20px 0\"><table width=\"600\"><tr><td align=\"left\">\
+                    <p>Votre facture est disponible.</p></td></tr></table></td></tr></tbody></table></div>";
+        let corps = corps_html(&message(html)).unwrap();
+        assert!(!corps.html.contains("<table"), "{}", corps.html);
+        assert!(corps.html.contains("<div style=\"text-align:left\"><p>Votre facture est disponible.</p></div>"),
+                "{}", corps.html);
     }
 }

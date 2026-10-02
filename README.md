@@ -152,9 +152,14 @@ connexion, les **messages des 31 derniers jours**, entiers, en fichiers `.eml`.
 La boîte de réception et chaque dossier ouvert se préchargent en arrière-plan ;
 au-delà de la fenêtre, un message est relu sur le serveur.
 
+Un message en cours de rédaction est gardé sur le poste toutes les 10 secondes
+et à la fermeture de MMail, et enregistré en brouillon sur le serveur toutes
+les 2 minutes tant qu'il change. Si MMail se ferme avant son envoi (mise à
+jour, arrêt du poste), il est proposé à la reprise au démarrage suivant.
+
 | | Windows | Linux |
 |---|---|---|
-| Profil (index, messages gardés, images des signatures) | `%APPDATA%\M-Media\MMail` | `~/.local/share/M-Media/MMail` |
+| Profil (index, messages gardés, rédactions en cours, images des signatures) | `%APPDATA%\M-Media\MMail` | `~/.local/share/M-Media/MMail` |
 | Réglages (comptes, signatures, apparence) | `HKCU\Software\M-Media\MMail` | `~/.config/M-Media/MMail.conf` |
 | Mots de passe | Gestionnaire d'identification | Secret Service |
 
@@ -171,7 +176,9 @@ variable d'environnement :
 
 - Connexion en **IMAPS (port 993)** seulement ; pas de STARTTLS ni d'OAuth2.
 - Le rendu HTML est celui du texte riche de Qt : pas de mise en page par
-  feuille de style élaborée ; une image plus large que la colonne est rognée.
+  feuille de style élaborée. Les tableaux de mise en page à une colonne des
+  lettres d'information sont ramenés à des blocs, et une image plus large que
+  la colonne est réduite ; les images SVG ne s'affichent pas.
 - Sous Android, les pièces jointes s'ouvrent mais ne s'enregistrent pas
   ailleurs ; leur ouverture n'a pas été éprouvée sur un téléphone.
 - Hors connexion, un message ouvert reste non lu sur le serveur ; pas de

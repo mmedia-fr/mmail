@@ -64,6 +64,8 @@ ApplicationWindow {
     readonly property string noyau: socle.noyau
     // Comptes du profil, pour le menu « Comptes » : { compte, adresse, hote }.
     property var comptesConnus: []
+    // Rédactions gardées sur le poste par une session précédente.
+    property var redactionsRetrouvees: []
     // Lien de configuration en cours de lecture, rendu au dialogue s'il échoue.
     property string lienEnCours: ""
     // Rôle SPECIAL-USE du dossier ouvert : « Drafts » change le double clic.
@@ -787,6 +789,19 @@ ApplicationWindow {
 
                     onLinkActivated: function(lien) { fenetre.ouvrirLien(lien) }
                     onLinkHovered: function(lien) { fenetre.lienSurvole = lien }
+
+                    // Une image plus large que la colonne y est ramenée, et
+                    // suit la colonne quand elle change de largeur.
+                    MiseEnForme {
+                        id: mefLecture
+                        document: vueCorps.textDocument
+                    }
+                    onWidthChanged: minuterieImages.restart()
+                    Timer {
+                        id: minuterieImages
+                        interval: 120
+                        onTriggered: fenetre.bornerImages()
+                    }
                     HoverHandler {
                         cursorShape: vueCorps.hoveredLink.length > 0 ? Qt.PointingHandCursor : Qt.IBeamCursor
                     }
@@ -1036,6 +1051,7 @@ ApplicationWindow {
             onActiveChanged: if (active && redaction) fenetre.redactionActive = redaction.jeton
             function fermerRedaction() {
                 redaction.fermetureConfirmee = true
+                redaction.oublierGarde()
                 fenetreRedaction.close()
             }
             Loader {
@@ -1047,9 +1063,14 @@ ApplicationWindow {
             onClosing: function(fermeture) {
                 if (redaction && redaction.modifie && !redaction.fermetureConfirmee) {
                     fermeture.accepted = false
+                    // Fermeture demandée par le système (mise à jour, arrêt du
+                    // poste) : il n'attendra peut-être pas la réponse.
+                    redaction.garder()
                     redaction.demanderFermeture()
                     return
                 }
+                if (redaction)
+                    redaction.oublierGarde()
                 fenetre.oublierRedaction(redaction ? redaction.jeton : "")
                 Qt.callLater(function() { fenetreRedaction.destroy() })
             }
@@ -1071,6 +1092,7 @@ ApplicationWindow {
             property alias redaction: chargeurVolet.item
             function fermerRedaction() {
                 redaction.fermetureConfirmee = true
+                redaction.oublierGarde()
                 voletRedaction.close()
             }
             Loader {
@@ -1113,6 +1135,13 @@ ApplicationWindow {
             property bool afficherCopies: false
             property bool miseEnForme: reglagesRedaction.miseEnForme
             property string brouillonChemin: ""
+            // Rédaction gardée sur le poste (noyau, garde.rs) : son
+            // identifiant et le dernier état écrit ; empreinte du contenu au
+            // dernier enregistrement sur le serveur.
+            property string idGarde: ""
+            property string etatGarde: ""
+            property string empreinteEnregistree: ""
+            property bool enregistrementAuto: false
             // Options d'envoi (menu « Options ») : importance 1 / 0 / -1,
             // accusés, heure d'envoi (secondes Unix, 0 : tout de suite).
             property int importance: 0
@@ -1324,13 +1353,16 @@ ApplicationWindow {
                     echouer(boite.erreur.length > 0 ? boite.erreur : qsTr("Envoi impossible."))
             }
 
-            function enregistrer() {
+            /// `auto` : enregistrement périodique, et non demandé.
+            function enregistrer(auto) {
                 if (occupe)
                     return
                 var c = compteChoisi()
                 if (!c)
                     return
                 occupe = true
+                enregistrementAuto = auto === true
+                empreinteEnregistree = empreinte()
                 signaler(qsTr("Enregistrement du brouillon…"), false)
                 if (!boite.enregistrerBrouillon(c.compte, JSON.stringify(contenu())))
                     echouer(boite.erreur.length > 0 ? boite.erreur : qsTr("Enregistrement impossible."))
@@ -1339,7 +1371,11 @@ ApplicationWindow {
             function brouillonEnregistre(uid) {
                 brouillonUid = uid
                 occupe = false
-                modifie = false
+                enregistrementAuto = false
+                // Ce qui a été tapé pendant l'enregistrement reste à enregistrer.
+                modifie = empreinte() !== empreinteEnregistree
+                if (!modifie)
+                    oublierGarde()
                 signaler(qsTr("Brouillon enregistré à %1.").arg(Qt.formatTime(new Date(), "hh:mm")), false)
                 if (fermerApresEnregistrement)
                     conteneur.fermerRedaction()
@@ -1349,7 +1385,57 @@ ApplicationWindow {
                 occupe = false
                 chargement = false
                 fermerApresEnregistrement = false
+                if (enregistrementAuto) {
+                    // Hors ligne, serveur injoignable : la rédaction reste
+                    // gardée sur le poste, ce n'est pas une erreur à traiter.
+                    enregistrementAuto = false
+                    garder()
+                    signaler(qsTr("Brouillon non enregistré sur le serveur (%1) ; il reste gardé sur ce poste.").arg(message), false)
+                    return
+                }
                 signaler(message, true)
+            }
+
+            /// Ce qui distingue deux états de la rédaction.
+            function empreinte() {
+                var c = contenu()
+                delete c.jeton
+                delete c.brouillonUid
+                delete c.brouillonChemin
+                return JSON.stringify(c)
+            }
+
+            /// Écrit l'état de la rédaction sur le poste, s'il a changé depuis
+            /// la dernière écriture.
+            function garder() {
+                if (!modifie || chargement || idGarde.length === 0)
+                    return
+                var c = compteChoisi()
+                var etat = JSON.stringify({ compte: c ? c.compte : 0, miseEnForme: miseEnForme, contenu: contenu() })
+                if (etat !== etatGarde && boite.garderRedaction(idGarde, etat))
+                    etatGarde = etat
+            }
+
+            /// La rédaction a trouvé une issue : rien à reprendre.
+            function oublierGarde() {
+                if (idGarde.length > 0)
+                    boite.oublierRedactionGardee(idGarde)
+                etatGarde = ""
+            }
+
+            // Sur le poste toutes les 10 s, sur le serveur toutes les 2 min,
+            // tant que la rédaction a changé.
+            Timer {
+                interval: 10000
+                repeat: true
+                running: true
+                onTriggered: redac.garder()
+            }
+            Timer {
+                interval: 120000
+                repeat: true
+                running: true
+                onTriggered: if (redac.modifie && !redac.occupe && !redac.chargement) redac.enregistrer(true)
             }
 
             // ---- adresses proposées à la saisie
@@ -3074,6 +3160,53 @@ ApplicationWindow {
     }
 
     Dialog {
+        id: dlgReprise
+        title: qsTr("Rédactions retrouvées")
+        modal: true
+        anchors.centerIn: Overlay.overlay
+        width: Math.min(560, fenetre.width - 24)
+        Label {
+            width: dlgReprise.availableWidth
+            wrapMode: Text.Wrap
+            text: {
+                var liste = fenetre.redactionsRetrouvees
+                var lignes = []
+                for (var k = 0; k < liste.length; ++k) {
+                    var c = liste[k].contenu || {}
+                    var objet = (c.objet || "").length > 0 ? "« " + c.objet + " »" : qsTr("(sans objet)")
+                    var a = (c.a || "").length > 0 ? qsTr(" à %1").arg(c.a) : ""
+                    lignes.push("• " + objet + a + qsTr(", modifié le %1").arg(fenetre.dateLongue(liste[k].modifie * 1000)))
+                }
+                return (liste.length > 1
+                        ? qsTr("MMail s'est fermé alors que %1 messages étaient en cours de rédaction :").arg(liste.length)
+                        : qsTr("MMail s'est fermé alors qu'un message était en cours de rédaction :"))
+                       + "\n" + lignes.join("\n")
+            }
+        }
+        footer: DialogButtonBox {
+            Button {
+                text: qsTr("Rouvrir")
+                DialogButtonBox.buttonRole: DialogButtonBox.AcceptRole
+            }
+            Button {
+                text: qsTr("Abandonner")
+                DialogButtonBox.buttonRole: DialogButtonBox.DestructiveRole
+            }
+            Button {
+                text: qsTr("Plus tard")
+                DialogButtonBox.buttonRole: DialogButtonBox.RejectRole
+            }
+        }
+        onAccepted: fenetre.rouvrirRedactions()
+        onDiscarded: {
+            for (var k = 0; k < fenetre.redactionsRetrouvees.length; ++k)
+                boite.oublierRedactionGardee(fenetre.redactionsRetrouvees[k].id)
+            fenetre.redactionsRetrouvees = []
+            dlgReprise.close()
+        }
+    }
+
+    Dialog {
         id: dlgLien
         title: qsTr("Ajouter avec un lien de configuration")
         modal: true
@@ -3241,7 +3374,10 @@ ApplicationWindow {
                     + "(Ctrl+Maj+R), « Transférer » (Ctrl+F) — boutons au-dessus du message, ou clic "
                     + "droit. Un double clic répond ; dans les brouillons, il reprend le brouillon. "
                     + "Dans la fenêtre de rédaction : Ctrl+Entrée envoie, Ctrl+S enregistre le "
-                    + "brouillon sur le serveur ; « Joindre… » ou un glisser-déposer de fichiers "
+                    + "brouillon sur le serveur — ce que MMail fait aussi seul toutes les 2 minutes, "
+                    + "et le message est gardé sur le poste toutes les 10 secondes : si MMail se "
+                    + "ferme avant l'envoi, il le propose à la reprise au démarrage suivant ; "
+                    + "« Joindre… » ou un glisser-déposer de fichiers "
                     + "ajoute des pièces jointes. Une copie de chaque message envoyé est gardée dans "
                     + "« Éléments envoyés ». Mise en forme : gras (Ctrl+B), italique (Ctrl+I), souligné "
                     + "(Ctrl+U), listes, liens ; décochez « Mise en forme » pour un message en texte "
@@ -3550,6 +3686,7 @@ ApplicationWindow {
             fenetre.htmlAffiche = html ? texte : ""
             fenetre.imagesBloquees = bloquees
             vueCorps.text = html ? fenetre.htmlAuZoom(texte) : texte
+            fenetre.bornerImages()
             vueCorps.cursorPosition = 0
             if (!brut) {
                 fenetre.confirmationDemandee = confirmation
@@ -3618,6 +3755,9 @@ ApplicationWindow {
             if (!r)
                 return
             r.brouillonEnregistre(uid)
+            if (fenetre.essai && fenetre.essai.scenario === "garde-serveur")
+                console.log("scenario: brouillon enregistré", uid, "| modifiée", r.modifie,
+                            "| gardées après", JSON.parse(boite.redactionsGardees()).length, "| note", r.note)
         }
 
         function onEchecRedaction(jeton, message) {
@@ -4208,12 +4348,45 @@ ApplicationWindow {
             conteneur.open()
         var r = conteneur.redaction
         r.jeton = jeton
+        r.idGarde = Date.now().toString(36) + "-" + Math.floor(Math.random() * 1e9).toString(36)
         redactionActive = jeton
         r.choisirCompte(compte)
         var table = redactions
         table[jeton] = r
         redactions = table
         return r
+    }
+
+    /// Rédactions qu'une session précédente n'a pas menées à leur terme
+    /// (MMail fermé avant l'envoi ou l'enregistrement) : proposées à la reprise.
+    function proposerReprise() {
+        var liste = []
+        try { liste = JSON.parse(boite.redactionsGardees()) } catch (e) { liste = [] }
+        if (liste.length === 0)
+            return
+        redactionsRetrouvees = liste
+        dlgReprise.open()
+    }
+
+    function rouvrirRedactions() {
+        var liste = redactionsRetrouvees
+        redactionsRetrouvees = []
+        for (var k = 0; k < liste.length; ++k) {
+            var g = liste[k]
+            var r = ouvrirRedaction(g.compte || (comptesConnus.length > 0 ? comptesConnus[0].compte : 0))
+            r.idGarde = g.id
+            var p = g.contenu || {}
+            p.mode = "brouillon"
+            r.remplir(p)
+            // Rien de ce qui est repris n'est encore sur le serveur.
+            r.modifie = true
+            var manquantes = (p.pieces || []).length - r.pieces.length
+            if (manquantes > 0)
+                r.signaler(qsTr("Rédaction reprise ; %1 introuvable sur le poste.")
+                           .arg(accord(manquantes, qsTr("pièce jointe"), qsTr("pièces jointes"))), true)
+            else
+                r.signaler(qsTr("Rédaction reprise, telle qu'au %1.").arg(dateLongue(g.modifie * 1000)), false)
+        }
     }
 
     function oublierRedaction(jeton) {
@@ -4321,7 +4494,14 @@ ApplicationWindow {
             return
         var position = cadreCorps.ScrollBar.vertical.position
         vueCorps.text = htmlAuZoom(htmlAffiche)
+        bornerImages()
         cadreCorps.ScrollBar.vertical.position = position
+    }
+
+    /// Les images du message HTML affiché, bornées à la largeur de la colonne.
+    function bornerImages() {
+        if (corpsHtml && !sourceVisible)
+            mefLecture.bornerImages(Math.floor(vueCorps.width - vueCorps.leftPadding - vueCorps.rightPadding) - 2)
     }
     onTailleMessageChanged: reposerHtml()
 
@@ -4526,6 +4706,16 @@ ApplicationWindow {
                 + d.getFullYear() + " " + deux(d.getHours()) + ":" + deux(d.getMinutes())
     }
 
+    // Fermeture de l'application : chaque rédaction ouverte est gardée sur le
+    // poste, dans son dernier état.
+    Connections {
+        target: Qt.application
+        function onAboutToQuit() {
+            for (var jeton in fenetre.redactions)
+                fenetre.redactions[jeton].garder()
+        }
+    }
+
     onClosing: function(fermeture) {
         // Sur téléphone, le retour arrière remonte d'un volet avant de quitter.
         if (compact && vue > 0) {
@@ -4540,6 +4730,7 @@ ApplicationWindow {
         if (!boite.ouvrirProfil(cheminProfil))
             return
         rafraichirArborescence()
+        Qt.callLater(proposerReprise)
         // Session ouverte d'emblée quand l'environnement porte des identifiants
         // (cf. cpp/main.cpp) : sert aux captures et aux essais, jamais en usage
         // courant. Le coffre n'est alors pas touché.
@@ -4551,6 +4742,22 @@ ApplicationWindow {
                                        || identifiantsEssai.scenario.indexOf("signature") === 0,
                       connecter2: null, scenario: identifiantsEssai.scenario || "",
                       etape: 0, sujet: "", examines: 0 }
+            // Scénarios « garde », « reprise », « reprise-ouvrir » : une
+            // rédaction gardée sur le poste par une session est proposée par la
+            // suivante, se rouvre telle quelle, et disparaît à son issue.
+            if (essai.scenario === "garde" || essai.scenario === "reprise-ouvrir") {
+                var pause = Qt.createQmlObject('import QtQuick; Timer { interval: 1500 }', fenetre)
+                pause.triggered.connect(essai.scenario === "garde" ? etapeScenarioGarde : etapeScenarioReprise)
+                pause.start()
+                return
+            }
+            if (essai.scenario === "reprise")
+                return
+            if (essai.scenario === "garde-serveur") {
+                var delai = Qt.createQmlObject('import QtQuick; Timer { interval: 6000 }', fenetre)
+                delai.triggered.connect(etapeScenarioGardeServeur)
+                delai.start()
+            }
             // Scénario « horsligne » : aucune connexion ; le profil d'une
             // session précédente doit suffire à lire la boîte de réception.
             if (essai.scenario === "horsligne") {
@@ -4576,6 +4783,42 @@ ApplicationWindow {
         }
         for (var i = 0; i < comptes.length; ++i)
             connecterCompte(comptes[i])
+    }
+
+    function etapeScenarioGarde() {
+        var r = ouvrirRedaction(comptesConnus.length > 0 ? comptesConnus[0].compte : 0)
+        r.remplir({ a: "destinataire@exemple.fr", objet: "Essai de reprise",
+                    texte: "Texte tapé avant la coupure.", mode: "brouillon" })
+        r.modifie = true
+        r.garder()
+        console.log("scenario: gardée", r.idGarde, r.etatGarde.length > 0 ? "OK" : "ECHEC")
+    }
+
+    /// Scénario « garde-serveur » : l'enregistrement périodique sur le
+    /// serveur efface la rédaction gardée sur le poste.
+    function etapeScenarioGardeServeur() {
+        var r = ouvrirRedaction(comptesConnus[0].compte)
+        r.remplir({ a: "destinataire@exemple.fr", objet: "Essai d'enregistrement automatique",
+                    texte: "Brouillon parti seul.", mode: "brouillon" })
+        r.modifie = true
+        r.garder()
+        console.log("scenario: gardées avant", JSON.parse(boite.redactionsGardees()).length)
+        r.enregistrer(true)
+    }
+
+    function etapeScenarioReprise() {
+        console.log("scenario: proposées", redactionsRetrouvees.length, "| dialogue ouvert", dlgReprise.opened)
+        dlgReprise.close()
+        rouvrirRedactions()
+        var jetons = Object.keys(redactions)
+        for (var k = 0; k < jetons.length; ++k) {
+            var r = redactions[jetons[k]]
+            var c = r.contenu()
+            console.log("scenario: reprise", r.idGarde, "|", c.a, "|", c.objet, "|", JSON.stringify(c.texte),
+                        "| modifiée", r.modifie, "| note", r.note)
+            r.conteneur.fermerRedaction()
+        }
+        console.log("scenario: restantes", JSON.parse(boite.redactionsGardees()).length)
     }
 
     /// Scénario d'essai « horsligne » : sans connexion, la boîte de réception

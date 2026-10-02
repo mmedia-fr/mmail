@@ -306,6 +306,23 @@ pub mod qobject {
         #[cxx_name = "imageSignature"]
         fn image_signature(self: Pin<&mut Boite>, adresse: &QString, url: &QString) -> QString;
 
+        /// Garde sur le poste l'état d'une rédaction en cours (JSON), sous
+        /// l'identifiant `id` ; faux en cas d'échec (motif dans `erreur`).
+        #[qinvokable]
+        #[cxx_name = "garderRedaction"]
+        fn garder_redaction(self: Pin<&mut Boite>, id: &QString, etat: &QString) -> bool;
+
+        /// Retire une rédaction gardée : elle a trouvé une issue.
+        #[qinvokable]
+        #[cxx_name = "oublierRedactionGardee"]
+        fn oublier_redaction_gardee(&self, id: &QString);
+
+        /// Rédactions gardées par une session précédente, en JSON : tableau
+        /// d'états, chacun avec son `id` et `modifie` (secondes Unix).
+        #[qinvokable]
+        #[cxx_name = "redactionsGardees"]
+        fn redactions_gardees(&self) -> QString;
+
         /// Fichier à joindre, désigné par son URL (`file:…`) ou son chemin :
         /// `{chemin, nom, taille}` en JSON, ou une chaîne vide s'il n'existe pas.
         #[qinvokable]
@@ -1234,6 +1251,34 @@ impl qobject::Boite {
             return false;
         };
         self.as_mut().envoyer(compte as i64, Commande::Brouillon { redaction })
+    }
+
+    pub fn garder_redaction(mut self: Pin<&mut Self>, id: &QString, etat: &QString) -> bool {
+        if self.profil.is_empty() {
+            return false;
+        }
+        let garde = crate::garde::Garde::du_profil(&self.profil);
+        match garde.garder(&id.to_string(), &etat.to_string(), &dossier_pieces(&self.profil)) {
+            Ok(()) => true,
+            Err(e) => {
+                self.as_mut().set_erreur(QString::from(&format!("rédaction gardée sur le poste : {e}")));
+                false
+            }
+        }
+    }
+
+    pub fn oublier_redaction_gardee(&self, id: &QString) {
+        if !self.profil.is_empty() {
+            crate::garde::Garde::du_profil(&self.profil).oublier(&id.to_string());
+        }
+    }
+
+    pub fn redactions_gardees(&self) -> QString {
+        if self.profil.is_empty() {
+            return QString::from("[]");
+        }
+        let liste = crate::garde::Garde::du_profil(&self.profil).lister();
+        QString::from(&serde_json::Value::Array(liste).to_string())
     }
 
     pub fn decrire_fichier(&self, url: &QString) -> QString {

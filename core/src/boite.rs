@@ -167,6 +167,14 @@ pub mod qobject {
         #[cxx_name = "messages"]
         fn messages(&self) -> QString;
 
+        /// Ce qui a changé dans la liste du dossier ouvert depuis le dernier
+        /// appel : `{"retires":[{uid,h}…],"ajoutes":[…],"modifies":[…]}`. Rend
+        /// `{"complet":[…]}`, la liste entière, à la première lecture d'un
+        /// dossier, si `complet`, ou s'il y a trop de changements.
+        #[qinvokable]
+        #[cxx_name = "changementsListe"]
+        fn changements_liste(self: Pin<&mut Boite>, complet: bool) -> QString;
+
         /// Demande le corps affichable d'un message du dossier ouvert, et le
         /// marque comme lu. Issue : `corpsRecu`.
         #[qinvokable]
@@ -495,7 +503,7 @@ enum Commande {
     OuvrirDossier(String),
     /// Lire un message : sa source si `brut`, sinon de quoi l'afficher, avec
     /// ses images distantes si `distantes`.
-    Corps { chemin: String, uid: u32, brut: bool, distantes: bool },
+    Corps { chemin: String, uid: u32, brut: bool, distantes: bool, numero: u64 },
     /// Écrire une pièce jointe : dans `destination` si elle est donnée, sinon
     /// dans le dossier de travail, pour l'ouvrir.
     Piece { chemin: String, uid: u32, indice: usize, destination: Option<PathBuf>, joindre: bool },
@@ -522,6 +530,9 @@ enum Commande {
     Brouillon { redaction: Redaction },
     /// Veille périodique, émise par le fil lui-même.
     Veille,
+    /// Le serveur a signalé, pendant `IDLE`, un changement du dossier ouvert :
+    /// il est resynchronisé. Émise par le fil lui-même.
+    Signale,
     /// Garder sur le poste les messages récents d'un dossier (décision 17),
     /// par petits lots, après tout ce que l'utilisateur demande.
     Precharger { chemin: String },
@@ -541,13 +552,17 @@ impl Commande {
                 | (Corps { .. }, Corps { .. })
                 | (Arborescence, Arborescence)
                 | (EnvoyerDifferes { .. }, EnvoyerDifferes { .. })
+                | (Signale, Signale)
         ) || (matches!(anterieure, Veille) && (self.comptee() || matches!(self, Veille)))
     }
 
     /// Vrai si la commande vient de l'interface et compte dans `occupe`.
     fn comptee(&self) -> bool {
         // Les tâches de fond ne font pas tourner l'indicateur d'activité.
-        !matches!(self, Commande::Veille | Commande::EnvoyerDifferes { .. } | Commande::Precharger { .. })
+        !matches!(
+            self,
+            Commande::Veille | Commande::Signale | Commande::EnvoyerDifferes { .. } | Commande::Precharger { .. }
+        )
     }
 }
 
@@ -652,6 +667,10 @@ pub struct BoiteRust {
     generation: u64,
     /// Dossier ouvert : compte, chemin, identifiant dans l'index.
     courant: Option<(i64, String, i64)>,
+    /// Liste envoyée en dernier à l'interface : dossier, et pour chaque message
+    /// son UID, sa date et l'empreinte de ses champs. De quoi ne lui renvoyer
+    /// que ce qui a changé.
+    liste: Option<(i64, Vec<(u32, i64, u64)>)>,
 }
 
 impl Default for BoiteRust {
@@ -672,6 +691,7 @@ impl Default for BoiteRust {
             nouveaux: HashSet::new(),
             generation: 0,
             courant: None,
+            liste: None,
         }
     }
 }
@@ -689,15 +709,22 @@ impl qobject::Boite {
                 let _ = std::fs::remove_dir_all(dossier_pieces(&chemin));
                 let _ = std::fs::remove_dir_all(dossier_affichage(&chemin));
                 // Messages gardés sur le poste : ce qui est sorti de la fenêtre
-                // d'un mois, puis ce que l'index ne connaît plus.
-                let cache = Cache::du_profil(&chemin);
-                for id in magasin.gardes_perimes(crate::cache::limite(maintenant())).unwrap_or_default() {
-                    cache.retirer(id);
-                    let _ = magasin.poser_etat_corps(id, "headers");
-                }
-                if let Ok(gardes) = magasin.gardes() {
-                    cache.ranger(&gardes);
-                }
+                // d'un mois, puis ce que l'index ne connaît plus. Dans un fil à
+                // part, par sa propre connexion à l'index : parcourir des
+                // dizaines de milliers de fichiers retardait l'apparition de la
+                // fenêtre.
+                let profil = chemin.clone();
+                let _ = thread::Builder::new().name("mmail-menage".into()).spawn(move || {
+                    let Ok(magasin) = Magasin::ouvrir(&profil) else { return };
+                    let cache = Cache::du_profil(&profil);
+                    for id in magasin.gardes_perimes(crate::cache::limite(maintenant())).unwrap_or_default() {
+                        cache.retirer(id);
+                        let _ = magasin.poser_etat_corps(id, "headers");
+                    }
+                    if let Ok(gardes) = magasin.gardes() {
+                        cache.ranger(&gardes);
+                    }
+                });
                 let attente = magasin.nombre_operations().unwrap_or(0) as i32;
                 {
                     let mut noyau = self.as_mut().rust_mut();
@@ -961,6 +988,22 @@ impl qobject::Boite {
             Ok(messages) => QString::from(&json_messages(&messages)),
             Err(_) => QString::from("[]"),
         }
+    }
+
+    pub fn changements_liste(mut self: Pin<&mut Self>, complet: bool) -> QString {
+        let (Some(magasin), Some((_, _, id))) = (self.magasin.as_ref(), self.courant.as_ref()) else {
+            return QString::from(r#"{"complet":[]}"#);
+        };
+        let id = *id;
+        let apres = magasin.messages(id).unwrap_or_default();
+        let empreintes: Vec<(u32, i64, u64)> = apres.iter().map(|m| (m.uid, m.horodatage, empreinte(m))).collect();
+        let changements = match &self.liste {
+            Some((dossier, avant)) if *dossier == id && !complet => changements(avant, &apres, &empreintes),
+            _ => None,
+        };
+        let json = changements.unwrap_or_else(|| format!(r#"{{"complet":{}}}"#, json_messages(&apres)));
+        self.as_mut().rust_mut().liste = Some((id, empreintes));
+        QString::from(&json)
     }
 
     pub fn demander_corps(self: Pin<&mut Self>, uid: i32) -> bool {
@@ -1402,32 +1445,64 @@ impl qobject::Boite {
             return false;
         };
         let uid = uid as u32;
+        let numero = AFFICHAGE.fetch_add(1, Ordering::SeqCst) + 1;
         // Un message gardé sur le poste s'affiche sans réseau — sauf pour en
         // télécharger les images distantes, que le fil du compte va chercher.
         let en_ligne = self.sessions.contains_key(&compte);
         if !(distantes && en_ligne) {
-            if let Some((octets, lu)) = self.sur_le_poste(dossier, uid) {
-                let atelier = dossier_affichage(&self.profil);
-                let preparation = preparer_lu(&octets, brut, distantes, compte, &atelier, !lu);
-                if let Some(magasin) = self.magasin.as_ref() {
-                    let _ = magasin.poser_pieces(dossier, uid, preparation.pieces != "[]");
-                }
-                self.as_mut().recevoir(compte, Issue::Corps { uid, lu: preparation, marque: false });
-                // Le marquage « lu » part au serveur s'il est joignable ; hors
-                // connexion, le message reste non lu. L'index et la ligne de la
-                // liste changent tout de suite, sans relire le dossier.
-                if !brut && !lu && en_ligne {
-                    if let Some(magasin) = self.magasin.as_ref() {
-                        let _ = magasin.marquer_lu(dossier, &[uid], true);
+            let garde = self.magasin.as_ref().and_then(|m| m.garde_sur_le_poste(dossier, uid).ok().flatten());
+            if let Some((id, lu)) = garde {
+                // Lecture, analyse, assainissement et images hors du fil de
+                // l'interface : sur une lettre d'information chargée, ils
+                // figeaient la fenêtre à chaque message parcouru.
+                let profil = self.profil.clone();
+                let fil = self.qt_thread();
+                let local = Local { compte, chemin: chemin.clone(), dossier, uid, lu, brut, en_ligne };
+                let lancement = thread::Builder::new().name("mmail-affichage".into()).spawn(move || {
+                    let preparation = Cache::du_profil(&profil).lire(id).and_then(|octets| {
+                        let atelier = dossier_affichage(&profil);
+                        rendre_si_actuel(numero, || preparer_lu(&octets, brut, distantes, compte, &atelier, !lu))
+                    });
+                    if AFFICHAGE.load(Ordering::SeqCst) == numero {
+                        let _ = fil.queue(move |boite: Pin<&mut qobject::Boite>| {
+                            boite.afficher_du_poste(local, preparation, numero, distantes);
+                        });
                     }
-                    self.as_mut().reviser();
-                    self.as_mut().lus_modifies(&QString::from(&uid.to_string()), true);
-                    self.as_mut().envoyer(compte, Commande::MarquerLu { chemin, uids: vec![uid], lu: true, discret: true });
+                });
+                if lancement.is_ok() {
+                    return true;
                 }
-                return true;
             }
         }
-        self.as_mut().envoyer(compte, Commande::Corps { chemin, uid, brut, distantes })
+        self.as_mut().envoyer(compte, Commande::Corps { chemin, uid, brut, distantes, numero })
+    }
+
+    /// Fin, sur le fil Qt, de l'affichage d'un message gardé sur le poste. Si
+    /// son fichier manquait, le fil du compte le relit sur le serveur.
+    fn afficher_du_poste(mut self: Pin<&mut Self>, l: Local, preparation: Option<Lu>, numero: u64, distantes: bool) {
+        let Some(preparation) = preparation else {
+            let Local { compte, chemin, uid, brut, .. } = l;
+            self.as_mut().envoyer(compte, Commande::Corps { chemin, uid, brut, distantes, numero });
+            return;
+        };
+        if let Some(magasin) = self.magasin.as_ref() {
+            let _ = magasin.poser_pieces(l.dossier, l.uid, preparation.pieces != "[]");
+        }
+        self.as_mut().recevoir(l.compte, Issue::Corps { uid: l.uid, lu: preparation, marque: false });
+        // Le marquage « lu » part au serveur s'il est joignable ; hors
+        // connexion, le message reste non lu. L'index et la ligne de la liste
+        // changent tout de suite, sans relire le dossier.
+        if !l.brut && !l.lu && l.en_ligne {
+            if let Some(magasin) = self.magasin.as_ref() {
+                let _ = magasin.marquer_lu(l.dossier, &[l.uid], true);
+            }
+            self.as_mut().reviser();
+            self.as_mut().lus_modifies(&QString::from(&l.uid.to_string()), true);
+            self.as_mut().envoyer(
+                l.compte,
+                Commande::MarquerLu { chemin: l.chemin, uids: vec![l.uid], lu: true, discret: true },
+            );
+        }
     }
 
     /// Un message du dossier ouvert gardé sur le poste, et s'il est lu. Le
@@ -1880,6 +1955,12 @@ struct Etabli {
     /// Pas forcément le dossier sélectionné : un vidage, une reprise ou un
     /// envoi différé en sélectionnent d'autres.
     ouvert: Option<String>,
+    /// Dernier passage du ménage des messages sortis de la fenêtre gardée.
+    menage: Option<Instant>,
+    /// Dernier message entier lu sur le serveur (dossier, UIDVALIDITY, UID) :
+    /// ouvrir ses pièces jointes une à une, y répondre ou le transférer ne le
+    /// retélécharge pas, même hors de la fenêtre gardée sur le poste.
+    dernier: Option<(String, u32, u32, Vec<u8>)>,
 }
 
 impl Travail {
@@ -1928,6 +2009,52 @@ impl Travail {
         self.remettre(issue);
     }
 
+    /// Attend la prochaine chose à faire : une commande de l'interface,
+    /// l'échéance de la veille, ou — en `IDLE` sur le dossier ouvert, quand le
+    /// serveur le sait — un changement qu'il signale. Un nouveau message
+    /// apparaît ainsi en quelques secondes, au lieu d'attendre la veille.
+    fn attendre(&self, e: &mut Etabli, reception: &Receiver<Commande>, veille: Instant) -> Reveil {
+        let perdue = |err: Echec| Reveil::Perdue(echec("reseau", format!("attente des nouveaux messages : {err}"), &err));
+        let ouvert = e.ouvert.clone().filter(|_| e.client.sait("IDLE"));
+        if let Some(chemin) = ouvert {
+            let debut = assurer_selection(&mut e.client, &chemin).and_then(|()| Ok(e.client.idle_commencer()?));
+            match debut {
+                Ok(()) => {
+                    let reveil = loop {
+                        match reception.try_recv() {
+                            Ok(commande) => break Reveil::Commande(commande),
+                            Err(TryRecvError::Disconnected) => break Reveil::Fermee,
+                            Err(TryRecvError::Empty) => {}
+                        }
+                        if Instant::now() >= veille {
+                            break Reveil::Veille;
+                        }
+                        // Une commande attend au plus ce délai : le canal de
+                        // l'interface et la socket ne s'attendent pas ensemble.
+                        match e.client.idle_attendre(Duration::from_millis(100)) {
+                            Ok(Some(ligne)) if signale_un_changement(&ligne) => break Reveil::Signal,
+                            Ok(_) => {}
+                            Err(err) => return perdue(Echec::Imap(err)),
+                        }
+                    };
+                    return match e.client.idle_terminer() {
+                        Err(err) if matches!(err, Erreur::Reseau(_)) => perdue(Echec::Imap(err)),
+                        _ => reveil,
+                    };
+                }
+                Err(err) if err.reseau() => return perdue(err),
+                // Dossier disparu, IDLE refusé : attente ordinaire, jusqu'à
+                // la prochaine ouverture d'un dossier.
+                Err(_) => e.ouvert = None,
+            }
+        }
+        match reception.recv_timeout(veille.saturating_duration_since(Instant::now())) {
+            Ok(commande) => Reveil::Commande(commande),
+            Err(RecvTimeoutError::Timeout) => Reveil::Veille,
+            Err(RecvTimeoutError::Disconnected) => Reveil::Fermee,
+        }
+    }
+
     fn abandonner_toutes(&self, commandes: Vec<Commande>, cause: &Issue) {
         let motif = match cause {
             Issue::Echec { message, .. } => message.as_str(),
@@ -1964,10 +2091,18 @@ impl Travail {
         let mut veille = Instant::now() + VEILLE;
         loop {
             if file.is_empty() {
-                match reception.recv_timeout(veille.saturating_duration_since(Instant::now())) {
-                    Ok(commande) => file.push(commande),
-                    Err(RecvTimeoutError::Timeout) => file.push(Commande::Veille),
-                    Err(RecvTimeoutError::Disconnected) => break,
+                match self.attendre(&mut etabli, &reception, veille) {
+                    Reveil::Commande(commande) => file.push(commande),
+                    Reveil::Veille => file.push(Commande::Veille),
+                    Reveil::Signal => file.push(Commande::Signale),
+                    Reveil::Fermee => break,
+                    Reveil::Perdue(issue) => {
+                        let restantes: Vec<Commande> = reception.try_iter().collect();
+                        self.terminer(restantes.iter().filter(|c| c.comptee()).count());
+                        self.abandonner_toutes(restantes, &issue);
+                        self.remettre(issue);
+                        return;
+                    }
                 }
             }
             loop {
@@ -1995,7 +2130,7 @@ impl Travail {
             // Un dossier qu'on vient de lire se précharge ensuite.
             let a_precharger = match &commande {
                 Commande::OuvrirDossier(chemin) => Some(chemin.clone()),
-                Commande::Veille => etabli.ouvert.clone(),
+                Commande::Veille | Commande::Signale => etabli.ouvert.clone(),
                 _ => None,
             };
             let est_veille = matches!(commande, Commande::Veille);
@@ -2050,7 +2185,15 @@ impl Travail {
         })?;
         synchro::arborescence(&mut client, &magasin, self.compte)
             .map_err(|e| perdue("connexion", format!("lecture des dossiers : {e}")))?;
-        Ok(Etabli { client, magasin, annexes: HashMap::new(), identites: HashMap::new(), ouvert: None })
+        Ok(Etabli {
+            client,
+            magasin,
+            annexes: HashMap::new(),
+            identites: HashMap::new(),
+            ouvert: None,
+            menage: None,
+            dernier: None,
+        })
     }
 
     fn traiter(&self, commande: Commande, e: &mut Etabli) -> Option<Issue> {
@@ -2074,18 +2217,20 @@ impl Travail {
                 // relira sur le serveur.
                 Err(_) => Issue::Precharge { chemin, reste: false },
             }),
-            Commande::Corps { chemin, uid, brut, distantes } => {
+            Commande::Corps { chemin, uid, brut, distantes, numero } => {
                 let atelier = dossier_affichage(&self.profil);
                 let cache = Cache::du_profil(&self.profil);
-                Some(match lire_corps(e, compte, &chemin, uid, brut, distantes, &atelier, &cache) {
-                    Ok((lu, marque)) => Issue::Corps { uid, lu, marque },
-                    Err(err) => echec("message", format!("lecture du message {uid} : {err}"), &err),
-                })
+                match lire_corps(e, compte, &chemin, uid, brut, distantes, &atelier, &cache, numero) {
+                    Ok(Some((lu, marque))) => Some(Issue::Corps { uid, lu, marque }),
+                    // Un autre message a été demandé entre-temps.
+                    Ok(None) => None,
+                    Err(err) => Some(echec("message", format!("lecture du message {uid} : {err}"), &err)),
+                }
             }
             Commande::Piece { chemin, uid, indice, destination, joindre } => {
                 let ouvrir = destination.is_none() && !joindre;
                 let dossier = dossier_travail_piece(&self.profil, compte, uid, indice, joindre);
-                Some(match ecrire_piece(e, &chemin, uid, indice, destination, &dossier, ouvrir) {
+                Some(match ecrire_piece(e, &self.profil, compte, &chemin, uid, indice, destination, &dossier, ouvrir) {
                     Ok(fichier) => Issue::Piece { fichier, ouvrir, joindre },
                     Err(err) => echec("piece", format!("pièce jointe : {err}"), &err),
                 })
@@ -2185,6 +2330,14 @@ impl Travail {
                     Ok(uid) => Issue::BrouillonEnregistre { jeton, uid },
                     Err(message) => Issue::EchecRedaction { jeton, message },
                 })
+            }
+            Commande::Signale => {
+                let chemin = e.ouvert.clone()?;
+                match synchro::synchroniser(&mut e.client, &e.magasin, compte, &chemin) {
+                    Ok(bilan) if bilan.change_la_liste() => Some(Issue::Dossier { chemin, veille: true }),
+                    Ok(_) => None,
+                    Err(err) => Some(echec("reseau", format!("nouveaux messages : {err}"), &err)),
+                }
             }
             Commande::Veille => {
                 if let Err(err) = synchro::arborescence(&mut e.client, &e.magasin, compte) {
@@ -2296,6 +2449,50 @@ impl Travail {
     }
 }
 
+/// Ce qui met fin à l'attente du fil d'un compte.
+enum Reveil {
+    Commande(Commande),
+    Veille,
+    /// Le serveur a signalé un changement du dossier ouvert.
+    Signal,
+    /// L'interface a lâché la session.
+    Fermee,
+    Perdue(Issue),
+}
+
+/// Vrai si une ligne reçue pendant `IDLE` annonce un changement du dossier :
+/// message arrivé ou retiré, drapeaux changés. « * OK Still here » n'en est pas un.
+fn signale_un_changement(ligne: &str) -> bool {
+    let ligne = ligne.to_ascii_uppercase();
+    ligne.starts_with("* ")
+        && (ligne.ends_with(" EXISTS")
+            || ligne.ends_with(" EXPUNGE")
+            || ligne.starts_with("* VANISHED")
+            || ligne.contains(" FETCH "))
+}
+
+/// Le message entier : gardé sur le poste, ou dernier lu par ce fil, sinon relu
+/// sur le serveur. Une pièce jointe, une réponse, un transfert ou une
+/// confirmation de lecture ne retéléchargent plus un message déjà là.
+fn message_entier(e: &mut Etabli, profil: &str, compte: i64, chemin: &str, uid: u32) -> Result<Vec<u8>, Echec> {
+    let id = e.magasin.dossier_id(compte, chemin)?;
+    if let Some((mid, _)) = e.magasin.garde_sur_le_poste(id, uid)? {
+        if let Some(octets) = Cache::du_profil(profil).lire(mid) {
+            return Ok(octets);
+        }
+    }
+    let validite = e.magasin.dossier(id)?.map(|d| d.uid_validity).unwrap_or(0);
+    if let Some((c, v, u, octets)) = &e.dernier {
+        if c == chemin && *v == validite && *u == uid {
+            return Ok(octets.clone());
+        }
+    }
+    assurer_selection(&mut e.client, chemin)?;
+    let octets = e.client.corps(uid)?;
+    e.dernier = Some((chemin.to_string(), validite, uid, octets.clone()));
+    Ok(octets)
+}
+
 /// Messages du dossier des envois différés (sélectionné) arrivés à échéance,
 /// avec leur `MODSEQ` : ceux qu'un client a déjà réservés (`\Deleted`) en
 /// sont exclus.
@@ -2393,8 +2590,7 @@ impl Travail {
     /// pour qu'elle ne soit plus posée — ici ni ailleurs.
     fn confirmer(&self, e: &mut Etabli, chemin: &str, uid: u32, id: Option<Identifiants>) -> Result<(), String> {
         if let Some(id) = id {
-            assurer_selection(&mut e.client, chemin).map_err(|x| x.to_string())?;
-            let octets = e.client.corps(uid).map_err(|x| x.to_string())?;
+            let octets = message_entier(e, &self.profil, self.compte, chemin, uid).map_err(|x| x.to_string())?;
             let (destinataire, rapport) =
                 redaction::confirmation_lecture(&octets, &id.utilisateur, "", maintenant())
                     .ok_or("ce message ne demande pas de confirmation de lecture")?;
@@ -2491,9 +2687,14 @@ impl Travail {
         const OCTETS_PAR_LOT: usize = 8 * 1024 * 1024;
         let cache = Cache::du_profil(&self.profil);
         let limite = crate::cache::limite(maintenant());
-        for id in e.magasin.gardes_perimes(limite)? {
-            cache.retirer(id);
-            e.magasin.poser_etat_corps(id, "headers")?;
+        // Une fois par heure : la fenêtre se compte en jours, et ce relevé
+        // parcourait l'index à chaque lot de huit messages.
+        if e.menage.is_none_or(|t| t.elapsed() > Duration::from_secs(3600)) {
+            for id in e.magasin.gardes_perimes(limite)? {
+                cache.retirer(id);
+                e.magasin.poser_etat_corps(id, "headers")?;
+            }
+            e.menage = Some(Instant::now());
         }
         let dossier = e.magasin.dossier_id(self.compte, chemin)?;
         let a_faire = e.magasin.a_garder(dossier, limite, LOT + 1)?;
@@ -2540,8 +2741,8 @@ impl Travail {
     }
 
     fn preparer(&self, e: &mut Etabli, chemin: &str, uid: u32, mode: &str) -> Result<Preparation, String> {
-        assurer_selection(&mut e.client, chemin).map_err(|x| x.to_string())?;
-        let octets = e.client.corps(uid).map_err(|x| format!("lecture du message : {x}"))?;
+        let octets = message_entier(e, &self.profil, self.compte, chemin, uid)
+            .map_err(|x| format!("lecture du message : {x}"))?;
         let propres: Vec<String> =
             e.magasin.compte_par_id(self.compte).ok().flatten().map(|c| vec![c.adresse]).unwrap_or_default();
         let mut p = redaction::preparer(&octets, mode, &propres);
@@ -2708,22 +2909,37 @@ fn lire_corps(
     distantes: bool,
     atelier: &Path,
     cache: &Cache,
-) -> Result<(Lu, bool), Echec> {
-    assurer_selection(&mut e.client, chemin)?;
-    let complet = e
-        .client
-        .message_complet(uid)?
-        .ok_or_else(|| Echec::Imap(Erreur::Refuse(format!("message {uid} disparu"))))?;
-    let octets = complet.octets;
+    numero: u64,
+) -> Result<Option<(Lu, bool)>, Echec> {
     let id = e.magasin.dossier_id(compte, chemin)?;
-    if let Some((mid, horodatage, _)) = e.magasin.identite_message(id, uid)? {
-        if horodatage >= crate::cache::limite(maintenant()) && cache.ecrire(mid, &octets).is_ok() {
-            e.magasin.poser_etat_corps(mid, "full")?;
+    let garde = e.magasin.garde_sur_le_poste(id, uid)?.and_then(|(mid, lu)| cache.lire(mid).map(|o| (o, lu)));
+    let (octets, confirmation_possible) = match garde {
+        // Gardé sur le poste — on vient ici pour ses images distantes : la
+        // confirmation de lecture se propose comme à l'affichage local, tant
+        // que le message n'est pas lu.
+        Some((octets, lu)) => (octets, !lu),
+        None => {
+            assurer_selection(&mut e.client, chemin)?;
+            let complet = e
+                .client
+                .message_complet(uid)?
+                .ok_or_else(|| Echec::Imap(Erreur::Refuse(format!("message {uid} disparu"))))?;
+            if let Some((mid, horodatage, _)) = e.magasin.identite_message(id, uid)? {
+                if horodatage >= crate::cache::limite(maintenant()) && cache.ecrire(mid, &complet.octets).is_ok() {
+                    e.magasin.poser_etat_corps(mid, "full")?;
+                }
+            }
+            let validite = e.magasin.dossier(id)?.map(|d| d.uid_validity).unwrap_or(0);
+            e.dernier = Some((chemin.to_string(), validite, uid, complet.octets.clone()));
+            // Demande de confirmation de lecture, sauf si l'on y a déjà répondu.
+            let deja = complet.drapeaux.iter().any(|d| d.eq_ignore_ascii_case("$MDNSent"));
+            (complet.octets, !deja)
         }
-    }
-    // Demande de confirmation de lecture, sauf si l'on y a déjà répondu.
-    let deja = complet.drapeaux.iter().any(|d| d.eq_ignore_ascii_case("$MDNSent"));
-    let lu = preparer_lu(&octets, brut, distantes, compte, atelier, !deja);
+    };
+    let Some(lu) = rendre_si_actuel(numero, || preparer_lu(&octets, brut, distantes, compte, atelier, confirmation_possible))
+    else {
+        return Ok(None);
+    };
     // Le message entier dit s'il porte des pièces jointes : cela prime sur ce
     // que ses en-têtes laissaient supposer dans la liste.
     e.magasin.poser_pieces(id, uid, lu.pieces != "[]")?;
@@ -2734,7 +2950,7 @@ fn lire_corps(
             marque = true;
         }
     }
-    Ok((lu, marque))
+    Ok(Some((lu, marque)))
 }
 
 /// De quoi afficher un message entier : sa source, son HTML assaini et ses
@@ -2761,6 +2977,34 @@ fn preparer_lu(octets: &[u8], brut: bool, distantes: bool, compte: i64, atelier:
     }
     lu.pieces = json_pieces(&crate::index::pieces_jointes(octets));
     lu
+}
+
+/// Numéro de la dernière demande d'affichage d'un message, d'où qu'elle vienne.
+/// Un rendu commencé pour un message que l'utilisateur a déjà quitté est
+/// abandonné : il effacerait, en posant ses images, celles du message affiché.
+static AFFICHAGE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Un seul rendu à la fois dans le dossier d'affichage : le fil du compte et
+/// les fils d'affichage local y effacent puis y écrivent des images.
+static ATELIER: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Rend un message si sa demande est toujours la dernière, sous le verrou de
+/// l'atelier ; `None` sinon.
+fn rendre_si_actuel(numero: u64, rendre: impl FnOnce() -> Lu) -> Option<Lu> {
+    let _verrou = ATELIER.lock().unwrap_or_else(|e| e.into_inner());
+    (AFFICHAGE.load(Ordering::SeqCst) == numero).then(rendre)
+}
+
+/// Ce qu'il faut, une fois un message du poste rendu, pour terminer son
+/// affichage sur le fil Qt.
+struct Local {
+    compte: i64,
+    chemin: String,
+    dossier: i64,
+    uid: u32,
+    lu: bool,
+    brut: bool,
+    en_ligne: bool,
 }
 
 /// Numéro de série des affichages : chaque affichage a son propre dossier, et
@@ -2865,8 +3109,11 @@ fn telecharger(adresses: &[String]) -> Vec<Option<(String, Vec<u8>)>> {
 /// choisi, ou dans `dossier` pour l'ouvrir. Une pièce exécutable n'est jamais
 /// écrite pour être ouverte — le refus est ici, et pas seulement dans
 /// l'interface.
+#[allow(clippy::too_many_arguments)]
 fn ecrire_piece(
     e: &mut Etabli,
+    profil: &str,
+    compte: i64,
     chemin: &str,
     uid: u32,
     indice: usize,
@@ -2874,8 +3121,7 @@ fn ecrire_piece(
     dossier: &Path,
     pour_ouvrir: bool,
 ) -> Result<PathBuf, Echec> {
-    assurer_selection(&mut e.client, chemin)?;
-    let octets = e.client.corps(uid)?;
+    let octets = message_entier(e, profil, compte, chemin, uid)?;
     ecrire_piece_de(&octets, indice, destination, dossier, pour_ouvrir)
         .map_err(|m| Echec::Index(crate::magasin::Erreur(m)))
 }
@@ -3031,8 +3277,9 @@ fn json_messages(messages: &[MessageLocal]) -> String {
         .iter()
         .map(|m| {
             format!(
-                r#"{{"uid":{},"expediteur":{},"adresse":{},"sujet":{},"date":{},"taille":{},"lu":{},"repondu":{},"pieces":{},"suivi":{},"importance":{}}}"#,
+                r#"{{"uid":{},"h":{},"expediteur":{},"adresse":{},"sujet":{},"date":{},"taille":{},"lu":{},"repondu":{},"pieces":{},"suivi":{},"importance":{}}}"#,
                 m.uid,
+                m.horodatage,
                 texte_json(&m.expediteur),
                 texte_json(&m.adresse),
                 texte_json(&m.sujet),
@@ -3047,6 +3294,55 @@ fn json_messages(messages: &[MessageLocal]) -> String {
         })
         .collect();
     format!("[{}]", corps.join(","))
+}
+
+/// Au-delà, l'interface relit la liste entière plutôt que d'appliquer les
+/// changements un à un.
+const CHANGEMENTS_MAX: usize = 2000;
+
+/// Empreinte des champs affichés d'un message.
+fn empreinte(m: &MessageLocal) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    m.hash(&mut h);
+    h.finish()
+}
+
+/// Différence entre la liste envoyée (`avant`) et l'index (`apres`, avec ses
+/// empreintes) : retirés, ajoutés et modifiés, en JSON ; `None` s'il y en a
+/// trop. Un message dont la date a changé est retiré puis ajouté : sa place
+/// dans la liste triée n'est plus la même.
+fn changements(avant: &[(u32, i64, u64)], apres: &[MessageLocal], empreintes: &[(u32, i64, u64)]) -> Option<String> {
+    let connus: HashMap<u32, (i64, u64)> = avant.iter().map(|&(u, h, e)| (u, (h, e))).collect();
+    let nouveaux: HashMap<u32, i64> = empreintes.iter().map(|&(u, h, _)| (u, h)).collect();
+    let retires: Vec<String> = avant
+        .iter()
+        .filter(|(u, h, _)| nouveaux.get(u) != Some(h))
+        .map(|(u, h, _)| format!(r#"{{"uid":{u},"h":{h}}}"#))
+        .collect();
+    if retires.len() > CHANGEMENTS_MAX {
+        return None;
+    }
+    let (mut ajoutes, mut modifies) = (Vec::new(), Vec::new());
+    for (m, &(_, h, e)) in apres.iter().zip(empreintes) {
+        match connus.get(&m.uid) {
+            Some(&(h0, e0)) if h0 == h => {
+                if e0 != e {
+                    modifies.push(m.clone());
+                }
+            }
+            _ => ajoutes.push(m.clone()),
+        }
+        if retires.len() + ajoutes.len() + modifies.len() > CHANGEMENTS_MAX {
+            return None;
+        }
+    }
+    Some(format!(
+        r#"{{"retires":[{}],"ajoutes":{},"modifies":{}}}"#,
+        retires.join(","),
+        json_messages(&ajoutes),
+        json_messages(&modifies)
+    ))
 }
 
 /// Chaîne JSON échappée. Écrite ici pour ne pas dépendre d'un sérialiseur
@@ -3081,7 +3377,7 @@ mod tests {
         Commande::OuvrirDossier(chemin.into())
     }
     fn corps(uid: u32) -> Commande {
-        Commande::Corps { chemin: "INBOX".into(), uid, brut: false, distantes: false }
+        Commande::Corps { chemin: "INBOX".into(), uid, brut: false, distantes: false, numero: 0 }
     }
     fn noms(file: &[Commande]) -> Vec<String> {
         file.iter()
@@ -3098,6 +3394,7 @@ mod tests {
                 Commande::Arborescence => "arborescence".into(),
                 Commande::Reprendre(_) => "reprendre".into(),
                 Commande::Veille => "veille".into(),
+                Commande::Signale => "signale".into(),
                 Commande::Precharger { chemin } => format!("precharger {chemin}"),
                 Commande::Preparer { .. } => "preparer".into(),
                 Commande::Envoyer { .. } => "envoyer".into(),
@@ -3213,6 +3510,53 @@ mod tests {
         // 12 est réservé par un autre poste, 13 n'est pas échu.
         assert_eq!(differes_echus(&mut client, 5_000).unwrap(), vec![(11, 300)]);
         assert!(journal.lock().unwrap()[0].contains("X-MMAIL-ENVOI-DIFFERE"));
+    }
+
+    fn ligne(uid: u32, h: i64, lu: bool) -> MessageLocal {
+        MessageLocal { uid, horodatage: h, lu, sujet: format!("m{uid}"), ..Default::default() }
+    }
+
+    fn empreintes(liste: &[MessageLocal]) -> Vec<(u32, i64, u64)> {
+        liste.iter().map(|m| (m.uid, m.horodatage, empreinte(m))).collect()
+    }
+
+    #[test]
+    fn changements_de_la_liste() {
+        let avant = vec![ligne(4, 40, false), ligne(3, 30, false), ligne(2, 20, true), ligne(1, 10, false)];
+        let e_avant = empreintes(&avant);
+        // Rien n'a changé : trois listes vides.
+        assert_eq!(
+            changements(&e_avant, &avant, &e_avant).unwrap(),
+            r#"{"retires":[],"ajoutes":[],"modifies":[]}"#
+        );
+        // 5 arrive, 2 part, 3 est lu, 1 change de date (déplacé puis revenu).
+        let apres = vec![ligne(5, 50, false), ligne(4, 40, false), ligne(3, 30, true), ligne(1, 15, false)];
+        let json = changements(&e_avant, &apres, &empreintes(&apres)).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let uids = |cle: &str| v[cle].as_array().unwrap().iter().map(|m| m["uid"].as_u64().unwrap()).collect::<Vec<_>>();
+        assert_eq!(uids("retires"), vec![2, 1]);
+        assert_eq!(uids("ajoutes"), vec![5, 1]);
+        assert_eq!(uids("modifies"), vec![3]);
+        // La date voyage avec chaque ligne : l'interface s'en sert pour placer.
+        assert_eq!(v["retires"][1]["h"], 10);
+        assert_eq!(v["ajoutes"][1]["h"], 15);
+    }
+
+    #[test]
+    fn trop_de_changements_fait_tout_relire() {
+        let avant: Vec<MessageLocal> = (1..=10).map(|u| ligne(u, u as i64, false)).collect();
+        let apres: Vec<MessageLocal> = (1..=CHANGEMENTS_MAX as u32 + 20).map(|u| ligne(u, u as i64, true)).collect();
+        assert!(changements(&empreintes(&avant), &apres, &empreintes(&apres)).is_none());
+    }
+
+    #[test]
+    fn signaux_d_idle() {
+        for ligne in ["* 12 EXISTS", "* 3 EXPUNGE", "* VANISHED 7:9", "* 2 FETCH (UID 8 FLAGS (\\Seen) MODSEQ (4))", "* 5 exists"] {
+            assert!(signale_un_changement(ligne), "{ligne}");
+        }
+        for ligne in ["* OK Still here", "* 1 RECENT", "+ idling", "m0004 OK Idle completed"] {
+            assert!(!signale_un_changement(ligne), "{ligne}");
+        }
     }
 
     #[test]

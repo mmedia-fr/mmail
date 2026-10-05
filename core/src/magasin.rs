@@ -19,8 +19,13 @@ use crate::protocole::{Dossier, EtatDossier, Statut};
 
 pub type Resultat<T> = Result<T, Erreur>;
 
+/// Lignes écrites par transaction : le verrou d'écriture de SQLite est unique,
+/// et le fil de l'interface, qui écrit aussi (marquages), attend qu'il se
+/// libère. Une transaction sur tout un dossier le tenait plusieurs secondes.
+const LOT_ECRITURE: usize = 500;
+
 /// Version du schéma, portée par `PRAGMA user_version`.
-const VERSION_SCHEMA: i32 = 5;
+const VERSION_SCHEMA: i32 = 6;
 
 #[derive(Debug)]
 pub struct Erreur(pub String);
@@ -77,7 +82,7 @@ pub struct DossierLocal {
 }
 
 /// Un message tel qu'il est rangé dans l'index : de quoi remplir une liste.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct MessageLocal {
     pub uid: u32,
     pub message_id: String,
@@ -282,6 +287,24 @@ impl Magasin {
             self.ajouter_colonne("accounts", "rang", "INTEGER")?;
             self.base.execute("UPDATE accounts SET rang = id WHERE rang IS NULL", [])?;
             self.ajouter_colonne("folders", "replie_local", "INTEGER NOT NULL DEFAULT 0")?;
+        }
+        // Version 6 : les expéditeurs rencontrés, de quoi proposer une adresse
+        // à la saisie sans parcourir tous les messages à chaque frappe ; et un
+        // index des messages gardés sur le poste, que le ménage du cache
+        // parcourait en entier.
+        if version < 6 {
+            self.base.execute_batch(
+                "CREATE TABLE IF NOT EXISTS expediteurs (
+                     adresse TEXT PRIMARY KEY,
+                     nom     TEXT NOT NULL DEFAULT '',
+                     nb      INTEGER NOT NULL DEFAULT 0,
+                     dernier INTEGER NOT NULL DEFAULT 0
+                 );
+                 INSERT OR IGNORE INTO expediteurs (adresse, nom, nb, dernier)
+                     SELECT lower(adresse), MAX(expediteur), COUNT(*), MAX(horodatage) FROM messages
+                     WHERE adresse <> '' GROUP BY lower(adresse);
+                 CREATE INDEX IF NOT EXISTS messages_gardes ON messages(horodatage) WHERE body_state = 'full';",
+            )?;
         }
         self.base.pragma_update(None, "user_version", VERSION_SCHEMA)?;
         Ok(())
@@ -626,53 +649,80 @@ impl Magasin {
     /// Range les messages d'un dossier. Un message déjà connu ne voit changer
     /// que ses drapeaux.
     pub fn poser_messages(&self, dossier: i64, messages: &[MessageLocal]) -> Resultat<()> {
-        let transaction = self.base.unchecked_transaction()?;
-        {
-            let mut insertion = transaction.prepare(
-                "INSERT INTO messages
-                   (folder_id, uid, message_id, expediteur, adresse, sujet, date, horodatage,
-                    taille, lu, repondu, pieces, suivi, importance)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
-                 ON CONFLICT(folder_id, uid)
-                 DO UPDATE SET lu = ?10, repondu = ?11, suivi = ?13, importance = ?14,
-                    pieces = CASE WHEN pieces_certain = 1 THEN pieces ELSE ?12 END",
-            )?;
-            for m in messages {
-                insertion.execute(params![
-                    dossier,
-                    m.uid,
-                    m.message_id,
-                    m.expediteur,
-                    m.adresse,
-                    m.sujet,
-                    m.date,
-                    m.horodatage,
-                    m.taille,
-                    m.lu as i32,
-                    m.repondu as i32,
-                    m.pieces as i32,
-                    m.suivi as i32,
-                    m.importance as i32
-                ])?;
+        for lot in messages.chunks(LOT_ECRITURE) {
+            let transaction = self.base.unchecked_transaction()?;
+            {
+                let mut insertion = transaction.prepare(
+                    "INSERT OR IGNORE INTO messages
+                       (folder_id, uid, message_id, expediteur, adresse, sujet, date, horodatage,
+                        taille, lu, repondu, pieces, suivi, importance)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                )?;
+                let mut mise_a_jour = transaction.prepare(
+                    "UPDATE messages SET lu = ?3, repondu = ?4, suivi = ?6, importance = ?7,
+                        pieces = CASE WHEN pieces_certain = 1 THEN pieces ELSE ?5 END
+                     WHERE folder_id = ?1 AND uid = ?2",
+                )?;
+                // Un expéditeur compte une fois par message nouveau dans l'index.
+                let mut expediteur = transaction.prepare(
+                    "INSERT INTO expediteurs (adresse, nom, nb, dernier) VALUES (lower(?1), ?2, 1, ?3)
+                     ON CONFLICT(adresse) DO UPDATE SET nb = nb + 1, dernier = MAX(dernier, excluded.dernier),
+                        nom = CASE WHEN excluded.nom <> '' THEN excluded.nom ELSE nom END",
+                )?;
+                for m in lot {
+                    let nouveau = insertion.execute(params![
+                        dossier,
+                        m.uid,
+                        m.message_id,
+                        m.expediteur,
+                        m.adresse,
+                        m.sujet,
+                        m.date,
+                        m.horodatage,
+                        m.taille,
+                        m.lu as i32,
+                        m.repondu as i32,
+                        m.pieces as i32,
+                        m.suivi as i32,
+                        m.importance as i32
+                    ])? == 1;
+                    if nouveau {
+                        if !m.adresse.is_empty() {
+                            expediteur.execute(params![m.adresse, m.expediteur, m.horodatage])?;
+                        }
+                    } else {
+                        mise_a_jour.execute(params![
+                            dossier,
+                            m.uid,
+                            m.lu as i32,
+                            m.repondu as i32,
+                            m.pieces as i32,
+                            m.suivi as i32,
+                            m.importance as i32
+                        ])?;
+                    }
+                }
             }
+            transaction.commit()?;
         }
-        transaction.commit()?;
         Ok(())
     }
 
     /// Applique des drapeaux rendus par le serveur à des messages connus.
     pub fn poser_drapeaux(&self, dossier: i64, drapeaux: &[(u32, Vec<String>)]) -> Resultat<()> {
-        let transaction = self.base.unchecked_transaction()?;
-        for (uid, liste) in drapeaux {
-            let lu = liste.iter().any(|d| d.eq_ignore_ascii_case("\\Seen"));
-            let repondu = liste.iter().any(|d| d.eq_ignore_ascii_case("\\Answered"));
-            let suivi = liste.iter().any(|d| d.eq_ignore_ascii_case("\\Flagged"));
-            transaction.execute(
-                "UPDATE messages SET lu = ?3, repondu = ?4, suivi = ?5 WHERE folder_id = ?1 AND uid = ?2",
-                params![dossier, uid, lu as i32, repondu as i32, suivi as i32],
-            )?;
+        for lot in drapeaux.chunks(LOT_ECRITURE) {
+            let transaction = self.base.unchecked_transaction()?;
+            for (uid, liste) in lot {
+                let lu = liste.iter().any(|d| d.eq_ignore_ascii_case("\\Seen"));
+                let repondu = liste.iter().any(|d| d.eq_ignore_ascii_case("\\Answered"));
+                let suivi = liste.iter().any(|d| d.eq_ignore_ascii_case("\\Flagged"));
+                transaction.execute(
+                    "UPDATE messages SET lu = ?3, repondu = ?4, suivi = ?5 WHERE folder_id = ?1 AND uid = ?2",
+                    params![dossier, uid, lu as i32, repondu as i32, suivi as i32],
+                )?;
+            }
+            transaction.commit()?;
         }
-        transaction.commit()?;
         Ok(())
     }
 
@@ -703,17 +753,19 @@ impl Magasin {
             "%{}%",
             filtre.trim().replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")
         );
+        // Un seul agrégat par groupe : SQLite rend alors le nom et l'adresse de
+        // la ligne qui le porte (un correspondant avant un expéditeur, le plus
+        // récent à poids égal). Avec deux, le nom venait d'une ligne quelconque.
         let mut requete = self.base.prepare(
-            "SELECT nom, adresse FROM (
+            "SELECT nom, adresse, MAX(poids * 10000000000 + dernier) AS cle FROM (
                 SELECT nom, adresse, 1000000 + envois AS poids, dernier FROM correspondants
                  WHERE adresse LIKE ?1 ESCAPE '\\' OR nom LIKE ?1 ESCAPE '\\'
                 UNION ALL
-                SELECT MAX(expediteur), adresse, COUNT(*), MAX(horodatage) FROM messages
-                 WHERE adresse <> '' AND (adresse LIKE ?1 ESCAPE '\\' OR expediteur LIKE ?1 ESCAPE '\\')
-                 GROUP BY lower(adresse)
+                SELECT nom, adresse, nb, dernier FROM expediteurs
+                 WHERE adresse LIKE ?1 ESCAPE '\\' OR nom LIKE ?1 ESCAPE '\\'
              )
              GROUP BY lower(adresse)
-             ORDER BY MAX(poids) DESC, MAX(dernier) DESC
+             ORDER BY cle DESC
              LIMIT ?2",
         )?;
         let lignes = requete
@@ -1373,6 +1425,38 @@ mod tests {
         assert_eq!(m.contacts("DURAND", 10).unwrap(), vec![("Noël Durand".into(), "noel@exemple.fr".into())]);
         assert_eq!(m.contacts("50%", 10).unwrap().len(), 1, "% cherché tel quel");
         assert!(m.contacts("zzz", 10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn expediteurs_comptes_une_fois_par_message() {
+        let (m, _, id) = boite();
+        let recu = |uid, nom: &str, adresse: &str| MessageLocal {
+            uid,
+            expediteur: nom.into(),
+            adresse: adresse.into(),
+            horodatage: uid as i64,
+            ..Default::default()
+        };
+        let lot = [recu(1, "Rare", "rare@exemple.fr"), recu(2, "Fréquent", "f@exemple.fr"), recu(3, "Fréquent", "F@exemple.fr")];
+        m.poser_messages(id, &lot).unwrap();
+        // Relu (resynchronisation) : rien ne se compte deux fois.
+        m.poser_messages(id, &lot).unwrap();
+        m.poser_messages(id, &[recu(4, "Fréquent", "f@exemple.fr")]).unwrap();
+        let nb: i64 = m.base.query_row("SELECT nb FROM expediteurs WHERE adresse = 'f@exemple.fr'", [], |l| l.get(0)).unwrap();
+        assert_eq!(nb, 3);
+        assert_eq!(m.contacts("exemple", 10).unwrap()[0], ("Fréquent".into(), "f@exemple.fr".into()));
+    }
+
+    #[test]
+    fn ecriture_par_lots() {
+        // Plus d'un lot : tout est écrit, et les mises à jour suivent.
+        let (m, _, id) = boite();
+        let lignes: Vec<MessageLocal> = (1..=1203).map(|uid| message(uid, uid as i64, false)).collect();
+        m.poser_messages(id, &lignes).unwrap();
+        assert_eq!(m.uids(id).unwrap().len(), 1203);
+        let drapeaux: Vec<(u32, Vec<String>)> = (1..=1203).map(|uid| (uid, vec!["\\Seen".to_string()])).collect();
+        m.poser_drapeaux(id, &drapeaux).unwrap();
+        assert!(m.messages(id).unwrap().iter().all(|l| l.lu));
     }
 
     #[test]

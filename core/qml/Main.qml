@@ -431,7 +431,10 @@ ApplicationWindow {
                     // vers les Favoris fait défiler la liste, et sa ligne d'origine,
                     // qui porte le glisser, ne doit pas être détruite en sortant de
                     // l'écran — le glisser serait annulé.
-                    cacheBuffer: 100000
+                    // Seulement pendant un glisser : hors de là, garder toutes
+                    // les lignes construites coûtait mémoire et reconstructions
+                    // pour rien.
+                    cacheBuffer: fenetre.glisse !== null ? 100000 : 400
 
                     // Défilement au bord pendant un glisser-déposer (retour de Manu,
                     // 01/10 : les Favoris, en haut, étaient hors d'atteinte).
@@ -522,6 +525,9 @@ ApplicationWindow {
             ListView {
                 id: vueMessages
                 model: ListModel { id: modeleMessages }
+                // Les lignes qui sortent de l'écran servent à celles qui entrent,
+                // au lieu d'être détruites et recréées à chaque défilement.
+                reuseItems: true
                 boundsBehavior: Flickable.StopAtBounds
                 currentIndex: -1
                 focus: true
@@ -1439,7 +1445,19 @@ ApplicationWindow {
             }
 
             // ---- adresses proposées à la saisie
+            // Temporisées : chaque frappe interrogeait l'index, sur le fil de
+            // l'interface ; on attend que la saisie marque une pause.
+            Timer {
+                id: minuterieProposer
+                interval: 150
+                property var champ: null
+                onTriggered: if (champ) redac.proposerMaintenant(champ)
+            }
             function proposer(champ) {
+                minuterieProposer.champ = champ
+                minuterieProposer.restart()
+            }
+            function proposerMaintenant(champ) {
                 var avant = champ.text.substring(0, champ.cursorPosition)
                 var coupure = Math.max(avant.lastIndexOf(","), avant.lastIndexOf(";"))
                 var morceau = avant.substring(coupure + 1).trim()
@@ -3816,7 +3834,9 @@ ApplicationWindow {
             fenetre.deplacementsEnVol = Math.max(0, fenetre.deplacementsEnVol - 1)
             if (fenetre.deplacementsEnVol === 0)
                 fenetre.enDeplacement = ({})
-            fenetre.rafraichirListe()
+            // En échec, les lignes retirées d'avance doivent revenir : le noyau
+            // ne les a jamais vues partir, il faut la liste entière.
+            fenetre.rafraichirListe(erreurs.length > 0)
             if (erreurs.length === 0)
                 messageEtat.texte = fenetre.accord(nombre, qsTr("message déplacé."), qsTr("messages déplacés."))
             if (fenetre.essai && fenetre.essai.scenario) {
@@ -4226,27 +4246,50 @@ ApplicationWindow {
         afficherTexte(qsTr("Aucun message sélectionné."))
     }
 
-    /// Relit la liste depuis l'index. Mêmes messages dans le même ordre : mise
-    /// à jour en place ; sinon reconstruction, en gardant la position.
-    function rafraichirListe() {
-        var messages = JSON.parse(boite.messages()).filter(function(m) {
-            return fenetre.enDeplacement[cleDeplacement(m.uid)] !== true
-        })
-        var memeForme = messages.length === modeleMessages.count
-        for (var i = 0; memeForme && i < messages.length; ++i)
-            memeForme = messages[i].uid === modeleMessages.get(i).uid
-        if (memeForme) {
-            for (var j = 0; j < messages.length; ++j) {
-                var avant = modeleMessages.get(j)
-                // Drapeau de suivi compris : posé sur le téléphone ou dans le
-                // webmail, il arrive ainsi sans changer de dossier.
-                if (avant.lu !== messages[j].lu || avant.repondu !== messages[j].repondu
-                        || avant.pieces !== messages[j].pieces || avant.suivi !== messages[j].suivi)
-                    modeleMessages.set(j, messages[j])
-            }
-            majInfoDossier()
+    /// Relit la liste depuis l'index. Le noyau ne rend que ce qui a changé
+    /// depuis sa lecture précédente — retirés, ajoutés, modifiés —, appliqué
+    /// ligne à ligne : relire et reconstruire 40 000 lignes figeait la fenêtre
+    /// à chaque message arrivé. La liste entière ne revient qu'à l'ouverture
+    /// d'un dossier, après de très nombreux changements, ou si `complet` —
+    /// quand des lignes retirées d'avance doivent réapparaître.
+    function rafraichirListe(complet) {
+        var c = JSON.parse(boite.changementsListe(complet === true))
+        if (c.complet !== undefined) {
+            poserListe(c.complet)
             return
         }
+        var absents = {}
+        for (var i = 0; i < c.retires.length; ++i) {
+            var r = c.retires[i]
+            var k = rangExact(r.h, r.uid)
+            if (k >= 0)
+                modeleMessages.remove(k)
+            absents[r.uid] = true
+        }
+        // Drapeau de suivi compris : posé sur le téléphone ou dans le
+        // webmail, il arrive ainsi sans changer de dossier.
+        for (var j = 0; j < c.modifies.length; ++j) {
+            var m = c.modifies[j]
+            var km = rangExact(m.h, m.uid)
+            if (km >= 0)
+                modeleMessages.set(km, m)
+        }
+        for (var a = 0; a < c.ajoutes.length; ++a) {
+            var n = c.ajoutes[a]
+            delete absents[n.uid]
+            if (fenetre.enDeplacement[cleDeplacement(n.uid)] === true || rangExact(n.h, n.uid) >= 0)
+                continue
+            modeleMessages.insert(rangInsertion(n.h, n.uid), n)
+        }
+        oublierAbsents(absents)
+        majInfoDossier()
+    }
+
+    /// Pose une liste entière, en gardant la position et ce qui est choisi.
+    function poserListe(liste) {
+        var messages = liste.filter(function(m) {
+            return fenetre.enDeplacement[cleDeplacement(m.uid)] !== true
+        })
         var position = vueMessages.contentY
         modeleMessages.clear()
         modeleMessages.append(messages)
@@ -4255,17 +4298,56 @@ ApplicationWindow {
         var presents = {}
         for (var k = 0; k < messages.length; ++k)
             presents[messages[k].uid] = true
-        var reste = {}
+        var absents = {}
         for (var uid in selection)
-            if (presents[uid])
+            if (!presents[uid])
+                absents[uid] = true
+        if (uidCourant > 0 && !presents[uidCourant])
+            absents[uidCourant] = true
+        oublierAbsents(absents)
+        majInfoDossier()
+    }
+
+    /// Retire de la sélection et de l'affichage les messages disparus.
+    function oublierAbsents(absents) {
+        var reste = {}
+        var change = false
+        for (var uid in selection) {
+            if (absents[uid])
+                change = true
+            else
                 reste[uid] = true
-        selection = reste
-        if (uidCourant > 0 && !presents[uidCourant]) {
+        }
+        if (change)
+            selection = reste
+        if (uidCourant > 0 && absents[uidCourant]) {
             uidCourant = 0
             sujetAffiche.text = ""
             auteurAffiche.text = ""
             afficherTexte(qsTr("Aucun message sélectionné."))
         }
+    }
+
+    /// Premier rang dont la ligne ne précède pas (h, uid) : la liste est triée
+    /// du plus récent au plus ancien, puis par UID décroissant, comme l'index.
+    function rangInsertion(h, uid) {
+        var bas = 0
+        var haut = modeleMessages.count
+        while (bas < haut) {
+            var milieu = (bas + haut) >> 1
+            var l = modeleMessages.get(milieu)
+            if (l.h > h || (l.h === h && l.uid > uid))
+                bas = milieu + 1
+            else
+                haut = milieu
+        }
+        return bas
+    }
+
+    /// Rang d'un message de la liste par sa date et son UID, -1 s'il n'y est pas.
+    function rangExact(h, uid) {
+        var i = rangInsertion(h, uid)
+        return i < modeleMessages.count && modeleMessages.get(i).uid === uid ? i : -1
     }
 
     function indexDe(uid) {
@@ -4505,7 +4587,14 @@ ApplicationWindow {
         if (corpsHtml && !sourceVisible)
             mefLecture.bornerImages(Math.floor(vueCorps.width - vueCorps.leftPadding - vueCorps.rightPadding) - 2)
     }
-    onTailleMessageChanged: reposerHtml()
+    // Un cran de molette remettait en page tout le message : les crans
+    // rapprochés n'en font qu'une.
+    onTailleMessageChanged: minuterieZoomMessage.restart()
+    Timer {
+        id: minuterieZoomMessage
+        interval: 150
+        onTriggered: fenetre.reposerHtml()
+    }
 
     /// Un lien du message : une adresse de courriel ouvre une rédaction dans
     /// MMail, une adresse web part au navigateur.
@@ -4768,6 +4857,14 @@ ApplicationWindow {
             }
             // Scénario « horsligne » : aucune connexion ; le profil d'une
             // session précédente doit suffire à lire la boîte de réception.
+            // Scénario « mesure-liste » : aucune connexion ; chronomètre
+            // l'ouverture d'INBOX depuis l'index et ses rafraîchissements.
+            if (essai.scenario === "mesure-liste") {
+                var mesure = Qt.createQmlObject('import QtQuick; Timer { interval: 1500 }', fenetre)
+                mesure.triggered.connect(etapeScenarioMesure)
+                mesure.start()
+                return
+            }
             if (essai.scenario === "horsligne") {
                 var attente = Qt.createQmlObject('import QtQuick; Timer { interval: 1500 }', fenetre)
                 attente.triggered.connect(etapeScenarioHorsLigne)
@@ -4842,6 +4939,48 @@ ApplicationWindow {
             console.log("scenario: affiché :", sujetAffiche.text, "| html :", corpsHtml, "|",
                         vueCorps.text.length, "caractères",
                         vueCorps.text.indexOf("Chargement") === 0 || vueCorps.text.length < 20 ? "ECHEC" : "OK")
+        })
+        attente.start()
+    }
+
+    /// Scénario « mesure-liste » : temps d'ouverture d'INBOX depuis l'index,
+    /// de trois rafraîchissements sans changement, puis d'un rafraîchissement
+    /// après l'arrivée d'un message, que l'épreuve insère dans l'index pendant
+    /// l'attente annoncée par « pret-insertion ».
+    function etapeScenarioMesure() {
+        var c = comptesConnus[0]
+        var t = Date.now()
+        ouvrirDossier(c.compte, "INBOX")
+        console.log("mesure: ouverture,", modeleMessages.count, "messages,", Date.now() - t, "ms")
+        for (var k = 0; k < 3; ++k) {
+            t = Date.now()
+            rafraichirListe()
+            console.log("mesure: rafraîchissement sans changement,", Date.now() - t, "ms")
+        }
+        // Ce que faisait la 0.4.4 à chaque rafraîchissement : la liste entière
+        // relue, puis comparée ligne à ligne.
+        for (k = 0; k < 3; ++k) {
+            t = Date.now()
+            var liste = JSON.parse(boite.messages())
+            var memeForme = liste.length === modeleMessages.count
+            for (var i = 0; memeForme && i < liste.length; ++i)
+                memeForme = liste[i].uid === modeleMessages.get(i).uid
+            for (var j = 0; memeForme && j < liste.length; ++j)
+                modeleMessages.get(j).lu !== liste[j].lu
+            console.log("mesure: ancien rafraîchissement sans changement,", Date.now() - t, "ms")
+        }
+        console.log("scenario: pret-insertion")
+        var attente = Qt.createQmlObject('import QtQuick; Timer { interval: 5000 }', fenetre)
+        attente.triggered.connect(function() {
+            var t2 = Date.now()
+            rafraichirListe()
+            console.log("mesure: rafraîchissement après une arrivée,", modeleMessages.count, "messages,",
+                        Date.now() - t2, "ms | premier :", modeleMessages.get(0).sujet)
+            // L'ancienne reconstruction, sur la même liste.
+            t2 = Date.now()
+            poserListe(JSON.parse(boite.messages()))
+            console.log("mesure: ancienne reconstruction,", Date.now() - t2, "ms")
+            Qt.quit()
         })
         attente.start()
     }

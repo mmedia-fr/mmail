@@ -13,7 +13,7 @@ use std::collections::VecDeque;
 use std::io::{self, Read, Write};
 use std::sync::{Arc, Mutex};
 
-use crate::imap::Client;
+use crate::imap::{Client, Flux};
 
 /// Une commande attendue et ce que le serveur y répond.
 pub struct Echange {
@@ -42,6 +42,9 @@ struct FluxSimule {
     /// Octets de littéral restant à lire ; la ligne de la commande reprend
     /// ensuite jusqu'à son CRLF.
     litteral: Option<usize>,
+    /// Étiquette de la commande `IDLE` en cours : `DONE`, qui n'en porte pas,
+    /// la termine.
+    idle: Option<String>,
 }
 
 impl FluxSimule {
@@ -75,7 +78,14 @@ impl FluxSimule {
     }
 
     fn repondre(&mut self, complete: &str) {
-        let (etiquette, texte) = complete.split_once(' ').unwrap_or((complete, ""));
+        let (etiquette, texte) = match (complete, &self.idle) {
+            ("DONE", Some(e)) => (e.clone(), "DONE"),
+            _ => {
+                let (e, t) = complete.split_once(' ').unwrap_or((complete, ""));
+                (e.to_string(), t)
+            }
+        };
+        let etiquette = etiquette.as_str();
         self.journal.lock().unwrap().push(texte.to_string());
         let echange = self
             .attendus
@@ -86,6 +96,17 @@ impl FluxSimule {
             "commande reçue « {texte} », attendue « {}… »",
             echange.attendu
         );
+        if texte == "IDLE" {
+            // Invite, puis ce que le serveur signale de lui-même ; la fin ne
+            // vient qu'avec DONE.
+            self.sortie.extend(b"+ idling\r\n");
+            self.sortie.extend(echange.reponses.as_bytes());
+            self.idle = Some(etiquette.to_string());
+            return;
+        }
+        if texte == "DONE" {
+            self.idle = None;
+        }
         self.sortie.extend(echange.reponses.as_bytes());
         self.sortie.extend(format!("{etiquette} {}\r\n", echange.fin).as_bytes());
     }
@@ -96,8 +117,14 @@ fn taille_litteral(ligne: &str) -> Option<usize> {
     ligne[debut + 1..].strip_suffix('}')?.parse().ok()
 }
 
+impl Flux for FluxSimule {}
+
 impl Read for FluxSimule {
     fn read(&mut self, tampon: &mut [u8]) -> io::Result<usize> {
+        // Pendant IDLE, rien à lire veut dire « rien de neuf » : un délai écoulé.
+        if self.sortie.is_empty() && self.idle.is_some() {
+            return Err(io::Error::from(io::ErrorKind::WouldBlock));
+        }
         // Rien à lire : le serveur « ferme », ce que le client prend pour une
         // perte de connexion — un dialogue incomplet échoue donc tout de suite.
         let n = tampon.len().min(self.sortie.len());
@@ -140,6 +167,7 @@ pub fn session(capacites: &str, echanges: Vec<Echange>) -> (Client, Journal) {
         entree: Vec::new(),
         commande: String::new(),
         litteral: None,
+        idle: None,
     };
     let mut client = Client::sur(Box::new(flux)).expect("salutation");
     client.ouvrir_session("essai@exemple.fr", "secret").expect("session");

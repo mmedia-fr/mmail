@@ -197,6 +197,10 @@ public:
     QTextDocument* doc = texte_();
     if (!doc || largeurMax <= 0)
       return;
+    // Même document, même largeur : rien à refaire. La minuterie de la colonne
+    // et le zoom l'appellent souvent pour rien.
+    if (doc == m_documentBorne && doc->revision() == m_revisionBornee && largeurMax == m_largeurBornee)
+      return;
     // Positions d'abord : changer un format redécoupe les fragments.
     QList<int> positions;
     for (QTextBlock b = doc->begin(); b.isValid(); b = b.next())
@@ -221,7 +225,14 @@ public:
       }
       const qreal largeur = f.property(LargeurVoulue).toReal();
       const qreal hauteur = f.property(HauteurVoulue).toReal();
-      const QSize naturelle = QImageReader(QUrl(f.name()).toLocalFile()).size();
+      // Taille du fichier, lue une fois et gardée sur le format : relire
+      // chaque image du disque à chaque largeur coûtait plus que le reste.
+      if (!f.hasProperty(LargeurNaturelle)) {
+        const QSize lue = QImageReader(QUrl(f.name()).toLocalFile()).size();
+        f.setProperty(LargeurNaturelle, lue.width());
+        f.setProperty(HauteurNaturelle, lue.height());
+      }
+      const QSize naturelle(f.property(LargeurNaturelle).toInt(), f.property(HauteurNaturelle).toInt());
       // Taille affichée sans contrainte : celle du message, l'autre côté
       // suivant les proportions de l'image.
       qreal l = largeur, h = hauteur;
@@ -252,6 +263,9 @@ public:
         c.setCharFormat(f);
     }
     c.endEditBlock();
+    m_documentBorne = doc;
+    m_revisionBornee = doc->revision();
+    m_largeurBornee = largeurMax;
   }
 
   /// Insère du texte brut (une signature) à la position donnée.
@@ -341,7 +355,12 @@ Q_SIGNALS:
 private:
   /// Taille d'une image telle que le message l'écrit, gardée sur son format
   /// pour que `bornerImages` puisse la rendre.
-  enum { LargeurVoulue = QTextFormat::UserProperty + 1, HauteurVoulue };
+  enum { LargeurVoulue = QTextFormat::UserProperty + 1, HauteurVoulue, LargeurNaturelle, HauteurNaturelle };
+
+  /// Dernier passage de `bornerImages` : document, révision, largeur.
+  QTextDocument* m_documentBorne = nullptr;
+  int m_revisionBornee = -1;
+  int m_largeurBornee = -1;
 
   QTextDocument* texte_() const { return m_document ? m_document->textDocument() : nullptr; }
 

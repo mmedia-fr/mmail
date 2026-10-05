@@ -12,8 +12,14 @@
 
 use std::io::{ErrorKind, Read, Write};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use crate::imap::{configuration_tls, joindre, Erreur, Resultat, DELAI};
+
+/// Durée totale d'une requête. `DELAI` ne borne que chaque lecture : une
+/// adresse d'image, que choisit l'expéditeur, pourrait sinon envoyer un octet
+/// toutes les 29 secondes et tenir le fil du compte indéfiniment.
+const DUREE_MAX: Duration = Duration::from_secs(60);
 
 /// Taille au-delà de laquelle une réponse est refusée : un document de
 /// configuration tient en quelques kilo-octets.
@@ -132,7 +138,13 @@ fn une_requete(methode: &str, url: &str, accepte: &str, taille_max: usize) -> Re
 
     let mut brut = Vec::new();
     let mut tampon = [0u8; 8192];
+    let echeance = Instant::now() + DUREE_MAX;
     loop {
+        let reste = echeance.saturating_duration_since(Instant::now());
+        if reste.is_zero() {
+            return Err(Erreur::Reseau(format!("pas de réponse complète en {} s", DUREE_MAX.as_secs())));
+        }
+        flux.sock.set_read_timeout(Some(reste.min(DELAI)))?;
         match flux.read(&mut tampon) {
             Ok(0) => break,
             Ok(n) => {

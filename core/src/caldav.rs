@@ -46,7 +46,7 @@ pub const DEMANDE_COLLECTION: &str = r#"<?xml version="1.0" encoding="utf-8"?>
 
 /// PROPFIND, profondeur 1 sur la collection : les agendas et leur étiquette.
 pub const DEMANDE_AGENDAS: &str = r#"<?xml version="1.0" encoding="utf-8"?>
-<d:propfind xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav" xmlns:cs="http://calendarserver.org/ns/" xmlns:ic="http://apple.com/ns/ical/"><d:prop><d:displayname/><d:resourcetype/><cs:getctag/><ic:calendar-color/><c:supported-calendar-component-set/></d:prop></d:propfind>"#;
+<d:propfind xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav" xmlns:cs="http://calendarserver.org/ns/" xmlns:ic="http://apple.com/ns/ical/"><d:prop><d:displayname/><d:resourcetype/><cs:getctag/><ic:calendar-color/><c:supported-calendar-component-set/><d:current-user-privilege-set/></d:prop></d:propfind>"#;
 
 /// PROPFIND, profondeur 1 sur un agenda : l'ETag de chaque objet.
 pub const DEMANDE_ETAGS: &str = r#"<?xml version="1.0" encoding="utf-8"?>
@@ -79,6 +79,9 @@ pub struct AgendaDistant {
     /// `#RRGGBB`, ou vide.
     pub couleur: String,
     pub ctag: String,
+    /// L'utilisateur peut y écrire. Sans `current-user-privilege-set`, on le
+    /// suppose : le serveur refusera, le cas échéant.
+    pub ecriture: bool,
 }
 
 /// Un objet d'un agenda : son adresse, son ETag et, s'il a été demandé, son
@@ -142,7 +145,7 @@ pub fn lire_agendas(xml: &str) -> Vec<AgendaDistant> {
     let Ok(doc) = roxmltree::Document::parse(xml) else { return Vec::new() };
     let mut agendas = Vec::new();
     for (href, proprietes) in reponses(&doc) {
-        let mut agenda = AgendaDistant { href, nom: String::new(), couleur: String::new(), ctag: String::new() };
+        let mut agenda = AgendaDistant { href, nom: String::new(), couleur: String::new(), ctag: String::new(), ecriture: true };
         let mut calendrier = false;
         // Sans la propriété, la RFC dit : tous les composants acceptés.
         let mut evenements = true;
@@ -161,6 +164,12 @@ pub fn lire_agendas(xml: &str) -> Vec<AgendaDistant> {
                 calendrier = p.children().any(|t| est(&t, CALDAV, "calendar"));
             } else if est(&p, CALDAV, "supported-calendar-component-set") {
                 evenements = p.children().any(|c| est(&c, CALDAV, "comp") && c.attribute("name") == Some("VEVENT"));
+            } else if est(&p, DAV, "current-user-privilege-set") {
+                agenda.ecriture = p.descendants().any(|d| {
+                    d.is_element()
+                        && d.tag_name().namespace() == Some(DAV)
+                        && matches!(d.tag_name().name(), "write" | "write-content" | "all" | "bind")
+                });
             }
         }
         if calendrier && evenements {
@@ -234,6 +243,10 @@ pub struct Acces<'a> {
 pub trait Dav {
     /// Envoie une requête et rend la réponse, quel qu'en soit le statut.
     fn envoyer(&self, methode: &str, url: &str, profondeur: &str, corps: &str) -> Resultat<Reponse>;
+
+    /// Dépose (PUT) ou retire (DELETE) un objet iCalendar, sous condition
+    /// d'ETag (`If-Match`) s'il est donné.
+    fn ecrire(&self, methode: &str, url: &str, corps: &str, si_etag: Option<&str>) -> Resultat<Reponse>;
 }
 
 impl Dav for Acces<'_> {
@@ -252,6 +265,18 @@ impl Dav for Acces<'_> {
             corps: corps.as_bytes(),
             taille_max: TAILLE_MAX,
         })
+    }
+
+    fn ecrire(&self, methode: &str, url: &str, corps: &str, si_etag: Option<&str>) -> Resultat<Reponse> {
+        let jeton = crate::smtp::base64(format!("{}:{}", self.utilisateur, self.mot_de_passe).as_bytes());
+        let mut entetes = vec![
+            ("Authorization", format!("Basic {jeton}")),
+            ("Content-Type", "text/calendar; charset=utf-8".to_string()),
+        ];
+        if let Some(etag) = si_etag {
+            entetes.push(("If-Match", etag.to_string()));
+        }
+        http::envoyer(&Demande { methode, url, accepte: "*/*", entetes: &entetes, corps: corps.as_bytes(), taille_max: TAILLE_MAX })
     }
 }
 
@@ -363,7 +388,8 @@ pub fn synchroniser(
             Some(a)
         })
         .collect();
-    let descriptions: Vec<_> = distants.iter().map(|a| (a.href.clone(), a.nom.clone(), a.couleur.clone())).collect();
+    let descriptions: Vec<_> =
+        distants.iter().map(|a| (a.href.clone(), a.nom.clone(), a.couleur.clone(), a.ecriture)).collect();
     bilan.change |= magasin.poser_agendas(compte, &descriptions).map_err(index)?;
     bilan.agendas = distants.len();
     let locaux = magasin.agendas().map_err(index)?;
@@ -428,6 +454,51 @@ fn lire_lot(magasin: &Magasin, agenda: i64, url: &str, lot: &[(String, String)],
         }
         Err(e) => Err(e),
     }
+}
+
+// ------------------------------------------------------------- écriture
+
+/// Motif d'une écriture refusée parce que l'objet a changé sur le serveur
+/// depuis la dernière synchronisation.
+pub const CONFLIT: &str = "l'événement a été modifié ailleurs entre-temps : l'agenda est relu, recommencez";
+
+fn issue_ecriture(reponse: &Reponse) -> Resultat<()> {
+    match reponse.statut {
+        200..=299 => Ok(()),
+        412 => Err(Erreur::Refuse(CONFLIT.into())),
+        401 => Err(Erreur::Refuse("accès à l'agenda refusé".into())),
+        403 => Err(Erreur::Refuse("cet agenda n'accepte pas l'écriture".into())),
+        507 => Err(Erreur::Refuse("espace insuffisant sur le serveur".into())),
+        statut => Err(Erreur::Protocole(format!("écriture dans l'agenda : HTTP {statut}"))),
+    }
+}
+
+/// Dépose un objet : nouveau sans ETag, remplacé avec l'ETag connu — un
+/// objet changé entre-temps sur le serveur n'est pas écrasé.
+pub fn deposer(dav: &impl Dav, url: &str, ical: &str, etag: Option<&str>) -> Resultat<()> {
+    issue_ecriture(&dav.ecrire("PUT", url, ical, etag)?)
+}
+
+/// Retire un objet, s'il n'a pas changé depuis que l'index l'a lu. SOGo
+/// ignore `If-Match` sur un DELETE : l'ETag est relu d'abord. Un objet déjà
+/// absent est tenu pour retiré.
+pub fn retirer(dav: &impl Dav, collection: &str, url: &str, etag: &str) -> Resultat<()> {
+    let reponse = dav.envoyer("PROPFIND", url, "0", DEMANDE_ETAGS)?;
+    match reponse.statut {
+        404 | 410 => return Ok(()),
+        207 => {
+            let actuel = lire_objets(&texte(&reponse), collection).into_iter().next().map(|o| o.etag);
+            if actuel.as_deref().is_some_and(|e| e != etag) {
+                return Err(Erreur::Refuse(CONFLIT.into()));
+            }
+        }
+        _ => issue_ecriture(&reponse)?,
+    }
+    let reponse = dav.ecrire("DELETE", url, "", Some(etag))?;
+    if matches!(reponse.statut, 404 | 410) {
+        return Ok(());
+    }
+    issue_ecriture(&reponse)
 }
 
 /// Un objet prêt à ranger. Sans événement lisible (tâche, objet vide), sa

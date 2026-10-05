@@ -395,6 +395,42 @@ pub mod qobject {
         #[qinvokable]
         #[cxx_name = "synchroniserAgendas"]
         fn synchroniser_agendas(self: Pin<&mut Boite>, insister: bool);
+
+        /// Formulaire prérempli d'un événement de l'index (cf.
+        /// `saisie::Saisie`, en JSON) : toute la série si `serie`, sinon
+        /// l'occurrence dont `occurrence` est le début d'origine. Vide si
+        /// l'événement ne se lit pas.
+        #[qinvokable]
+        #[cxx_name = "saisieEvenement"]
+        fn saisie_evenement(&self, objet: i32, occurrence: &QString, serie: bool) -> QString;
+
+        /// Enregistre une saisie (JSON) sur le serveur : nouvel événement, ou
+        /// modification de la série ou d'une occurrence. Issue :
+        /// `evenementEnregistre`, puis l'agenda relu.
+        #[qinvokable]
+        #[cxx_name = "enregistrerEvenement"]
+        fn enregistrer_evenement(self: Pin<&mut Boite>, saisie: &QString);
+
+        /// Supprime un événement — toute la série si `serie`, sinon
+        /// l'occurrence désignée. Issue : `evenementEnregistre`.
+        #[qinvokable]
+        #[cxx_name = "supprimerEvenement"]
+        fn supprimer_evenement(self: Pin<&mut Boite>, objet: i32, occurrence: &QString, serie: bool);
+
+        /// Rappels échus à montrer, en JSON (cf. `agenda::Rappel`).
+        #[qinvokable]
+        #[cxx_name = "rappelsEchus"]
+        fn rappels_echus(&self) -> QString;
+
+        /// Un rappel vu ne revient pas.
+        #[qinvokable]
+        #[cxx_name = "rappelVu"]
+        fn rappel_vu(&self, cle: &QString);
+
+        /// Un rappel repoussé revient dans `minutes` minutes.
+        #[qinvokable]
+        #[cxx_name = "repousserRappel"]
+        fn repousser_rappel(&self, cle: &QString, minutes: i32);
     }
 
     impl cxx_qt::Threading for Boite {}
@@ -515,6 +551,12 @@ pub mod qobject {
         #[qsignal]
         #[cxx_name = "agendasSynchronises"]
         fn agendas_synchronises(self: Pin<&mut Boite>, change: bool, erreurs: &QString);
+
+        /// Écriture dans l'agenda terminée : `message` dit pourquoi elle a
+        /// échoué.
+        #[qsignal]
+        #[cxx_name = "evenementEnregistre"]
+        fn evenement_enregistre(self: Pin<&mut Boite>, ok: bool, message: &QString);
     }
 }
 
@@ -826,6 +868,7 @@ impl qobject::Boite {
                     "nom": a.nom,
                     "couleur": crate::agenda::couleur(a),
                     "affiche": a.affiche,
+                    "ecriture": a.ecriture,
                 })
             })
             .collect();
@@ -887,6 +930,132 @@ impl qobject::Boite {
         });
         if lance.is_err() {
             self.as_mut().set_agenda_occupe(false);
+        }
+    }
+
+    pub fn saisie_evenement(&self, objet: i32, occurrence: &QString, serie: bool) -> QString {
+        let Some(o) = self.magasin.as_ref().and_then(|m| m.objet(objet as i64).ok().flatten()) else {
+            return QString::from("");
+        };
+        let occurrence = if serie { None } else { occurrence.to_string().parse::<i64>().ok() };
+        match crate::saisie::saisie_de(&o.ical, occurrence, crate::saisie::fuseau_du_poste()) {
+            Some(mut s) => {
+                s.agenda = o.agenda;
+                s.objet = o.id;
+                QString::from(&serde_json::to_string(&s).unwrap_or_default())
+            }
+            None => QString::from(""),
+        }
+    }
+
+    pub fn enregistrer_evenement(mut self: Pin<&mut Self>, saisie: &QString) {
+        let saisie: crate::saisie::Saisie = match serde_json::from_str(&saisie.to_string()) {
+            Ok(s) => s,
+            Err(e) => {
+                self.as_mut().evenement_enregistre(false, &QString::from(&format!("saisie illisible : {e}")));
+                return;
+            }
+        };
+        let objet = if saisie.objet > 0 { self.magasin.as_ref().and_then(|m| m.objet(saisie.objet).ok().flatten()) } else { None };
+        if saisie.objet > 0 && objet.is_none() {
+            self.as_mut().evenement_enregistre(false, &QString::from("événement introuvable dans l'index"));
+            return;
+        }
+        let agenda = objet.as_ref().map(|o| o.agenda).unwrap_or(saisie.agenda);
+        self.lancer_ecriture(
+            agenda,
+            Box::new(move |dav, agenda| {
+                let (tz, maintenant) = (crate::saisie::fuseau_du_poste(), chrono::Utc::now());
+                match objet {
+                    None => {
+                        let (uid, ical) = crate::saisie::creer(&saisie, tz, maintenant)?;
+                        let url = format!("{}/{uid}.ics", agenda.adresse.trim_end_matches('/'));
+                        crate::caldav::deposer(dav, &url, &ical, None).map_err(|e| e.to_string())
+                    }
+                    Some(o) => {
+                        let ical = crate::saisie::modifier(&o.ical, &saisie, tz, maintenant)?;
+                        let url = crate::caldav::adresse(&agenda.adresse, &o.href).ok_or("adresse de l'événement invalide")?;
+                        crate::caldav::deposer(dav, &url, &ical, Some(&o.etag)).map_err(|e| e.to_string())
+                    }
+                }
+            }),
+        );
+    }
+
+    pub fn supprimer_evenement(mut self: Pin<&mut Self>, objet: i32, occurrence: &QString, serie: bool) {
+        let Some(o) = self.magasin.as_ref().and_then(|m| m.objet(objet as i64).ok().flatten()) else {
+            self.as_mut().evenement_enregistre(false, &QString::from("événement introuvable dans l'index"));
+            return;
+        };
+        let occurrence = if serie { None } else { occurrence.to_string().parse::<i64>().ok() };
+        let agenda = o.agenda;
+        self.lancer_ecriture(
+            agenda,
+            Box::new(move |dav, agenda| {
+                let url = crate::caldav::adresse(&agenda.adresse, &o.href).ok_or("adresse de l'événement invalide")?;
+                match occurrence {
+                    None => crate::caldav::retirer(dav, &agenda.adresse, &url, &o.etag).map_err(|e| e.to_string()),
+                    Some(origine) => {
+                        let ical = crate::saisie::retirer_occurrence(&o.ical, origine, chrono::Utc::now())?;
+                        crate::caldav::deposer(dav, &url, &ical, Some(&o.etag)).map_err(|e| e.to_string())
+                    }
+                }
+            }),
+        );
+    }
+
+    /// Écrit dans un agenda depuis un fil à part, avec les identifiants de sa
+    /// boîte ; relit ensuite l'agenda — réussite ou conflit — et rend compte.
+    fn lancer_ecriture(
+        mut self: Pin<&mut Self>,
+        agenda: i64,
+        travail: Box<dyn FnOnce(&crate::caldav::Acces, &crate::magasin::AgendaLocal) -> Result<(), String> + Send>,
+    ) {
+        let Some(magasin) = self.magasin.as_ref() else { return };
+        let Some(local) = magasin.agendas().unwrap_or_default().into_iter().find(|a| a.id == agenda) else {
+            self.as_mut().evenement_enregistre(false, &QString::from("agenda introuvable"));
+            return;
+        };
+        let Some(id) = self.identites.get(&local.compte).cloned() else {
+            self.as_mut().evenement_enregistre(false, &QString::from("la boîte de cet agenda n'est pas connectée"));
+            return;
+        };
+        let profil = self.profil.clone();
+        let fil = self.qt_thread();
+        let lance = thread::Builder::new().name("mmail-agenda-ecriture".into()).spawn(move || {
+            let acces = crate::caldav::Acces { utilisateur: &id.utilisateur, mot_de_passe: &id.mot_de_passe };
+            let issue = travail(&acces, &local);
+            if let Ok(magasin) = Magasin::ouvrir(&profil) {
+                let _ = crate::caldav::synchroniser(&magasin, local.compte, &id.hote, &acces, maintenant(), false);
+            }
+            let _ = fil.queue(move |mut boite: Pin<&mut qobject::Boite>| {
+                let message = issue.as_ref().err().cloned().unwrap_or_default();
+                boite.as_mut().agendas_synchronises(true, &QString::from(""));
+                boite.as_mut().evenement_enregistre(issue.is_ok(), &QString::from(&message));
+            });
+        });
+        if lance.is_err() {
+            self.as_mut().evenement_enregistre(false, &QString::from("impossible de lancer l'écriture"));
+        }
+    }
+
+    pub fn rappels_echus(&self) -> QString {
+        let Some(magasin) = self.magasin.as_ref() else {
+            return QString::from("[]");
+        };
+        let rappels = crate::agenda::rappels_echus(magasin, chrono::Utc::now());
+        QString::from(&serde_json::to_string(&rappels).unwrap_or_else(|_| "[]".into()))
+    }
+
+    pub fn rappel_vu(&self, cle: &QString) {
+        if let Some(magasin) = self.magasin.as_ref() {
+            let _ = magasin.poser_rappel(&cle.to_string(), true, 0, maintenant());
+        }
+    }
+
+    pub fn repousser_rappel(&self, cle: &QString, minutes: i32) {
+        if let Some(magasin) = self.magasin.as_ref() {
+            let _ = magasin.poser_rappel(&cle.to_string(), false, maintenant() + minutes.max(1) as i64 * 60, maintenant());
         }
     }
 

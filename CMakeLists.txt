@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # MMail — noyau Rust (core/), interface Qt 6 / QML, coffre des mots de passe natif.
 cmake_minimum_required(VERSION 3.24)
-project(mmail VERSION 0.5.0 LANGUAGES CXX)
+project(mmail VERSION 0.5.1 LANGUAGES CXX)
 
 if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
   set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreadedDLL")
@@ -126,7 +126,7 @@ endif()
 # — sans quoi l'explorateur et les raccourcis affichent une icône générique.
 # Le .h figure dans les sources pour qu'AUTOMOC le traite : sans cela, la classe
 # QObject qu'il declare n'a pas de metaobjet et l'edition de liens echoue.
-set(MMAIL_SOURCES cpp/main.cpp cpp/coffre.h cpp/presse_papier.h cpp/mise_en_forme.h)
+set(MMAIL_SOURCES cpp/main.cpp cpp/coffre.h cpp/fenetre.h cpp/presse_papier.h cpp/mise_en_forme.h)
 if(WIN32)
   list(APPEND MMAIL_SOURCES build/mmail.rc)
 endif()
@@ -144,6 +144,12 @@ endif()
 target_link_libraries(mmail PRIVATE mmail_qml_module Qt::Network Qt::Quick Qt::QuickControls2
                                       Qt::QuickDialogs2 Qt::LabsSettings coffre)
 target_compile_definitions(mmail PRIVATE MMAIL_VERSION="${PROJECT_VERSION}")
+
+# Liste de raccourcis de la barre des tâches (cf. cpp/fenetre.h) : COM et
+# interfaces du shell.
+if(WIN32)
+  target_link_libraries(mmail PRIVATE ole32 shell32 uuid)
+endif()
 
 # Le vérificateur de certificats de la plateforme s'appuie sur le Security
 # Framework sous macOS : sans ces deux bibliothèques, l'édition de liens

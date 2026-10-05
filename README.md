@@ -104,7 +104,7 @@ de projet interne.
 
 ### L'agenda
 
-**Agenda en lecture** (bouton « Agenda », Ctrl+2 ; Ctrl+1 ramène au courrier) :
+**Agenda** (bouton « Agenda », Ctrl+2 ; Ctrl+1 ramène au courrier) :
 les agendas CalDAV des boîtes connectées — SOGo pour une boîte Mailcow, ou tout
 serveur CalDAV qui accepte les identifiants de la boîte —, trouvés sans
 réglage sur le serveur de la boîte (`/.well-known/caldav`, RFC 6764). Vues jour, semaine et mois à la
@@ -114,7 +114,20 @@ répétitions, leurs exceptions et les occurrences déplacées sont calculées s
 le poste, dans le fuseau du poste ; les fuseaux nommés à la manière de Windows
 (« Romance Standard Time ») sont reconnus. L'agenda reste consultable hors
 connexion ; il se synchronise au démarrage, tous les quarts d'heure, et sur
-« Actualiser ». La création et la modification d'événements viendront ensuite.
+« Actualiser ».
+
+**Créer, modifier, supprimer** : « Nouvel événement », ou un double clic sur un
+créneau de la semaine, du jour ou sur une case du mois ; titre, lieu, horaires
+ou journée entière, agenda, répétition (chaque jour, jour ouvré, semaine, mois,
+année, jusqu'à une date), rappel, description. Dans une série, la fiche
+demande s'il s'agit de cette occurrence ou de toute la série. Un événement
+modifié ailleurs entre-temps n'est pas écrasé : l'agenda est relu et la
+modification est à refaire. Les propriétés que MMail ne gère pas (celles d'un
+autre logiciel) sont conservées.
+
+**Rappels** : ceux des agendas affichés, posés depuis MMail ou ailleurs,
+s'affichent à l'heure dite tant que MMail est ouvert, avec « Ignorer » et
+« Répéter dans… » ; la fenêtre clignote dans la barre des tâches.
 
 ### Le déplacement entre boîtes
 
@@ -203,6 +216,12 @@ variable d'environnement :
 Un seul MMail s'ouvre par profil : un second lancement ramène au premier plan
 la fenêtre déjà ouverte, puis s'arrête.
 
+La fenêtre retrouve sa position, sa taille et son état agrandi. Une position
+tombée hors de tout écran (écran débranché, autre bureau) est remise au centre
+de l'écran principal au démarrage ; à tout moment, le clic droit sur l'icône de
+MMail dans la barre des tâches propose **« Ramener la fenêtre »** (`mmail
+--ramener`).
+
 MMail signale une nouvelle version par un bandeau, après avoir demandé à
 l'API de GitHub la dernière publication du dépôt — au démarrage, puis une fois
 par jour. Rien d'autre n'est envoyé ; `AvisVersion` à 0 le coupe.
@@ -218,8 +237,10 @@ par jour. Rien d'autre n'est envoyé ; `AvisVersion` à 0 le coupe.
   ailleurs ; leur ouverture n'a pas été éprouvée sur un téléphone.
 - Hors connexion, un message ouvert reste non lu sur le serveur ; pas de
   filtres.
-- L'agenda est en lecture seule : ni création, ni modification, ni réponse aux
-  invitations. Les tâches (VTODO) ne s'affichent pas.
+- Agenda : les réunions avec participants ne se modifient pas encore, et les
+  invitations ne se traitent pas ; une écriture exige la connexion ; les rappels
+  ne s'affichent que MMail ouvert (pas de notification du système, ni sous
+  Android en arrière-plan). Les tâches (VTODO) ne s'affichent pas.
 - L'envoi passe par le même serveur que la lecture, sur le port 465.
 - Sous Android, les autorités de certification sont celles de Mozilla,
   embarquées dans l'application — et non celles du téléphone.

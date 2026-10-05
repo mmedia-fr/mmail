@@ -39,12 +39,41 @@ pub struct Propriete {
 }
 
 impl Propriete {
-    fn param(&self, nom: &str) -> Option<&str> {
+    pub(crate) fn nouvelle(nom: &str, params: &[(&str, &str)], valeur: &str) -> Propriete {
+        Propriete {
+            nom: nom.to_string(),
+            params: params.iter().map(|(n, v)| (n.to_string(), v.to_string())).collect(),
+            valeur: valeur.to_string(),
+        }
+    }
+
+    pub(crate) fn param(&self, nom: &str) -> Option<&str> {
         self.params.iter().find(|(n, _)| n.eq_ignore_ascii_case(nom)).map(|(_, v)| v.as_str())
     }
 
-    fn date_seule(&self) -> bool {
+    pub(crate) fn date_seule(&self) -> bool {
         self.param("VALUE").is_some_and(|v| v.eq_ignore_ascii_case("DATE"))
+    }
+
+    /// La propriété en une ligne logique, paramètres remis entre guillemets
+    /// quand leur valeur contient un séparateur.
+    fn ligne(&self) -> String {
+        let mut texte = self.nom.clone();
+        for (nom, valeur) in &self.params {
+            texte.push(';');
+            texte.push_str(nom);
+            texte.push('=');
+            if valeur.contains([':', ';', ',']) {
+                texte.push('"');
+                texte.push_str(&valeur.replace('"', ""));
+                texte.push('"');
+            } else {
+                texte.push_str(valeur);
+            }
+        }
+        texte.push(':');
+        texte.push_str(&self.valeur);
+        texte
     }
 }
 
@@ -57,17 +86,92 @@ pub struct Composant {
 }
 
 impl Composant {
-    fn propriete(&self, nom: &str) -> Option<&Propriete> {
+    pub(crate) fn propriete(&self, nom: &str) -> Option<&Propriete> {
         self.proprietes.iter().find(|p| p.nom == nom)
     }
 
-    fn toutes<'a>(&'a self, nom: &'a str) -> impl Iterator<Item = &'a Propriete> {
+    pub(crate) fn toutes<'a>(&'a self, nom: &'a str) -> impl Iterator<Item = &'a Propriete> {
         self.proprietes.iter().filter(move |p| p.nom == nom)
     }
 
-    fn texte(&self, nom: &str) -> String {
+    pub(crate) fn texte(&self, nom: &str) -> String {
         self.propriete(nom).map(|p| desechapper(&p.valeur)).unwrap_or_default()
     }
+
+    /// Remplace la propriété `nom` — toutes ses occurrences — par celle-ci.
+    pub(crate) fn poser(&mut self, propriete: Propriete) {
+        let nom = propriete.nom.clone();
+        match self.proprietes.iter().position(|p| p.nom == nom) {
+            Some(i) => {
+                self.proprietes[i] = propriete;
+                let mut vu = false;
+                self.proprietes.retain(|p| {
+                    if p.nom != nom {
+                        return true;
+                    }
+                    let garde = !vu;
+                    vu = true;
+                    garde
+                });
+            }
+            None => self.proprietes.push(propriete),
+        }
+    }
+
+    pub(crate) fn retirer(&mut self, nom: &str) {
+        self.proprietes.retain(|p| p.nom != nom);
+    }
+
+    /// L'objet en texte iCalendar : lignes pliées à 75 octets, fins de ligne
+    /// CRLF (RFC 5545 § 3.1).
+    pub fn ecrire(&self) -> String {
+        let mut sortie = String::new();
+        self.ecrire_dans(&mut sortie);
+        sortie
+    }
+
+    fn ecrire_dans(&self, sortie: &mut String) {
+        ecrire_ligne(sortie, &format!("BEGIN:{}", self.nom));
+        for p in &self.proprietes {
+            ecrire_ligne(sortie, &p.ligne());
+        }
+        for enfant in &self.enfants {
+            enfant.ecrire_dans(sortie);
+        }
+        ecrire_ligne(sortie, &format!("END:{}", self.nom));
+    }
+}
+
+/// Une ligne logique pliée à 75 octets, sans couper un caractère.
+fn ecrire_ligne(sortie: &mut String, texte: &str) {
+    let mut longueur = 0;
+    for c in texte.chars() {
+        let n = c.len_utf8();
+        if longueur + n > 75 {
+            sortie.push_str("\r\n ");
+            longueur = 1;
+        }
+        sortie.push(c);
+        longueur += n;
+    }
+    sortie.push_str("\r\n");
+}
+
+/// Valeur de type TEXT : antislash, point-virgule, virgule et fin de ligne
+/// échappés (RFC 5545 § 3.3.11).
+pub(crate) fn echapper(texte: &str) -> String {
+    let mut sortie = String::with_capacity(texte.len());
+    for c in texte.replace("\r\n", "\n").chars() {
+        match c {
+            '\\' => sortie.push_str("\\\\"),
+            ';' => sortie.push_str("\\;"),
+            ',' => sortie.push_str("\\,"),
+            '\n' => sortie.push_str("\\n"),
+            '\r' => {}
+            autre => sortie.push(autre),
+        }
+    }
+    sortie
 }
 
 /// Lignes logiques : une ligne qui commence par une espace ou une tabulation
@@ -312,7 +416,7 @@ pub enum Moment {
 impl Moment {
     /// En temps universel. Une journée entière commence à minuit UTC : seule
     /// sa date compte, et l'arithmétique des journées reste exacte.
-    fn utc(&self) -> DateTime<Utc> {
+    pub(crate) fn utc(&self) -> DateTime<Utc> {
         match self {
             Moment::Jour(d) => Utc.from_utc_datetime(&d.and_hms_opt(0, 0, 0).unwrap()),
             Moment::Instant(i) => *i,
@@ -324,24 +428,24 @@ impl Moment {
 /// Heure locale d'un fuseau vers le temps universel. Heure qui n'existe pas
 /// (passage à l'heure d'été) : celle d'une heure plus tard ; heure doublée
 /// (retour à l'heure d'hiver) : la première des deux.
-fn local_vers_utc<T: TimeZone>(tz: &T, local: &NaiveDateTime) -> Option<DateTime<Utc>> {
+pub(crate) fn local_vers_utc<T: TimeZone>(tz: &T, local: &NaiveDateTime) -> Option<DateTime<Utc>> {
     tz.from_local_datetime(local)
         .earliest()
         .or_else(|| tz.from_local_datetime(&(*local + Duration::hours(1))).earliest())
         .map(|l| l.with_timezone(&Utc))
 }
 
-fn lire_date(valeur: &str) -> Option<NaiveDate> {
+pub(crate) fn lire_date(valeur: &str) -> Option<NaiveDate> {
     NaiveDate::parse_from_str(valeur.get(..8)?, "%Y%m%d").ok()
 }
 
-fn lire_date_heure(valeur: &str) -> Option<NaiveDateTime> {
+pub(crate) fn lire_date_heure(valeur: &str) -> Option<NaiveDateTime> {
     NaiveDateTime::parse_from_str(valeur.get(..15)?, "%Y%m%dT%H%M%S").ok()
 }
 
 /// Lit une date (`20261009`), une date-heure UTC (`20261007T150000Z`) ou
 /// locale, celle-ci dans le fuseau donné.
-fn lire_moment(valeur: &str, tz: Option<chrono_tz::Tz>, date_seule: bool) -> Option<Moment> {
+pub(crate) fn lire_moment(valeur: &str, tz: Option<chrono_tz::Tz>, date_seule: bool) -> Option<Moment> {
     let valeur = valeur.trim();
     if date_seule || !valeur.contains('T') {
         return lire_date(valeur).map(Moment::Jour);
@@ -357,7 +461,7 @@ fn lire_moment(valeur: &str, tz: Option<chrono_tz::Tz>, date_seule: bool) -> Opt
 }
 
 /// Durée d'un `DURATION` (`PT1H30M`, `P1D`, `-PT15M`).
-fn lire_duree(valeur: &str) -> Option<Duration> {
+pub(crate) fn lire_duree(valeur: &str) -> Option<Duration> {
     let v = valeur.trim();
     let (signe, v) = match v.strip_prefix('-') {
         Some(r) => (-1, r),
@@ -389,6 +493,36 @@ fn lire_duree(valeur: &str) -> Option<Duration> {
 
 // ------------------------------------------------------------- événements
 
+/// Déclencheur d'un rappel (`VALARM`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Alarme {
+    /// Décalage par rapport au début — à la fin avec `RELATED=END` ; négatif
+    /// avant.
+    Relative { decalage: Duration, fin: bool },
+    Absolue(DateTime<Utc>),
+}
+
+/// Rappels d'un `VEVENT` : ceux qui s'affichent ou sonnent, pas ceux qui
+/// envoient un courriel.
+pub(crate) fn alarmes(c: &Composant) -> Vec<Alarme> {
+    c.enfants
+        .iter()
+        .filter(|a| a.nom == "VALARM")
+        .filter(|a| !a.propriete("ACTION").is_some_and(|p| matches!(p.valeur.trim().to_ascii_uppercase().as_str(), "EMAIL" | "NONE")))
+        .filter_map(|a| {
+            let t = a.propriete("TRIGGER")?;
+            if t.param("VALUE").is_some_and(|v| v.eq_ignore_ascii_case("DATE-TIME")) {
+                return match lire_moment(&t.valeur, None, false)? {
+                    Moment::Instant(i) => Some(Alarme::Absolue(i)),
+                    _ => None,
+                };
+            }
+            let fin = t.param("RELATED").is_some_and(|v| v.eq_ignore_ascii_case("END"));
+            Some(Alarme::Relative { decalage: lire_duree(&t.valeur)?, fin })
+        })
+        .collect()
+}
+
 /// Un `VEVENT` lu.
 #[derive(Debug, Clone)]
 struct Evenement {
@@ -404,6 +538,10 @@ struct Evenement {
     ajoutees: Vec<Moment>,
     recurrence: Option<Moment>,
     annule: bool,
+    alarmes: Vec<Alarme>,
+    /// Réunion : des participants (`ATTENDEE`), qu'une modification devrait
+    /// prévenir.
+    participants: bool,
 }
 
 fn evenements(racine: &Composant) -> Vec<Evenement> {
@@ -441,6 +579,8 @@ fn evenements(racine: &Composant) -> Vec<Evenement> {
                 ajoutees: c.toutes("RDATE").flat_map(&moments).collect(),
                 recurrence: c.propriete("RECURRENCE-ID").and_then(&moment),
                 annule: c.propriete("STATUS").is_some_and(|s| s.valeur.trim().eq_ignore_ascii_case("CANCELLED")),
+                alarmes: alarmes(c),
+                participants: c.propriete("ATTENDEE").is_some(),
             })
         })
         .collect()
@@ -460,26 +600,50 @@ pub struct Occurrence {
     pub journee: Option<(NaiveDate, NaiveDate)>,
     /// Annulée par l'organisateur (`STATUS:CANCELLED`) : montrée barrée.
     pub annule: bool,
-    /// Agenda d'où elle vient, posé par l'appelant.
+    /// Agenda et objet d'où elle vient, posés par l'appelant.
     pub agenda: i64,
+    pub objet: i64,
+    /// Début d'origine de l'occurrence — celui de la règle, même si elle a été
+    /// déplacée : c'est lui qui la désigne (`RECURRENCE-ID`, `EXDATE`).
+    pub origine: DateTime<Utc>,
+    /// Partie d'une série.
+    pub repete: bool,
+    pub participants: bool,
+    /// Heures de ses rappels.
+    pub rappels: Vec<DateTime<Utc>>,
 }
 
-fn occurrence(e: &Evenement, debut: Moment) -> Occurrence {
+fn occurrence(e: &Evenement, debut: Moment, origine: DateTime<Utc>, repete: bool) -> Occurrence {
     let journee = match debut {
         Moment::Jour(d) => Some((d, d + Duration::days(e.duree.num_days().max(1)))),
         _ => None,
     };
     let debut = debut.utc();
+    let fin = debut + e.duree;
+    let rappels = e
+        .alarmes
+        .iter()
+        .map(|a| match a {
+            Alarme::Relative { decalage, fin: false } => debut + *decalage,
+            Alarme::Relative { decalage, fin: true } => fin + *decalage,
+            Alarme::Absolue(i) => *i,
+        })
+        .collect();
     Occurrence {
         uid: e.uid.clone(),
         resume: e.resume.clone(),
         lieu: e.lieu.clone(),
         description: e.description.clone(),
         debut,
-        fin: debut + e.duree,
+        fin,
         journee,
         annule: e.annule,
         agenda: 0,
+        objet: 0,
+        origine,
+        repete,
+        participants: e.participants,
+        rappels,
     }
 }
 
@@ -496,6 +660,7 @@ pub fn occurrences(ical: &str, de: DateTime<Utc>, a: DateTime<Utc>) -> Vec<Occur
             .filter(|e| e.uid == maitre.uid)
             .filter_map(|e| e.recurrence.map(|r| r.utc()))
             .collect();
+        let repete = maitre.regle.is_some() || !maitre.ajoutees.is_empty();
         let debuts = match &maitre.regle {
             Some(regle) => repetitions(maitre, regle, Some((de - maitre.duree, a))).0,
             None => {
@@ -508,14 +673,15 @@ pub fn occurrences(ical: &str, de: DateTime<Utc>, a: DateTime<Utc>) -> Vec<Occur
             if remplacees.contains(&debut.utc()) {
                 continue;
             }
-            let o = occurrence(maitre, debut);
+            let o = occurrence(maitre, debut, debut.utc(), repete);
             if touche(&o) {
                 sortie.push(o);
             }
         }
     }
     for remplacant in evenements.iter().filter(|e| e.recurrence.is_some()) {
-        let o = occurrence(remplacant, remplacant.debut);
+        let origine = remplacant.recurrence.map(|r| r.utc()).unwrap_or_else(|| remplacant.debut.utc());
+        let o = occurrence(remplacant, remplacant.debut, origine, true);
         if touche(&o) {
             sortie.push(o);
         }
@@ -669,7 +835,18 @@ pub struct Fiche {
     #[serde(rename = "nomAgenda")]
     pub nom_agenda: String,
     pub couleur: String,
+    /// Objet de l'index, et début d'origine de l'occurrence (secondes Unix,
+    /// en texte : QML n'a pas d'entier sur 64 bits) : de quoi la modifier.
+    pub objet: i64,
+    pub occurrence: String,
+    pub repete: bool,
+    /// Modifiable depuis MMail ; sinon `motif` dit pourquoi.
+    pub modifiable: bool,
+    pub motif: String,
 }
+
+/// Pourquoi une réunion ne se modifie pas encore.
+const MOTIF_REUNION: &str = "réunion avec participants : elle se modifiera avec la gestion des invitations";
 
 /// Une occurrence placée dans le bandeau des journées entières : colonnes
 /// `de` à `a` (exclue), sur la ligne `ligne`.
@@ -760,6 +937,11 @@ fn fiche<T: TimeZone>(o: &Occurrence, tz: &T) -> Fiche {
         annule: o.annule,
         nom_agenda: String::new(),
         couleur: String::new(),
+        objet: o.objet,
+        occurrence: o.origine.timestamp().to_string(),
+        repete: o.repete,
+        modifiable: !o.participants,
+        motif: if o.participants { MOTIF_REUNION.into() } else { String::new() },
     }
 }
 
@@ -944,7 +1126,10 @@ fn majuscule(texte: &str) -> String {
 /// Vue de l'agenda autour de `date`, dans le fuseau du poste, en JSON pour
 /// l'interface.
 pub fn vue(magasin: &Magasin, genre: &str, date: NaiveDate) -> String {
-    vue_dans(magasin, genre, date, chrono::Local::now().date_naive(), &chrono::Local)
+    match crate::saisie::nom_du_fuseau() {
+        Some(tz) => vue_dans(magasin, genre, date, Utc::now().with_timezone(&tz).date_naive(), &tz),
+        None => vue_dans(magasin, genre, date, chrono::Local::now().date_naive(), &chrono::Local),
+    }
 }
 
 pub fn vue_dans<T: TimeZone>(magasin: &Magasin, genre: &str, date: NaiveDate, aujourdhui: NaiveDate, tz: &T) -> String {
@@ -953,9 +1138,10 @@ pub fn vue_dans<T: TimeZone>(magasin: &Magasin, genre: &str, date: NaiveDate, au
     let (de, a) = (minuit(premier), minuit(premier + Duration::days(jours as i64)));
     let agendas = magasin.agendas().unwrap_or_default();
     let mut liste = Vec::new();
-    for (agenda, ical) in magasin.evenements_periode(de.timestamp(), a.timestamp()).unwrap_or_default() {
+    for (objet, agenda, ical) in magasin.evenements_periode(de.timestamp(), a.timestamp()).unwrap_or_default() {
         for mut o in occurrences(&ical, de, a) {
             o.agenda = agenda;
+            o.objet = objet;
             liste.push(o);
         }
     }
@@ -965,6 +1151,10 @@ pub fn vue_dans<T: TimeZone>(magasin: &Magasin, genre: &str, date: NaiveDate, au
             if let Some(a) = agendas.iter().find(|a| a.id == f.agenda) {
                 f.nom_agenda = a.nom.clone();
                 f.couleur = couleur(a);
+                if !a.ecriture && f.modifiable {
+                    f.modifiable = false;
+                    f.motif = "agenda en lecture seule".into();
+                }
             }
         }
     };
@@ -1001,6 +1191,72 @@ pub fn vue_dans<T: TimeZone>(magasin: &Magasin, genre: &str, date: NaiveDate, au
         sortie["fiches"] = json!(g.fiches);
     }
     sortie.to_string()
+}
+
+// ------------------------------------------------------------- rappels
+
+/// Un rappel échu, à montrer.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct Rappel {
+    /// Désigne le rappel : agenda, UID, occurrence et heure du rappel.
+    pub cle: String,
+    pub titre: String,
+    pub quand: String,
+    pub lieu: String,
+    /// Jour de l'occurrence, `aaaa-mm-jj` : pour l'ouvrir dans l'agenda.
+    pub date: String,
+    pub couleur: String,
+}
+
+/// Rappels échus et pas encore vus, ou repoussés jusqu'à maintenant, des
+/// agendas affichés, dans le fuseau du poste.
+pub fn rappels_echus(magasin: &Magasin, maintenant: DateTime<Utc>) -> Vec<Rappel> {
+    match crate::saisie::nom_du_fuseau() {
+        Some(tz) => rappels_dans(magasin, maintenant, &tz),
+        None => rappels_dans(magasin, maintenant, &chrono::Local),
+    }
+}
+
+pub fn rappels_dans<T: TimeZone>(magasin: &Magasin, maintenant: DateTime<Utc>, tz: &T) -> Vec<Rappel> {
+    // Un rappel se pose jusqu'à une semaine avant ; un rappel échu depuis plus
+    // d'une heure pour une occurrence terminée ne vaut plus d'être montré.
+    let (de, a) = (maintenant - Duration::days(1), maintenant + Duration::days(8));
+    let agendas = magasin.agendas().unwrap_or_default();
+    let etats = magasin.etats_rappels().unwrap_or_default();
+    let mut echus: Vec<(DateTime<Utc>, Rappel)> = Vec::new();
+    for (_, agenda, ical) in magasin.evenements_periode(de.timestamp(), a.timestamp()).unwrap_or_default() {
+        for o in occurrences(&ical, de, a) {
+            if o.annule {
+                continue;
+            }
+            for quand in &o.rappels {
+                if *quand > maintenant || (o.fin <= maintenant && *quand <= maintenant - Duration::hours(1)) {
+                    continue;
+                }
+                let cle = format!("{agenda}:{}:{}:{}", o.uid, o.origine.timestamp(), quand.timestamp());
+                match etats.get(&cle) {
+                    Some((true, _)) => continue,
+                    Some((false, repousse)) if *repousse > maintenant.timestamp() => continue,
+                    _ => {}
+                }
+                let f = fiche(&o, tz);
+                echus.push((
+                    *quand,
+                    Rappel {
+                        cle,
+                        titre: f.titre,
+                        quand: f.quand,
+                        lieu: f.lieu,
+                        date: o.debut.with_timezone(tz).date_naive().format("%Y-%m-%d").to_string(),
+                        couleur: agendas.iter().find(|g| g.id == agenda).map(couleur).unwrap_or_default(),
+                    },
+                ));
+            }
+        }
+    }
+    echus.sort_by(|x, y| (x.0, &x.1.cle).cmp(&(y.0, &y.1.cle)));
+    echus.dedup_by(|x, y| x.1.cle == y.1.cle);
+    echus.into_iter().map(|(_, r)| r).collect()
 }
 
 #[cfg(test)]

@@ -8,3 +8,8 @@ Icon=mmail
 Categories=Network;Email;
 Terminal=false
 StartupWMClass=mmail
+Actions=ramener;
+
+[Desktop Action ramener]
+Name=Ramener la fenêtre
+Exec=mmail --ramener

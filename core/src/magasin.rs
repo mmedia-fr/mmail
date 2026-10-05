@@ -25,7 +25,7 @@ pub type Resultat<T> = Result<T, Erreur>;
 const LOT_ECRITURE: usize = 500;
 
 /// Version du schéma, portée par `PRAGMA user_version`.
-const VERSION_SCHEMA: i32 = 7;
+const VERSION_SCHEMA: i32 = 8;
 
 #[derive(Debug)]
 pub struct Erreur(pub String);
@@ -56,6 +56,18 @@ pub struct AgendaLocal {
     /// Étiquette du serveur à la dernière synchronisation complète.
     pub ctag: String,
     pub affiche: bool,
+    /// Le serveur y accepte l'écriture (`current-user-privilege-set`).
+    pub ecriture: bool,
+}
+
+/// Un objet d'un agenda tel que l'index le garde.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ObjetLocal {
+    pub id: i64,
+    pub agenda: i64,
+    pub href: String,
+    pub etag: String,
+    pub ical: String,
 }
 
 /// Un objet d'un agenda à ranger : adresse, ETag, texte iCalendar et période
@@ -370,6 +382,19 @@ impl Magasin {
                      UNIQUE (agenda_id, href)
                  );
                  CREATE INDEX IF NOT EXISTS evenements_par_debut ON evenements(debut);",
+            )?;
+        }
+        // Version 8 : l'écriture dans l'agenda. Le droit d'écriture de chaque
+        // agenda, et l'état des rappels — vus, ou repoussés jusqu'à une heure.
+        if version < 8 {
+            self.ajouter_colonne("agendas", "ecriture", "INTEGER NOT NULL DEFAULT 1")?;
+            self.base.execute_batch(
+                "CREATE TABLE IF NOT EXISTS rappels (
+                     cle       TEXT PRIMARY KEY,
+                     vu        INTEGER NOT NULL DEFAULT 0,
+                     repousse  INTEGER NOT NULL DEFAULT 0,
+                     pose      INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+                 );",
             )?;
         }
         self.base.pragma_update(None, "user_version", VERSION_SCHEMA)?;
@@ -1149,7 +1174,7 @@ impl Magasin {
     /// Tous les agendas, dans l'ordre des comptes puis par nom.
     pub fn agendas(&self) -> Resultat<Vec<AgendaLocal>> {
         let mut requete = self.base.prepare(
-            "SELECT g.id, g.account_id, g.adresse, g.nom, g.couleur, g.ctag, g.affiche
+            "SELECT g.id, g.account_id, g.adresse, g.nom, g.couleur, g.ctag, g.affiche, g.ecriture
              FROM agendas g JOIN accounts a ON a.id = g.account_id
              ORDER BY a.rang IS NULL, a.rang, a.id, g.nom COLLATE NOCASE, g.id",
         )?;
@@ -1163,6 +1188,7 @@ impl Magasin {
                     couleur: l.get(4)?,
                     ctag: l.get(5)?,
                     affiche: l.get::<_, i32>(6)? != 0,
+                    ecriture: l.get::<_, i32>(7)? != 0,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -1170,33 +1196,33 @@ impl Magasin {
     }
 
     /// Pose les agendas d'un compte tels que le serveur les décrit — adresse,
-    /// nom, couleur — et retire ceux qu'il ne décrit plus, objets compris. La
-    /// case « affiché » des agendas déjà connus ne bouge pas. Rend vrai si
-    /// quelque chose a changé.
-    pub fn poser_agendas(&self, compte: i64, distants: &[(String, String, String)]) -> Resultat<bool> {
+    /// nom, couleur, droit d'écriture — et retire ceux qu'il ne décrit plus,
+    /// objets compris. La case « affiché » des agendas déjà connus ne bouge
+    /// pas. Rend vrai si quelque chose a changé.
+    pub fn poser_agendas(&self, compte: i64, distants: &[(String, String, String, bool)]) -> Resultat<bool> {
         let avant: Vec<AgendaLocal> = self.agendas()?.into_iter().filter(|a| a.compte == compte).collect();
         let transaction = self.base.unchecked_transaction()?;
         let mut change = false;
         for ancien in &avant {
-            if !distants.iter().any(|(adresse, _, _)| adresse == &ancien.adresse) {
+            if !distants.iter().any(|(adresse, _, _, _)| adresse == &ancien.adresse) {
                 transaction.execute("DELETE FROM agendas WHERE id = ?1", params![ancien.id])?;
                 change = true;
             }
         }
-        for (adresse, nom, couleur) in distants {
+        for (adresse, nom, couleur, ecriture) in distants {
             match avant.iter().find(|a| &a.adresse == adresse) {
-                Some(a) if &a.nom == nom && &a.couleur == couleur => {}
+                Some(a) if &a.nom == nom && &a.couleur == couleur && a.ecriture == *ecriture => {}
                 Some(a) => {
                     transaction.execute(
-                        "UPDATE agendas SET nom = ?2, couleur = ?3 WHERE id = ?1",
-                        params![a.id, nom, couleur],
+                        "UPDATE agendas SET nom = ?2, couleur = ?3, ecriture = ?4 WHERE id = ?1",
+                        params![a.id, nom, couleur, *ecriture as i32],
                     )?;
                     change = true;
                 }
                 None => {
                     transaction.execute(
-                        "INSERT INTO agendas (account_id, adresse, nom, couleur) VALUES (?1, ?2, ?3, ?4)",
-                        params![compte, adresse, nom, couleur],
+                        "INSERT INTO agendas (account_id, adresse, nom, couleur, ecriture) VALUES (?1, ?2, ?3, ?4, ?5)",
+                        params![compte, adresse, nom, couleur, *ecriture as i32],
                     )?;
                     change = true;
                 }
@@ -1256,16 +1282,46 @@ impl Magasin {
     }
 
     /// Texte des objets des agendas affichés qui touchent `[de, a)` (secondes
-    /// Unix), avec l'agenda de chacun.
-    pub fn evenements_periode(&self, de: i64, a: i64) -> Resultat<Vec<(i64, String)>> {
+    /// Unix), avec l'identifiant et l'agenda de chacun.
+    pub fn evenements_periode(&self, de: i64, a: i64) -> Resultat<Vec<(i64, i64, String)>> {
         let mut requete = self.base.prepare(
-            "SELECT e.agenda_id, e.ical FROM evenements e JOIN agendas g ON g.id = e.agenda_id
+            "SELECT e.id, e.agenda_id, e.ical FROM evenements e JOIN agendas g ON g.id = e.agenda_id
              WHERE g.affiche = 1 AND e.debut < ?2 AND e.fin >= ?1",
         )?;
         let objets = requete
-            .query_map(params![de, a], |l| Ok((l.get(0)?, l.get(1)?)))?
+            .query_map(params![de, a], |l| Ok((l.get(0)?, l.get(1)?, l.get(2)?)))?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(objets)
+    }
+
+    pub fn objet(&self, id: i64) -> Resultat<Option<ObjetLocal>> {
+        Ok(self
+            .base
+            .query_row("SELECT id, agenda_id, href, etag, ical FROM evenements WHERE id = ?1", params![id], |l| {
+                Ok(ObjetLocal { id: l.get(0)?, agenda: l.get(1)?, href: l.get(2)?, etag: l.get(3)?, ical: l.get(4)? })
+            })
+            .optional()?)
+    }
+
+    /// État des rappels connus : clé → (vu, repoussé jusqu'à).
+    pub fn etats_rappels(&self) -> Resultat<HashMap<String, (bool, i64)>> {
+        let mut requete = self.base.prepare("SELECT cle, vu, repousse FROM rappels")?;
+        let etats = requete
+            .query_map([], |l| Ok((l.get(0)?, (l.get::<_, i32>(1)? != 0, l.get(2)?))))?
+            .collect::<Result<HashMap<_, _>, _>>()?;
+        Ok(etats)
+    }
+
+    /// Un rappel vu ne revient pas ; un rappel repoussé revient à l'heure dite.
+    /// Les états de plus d'un mois sont oubliés au passage.
+    pub fn poser_rappel(&self, cle: &str, vu: bool, repousse: i64, maintenant: i64) -> Resultat<()> {
+        self.base.execute(
+            "INSERT INTO rappels (cle, vu, repousse, pose) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT (cle) DO UPDATE SET vu = excluded.vu, repousse = excluded.repousse, pose = excluded.pose",
+            params![cle, vu as i32, repousse, maintenant],
+        )?;
+        self.base.execute("DELETE FROM rappels WHERE pose < ?1", params![maintenant - 31 * 86400])?;
+        Ok(())
     }
 }
 

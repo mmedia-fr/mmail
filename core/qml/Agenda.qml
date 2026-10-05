@@ -32,6 +32,12 @@ Pane {
     // Minutes écoulées depuis minuit : la ligne de l'heure courante.
     property int minutesMaintenant: 0
 
+    // Écriture en cours : « saisie » (formulaire ouvert) ou « suppression ».
+    property string ecritureEnCours: ""
+
+    // Message passager, montré par la fenêtre principale.
+    signal annoncer(string texte, bool erreur)
+
     readonly property color trait: Qt.rgba(palette.windowText.r, palette.windowText.g, palette.windowText.b, 0.13)
     readonly property color traitLeger: Qt.rgba(palette.windowText.r, palette.windowText.g, palette.windowText.b, 0.06)
 
@@ -39,6 +45,8 @@ Pane {
         id: reglagesAgenda
         category: "agenda"
         property string genre: ""
+        // Dernier agenda choisi pour un nouvel événement.
+        property int agendaParDefaut: 0
     }
 
     function iso(d) {
@@ -78,6 +86,88 @@ Pane {
             return
         popupFiche.f = donnees.fiches[indice]
         popupFiche.open()
+    }
+
+    function deuxChiffres(n) {
+        return (n < 10 ? "0" : "") + n
+    }
+
+    function isoJour(d) {
+        return d.getFullYear() + "-" + deuxChiffres(d.getMonth() + 1) + "-" + deuxChiffres(d.getDate())
+    }
+
+    function isoHeure(d) {
+        return isoJour(d) + "T" + deuxChiffres(d.getHours()) + ":" + deuxChiffres(d.getMinutes())
+    }
+
+    // « 2026-10-07… » → « 07/10/2026 ».
+    function jjmmaaaa(texte) {
+        if (!texte || texte.length < 10)
+            return ""
+        return texte.substr(8, 2) + "/" + texte.substr(5, 2) + "/" + texte.substr(0, 4)
+    }
+
+    // « 07/10/2026 » et « 09:30 » → Date, ou null si l'un ne se lit pas.
+    function lireDate(jour, heure) {
+        var j = /^\s*(\d{1,2})\/(\d{1,2})\/(\d{4})\s*$/.exec(jour)
+        var h = /^\s*(\d{1,2}):(\d{2})\s*$/.exec(heure)
+        if (!j || !h || Number(h[1]) > 23 || Number(h[2]) > 59)
+            return null
+        var d = new Date(Number(j[3]), Number(j[2]) - 1, Number(j[1]), Number(h[1]), Number(h[2]))
+        return d.getDate() === Number(j[1]) && d.getMonth() === Number(j[2]) - 1 ? d : null
+    }
+
+    function agendasModifiables() {
+        return agendas.filter(function(a) { return a.ecriture })
+    }
+
+    // Nouvel événement le jour `texte` (aaaa-mm-jj), à `minutes` depuis
+    // minuit — -1 : l'heure pleine qui vient aujourd'hui, 9 h un autre jour.
+    function nouvelEvenement(texte, minutes, journee) {
+        var modifiables = agendasModifiables()
+        if (modifiables.length === 0) {
+            annoncer(qsTr("Aucun agenda n'accepte l'écriture."), true)
+            return
+        }
+        var debut = dateDe(texte)
+        if (minutes < 0) {
+            var maintenant = new Date()
+            minutes = isoJour(debut) === isoJour(maintenant) ? Math.min(23 * 60, (maintenant.getHours() + 1) * 60) : 9 * 60
+        }
+        debut.setHours(Math.floor(minutes / 60), minutes % 60)
+        var fin = new Date(debut.getTime() + 60 * 60 * 1000)
+        var defaut = modifiables.find(function(a) { return a.id === reglagesAgenda.agendaParDefaut }) || modifiables[0]
+        popupSaisie.ouvrir({
+            agenda: defaut.id, objet: 0, occurrence: "", titre: "", lieu: "", description: "",
+            journee: journee, debut: journee ? isoJour(debut) : isoHeure(debut),
+            fin: journee ? isoJour(debut) : isoHeure(fin), repetition: "", jusquAu: "", rappel: 15
+        })
+    }
+
+    // Modifier ou supprimer : une série demande d'abord laquelle des deux.
+    function demander(action, f) {
+        popupFiche.close()
+        if (action === "modifier" && !f.repete) {
+            modifier(f, true)
+            return
+        }
+        popupPortee.action = action
+        popupPortee.f = f
+        popupPortee.open()
+    }
+
+    function modifier(f, serie) {
+        var texte = boite.saisieEvenement(f.objet, f.occurrence, serie)
+        if (texte.length === 0) {
+            annoncer(qsTr("Cet événement ne se lit pas."), true)
+            return
+        }
+        popupSaisie.ouvrir(JSON.parse(texte))
+    }
+
+    function supprimer(f, serie) {
+        ecritureEnCours = "suppression"
+        boite.supprimerEvenement(f.objet, f.occurrence, serie)
     }
 
     // Texte lisible sur une couleur : noir sur une couleur claire, blanc sinon.
@@ -124,6 +214,21 @@ Pane {
             agenda.erreurs = erreurs
             if (change)
                 agenda.relire()
+        }
+        function onEvenementEnregistre(ok, message) {
+            var enCours = agenda.ecritureEnCours
+            agenda.ecritureEnCours = ""
+            if (enCours === "saisie" && popupSaisie.opened) {
+                popupSaisie.enCours = false
+                if (ok) {
+                    popupSaisie.close()
+                    agenda.annoncer(qsTr("Événement enregistré."), false)
+                } else {
+                    popupSaisie.erreur = message
+                }
+            } else if (enCours === "suppression") {
+                agenda.annoncer(ok ? qsTr("Événement supprimé.") : qsTr("Suppression impossible : %1").arg(message), !ok)
+            }
         }
     }
 
@@ -236,6 +341,14 @@ Pane {
                 Layout.margins: 6
                 Layout.bottomMargin: agenda.compact ? 0 : 6
                 spacing: 4
+                Button {
+                    visible: agenda.agendasModifiables().length > 0
+                    text: agenda.compact ? "+" : qsTr("Nouvel événement")
+                    font.bold: true
+                    onClicked: agenda.nouvelEvenement(agenda.iso(agenda.jour), -1, false)
+                    ToolTip.visible: hovered && agenda.compact
+                    ToolTip.text: qsTr("Nouvel événement")
+                }
                 Button {
                     text: qsTr("Aujourd'hui")
                     onClicked: agenda.jour = new Date()
@@ -455,7 +568,7 @@ Pane {
 
                         MouseArea {
                             anchors.fill: parent
-                            onDoubleClicked: agenda.allerAuJour(caseMois.info.date)
+                            onDoubleClicked: agenda.nouvelEvenement(caseMois.info.date, 9 * 60, false)
                         }
                         Rectangle {
                             x: parent.width - width - 4
@@ -710,6 +823,18 @@ Pane {
                         }
                     }
                 }
+                // Double clic sur un créneau libre : un nouvel événement à la
+                // demi-heure.
+                MouseArea {
+                    width: defilement.contentWidth
+                    height: defilement.contentHeight
+                    onDoubleClicked: function(souris) {
+                        var j = Math.floor((souris.x - grille.marge) / grille.largeurJour)
+                        if (j < 0 || j >= grille.nbJours)
+                            return
+                        agenda.nouvelEvenement(agenda.donnees.jours[j].date, Math.floor(souris.y / grille.hh * 2) * 30, false)
+                    }
+                }
                 // Événements.
                 Repeater {
                     model: agenda.donnees.cases || []
@@ -863,10 +988,471 @@ Pane {
                     background: null
                 }
             }
-            Button {
+            Label {
+                Layout.fillWidth: true
+                visible: !popupFiche.f.modifiable && (popupFiche.f.motif || "").length > 0
+                text: qsTr("Non modifiable ici : %1.").arg(popupFiche.f.motif || "")
+                wrapMode: Text.Wrap
+                opacity: 0.75
+                font.pixelSize: 12
+            }
+            RowLayout {
                 Layout.alignment: Qt.AlignRight
-                text: qsTr("Fermer")
-                onClicked: popupFiche.close()
+                Button {
+                    visible: popupFiche.f.modifiable || false
+                    text: qsTr("Modifier")
+                    onClicked: agenda.demander("modifier", popupFiche.f)
+                }
+                Button {
+                    visible: popupFiche.f.modifiable || false
+                    text: qsTr("Supprimer")
+                    onClicked: agenda.demander("supprimer", popupFiche.f)
+                }
+                Button {
+                    text: qsTr("Fermer")
+                    onClicked: popupFiche.close()
+                }
+            }
+        }
+    }
+
+    // --- portée d'une modification ou d'une suppression ----------------------------
+    Popup {
+        id: popupPortee
+        property string action: ""
+        property var f: ({})
+        anchors.centerIn: Overlay.overlay
+        width: Math.min(agenda.width - 32, 460)
+        modal: true
+        focus: true
+        padding: 16
+        function choisir(serie) {
+            close()
+            if (action === "modifier")
+                agenda.modifier(f, serie)
+            else
+                agenda.supprimer(f, serie)
+        }
+        contentItem: ColumnLayout {
+            spacing: 12
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                font.bold: true
+                text: popupPortee.action === "supprimer"
+                      ? (popupPortee.f.repete ? qsTr("Supprimer « %1 » : cette occurrence, ou toute la série ?")
+                                              : qsTr("Supprimer « %1 » ?")).arg(popupPortee.f.titre || "")
+                      : qsTr("Modifier « %1 » : cette occurrence, ou toute la série ?").arg(popupPortee.f.titre || "")
+            }
+            Flow {
+                Layout.fillWidth: true
+                layoutDirection: Qt.RightToLeft
+                spacing: 6
+                Button {
+                    text: qsTr("Annuler")
+                    flat: true
+                    onClicked: popupPortee.close()
+                }
+                Button {
+                    visible: popupPortee.f.repete || false
+                    text: qsTr("Toute la série")
+                    onClicked: popupPortee.choisir(true)
+                }
+                Button {
+                    visible: popupPortee.f.repete || false
+                    text: qsTr("Cette occurrence")
+                    onClicked: popupPortee.choisir(false)
+                }
+                Button {
+                    visible: !(popupPortee.f.repete || false)
+                    text: qsTr("Supprimer")
+                    onClicked: popupPortee.choisir(true)
+                }
+            }
+        }
+    }
+
+    // --- saisie d'un événement -----------------------------------------------------
+    Popup {
+        id: popupSaisie
+        property var s: ({})
+        property bool enCours: false
+        property string erreur: ""
+        // Début à l'ouverture ou au dernier changement : un nouveau début
+        // décale la fin d'autant, comme dans Outlook.
+        property var debutPrecedent: null
+        readonly property var repetitions: [
+            ["", qsTr("Ne se répète pas")], ["DAILY", qsTr("Chaque jour")],
+            ["WEEKDAYS", qsTr("Chaque jour ouvré (lundi à vendredi)")], ["WEEKLY", qsTr("Chaque semaine")],
+            ["MONTHLY", qsTr("Chaque mois")], ["YEARLY", qsTr("Chaque année")]
+        ]
+        readonly property var rappels: [
+            [-1, qsTr("Aucun rappel")], [0, qsTr("À l'heure du début")], [5, qsTr("5 minutes avant")],
+            [10, qsTr("10 minutes avant")], [15, qsTr("15 minutes avant")], [30, qsTr("30 minutes avant")],
+            [60, qsTr("1 heure avant")], [120, qsTr("2 heures avant")], [1440, qsTr("1 jour avant")],
+            [10080, qsTr("1 semaine avant")]
+        ]
+        property var choixRepetitions: repetitions
+        property var choixRappels: rappels
+        readonly property bool nouveau: !(s.objet > 0)
+        readonly property bool occurrence: (s.occurrence || "").length > 0
+
+        anchors.centerIn: Overlay.overlay
+        width: Math.min(agenda.width - 24, 580)
+        height: Math.min(agenda.height - 24, implicitHeight)
+        modal: true
+        focus: true
+        closePolicy: Popup.CloseOnEscape
+        padding: 16
+
+        function ouvrir(saisie) {
+            s = saisie
+            erreur = ""
+            enCours = false
+            champTitre.text = s.titre || ""
+            champLieu.text = s.lieu || ""
+            caseJournee.checked = s.journee
+            champDebutJour.text = agenda.jjmmaaaa(s.debut)
+            champFinJour.text = agenda.jjmmaaaa(s.fin)
+            champDebutHeure.text = s.journee ? "09:00" : s.debut.substr(11, 5)
+            champFinHeure.text = s.journee ? "10:00" : s.fin.substr(11, 5)
+            var r = repetitions.slice()
+            if (s.repetition === "AUTRE")
+                r.push(["AUTRE", qsTr("Répétition personnalisée (conservée)")])
+            choixRepetitions = r
+            choixRepetition.currentIndex = Math.max(0, r.findIndex(function(x) { return x[0] === (s.repetition || "") }))
+            champJusquAu.text = s.jusquAu ? agenda.jjmmaaaa(s.jusquAu) : ""
+            var rp = rappels.slice()
+            if (!rp.some(function(x) { return x[0] === s.rappel }))
+                rp.push([s.rappel, qsTr("%1 minutes avant").arg(s.rappel)])
+            choixRappels = rp
+            choixRappel.currentIndex = Math.max(0, rp.findIndex(function(x) { return x[0] === s.rappel }))
+            champDescription.text = s.description || ""
+            var modifiables = agenda.agendasModifiables()
+            choixAgenda.model = modifiables.map(function(a) { return a.nom + " — " + a.boite })
+            choixAgenda.currentIndex = Math.max(0, modifiables.findIndex(function(a) { return a.id === s.agenda }))
+            debutPrecedent = lireDebut()
+            open()
+            champTitre.forceActiveFocus()
+        }
+
+        function lireDebut() {
+            return agenda.lireDate(champDebutJour.text, caseJournee.checked ? "00:00" : champDebutHeure.text)
+        }
+
+        function lireFin() {
+            return agenda.lireDate(champFinJour.text, caseJournee.checked ? "00:00" : champFinHeure.text)
+        }
+
+        // Le début a changé : la fin suit, durée gardée.
+        function debutChange() {
+            var debut = lireDebut()
+            var fin = lireFin()
+            if (debut && fin && debutPrecedent) {
+                var nouvelle = new Date(fin.getTime() + (debut.getTime() - debutPrecedent.getTime()))
+                champFinJour.text = agenda.jjmmaaaa(agenda.isoJour(nouvelle))
+                if (!caseJournee.checked)
+                    champFinHeure.text = agenda.isoHeure(nouvelle).substr(11, 5)
+            }
+            if (debut)
+                debutPrecedent = debut
+        }
+
+        function enregistrer() {
+            var debut = lireDebut()
+            var fin = lireFin()
+            if (!debut || !fin) {
+                erreur = qsTr("Date ou heure illisible : jj/mm/aaaa et hh:mm.")
+                return
+            }
+            var jusqua = null
+            if (champJusquAu.visible && champJusquAu.text.trim().length > 0) {
+                jusqua = agenda.lireDate(champJusquAu.text, "00:00")
+                if (!jusqua) {
+                    erreur = qsTr("Dernier jour de la répétition illisible : jj/mm/aaaa.")
+                    return
+                }
+            }
+            var modifiables = agenda.agendasModifiables()
+            var saisie = {
+                agenda: nouveau ? (modifiables.length > 0 ? modifiables[choixAgenda.currentIndex].id : 0) : s.agenda,
+                objet: s.objet || 0,
+                occurrence: s.occurrence || "",
+                titre: champTitre.text,
+                lieu: champLieu.text,
+                description: champDescription.text,
+                journee: caseJournee.checked,
+                debut: caseJournee.checked ? agenda.isoJour(debut) : agenda.isoHeure(debut),
+                fin: caseJournee.checked ? agenda.isoJour(fin) : agenda.isoHeure(fin),
+                repetition: occurrence ? "" : choixRepetitions[choixRepetition.currentIndex][0],
+                jusquAu: jusqua ? agenda.isoJour(jusqua) : "",
+                rappel: choixRappels[choixRappel.currentIndex][0]
+            }
+            if (nouveau)
+                reglagesAgenda.agendaParDefaut = saisie.agenda
+            erreur = ""
+            enCours = true
+            agenda.ecritureEnCours = "saisie"
+            agenda.boite.enregistrerEvenement(JSON.stringify(saisie))
+        }
+
+        contentItem: ColumnLayout {
+            spacing: 10
+            Label {
+                Layout.fillWidth: true
+                font.bold: true
+                font.pixelSize: 17
+                text: popupSaisie.nouveau ? qsTr("Nouvel événement")
+                      : popupSaisie.occurrence ? qsTr("Modifier cette occurrence")
+                      : (popupSaisie.s.repetition || "").length > 0 ? qsTr("Modifier la série") : qsTr("Modifier l'événement")
+            }
+            ScrollView {
+                id: defileSaisie
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                implicitHeight: grilleSaisie.implicitHeight
+                contentWidth: availableWidth
+                clip: true
+                GridLayout {
+                    id: grilleSaisie
+                    width: defileSaisie.availableWidth
+                    columns: agenda.compact ? 1 : 2
+                    columnSpacing: 12
+                    rowSpacing: 6
+
+                    Label { text: qsTr("Titre") }
+                    TextField {
+                        id: champTitre
+                        Layout.fillWidth: true
+                        placeholderText: qsTr("Objet de l'événement")
+                        onAccepted: popupSaisie.enregistrer()
+                    }
+                    Label { text: qsTr("Lieu") }
+                    TextField {
+                        id: champLieu
+                        Layout.fillWidth: true
+                    }
+                    Item {
+                        visible: !agenda.compact
+                        implicitWidth: 1
+                        implicitHeight: 1
+                    }
+                    CheckBox {
+                        id: caseJournee
+                        text: qsTr("Journée entière")
+                    }
+                    Label { text: qsTr("Début") }
+                    RowLayout {
+                        spacing: 4
+                        TextField {
+                            id: champDebutJour
+                            Layout.preferredWidth: 120
+                            placeholderText: qsTr("jj/mm/aaaa")
+                            onEditingFinished: popupSaisie.debutChange()
+                        }
+                        ToolButton {
+                            text: "…"
+                            ToolTip.visible: hovered
+                            ToolTip.text: qsTr("Choisir dans le calendrier")
+                            onClicked: popupCalendrier.ouvrirPour(champDebutJour)
+                        }
+                        TextField {
+                            id: champDebutHeure
+                            visible: !caseJournee.checked
+                            Layout.preferredWidth: 70
+                            placeholderText: qsTr("hh:mm")
+                            onEditingFinished: popupSaisie.debutChange()
+                        }
+                    }
+                    Label { text: caseJournee.checked ? qsTr("Dernier jour") : qsTr("Fin") }
+                    RowLayout {
+                        spacing: 4
+                        TextField {
+                            id: champFinJour
+                            Layout.preferredWidth: 120
+                            placeholderText: qsTr("jj/mm/aaaa")
+                        }
+                        ToolButton {
+                            text: "…"
+                            ToolTip.visible: hovered
+                            ToolTip.text: qsTr("Choisir dans le calendrier")
+                            onClicked: popupCalendrier.ouvrirPour(champFinJour)
+                        }
+                        TextField {
+                            id: champFinHeure
+                            visible: !caseJournee.checked
+                            Layout.preferredWidth: 70
+                            placeholderText: qsTr("hh:mm")
+                        }
+                    }
+                    Label {
+                        visible: popupSaisie.nouveau
+                        text: qsTr("Agenda")
+                    }
+                    ComboBox {
+                        id: choixAgenda
+                        visible: popupSaisie.nouveau
+                        Layout.fillWidth: true
+                    }
+                    Label {
+                        visible: !popupSaisie.occurrence
+                        text: qsTr("Répétition")
+                    }
+                    ComboBox {
+                        id: choixRepetition
+                        visible: !popupSaisie.occurrence
+                        Layout.fillWidth: true
+                        model: popupSaisie.choixRepetitions.map(function(x) { return x[1] })
+                    }
+                    Label {
+                        visible: champJusquAu.parent.visible
+                        text: qsTr("Jusqu'au")
+                    }
+                    RowLayout {
+                        visible: !popupSaisie.occurrence && choixRepetition.currentIndex > 0
+                                 && popupSaisie.choixRepetitions[choixRepetition.currentIndex][0] !== "AUTRE"
+                        spacing: 4
+                        TextField {
+                            id: champJusquAu
+                            Layout.preferredWidth: 120
+                            placeholderText: qsTr("sans fin")
+                        }
+                        ToolButton {
+                            text: "…"
+                            ToolTip.visible: hovered
+                            ToolTip.text: qsTr("Choisir dans le calendrier")
+                            onClicked: popupCalendrier.ouvrirPour(champJusquAu)
+                        }
+                    }
+                    Label { text: qsTr("Rappel") }
+                    ComboBox {
+                        id: choixRappel
+                        Layout.fillWidth: true
+                        model: popupSaisie.choixRappels.map(function(x) { return x[1] })
+                    }
+                    Label {
+                        Layout.alignment: Qt.AlignTop
+                        text: qsTr("Description")
+                    }
+                    TextArea {
+                        id: champDescription
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 110
+                        wrapMode: TextArea.Wrap
+                        selectByMouse: true
+                        // Certains styles n'en dessinent pas le cadre : sans lui,
+                        // la zone ne se voit pas.
+                        background: Rectangle {
+                            color: agenda.palette.base
+                            border.width: 1
+                            border.color: champDescription.activeFocus ? agenda.palette.highlight : agenda.palette.mid
+                            radius: 2
+                        }
+                    }
+                }
+            }
+            Label {
+                Layout.fillWidth: true
+                visible: popupSaisie.erreur.length > 0
+                text: popupSaisie.erreur
+                color: "#b00020"
+                wrapMode: Text.Wrap
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                BusyIndicator {
+                    running: popupSaisie.enCours
+                    visible: running
+                    Layout.preferredHeight: 28
+                    Layout.preferredWidth: 28
+                }
+                Item { Layout.fillWidth: true }
+                Button {
+                    text: qsTr("Annuler")
+                    flat: true
+                    onClicked: popupSaisie.close()
+                }
+                Button {
+                    text: qsTr("Enregistrer")
+                    enabled: !popupSaisie.enCours
+                    highlighted: true
+                    onClicked: popupSaisie.enregistrer()
+                }
+            }
+        }
+    }
+
+    // Petit calendrier pour choisir une date dans le formulaire.
+    Popup {
+        id: popupCalendrier
+        property var cible: null
+        property date mois: new Date()
+        padding: 8
+        focus: true
+        function ouvrirPour(champ) {
+            cible = champ
+            mois = agenda.lireDate(champ.text, "00:00") || new Date()
+            var point = champ.mapToItem(agenda, 0, champ.height)
+            x = Math.max(0, Math.min(agenda.width - 260, point.x))
+            y = Math.max(0, Math.min(agenda.height - 260, point.y))
+            open()
+        }
+        function choisir(annee, moisChoisi, jourChoisi) {
+            cible.text = agenda.deuxChiffres(jourChoisi) + "/" + agenda.deuxChiffres(moisChoisi + 1) + "/" + annee
+            if (cible === champDebutJour)
+                popupSaisie.debutChange()
+            close()
+        }
+        contentItem: ColumnLayout {
+            RowLayout {
+                Layout.fillWidth: true
+                ToolButton {
+                    text: "‹"
+                    onClicked: popupCalendrier.mois = new Date(popupCalendrier.mois.getFullYear(), popupCalendrier.mois.getMonth() - 1, 1)
+                }
+                Label {
+                    Layout.fillWidth: true
+                    horizontalAlignment: Text.AlignHCenter
+                    font.bold: true
+                    text: {
+                        var t = Qt.locale("fr_FR").standaloneMonthName(popupCalendrier.mois.getMonth(), Locale.LongFormat)
+                        return t.charAt(0).toUpperCase() + t.slice(1) + " " + popupCalendrier.mois.getFullYear()
+                    }
+                }
+                ToolButton {
+                    text: "›"
+                    onClicked: popupCalendrier.mois = new Date(popupCalendrier.mois.getFullYear(), popupCalendrier.mois.getMonth() + 1, 1)
+                }
+            }
+            DayOfWeekRow {
+                Layout.fillWidth: true
+                locale: Qt.locale("fr_FR")
+                delegate: Label {
+                    required property string shortName
+                    text: shortName.charAt(0).toUpperCase()
+                    horizontalAlignment: Text.AlignHCenter
+                    opacity: 0.6
+                    font.pixelSize: 11
+                }
+            }
+            MonthGrid {
+                id: grilleCalendrier
+                Layout.preferredWidth: 240
+                month: popupCalendrier.mois.getMonth()
+                year: popupCalendrier.mois.getFullYear()
+                locale: Qt.locale("fr_FR")
+                delegate: Label {
+                    required property var model
+                    text: model.day
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                    opacity: model.month === grilleCalendrier.month ? 1 : 0.4
+                    font.bold: model.today
+                    MouseArea {
+                        anchors.fill: parent
+                        onClicked: popupCalendrier.choisir(parent.model.year, parent.model.month, parent.model.day)
+                    }
+                }
             }
         }
     }

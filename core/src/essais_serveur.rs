@@ -598,7 +598,7 @@ fn occurrences_janvier_2030(magasin: &Magasin, uid: &str) -> Vec<(String, String
         .evenements_periode(1893456000, 1896134400)
         .unwrap()
         .iter()
-        .flat_map(|(_, ical)| crate::agenda::occurrences(ical, de, a))
+        .flat_map(|(_, _, ical)| crate::agenda::occurrences(ical, de, a))
         .filter(|o| o.uid == uid)
         .map(|o| (o.resume, o.debut.format("%Y-%m-%dT%H:%MZ").to_string()))
         .collect()
@@ -649,4 +649,81 @@ fn agenda_decouvert_synchronise_et_suivi() {
     assert!(matches!(requete_agenda("DELETE", &url, ""), 200 | 204));
     assert!(synchro(false).retires >= 1);
     assert!(occurrences_janvier_2030(&magasin, &uid).is_empty());
+}
+
+/// Objet de l'index qui porte `uid`.
+fn objet_par_uid(magasin: &Magasin, uid: &str) -> Option<crate::magasin::ObjetLocal> {
+    magasin
+        .evenements_periode(i64::MIN / 2, i64::MAX / 2)
+        .unwrap()
+        .into_iter()
+        .find(|(_, _, ical)| ical.contains(&format!("UID:{uid}")))
+        .and_then(|(id, _, _)| magasin.objet(id).unwrap())
+}
+
+fn debuts_fevrier_2030(magasin: &Magasin, uid: &str) -> Vec<String> {
+    let (de, a) = ("2030-02-01T00:00:00Z".parse().unwrap(), "2030-03-01T00:00:00Z".parse().unwrap());
+    objet_par_uid(magasin, uid)
+        .map(|o| crate::agenda::occurrences(&o.ical, de, a).iter().map(|o| o.debut.format("%d %H:%M").to_string()).collect())
+        .unwrap_or_default()
+}
+
+#[test]
+#[ignore = "exige un serveur CalDAV et un compte"]
+fn agenda_ecriture_serie_occurrence_conflit_retrait() {
+    use crate::caldav::{self, Acces};
+    use crate::saisie::{self, Saisie};
+    let hote = variable("MMAIL_HOTE");
+    let (utilisateur, mot_de_passe) = (variable("MMAIL_UTILISATEUR"), variable("MMAIL_MOTDEPASSE"));
+    let maintenant = chrono::Utc::now();
+    let magasin = Magasin::en_memoire().unwrap();
+    let compte = magasin.compte(&utilisateur, &hote, 993, &utilisateur).unwrap();
+    let acces = Acces { utilisateur: &utilisateur, mot_de_passe: &mot_de_passe };
+    let synchro = || caldav::synchroniser(&magasin, compte, &hote, &acces, maintenant.timestamp(), false).expect("synchronisation");
+    synchro();
+    let agendas = magasin.agendas().unwrap();
+    let agenda = agendas.iter().find(|a| a.ecriture && a.adresse.ends_with("/personal/")).unwrap_or(&agendas[0]);
+    assert!(agenda.ecriture, "{agenda:?}");
+    let paris: chrono_tz::Tz = "Europe/Paris".parse().unwrap();
+
+    // Série : chaque lundi de février 2030 à 10 h, rappel un quart d'heure avant.
+    let s = Saisie {
+        titre: "Épreuve d'écriture MMail".into(),
+        debut: "2030-02-04T10:00".into(),
+        fin: "2030-02-04T11:00".into(),
+        repetition: "WEEKLY".into(),
+        jusqu_au: "2030-02-25".into(),
+        rappel: 15,
+        ..Default::default()
+    };
+    let (uid, ical) = saisie::creer(&s, paris, maintenant).unwrap();
+    let url = format!("{}/{uid}.ics", agenda.adresse.trim_end_matches('/'));
+    caldav::deposer(&acces, &url, &ical, None).expect("dépôt");
+    synchro();
+    assert_eq!(debuts_fevrier_2030(&magasin, &uid), ["04 09:00", "11 09:00", "18 09:00", "25 09:00"]);
+
+    // L'occurrence du 11 déplacée à 14 h ; le même dépôt, ETag périmé, refusé.
+    let o = objet_par_uid(&magasin, &uid).unwrap();
+    let origine = "2030-02-11T09:00:00Z".parse::<chrono::DateTime<chrono::Utc>>().unwrap().timestamp();
+    let mut so = saisie::saisie_de(&o.ical, Some(origine), paris).unwrap();
+    so.debut = "2030-02-11T14:00".into();
+    so.fin = "2030-02-11T15:00".into();
+    let modifie = saisie::modifier(&o.ical, &so, paris, maintenant).unwrap();
+    caldav::deposer(&acces, &url, &modifie, Some(&o.etag)).expect("modification");
+    let conflit = caldav::deposer(&acces, &url, &modifie, Some(&o.etag)).unwrap_err();
+    assert!(conflit.to_string().contains(caldav::CONFLIT), "{conflit}");
+    synchro();
+    assert_eq!(debuts_fevrier_2030(&magasin, &uid), ["04 09:00", "11 13:00", "18 09:00", "25 09:00"]);
+
+    // L'occurrence du 18 retirée, puis toute la série.
+    let o = objet_par_uid(&magasin, &uid).unwrap();
+    let origine = "2030-02-18T09:00:00Z".parse::<chrono::DateTime<chrono::Utc>>().unwrap().timestamp();
+    let retire = saisie::retirer_occurrence(&o.ical, origine, maintenant).unwrap();
+    caldav::deposer(&acces, &url, &retire, Some(&o.etag)).expect("retrait d'une occurrence");
+    synchro();
+    assert_eq!(debuts_fevrier_2030(&magasin, &uid), ["04 09:00", "11 13:00", "25 09:00"]);
+    let o = objet_par_uid(&magasin, &uid).unwrap();
+    caldav::retirer(&acces, &agenda.adresse, &url, &o.etag).expect("retrait de la série");
+    synchro();
+    assert!(objet_par_uid(&magasin, &uid).is_none());
 }

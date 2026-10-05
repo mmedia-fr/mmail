@@ -1,6 +1,6 @@
 [package]
 name = "mmail_core"
-version = "0.5.0"
+version = "0.5.1"
 edition = "2021"
 rust-version = "1.85"
 license = "GPL-3.0-or-later"
@@ -54,6 +54,9 @@ roxmltree = "0.20"
 rrule = "0.14"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 chrono-tz = "0.10"
+# Nom IANA du fuseau du poste (« Europe/Paris »), pour écrire les heures d'un
+# événement : chrono sait le décalage local, pas son nom. Déjà tiré par chrono.
+iana-time-zone = "0.1"
 
 # Autorités de certification : celles du système sur le bureau, par le
 # vérificateur de plateforme. Sous Android, ce vérificateur exige un composant

@@ -151,6 +151,11 @@ impl Dav for Faux {
             return reponse(url, statut, String::new());
         }
         let agendas = self.agendas.borrow();
+        if profondeur == "0" && agendas.values().any(|a| a.objets.contains_key(&chemin)) {
+            // ETag d'un objet seul, relu avant un retrait.
+            let (etag, _) = agendas.values().find_map(|a| a.objets.get(&chemin)).unwrap();
+            return reponse(url, 207, multistatus(&[propriete(&chemin, &format!("<D:getetag>{}</D:getetag>", xml(etag)))]));
+        }
         match (methode, chemin.as_str(), profondeur) {
             // Redirigé vers /dav/ : l'adresse rendue est celle d'arrivée.
             ("PROPFIND", "/.well-known/caldav", "0") => reponse(
@@ -203,6 +208,47 @@ impl Dav for Faux {
             _ => reponse(url, 404, String::new()),
         }
     }
+
+    /// PUT et DELETE sur les objets, ETag vérifiés comme le fait SOGo : au PUT
+    /// seulement.
+    fn ecrire(&self, methode: &str, url: &str, corps: &str, si_etag: Option<&str>) -> Resultat<Reponse> {
+        let chemin = chemin(url).to_string();
+        self.journal.borrow_mut().push(format!("{methode} {chemin} {}", si_etag.unwrap_or("-")));
+        if let Some(statut) = self.statut {
+            return reponse(url, statut, String::new());
+        }
+        let mut agendas = self.agendas.borrow_mut();
+        let Some((_, agenda)) = agendas.iter_mut().find(|(href, _)| chemin.starts_with(href.as_str())) else {
+            return reponse(url, 404, String::new());
+        };
+        let actuel = agenda.objets.get(&chemin).map(|(e, _)| e.clone());
+        match methode {
+            "PUT" => {
+                if si_etag.is_some() && si_etag.map(str::to_string) != actuel {
+                    return reponse(url, 412, String::new());
+                }
+                let version = actuel.as_deref().and_then(|e| e.trim_matches('"').parse::<u32>().ok()).map_or(0, |n| n + 1);
+                agenda.objets.insert(chemin, (format!("\"{version}\""), corps.to_string()));
+                agenda.ctag += 1;
+                reponse(url, if actuel.is_some() { 204 } else { 201 }, String::new())
+            }
+            "DELETE" => match agenda.objets.remove(&chemin) {
+                Some(_) => {
+                    agenda.ctag += 1;
+                    reponse(url, 204, String::new())
+                }
+                None => reponse(url, 404, String::new()),
+            },
+            _ => reponse(url, 405, String::new()),
+        }
+    }
+}
+
+impl Faux {
+    /// Écritures reçues : (méthode, chemin, If-Match).
+    fn ecritures(&self) -> Vec<String> {
+        self.journal.borrow().iter().filter(|l| l.starts_with("PUT") || l.starts_with("DELETE")).cloned().collect()
+    }
 }
 
 fn evenement(uid: &str, jour: u32, titre: &str) -> String {
@@ -228,7 +274,7 @@ fn titres(magasin: &Magasin) -> Vec<String> {
         .evenements_periode(1790812800, 1793491200)
         .unwrap()
         .iter()
-        .flat_map(|(_, ical)| crate::agenda::occurrences(ical, "2026-10-01T00:00:00Z".parse().unwrap(), "2026-11-01T00:00:00Z".parse().unwrap()))
+        .flat_map(|(_, _, ical)| crate::agenda::occurrences(ical, "2026-10-01T00:00:00Z".parse().unwrap(), "2026-11-01T00:00:00Z".parse().unwrap()))
         .map(|o| o.resume)
         .collect();
     t.sort();
@@ -330,4 +376,58 @@ fn boite_sans_agenda_et_identifiants_refuses() {
     faux.statut = Some(401);
     let erreur = synchro(&magasin, compte, &faux, 1000 + 3 * 86400, true).unwrap_err();
     assert!(matches!(erreur, Erreur::Refuse(_)), "{erreur}");
+}
+
+#[test]
+fn droits_d_ecriture_des_agendas() {
+    let xml = |privileges: &str| {
+        multistatus(&[propriete(
+            "/dav/alice/agendas/partage/",
+            &format!(
+                "<D:displayname>Partagé</D:displayname><D:resourcetype><D:collection/><C:calendar/></D:resourcetype>\
+<D:current-user-privilege-set>{privileges}</D:current-user-privilege-set>"
+            ),
+        )])
+    };
+    let lecture = lire_agendas(&xml("<D:privilege><D:read/></D:privilege><D:privilege><D:read-current-user-privilege-set/></D:privilege>"));
+    assert!(!lecture[0].ecriture);
+    let ecriture = lire_agendas(&xml("<D:privilege><D:read/></D:privilege><D:privilege><D:write-content/></D:privilege>"));
+    assert!(ecriture[0].ecriture);
+    // Sans la propriété : écriture supposée, le serveur refusera s'il le faut.
+    assert!(lire_agendas(include_str!("sogo-agendas.xml"))[0].ecriture);
+}
+
+#[test]
+fn depot_conflit_et_retrait() {
+    let (magasin, compte) = profil();
+    let faux = Faux::nouveau();
+    faux.poser("perso", "Personnel", "a", "\"1\"", &evenement("a", 5, "Alpha"));
+    synchro(&magasin, compte, &faux, 1000, false).unwrap();
+    let agenda = format!("{ORIGINE}{AGENDAS}perso/");
+
+    // Nouvel objet : sans condition.
+    deposer(&faux, &format!("{agenda}b.ics"), &evenement("b", 6, "Bêta"), None).unwrap();
+    synchro(&magasin, compte, &faux, 2000, false).unwrap();
+    assert_eq!(titres(&magasin), ["Alpha", "Bêta"]);
+
+    // Modification avec l'ETag connu, puis avec un ETag périmé : refusée.
+    deposer(&faux, &format!("{agenda}a.ics"), &evenement("a", 5, "Alpha 2"), Some("\"1\"")).unwrap();
+    let conflit = deposer(&faux, &format!("{agenda}a.ics"), &evenement("a", 5, "Alpha 3"), Some("\"1\"")).unwrap_err();
+    assert!(conflit.to_string().contains(CONFLIT), "{conflit}");
+    synchro(&magasin, compte, &faux, 3000, false).unwrap();
+    assert_eq!(titres(&magasin), ["Alpha 2", "Bêta"]);
+
+    // Retrait : l'ETag est relu avant le DELETE, que SOGo ne conditionne pas.
+    let etags = magasin.etags(magasin.agendas().unwrap()[0].id).unwrap();
+    let href_b = format!("{AGENDAS}perso/b.ics");
+    faux.requetes();
+    let perime = retirer(&faux, &agenda, &format!("{agenda}b.ics"), "\"périmé\"").unwrap_err();
+    assert!(perime.to_string().contains(CONFLIT));
+    assert!(faux.ecritures().is_empty());
+    retirer(&faux, &agenda, &format!("{agenda}b.ics"), &etags[&href_b]).unwrap();
+    assert_eq!(faux.ecritures(), [format!("DELETE {href_b} {}", etags[&href_b])]);
+    // Déjà absent : rien à faire.
+    retirer(&faux, &agenda, &format!("{agenda}b.ics"), &etags[&href_b]).unwrap();
+    synchro(&magasin, compte, &faux, 4000, false).unwrap();
+    assert_eq!(titres(&magasin), ["Alpha 2"]);
 }

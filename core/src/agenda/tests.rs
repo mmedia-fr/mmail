@@ -198,6 +198,11 @@ fn occ(debut: &str, fin: &str, titre: &str) -> Occurrence {
         journee: None,
         annule: false,
         agenda: 1,
+        objet: 0,
+        origine: utc(debut),
+        repete: false,
+        participants: false,
+        rappels: Vec::new(),
     }
 }
 
@@ -280,7 +285,10 @@ fn vue_semaine_et_mois_depuis_l_index() {
     let magasin = Magasin::en_memoire().unwrap();
     let compte = magasin.compte("a@exemple.fr", "h", 993, "a@exemple.fr").unwrap();
     magasin
-        .poser_agendas(compte, &[("https://h/p/".into(), "Personnel".into(), "".into()), ("https://h/t/".into(), "Travail".into(), "#112233".into())])
+        .poser_agendas(
+            compte,
+            &[("https://h/p/".into(), "Personnel".into(), "".into(), true), ("https://h/t/".into(), "Travail".into(), "#112233".into(), false)],
+        )
         .unwrap();
     let agendas = magasin.agendas().unwrap();
     let (perso, travail) = (agendas[0].id, agendas[1].id);
@@ -328,4 +336,40 @@ fn vue_semaine_et_mois_depuis_l_index() {
 
 fn objet_texte(corps: &str) -> String {
     objet(corps)
+}
+
+#[test]
+fn rappels_echus_vus_et_repousses() {
+    use crate::magasin::ObjetAgenda;
+    let paris: chrono_tz::Tz = "Europe/Paris".parse().unwrap();
+    let magasin = Magasin::en_memoire().unwrap();
+    let compte = magasin.compte("a@exemple.fr", "h", 993, "a@exemple.fr").unwrap();
+    magasin.poser_agendas(compte, &[("https://h/p/".into(), "Personnel".into(), "".into(), true)]).unwrap();
+    let agenda = magasin.agendas().unwrap()[0].id;
+    // Réunion à 9 h 30 (7 h 30 UTC), rappel un quart d'heure avant ; un
+    // rappel par courriel, que MMail n'a pas à montrer.
+    let ical = objet(
+        "BEGIN:VEVENT\r\nUID:r\r\nDTSTART;TZID=Europe/Paris:20261007T093000\r\nDTEND;TZID=Europe/Paris:20261007T110000\r\n\
+SUMMARY:Réunion\r\nBEGIN:VALARM\r\nACTION:DISPLAY\r\nTRIGGER:-PT15M\r\nEND:VALARM\r\nBEGIN:VALARM\r\nACTION:EMAIL\r\n\
+TRIGGER:-PT1H\r\nEND:VALARM\r\nEND:VEVENT\r\n",
+    );
+    let (debut, fin) = etendue(&ical).unwrap();
+    magasin.poser_evenements(agenda, &[ObjetAgenda { href: "r".into(), etag: "1".into(), ical, debut, fin }]).unwrap();
+    let echus = |t: &str| rappels_dans(&magasin, utc(t), &paris);
+
+    assert!(echus("2026-10-07T07:14:00Z").is_empty());
+    let r = echus("2026-10-07T07:16:00Z");
+    assert_eq!(r.len(), 1);
+    assert_eq!((r[0].titre.as_str(), r[0].quand.as_str(), r[0].date.as_str()), ("Réunion", "mercredi 7 octobre 2026, 09:30 – 11:00", "2026-10-07"));
+    // Repoussé de cinq minutes : absent jusque-là, de retour ensuite.
+    magasin.poser_rappel(&r[0].cle, false, utc("2026-10-07T07:21:00Z").timestamp(), utc("2026-10-07T07:16:00Z").timestamp()).unwrap();
+    assert!(echus("2026-10-07T07:20:00Z").is_empty());
+    assert_eq!(echus("2026-10-07T07:22:00Z").len(), 1);
+    // Vu : ne revient plus.
+    magasin.poser_rappel(&r[0].cle, true, 0, utc("2026-10-07T07:22:00Z").timestamp()).unwrap();
+    assert!(echus("2026-10-07T07:30:00Z").is_empty());
+    // Jamais vu, mais la réunion est finie depuis longtemps : plus montré.
+    magasin.poser_rappel(&r[0].cle, false, 0, utc("2026-10-07T07:22:00Z").timestamp()).unwrap();
+    assert_eq!(echus("2026-10-07T08:50:00Z").len(), 1);
+    assert!(echus("2026-10-07T12:00:00Z").is_empty());
 }

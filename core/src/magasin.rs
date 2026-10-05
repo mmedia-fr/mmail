@@ -11,7 +11,7 @@
 //! Le schéma reprend les noms décidés au dossier pour que la suite s'y pose
 //! sans renommer : `accounts`, `folders`, `messages`, `pending_ops`.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use rusqlite::{params, Connection, OptionalExtension};
 
@@ -25,7 +25,7 @@ pub type Resultat<T> = Result<T, Erreur>;
 const LOT_ECRITURE: usize = 500;
 
 /// Version du schéma, portée par `PRAGMA user_version`.
-const VERSION_SCHEMA: i32 = 6;
+const VERSION_SCHEMA: i32 = 7;
 
 #[derive(Debug)]
 pub struct Erreur(pub String);
@@ -40,6 +40,32 @@ impl From<rusqlite::Error> for Erreur {
     fn from(e: rusqlite::Error) -> Self {
         Erreur(e.to_string())
     }
+}
+
+/// Un agenda d'un compte, tel que le serveur l'a décrit, et la case qui dit
+/// s'il est affiché.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgendaLocal {
+    pub id: i64,
+    pub compte: i64,
+    /// Adresse complète de la collection CalDAV.
+    pub adresse: String,
+    pub nom: String,
+    /// `#RRGGBB`, ou vide.
+    pub couleur: String,
+    /// Étiquette du serveur à la dernière synchronisation complète.
+    pub ctag: String,
+    pub affiche: bool,
+}
+
+/// Un objet d'un agenda à ranger : adresse, ETag, texte iCalendar et période
+/// occupée (cf. `agenda::etendue`).
+pub struct ObjetAgenda {
+    pub href: String,
+    pub etag: String,
+    pub ical: String,
+    pub debut: i64,
+    pub fin: i64,
 }
 
 /// Un compte tel qu'il est enregistré dans le profil.
@@ -313,6 +339,37 @@ impl Magasin {
                      SELECT lower(adresse), MAX(expediteur), COUNT(*), MAX(horodatage) FROM messages
                      WHERE adresse <> '' GROUP BY lower(adresse);
                  CREATE INDEX IF NOT EXISTS messages_gardes ON messages(horodatage) WHERE body_state = 'full';",
+            )?;
+        }
+        // Version 7 : l'agenda. Pour chaque compte, l'adresse CalDAV trouvée
+        // et l'heure du dernier essai infructueux ; les agendas ; le texte de
+        // chaque objet et la période qu'il occupe — de quoi afficher une
+        // semaine hors connexion sans relire tous les objets.
+        if version < 7 {
+            self.ajouter_colonne("accounts", "caldav", "TEXT NOT NULL DEFAULT ''")?;
+            self.ajouter_colonne("accounts", "caldav_essai", "INTEGER NOT NULL DEFAULT 0")?;
+            self.base.execute_batch(
+                "CREATE TABLE IF NOT EXISTS agendas (
+                     id          INTEGER PRIMARY KEY,
+                     account_id  INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+                     adresse     TEXT NOT NULL,
+                     nom         TEXT NOT NULL DEFAULT '',
+                     couleur     TEXT NOT NULL DEFAULT '',
+                     ctag        TEXT NOT NULL DEFAULT '',
+                     affiche     INTEGER NOT NULL DEFAULT 1,
+                     UNIQUE (account_id, adresse)
+                 );
+                 CREATE TABLE IF NOT EXISTS evenements (
+                     id          INTEGER PRIMARY KEY,
+                     agenda_id   INTEGER NOT NULL REFERENCES agendas(id) ON DELETE CASCADE,
+                     href        TEXT NOT NULL,
+                     etag        TEXT NOT NULL,
+                     ical        TEXT NOT NULL,
+                     debut       INTEGER NOT NULL,
+                     fin         INTEGER NOT NULL,
+                     UNIQUE (agenda_id, href)
+                 );
+                 CREATE INDEX IF NOT EXISTS evenements_par_debut ON evenements(debut);",
             )?;
         }
         self.base.pragma_update(None, "user_version", VERSION_SCHEMA)?;
@@ -1065,6 +1122,150 @@ impl Magasin {
     /// Nombre de déplacements en cours, tous comptes confondus.
     pub fn nombre_operations(&self) -> Resultat<u32> {
         Ok(self.base.query_row("SELECT COUNT(*) FROM pending_ops", [], |l| l.get(0))?)
+    }
+
+    // ------------------------------------------------------------- agenda
+
+    /// Adresse CalDAV d'un compte (vide si elle n'est pas connue) et heure du
+    /// dernier essai de découverte infructueux.
+    pub fn caldav(&self, compte: i64) -> Resultat<(String, i64)> {
+        Ok(self
+            .base
+            .query_row("SELECT caldav, caldav_essai FROM accounts WHERE id = ?1", params![compte], |l| {
+                Ok((l.get(0)?, l.get(1)?))
+            })
+            .optional()?
+            .unwrap_or_default())
+    }
+
+    pub fn poser_caldav(&self, compte: i64, adresse: &str, essai: i64) -> Resultat<()> {
+        self.base.execute(
+            "UPDATE accounts SET caldav = ?2, caldav_essai = ?3 WHERE id = ?1",
+            params![compte, adresse, essai],
+        )?;
+        Ok(())
+    }
+
+    /// Tous les agendas, dans l'ordre des comptes puis par nom.
+    pub fn agendas(&self) -> Resultat<Vec<AgendaLocal>> {
+        let mut requete = self.base.prepare(
+            "SELECT g.id, g.account_id, g.adresse, g.nom, g.couleur, g.ctag, g.affiche
+             FROM agendas g JOIN accounts a ON a.id = g.account_id
+             ORDER BY a.rang IS NULL, a.rang, a.id, g.nom COLLATE NOCASE, g.id",
+        )?;
+        let agendas = requete
+            .query_map([], |l| {
+                Ok(AgendaLocal {
+                    id: l.get(0)?,
+                    compte: l.get(1)?,
+                    adresse: l.get(2)?,
+                    nom: l.get(3)?,
+                    couleur: l.get(4)?,
+                    ctag: l.get(5)?,
+                    affiche: l.get::<_, i32>(6)? != 0,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(agendas)
+    }
+
+    /// Pose les agendas d'un compte tels que le serveur les décrit — adresse,
+    /// nom, couleur — et retire ceux qu'il ne décrit plus, objets compris. La
+    /// case « affiché » des agendas déjà connus ne bouge pas. Rend vrai si
+    /// quelque chose a changé.
+    pub fn poser_agendas(&self, compte: i64, distants: &[(String, String, String)]) -> Resultat<bool> {
+        let avant: Vec<AgendaLocal> = self.agendas()?.into_iter().filter(|a| a.compte == compte).collect();
+        let transaction = self.base.unchecked_transaction()?;
+        let mut change = false;
+        for ancien in &avant {
+            if !distants.iter().any(|(adresse, _, _)| adresse == &ancien.adresse) {
+                transaction.execute("DELETE FROM agendas WHERE id = ?1", params![ancien.id])?;
+                change = true;
+            }
+        }
+        for (adresse, nom, couleur) in distants {
+            match avant.iter().find(|a| &a.adresse == adresse) {
+                Some(a) if &a.nom == nom && &a.couleur == couleur => {}
+                Some(a) => {
+                    transaction.execute(
+                        "UPDATE agendas SET nom = ?2, couleur = ?3 WHERE id = ?1",
+                        params![a.id, nom, couleur],
+                    )?;
+                    change = true;
+                }
+                None => {
+                    transaction.execute(
+                        "INSERT INTO agendas (account_id, adresse, nom, couleur) VALUES (?1, ?2, ?3, ?4)",
+                        params![compte, adresse, nom, couleur],
+                    )?;
+                    change = true;
+                }
+            }
+        }
+        transaction.commit()?;
+        Ok(change)
+    }
+
+    pub fn poser_ctag(&self, agenda: i64, ctag: &str) -> Resultat<()> {
+        self.base.execute("UPDATE agendas SET ctag = ?2 WHERE id = ?1", params![agenda, ctag])?;
+        Ok(())
+    }
+
+    pub fn afficher_agenda(&self, agenda: i64, affiche: bool) -> Resultat<()> {
+        self.base.execute("UPDATE agendas SET affiche = ?2 WHERE id = ?1", params![agenda, affiche as i32])?;
+        Ok(())
+    }
+
+    /// ETag de chaque objet d'un agenda, par adresse.
+    pub fn etags(&self, agenda: i64) -> Resultat<HashMap<String, String>> {
+        let mut requete = self.base.prepare("SELECT href, etag FROM evenements WHERE agenda_id = ?1")?;
+        let etags = requete
+            .query_map(params![agenda], |l| Ok((l.get(0)?, l.get(1)?)))?
+            .collect::<Result<HashMap<_, _>, _>>()?;
+        Ok(etags)
+    }
+
+    /// Range des objets d'un agenda, nouveaux ou modifiés.
+    pub fn poser_evenements(&self, agenda: i64, objets: &[ObjetAgenda]) -> Resultat<()> {
+        for lot in objets.chunks(LOT_ECRITURE) {
+            let transaction = self.base.unchecked_transaction()?;
+            for o in lot {
+                transaction.execute(
+                    "INSERT INTO evenements (agenda_id, href, etag, ical, debut, fin)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                     ON CONFLICT (agenda_id, href) DO UPDATE SET
+                         etag = excluded.etag, ical = excluded.ical,
+                         debut = excluded.debut, fin = excluded.fin",
+                    params![agenda, o.href, o.etag, o.ical, o.debut, o.fin],
+                )?;
+            }
+            transaction.commit()?;
+        }
+        Ok(())
+    }
+
+    pub fn retirer_evenements(&self, agenda: i64, hrefs: &[String]) -> Resultat<()> {
+        for lot in hrefs.chunks(LOT_ECRITURE) {
+            let transaction = self.base.unchecked_transaction()?;
+            for href in lot {
+                transaction.execute("DELETE FROM evenements WHERE agenda_id = ?1 AND href = ?2", params![agenda, href])?;
+            }
+            transaction.commit()?;
+        }
+        Ok(())
+    }
+
+    /// Texte des objets des agendas affichés qui touchent `[de, a)` (secondes
+    /// Unix), avec l'agenda de chacun.
+    pub fn evenements_periode(&self, de: i64, a: i64) -> Resultat<Vec<(i64, String)>> {
+        let mut requete = self.base.prepare(
+            "SELECT e.agenda_id, e.ical FROM evenements e JOIN agendas g ON g.id = e.agenda_id
+             WHERE g.affiche = 1 AND e.debut < ?2 AND e.fin >= ?1",
+        )?;
+        let objets = requete
+            .query_map(params![de, a], |l| Ok((l.get(0)?, l.get(1)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(objets)
     }
 }
 

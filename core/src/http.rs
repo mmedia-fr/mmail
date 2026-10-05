@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Requêtes HTTPS minimales : configuration automatique d'un compte et lien de
-//! configuration (cf. `configuration`).
+//! Requêtes HTTPS minimales : configuration automatique d'un compte, lien de
+//! configuration (cf. `configuration`), images distantes et agendas CalDAV
+//! (cf. `caldav`).
 //!
 //! Écrit sur la pile TLS du client IMAP plutôt que pris d'une bibliothèque :
 //! deux requêtes sans état, des réponses de quelques kilo-octets, et surtout le
@@ -25,7 +26,10 @@ const DUREE_MAX: Duration = Duration::from_secs(60);
 /// configuration tient en quelques kilo-octets.
 const TAILLE_MAX: usize = 256 * 1024;
 
-/// Redirections suivies au plus, pour une requête GET.
+/// Motif du refus d'une réponse plus grande que la limite demandée.
+pub const TROP_VOLUMINEUSE: &str = "réponse trop volumineuse";
+
+/// Redirections suivies au plus, pour une lecture (GET, PROPFIND, REPORT).
 const REDIRECTIONS_MAX: usize = 3;
 
 #[derive(Debug, PartialEq)]
@@ -35,6 +39,28 @@ pub struct Reponse {
     /// En-tête `Location`, s'il y en a un.
     pub redirection: Option<String>,
     pub corps: Vec<u8>,
+    /// Adresse qui a rendu la réponse, redirections suivies : c'est d'elle que
+    /// partent les adresses relatives du corps.
+    pub adresse: String,
+}
+
+/// Une requête : méthode, adresse, en-têtes ajoutés et corps.
+pub struct Demande<'a> {
+    pub methode: &'a str,
+    pub url: &'a str,
+    pub accepte: &'a str,
+    /// En-têtes en plus de `Host`, `User-Agent`, `Accept`, `Content-Length`
+    /// et `Connection`. Un en-tête `Authorization` ne suit pas une
+    /// redirection vers un autre serveur.
+    pub entetes: &'a [(&'a str, String)],
+    pub corps: &'a [u8],
+    pub taille_max: usize,
+}
+
+impl<'a> Demande<'a> {
+    pub fn simple(methode: &'a str, url: &'a str, accepte: &'a str) -> Self {
+        Demande { methode, url, accepte, entetes: &[], corps: &[], taille_max: TAILLE_MAX }
+    }
 }
 
 /// Une adresse HTTPS découpée : ce qu'il faut pour se connecter et demander.
@@ -89,28 +115,53 @@ pub fn resoudre(depart: &str, location: &str) -> Resultat<String> {
     Err(Erreur::Protocole(format!("redirection refusée : {location}")))
 }
 
-/// Envoie une requête sans corps et rend la réponse. Un GET suit les
-/// redirections vers HTTPS ; un POST, jamais — il n'a pas à être rejoué ailleurs.
+/// Envoie une requête sans corps et rend la réponse (cf. `envoyer`).
 pub fn requete(methode: &str, url: &str, accepte: &str) -> Resultat<Reponse> {
-    requete_bornee(methode, url, accepte, TAILLE_MAX)
+    envoyer(&Demande::simple(methode, url, accepte))
 }
 
 /// Comme `requete`, avec une autre limite de taille du corps : une image
 /// distante d'un message pèse plus qu'un document de configuration.
 pub fn requete_bornee(methode: &str, url: &str, accepte: &str, taille_max: usize) -> Resultat<Reponse> {
-    let mut url = url.trim().to_string();
+    envoyer(&Demande { taille_max, ..Demande::simple(methode, url, accepte) })
+}
+
+/// Envoie une requête et rend la réponse. GET, PROPFIND et REPORT — des
+/// lectures — suivent les redirections vers HTTPS ; un POST, jamais : il n'a
+/// pas à être rejoué ailleurs.
+pub fn envoyer(demande: &Demande) -> Resultat<Reponse> {
+    let depart = analyser_url(demande.url)?;
+    let lecture = matches!(demande.methode, "GET" | "PROPFIND" | "REPORT");
+    let mut url = demande.url.trim().to_string();
     for _ in 0..=REDIRECTIONS_MAX {
-        let reponse = une_requete(methode, &url, accepte, taille_max)?;
-        let redirige = matches!(reponse.statut, 301 | 302 | 303 | 307 | 308);
-        match (&reponse.redirection, methode == "GET" && redirige) {
+        // Les identifiants ne partent que vers le serveur de départ.
+        let cible = analyser_url(&url)?;
+        let meme_serveur = cible.hote == depart.hote && cible.port == depart.port;
+        let entetes: Vec<&(&str, String)> = demande
+            .entetes
+            .iter()
+            .filter(|(nom, _)| meme_serveur || !nom.eq_ignore_ascii_case("authorization"))
+            .collect();
+        let mut reponse = une_requete(demande, &url, &entetes)?;
+        let redirige = match reponse.statut {
+            301 | 302 | 307 | 308 => lecture,
+            // 303 : « voir ailleurs », par un GET — seul un GET le rejoue tel quel.
+            303 => demande.methode == "GET",
+            _ => false,
+        };
+        match (&reponse.redirection, redirige) {
             (Some(location), true) => url = resoudre(&url, location)?,
-            _ => return Ok(reponse),
+            _ => {
+                reponse.adresse = url;
+                return Ok(reponse);
+            }
         }
     }
     Err(Erreur::Protocole("trop de redirections".into()))
 }
 
-fn une_requete(methode: &str, url: &str, accepte: &str, taille_max: usize) -> Resultat<Reponse> {
+fn une_requete(demande: &Demande, url: &str, entetes: &[&(&str, String)]) -> Resultat<Reponse> {
+    let (methode, accepte, taille_max) = (demande.methode, demande.accepte, demande.taille_max);
     let cible = analyser_url(url)?;
     let config = configuration_tls()?;
     let nom = rustls::pki_types::ServerName::try_from(cible.hote.clone())
@@ -127,13 +178,24 @@ fn une_requete(methode: &str, url: &str, accepte: &str, taille_max: usize) -> Re
     } else {
         format!("{}:{}", cible.hote, cible.port)
     };
-    let demande = format!(
+    let mut tete = format!(
         "{methode} {} HTTP/1.1\r\nHost: {hote}\r\nUser-Agent: MMail/{}\r\nAccept: {accepte}\r\n\
-         Content-Length: 0\r\nConnection: close\r\n\r\n",
+         Content-Length: {}\r\nConnection: close\r\n",
         cible.chemin,
-        env!("CARGO_PKG_VERSION")
+        env!("CARGO_PKG_VERSION"),
+        demande.corps.len()
     );
-    flux.write_all(demande.as_bytes())?;
+    for (nom, valeur) in entetes {
+        // Un en-tête ne s'écrit pas sur deux lignes : pas de quoi en glisser un
+        // autre par une valeur venue d'ailleurs.
+        if valeur.contains(['\r', '\n']) || nom.contains(['\r', '\n', ':']) {
+            return Err(Erreur::Protocole(format!("en-tête invalide : {nom}")));
+        }
+        tete.push_str(&format!("{nom}: {valeur}\r\n"));
+    }
+    tete.push_str("\r\n");
+    flux.write_all(tete.as_bytes())?;
+    flux.write_all(demande.corps)?;
     flux.flush()?;
 
     let mut brut = Vec::new();
@@ -151,7 +213,7 @@ fn une_requete(methode: &str, url: &str, accepte: &str, taille_max: usize) -> Re
                 brut.extend_from_slice(&tampon[..n]);
                 // Marge pour les en-têtes : c'est le corps que borne la limite.
                 if brut.len() > taille_max + 64 * 1024 {
-                    return Err(Erreur::Refuse("réponse trop volumineuse".into()));
+                    return Err(Erreur::Refuse(TROP_VOLUMINEUSE.into()));
                 }
                 // Certains serveurs gardent la connexion ouverte malgré
                 // « Connection: close » (Apache qui propose HTTP/2) : on
@@ -229,7 +291,7 @@ fn analyser_reponse_bornee(brut: &[u8], taille_max: usize) -> Resultat<Reponse> 
             .parse()
             .map_err(|_| Erreur::Protocole(format!("longueur illisible : {longueur}")))?;
         if n > taille_max {
-            return Err(Erreur::Refuse("réponse trop volumineuse".into()));
+            return Err(Erreur::Refuse(TROP_VOLUMINEUSE.into()));
         }
         if reste.len() < n {
             return Err(Erreur::Reseau("réponse tronquée".into()));
@@ -239,13 +301,14 @@ fn analyser_reponse_bornee(brut: &[u8], taille_max: usize) -> Resultat<Reponse> 
         reste.to_vec()
     };
     if corps.len() > taille_max {
-        return Err(Erreur::Refuse("réponse trop volumineuse".into()));
+        return Err(Erreur::Refuse(TROP_VOLUMINEUSE.into()));
     }
     Ok(Reponse {
         statut,
         type_contenu: entete("content-type").unwrap_or("").to_string(),
         redirection: entete("location").map(str::to_string),
         corps,
+        adresse: String::new(),
     })
 }
 
@@ -266,7 +329,7 @@ fn rassembler(mut reste: &[u8], taille_max: usize) -> Resultat<Vec<u8>> {
             return Ok(corps);
         }
         if taille > taille_max || corps.len() + taille > taille_max {
-            return Err(Erreur::Refuse("réponse trop volumineuse".into()));
+            return Err(Erreur::Refuse(TROP_VOLUMINEUSE.into()));
         }
         if reste.len() < taille + 2 {
             return Err(tronque());

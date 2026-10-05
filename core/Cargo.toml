@@ -1,6 +1,6 @@
 [package]
 name = "mmail_core"
-version = "0.4.6"
+version = "0.5.0"
 edition = "2021"
 rust-version = "1.85"
 license = "GPL-3.0-or-later"
@@ -42,9 +42,18 @@ serde_json = "1"
 # assainisseur éprouvé plutôt qu'écrit à la main.
 ammonia = "4.2"
 
-# Document de configuration automatique (format « autoconfig ») : un analyseur
-# XML sans dépendance, qui refuse les DTD et donc les entités.
+# Document de configuration automatique (format « autoconfig ») et réponses
+# CalDAV : un analyseur XML sans dépendance, qui refuse les DTD et donc les
+# entités.
 roxmltree = "0.20"
+
+# Agenda : les règles de répétition iCalendar (RRULE, EXDATE, RDATE) et les
+# fuseaux horaires IANA. SOGo ne développe pas les répétitions (`expand`
+# ignoré) : le calcul se fait ici, par une implantation éprouvée plutôt
+# qu'écrite à la main.
+rrule = "0.14"
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+chrono-tz = "0.10"
 
 # Autorités de certification : celles du système sur le bureau, par le
 # vérificateur de plateforme. Sous Android, ce vérificateur exige un composant

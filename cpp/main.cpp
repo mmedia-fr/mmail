@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include <QtCore/QCoreApplication>
+#include <QtCore/QCryptographicHash>
 #include <QtCore/QDir>
 #include <QtCore/QFileInfo>
+#include <QtCore/QLockFile>
 #include <QtCore/QRegularExpression>
 #include <QtCore/QSettings>
 #include <QtCore/QStandardPaths>
@@ -14,6 +16,8 @@
 #include <QtGui/QFont>
 #include <QtGui/QGuiApplication>
 #include <QtGui/QIcon>
+#include <QtNetwork/QLocalServer>
+#include <QtNetwork/QLocalSocket>
 #include <QtQml/QQmlApplicationEngine>
 #include <QtQml/QQmlContext>
 #include <QtQuickControls2/QQuickStyle>
@@ -216,6 +220,49 @@ int main(int argc, char* argv[])
     ? QDir(dossierProfil()).filePath(QStringLiteral("index.sqlite"))
     : QString::fromUtf8(profilEssai);
   engine.rootContext()->setContextProperty(QStringLiteral("cheminProfil"), profil);
+
+  // Un seul MMail par profil. Deux instances videraient l'une sous l'autre
+  // les pièces jointes ouvertes, enverraient deux fois les messages différés
+  // et rejoueraient ensemble les déplacements interrompus. Un double clic au
+  // lancement suffisait. La seconde réveille la fenêtre de la première et
+  // s'arrête. Le verrou d'un MMail arrêté net (processus disparu) est repris.
+  QDir().mkpath(QFileInfo(profil).absolutePath());
+  QLockFile verrou(QFileInfo(profil).absolutePath() + QStringLiteral("/mmail.lock"));
+  verrou.setStaleLockTime(0);
+  const QString canal = QStringLiteral("mmail-") +
+    QString::fromLatin1(QCryptographicHash::hash(QFileInfo(profil).absoluteFilePath().toUtf8(),
+                                                 QCryptographicHash::Sha1).toHex().left(16));
+  if (!verrou.tryLock(0)) {
+#ifdef Q_OS_WIN
+    // Le premier plan revient à celui que l'utilisateur vient de lancer : il
+    // le cède à l'instance déjà ouverte.
+    AllowSetForegroundWindow(ASFW_ANY);
+#endif
+    QLocalSocket appel;
+    appel.connectToServer(canal);
+    if (appel.waitForConnected(1000)) {
+      appel.write("montrer\n");
+      appel.waitForBytesWritten(1000);
+    }
+    std::fprintf(stderr, "MMail est déjà ouvert sur ce profil.\n");
+    return 0;
+  }
+  QLocalServer reveil;
+  QLocalServer::removeServer(canal);
+  reveil.listen(canal);
+  QObject::connect(&reveil, &QLocalServer::newConnection, &app, [&reveil, &engine] {
+    while (QLocalSocket* appel = reveil.nextPendingConnection())
+      QObject::connect(appel, &QLocalSocket::disconnected, appel, &QObject::deleteLater);
+    if (engine.rootObjects().isEmpty())
+      return;
+    if (auto* fenetre = qobject_cast<QQuickWindow*>(engine.rootObjects().first())) {
+      if (fenetre->windowStates() & Qt::WindowMinimized)
+        fenetre->showNormal();
+      fenetre->show();
+      fenetre->raise();
+      fenetre->requestActivate();
+    }
+  });
 
   const QUrl url(QStringLiteral("qrc:/qt/qml/fr/mmedia/mmail/qml/Main.qml"));
   QObject::connect(

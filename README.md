@@ -40,7 +40,9 @@ de projet interne.
   confirmation de lecture demandée au destinataire (`Disposition-Notification-To`) ;
 - **envoi différé** : le message attend sur le serveur, dans un dossier
   « Envoi différé » créé au besoin, et part à l'heure dite si MMail est ouvert
-  — sur ce poste ou un autre ; sinon à la prochaine ouverture ;
+  — sur ce poste ou un autre ; sinon à la prochaine ouverture. Le premier MMail
+  qui le réserve (CONDSTORE) l'envoie, les autres le laissent : il ne part
+  qu'une fois ;
 - **drapeau de suivi** (`\Flagged`) posé ou retiré d'un clic en bout de ligne,
   par le menu ou la touche Insertion ; importance des messages reçus signalée
   dans la liste (« ! », « ↓ ») et dans l'en-tête ;
@@ -68,6 +70,9 @@ de projet interne.
   même boîte ou de n'importe quelle autre boîte connectée ; dialogue
   « Déplacer vers… » avec filtre (Ctrl+Maj+V) ;
 - **Supprimer** envoie à la corbeille de la boîte (touche Suppr) ;
+- **vider les corbeilles et indésirables** de tous les comptes : seuls les
+  dossiers que le serveur désigne comme tels (`\Trash`, `\Junk`) sont purgés,
+  jamais un dossier sur la foi de son nom ;
 - marquage lu / non lu (Ctrl+Q, Ctrl+U) ; un message affiché est marqué lu ;
 - **masquage local** des dossiers peu utilisés, réaffichage en un clic ;
 - affichage du **message brut** (bouton « Source ») ;
@@ -171,6 +176,9 @@ variable d'environnement :
 |---|---|---|
 | `DossierProfil` | `MMAIL_DOSSIER_PROFIL` | emplacement du profil, variables développées — par exemple `D:\MMail\%USERNAME%`. Un profil itinérant ou redirigé partirait sur le réseau, où l'index SQLite se comporte mal |
 | `JoursCache` | `MMAIL_JOURS_CACHE` | jours de messages gardés sur le poste (31 par défaut ; 0 : aucun) |
+
+Un seul MMail s'ouvre par profil : un second lancement ramène au premier plan
+la fenêtre déjà ouverte, puis s'arrête.
 
 ## Limites connues
 

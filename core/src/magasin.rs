@@ -487,6 +487,13 @@ impl Magasin {
         Ok(requete.query_row(params![id], lire_dossier).optional()?)
     }
 
+    /// Oublie le `HIGHESTMODSEQ` d'un dossier : la prochaine synchronisation
+    /// relira tous ses drapeaux au lieu de demander ce qui a changé.
+    pub fn oublier_modseq(&self, dossier: i64) -> Resultat<()> {
+        self.base.execute("UPDATE folders SET highestmodseq = 0 WHERE id = ?1", params![dossier])?;
+        Ok(())
+    }
+
     /// Note l'état de synchronisation d'un dossier après `SELECT`/`EXAMINE`.
     ///
     /// Rend vrai si l'`UIDVALIDITY` a changé : le contenu local du dossier est
@@ -810,6 +817,19 @@ impl Magasin {
                 "SELECT id, horodatage, lu FROM messages WHERE folder_id = ?1 AND uid = ?2",
                 params![dossier, uid],
                 |l| Ok((l.get(0)?, l.get(1)?, l.get::<_, i32>(2)? != 0)),
+            )
+            .optional()?)
+    }
+
+    /// Identifiant et état « lu » d'un message gardé sur le poste (`full`) ;
+    /// `None` s'il ne l'est pas, même si un fichier porte son identifiant.
+    pub fn garde_sur_le_poste(&self, dossier: i64, uid: u32) -> Resultat<Option<(i64, bool)>> {
+        Ok(self
+            .base
+            .query_row(
+                "SELECT id, lu FROM messages WHERE folder_id = ?1 AND uid = ?2 AND body_state = 'full'",
+                params![dossier, uid],
+                |l| Ok((l.get(0)?, l.get::<_, i32>(1)? != 0)),
             )
             .optional()?)
     }

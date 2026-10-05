@@ -81,6 +81,8 @@ pub struct Entete {
     pub date_interne: String,
     /// Bloc d'en-têtes brut, à analyser par `mail-parser`.
     pub brut: Vec<u8>,
+    /// `MODSEQ` du message (CONDSTORE), quand il a été demandé ; 0 sinon.
+    pub modseq: u64,
 }
 
 impl Entete {
@@ -96,6 +98,11 @@ impl Entete {
     /// suivi ».
     pub fn suivi(&self) -> bool {
         self.drapeaux.iter().any(|d| d.eq_ignore_ascii_case("\\Flagged"))
+    }
+
+    /// Marqué pour suppression (`\Deleted`) : par ce client ou par un autre.
+    pub fn supprime(&self) -> bool {
+        self.drapeaux.iter().any(|d| d.eq_ignore_ascii_case("\\Deleted"))
     }
 }
 
@@ -173,6 +180,7 @@ pub fn analyser_fetch(reponse: &str, litteraux: &[Vec<u8>]) -> Vec<Entete> {
         let mut entete = Entete::default();
         entete.uid = nombre_apres(&corps, "UID ").unwrap_or(0) as u32;
         entete.taille = nombre_apres(&corps, "RFC822.SIZE ").unwrap_or(0) as u32;
+        entete.modseq = nombre_apres(&corps, "MODSEQ (").unwrap_or(0);
         if let Some(reste) = corps.split_once("FLAGS ").map(|(_, r)| r) {
             if let Some((drapeaux, _)) = entre_parentheses(reste) {
                 entete.drapeaux = drapeaux.split_whitespace().map(str::to_string).collect();
@@ -550,6 +558,19 @@ mod tests {
         assert!(!e.repondu());
         assert_eq!(e.date_interne, "16-Sep-2026 18:00:00 +0200");
         assert!(String::from_utf8_lossy(&e.brut).contains("Objet"));
+    }
+
+    #[test]
+    fn modseq_et_suppression_lus_dans_fetch() {
+        let reponse = "* 4 FETCH (UID 9 MODSEQ (12345) FLAGS (\\Seen \\Deleted))\r\n";
+        let e = &analyser_fetch(reponse, &[])[0];
+        assert_eq!(e.uid, 9);
+        assert_eq!(e.modseq, 12345);
+        assert!(e.supprime());
+        // Sans MODSEQ demandé, rien n'est inventé.
+        let e = &analyser_fetch("* 4 FETCH (UID 9 FLAGS ())\r\n", &[])[0];
+        assert_eq!(e.modseq, 0);
+        assert!(!e.supprime());
     }
 
     #[test]

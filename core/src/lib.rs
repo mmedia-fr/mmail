@@ -24,3 +24,7 @@ pub mod synchro;
 // compte fourni par l'environnement (cf. le module).
 #[cfg(test)]
 mod essais_serveur;
+
+// Faux serveur IMAP : les mêmes enchaînements, sans compte ni réseau.
+#[cfg(test)]
+mod simule;

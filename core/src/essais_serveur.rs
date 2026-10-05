@@ -482,3 +482,26 @@ fn vidage_d_un_dossier_d_indesirables() {
     let reste = a.selectionner("Junk", None).expect("SELECT après vidage");
     assert_eq!(reste.etat.messages, 0);
 }
+
+#[test]
+#[ignore = "exige un serveur IMAP et un compte"]
+fn reservation_par_deux_postes() {
+    // Deux MMail ouverts sur la même boîte relèvent le même message dans la
+    // même minute : un seul doit pouvoir le réserver.
+    let mut a = session();
+    let mut b = session();
+    let (id, brut) = message_essai("Réservation");
+    let uid = a.deposer("INBOX", &[], DATE_ESSAI, &brut).expect("APPEND").expect("APPENDUID");
+    a.selectionner("INBOX", None).expect("SELECT A");
+    b.selectionner("INBOX", None).expect("SELECT B");
+    let modseq_a = a.champs(&uid.to_string(), "MESSAGE-ID").expect("FETCH A")[0].modseq;
+    let modseq_b = b.champs(&uid.to_string(), "MESSAGE-ID").expect("FETCH B")[0].modseq;
+    assert!(modseq_a > 0, "MODSEQ non rendu");
+    assert_eq!(modseq_a, modseq_b);
+    assert!(a.reserver(uid, modseq_a).expect("STORE A"), "le premier poste doit réserver");
+    assert!(!b.reserver(uid, modseq_b).expect("STORE B"), "le second poste ne doit pas réserver");
+    let vu_par_b = b.champs(&uid.to_string(), "MESSAGE-ID").expect("FETCH B après");
+    assert!(vu_par_b[0].supprime(), "la réservation doit se voir des autres postes");
+    a.supprimer(&[uid]).expect("purge");
+    assert!(compter(&mut a, "INBOX", &id).is_empty());
+}

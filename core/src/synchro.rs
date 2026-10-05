@@ -70,6 +70,15 @@ pub struct Bilan {
     /// Vrai si le dossier a été relu en entier (première visite, rupture
     /// d'`UIDVALIDITY` ou réconciliation).
     pub complet: bool,
+    /// Messages dont les drapeaux ont changé ailleurs (reprise QRESYNC).
+    pub drapeaux: usize,
+}
+
+impl Bilan {
+    /// Vrai si la liste affichée du dossier n'est plus à jour.
+    pub fn change_la_liste(&self) -> bool {
+        self.nouveaux > 0 || self.retires > 0 || self.drapeaux > 0 || self.complet
+    }
 }
 
 /// Relit l'arborescence d'un compte et les compteurs de tous ses dossiers.
@@ -114,6 +123,7 @@ pub fn synchroniser(
         magasin.retirer_intervalles(id, &selection.disparus)?;
         bilan.retires = selection.disparus.iter().map(|(a, b)| (b - a + 1) as usize).sum();
         magasin.poser_drapeaux(id, &selection.drapeaux)?;
+        bilan.drapeaux = selection.drapeaux.len();
         if etat.uid_next > local.uid_next {
             bilan.nouveaux = lire_depuis(client, magasin, id, local.uid_next.max(1))?;
         }
@@ -219,9 +229,8 @@ pub fn marquer_lu(
     uids: &[u32],
     lu: bool,
 ) -> Result<(), Echec> {
-    assurer_selection(client, chemin)?;
-    client.marquer(uids, "\\Seen", lu)?;
     let id = magasin.dossier_id(compte, chemin)?;
+    marquer_au_serveur(client, magasin, id, chemin, uids, "\\Seen", lu)?;
     magasin.marquer_lu(id, uids, lu)?;
     Ok(())
 }
@@ -235,11 +244,30 @@ pub fn marquer_suivi(
     uids: &[u32],
     suivi: bool,
 ) -> Result<(), Echec> {
-    assurer_selection(client, chemin)?;
-    client.marquer(uids, "\\Flagged", suivi)?;
     let id = magasin.dossier_id(compte, chemin)?;
+    marquer_au_serveur(client, magasin, id, chemin, uids, "\\Flagged", suivi)?;
     magasin.marquer_suivi(id, uids, suivi)?;
     Ok(())
+}
+
+/// Pose un drapeau sur le serveur. L'interface a déjà écrit l'index : si le
+/// serveur ne suit pas, la reprise QRESYNC ne le verra jamais (rien n'a changé
+/// de son côté). Le `HIGHESTMODSEQ` du dossier est alors oublié, ce qui fait
+/// relire tous les drapeaux à la prochaine synchronisation.
+fn marquer_au_serveur(
+    client: &mut Client,
+    magasin: &Magasin,
+    id: i64,
+    chemin: &str,
+    uids: &[u32],
+    drapeau: &str,
+    present: bool,
+) -> Result<(), Echec> {
+    let resultat = assurer_selection(client, chemin).and_then(|()| Ok(client.marquer(uids, drapeau, present)?));
+    if resultat.is_err() {
+        let _ = magasin.oublier_modseq(id);
+    }
+    resultat
 }
 
 /// Sélectionne un dossier s'il ne l'est pas déjà, sans resynchroniser.
@@ -248,4 +276,83 @@ pub fn assurer_selection(client: &mut Client, chemin: &str) -> Result<(), Echec>
         client.selectionner(chemin, None)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocole::Dossier;
+    use crate::simule::{echange, session, DOVECOT};
+
+    fn inbox() -> Dossier {
+        Dossier { chemin: "INBOX".into(), separateur: "/".into(), attributs: Vec::new() }
+    }
+
+    /// Index d'un compte dont INBOX a déjà été vu : UID 1 à 3, état
+    /// (UIDVALIDITY 1, UIDNEXT 4, HIGHESTMODSEQ 10).
+    fn index_connu() -> (Magasin, i64, i64) {
+        let m = Magasin::en_memoire().unwrap();
+        let compte = m.compte("a@exemple.fr", "h", 993, "a@exemple.fr").unwrap();
+        m.poser_dossiers(compte, &[inbox()]).unwrap();
+        let id = m.dossier_id(compte, "INBOX").unwrap();
+        let lignes: Vec<MessageLocal> = (1..=3)
+            .map(|uid| MessageLocal { uid, horodatage: uid as i64, sujet: format!("m{uid}"), ..Default::default() })
+            .collect();
+        m.poser_messages(id, &lignes).unwrap();
+        m.poser_etat(id, &EtatDossier { messages: 3, uid_validity: 1, uid_next: 4, highest_mod_seq: 10 })
+            .unwrap();
+        (m, compte, id)
+    }
+
+    #[test]
+    fn reprise_qresync() {
+        let (m, compte, id) = index_connu();
+        let entete = "From: x@exemple.fr\r\nSubject: nouveau\r\n\r\n";
+        let (mut client, journal) = session(
+            DOVECOT,
+            vec![
+                echange(
+                    "SELECT \"INBOX\" (QRESYNC (1 10))",
+                    "* 3 EXISTS\r\n* OK [UIDVALIDITY 1] v\r\n* OK [UIDNEXT 5] n\r\n\
+                     * OK [HIGHESTMODSEQ 12] m\r\n* VANISHED (EARLIER) 2\r\n\
+                     * 1 FETCH (UID 1 FLAGS (\\Seen \\Flagged) MODSEQ (12))\r\n",
+                    "OK [READ-WRITE] fait",
+                ),
+                echange(
+                    "UID FETCH 4:*",
+                    &format!(
+                        "* 3 FETCH (UID 4 FLAGS () INTERNALDATE \"05-Oct-2026 10:00:00 +0200\" RFC822.SIZE 40 \
+                         BODY[HEADER.FIELDS (FROM SUBJECT)] {{{}}}\r\n{entete})\r\n",
+                        entete.len()
+                    ),
+                    "OK",
+                ),
+            ],
+        );
+        let bilan = synchroniser(&mut client, &m, compte, "INBOX").unwrap();
+        assert_eq!(journal.lock().unwrap().len(), 2, "ni relecture complète, ni réconciliation");
+        assert_eq!((bilan.nouveaux, bilan.retires, bilan.drapeaux, bilan.complet), (1, 1, 1, false));
+        assert!(bilan.change_la_liste());
+        let mut uids = m.uids(id).unwrap();
+        uids.sort();
+        assert_eq!(uids, vec![1, 3, 4]);
+        let premier = m.messages(id).unwrap().into_iter().find(|l| l.uid == 1).unwrap();
+        assert!(premier.lu && premier.suivi);
+        assert_eq!(m.dossier(id).unwrap().unwrap().highest_mod_seq, 12);
+    }
+
+    #[test]
+    fn marquage_refuse_fait_tout_relire_ensuite() {
+        let (m, compte, id) = index_connu();
+        let (mut client, _) = session(
+            DOVECOT,
+            vec![
+                echange("SELECT \"INBOX\"", "* 3 EXISTS\r\n", "OK [READ-WRITE] fait"),
+                echange("UID STORE 2 +FLAGS.SILENT (\\Seen)", "", "NO [SERVERBUG] refusé"),
+            ],
+        );
+        assert!(marquer_lu(&mut client, &m, compte, "INBOX", &[2], true).is_err());
+        // Plus de HIGHESTMODSEQ : la prochaine visite relit tous les drapeaux.
+        assert_eq!(m.dossier(id).unwrap().unwrap().highest_mod_seq, 0);
+    }
 }

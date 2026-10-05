@@ -3837,9 +3837,9 @@ ApplicationWindow {
 
         function onEchec(compte, etape, message) {
             if (etape === "tri") {
-                fenetre.deplacementsEnVol = Math.max(0, fenetre.deplacementsEnVol - 1)
-                if (fenetre.deplacementsEnVol === 0)
-                    fenetre.enDeplacement = ({})
+                // Le compte des déplacements en cours n'est pas touché ici : un
+                // déplacement rend toujours « deplacementTermine », réussi ou
+                // non ; un « tri » échoué peut aussi être un marquage.
                 fenetre.rafraichirListe()
             } else if (etape === "identifiants") {
                 // Mot de passe refusé : on redemande, sans effacer d'office
@@ -4230,7 +4230,7 @@ ApplicationWindow {
     /// à jour en place ; sinon reconstruction, en gardant la position.
     function rafraichirListe() {
         var messages = JSON.parse(boite.messages()).filter(function(m) {
-            return fenetre.enDeplacement[m.uid] !== true
+            return fenetre.enDeplacement[cleDeplacement(m.uid)] !== true
         })
         var memeForme = messages.length === modeleMessages.count
         for (var i = 0; memeForme && i < messages.length; ++i)
@@ -4238,8 +4238,10 @@ ApplicationWindow {
         if (memeForme) {
             for (var j = 0; j < messages.length; ++j) {
                 var avant = modeleMessages.get(j)
+                // Drapeau de suivi compris : posé sur le téléphone ou dans le
+                // webmail, il arrive ainsi sans changer de dossier.
                 if (avant.lu !== messages[j].lu || avant.repondu !== messages[j].repondu
-                        || avant.pieces !== messages[j].pieces)
+                        || avant.pieces !== messages[j].pieces || avant.suivi !== messages[j].suivi)
                     modeleMessages.set(j, messages[j])
             }
             majInfoDossier()
@@ -4609,17 +4611,23 @@ ApplicationWindow {
             retirerDeLaListe(uids)
     }
 
+    /// Clé d'un message en cours de déplacement : un UID ne désigne un message
+    /// que dans son dossier, et le même numéro existe ailleurs.
+    function cleDeplacement(uid) {
+        return boite.compteCourant + "|" + boite.dossierCourant + "|" + uid
+    }
+
     function retirerDeLaListe(uids) {
         var retires = {}
         for (var u in enDeplacement)
             retires[u] = true
         for (var i = 0; i < uids.length; ++i)
-            retires[uids[i]] = true
+            retires[cleDeplacement(uids[i])] = true
         enDeplacement = retires
         deplacementsEnVol += 1
         var suivant = -1
         for (var k = modeleMessages.count - 1; k >= 0; --k) {
-            if (retires[modeleMessages.get(k).uid]) {
+            if (retires[cleDeplacement(modeleMessages.get(k).uid)]) {
                 modeleMessages.remove(k)
                 suivant = k
             }

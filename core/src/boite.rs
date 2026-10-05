@@ -32,7 +32,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::cache::Cache;
 use crate::deplacement::{self, Rapport};
@@ -541,8 +541,7 @@ impl Commande {
                 | (Corps { .. }, Corps { .. })
                 | (Arborescence, Arborescence)
                 | (EnvoyerDifferes { .. }, EnvoyerDifferes { .. })
-                | (_, Veille)
-        )
+        ) || (matches!(anterieure, Veille) && (self.comptee() || matches!(self, Veille)))
     }
 
     /// Vrai si la commande vient de l'interface et compte dans `occupe`.
@@ -584,6 +583,12 @@ enum Issue {
     Piece { fichier: PathBuf, ouvrir: bool, joindre: bool },
     Marque { discret: bool },
     Deplace { cible: i64, chemin_cible: String, rapport: Rapport },
+    /// Un déplacement n'aura pas lieu (échec, ou commande abandonnée avec la
+    /// session) : l'interface remet les lignes qu'elle avait retirées.
+    DeplacementEchoue { message: String },
+    /// Un marquage n'a pas atteint le serveur : l'index du dossier a peut-être
+    /// pris de l'avance, il sera réconcilié à la prochaine ouverture.
+    MarquageAbandonne { chemin: String },
     /// Corbeille et indésirables de ce compte vidés : `nombre` messages effacés.
     Vide { nombre: u32 },
     /// Des déplacements interrompus ont été repris : ni demandés à l'instant,
@@ -1137,11 +1142,8 @@ impl qobject::Boite {
                 .magasin
                 .as_ref()
                 .and_then(|m| m.dossiers(compte).ok())
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|d| d.selectionnable && est_indesirable(&d.role, &d.nom))
-                .map(|d| d.chemin)
-                .collect();
+                .map(|dossiers| dossiers_a_vider(&dossiers))
+                .unwrap_or_default();
             if !chemins.is_empty() {
                 self.as_mut().envoyer(compte, Commande::ViderDossiers { chemins });
             }
@@ -1428,9 +1430,11 @@ impl qobject::Boite {
         self.as_mut().envoyer(compte, Commande::Corps { chemin, uid, brut, distantes })
     }
 
-    /// Un message du dossier ouvert gardé sur le poste, et s'il est lu.
+    /// Un message du dossier ouvert gardé sur le poste, et s'il est lu. Le
+    /// fichier n'est lu que si l'index le dit gardé : l'identifiant d'un
+    /// message supprimé peut être réattribué, et son fichier traîner encore.
     fn sur_le_poste(&self, dossier: i64, uid: u32) -> Option<(Vec<u8>, bool)> {
-        let (id, _, lu) = self.magasin.as_ref()?.identite_message(dossier, uid).ok()??;
+        let (id, lu) = self.magasin.as_ref()?.garde_sur_le_poste(dossier, uid).ok()??;
         Cache::du_profil(&self.profil).lire(id).map(|octets| (octets, lu))
     }
 
@@ -1485,27 +1489,35 @@ impl qobject::Boite {
             self.as_mut().set_erreur(QString::from("ce compte n'est pas connecté"));
             return false;
         }
-        let envoye = {
+        let refusee = {
             let session = &self.sessions[&compte];
-            if commande.comptee() {
+            let comptee = commande.comptee();
+            if comptee {
                 session.attente.fetch_add(1, Ordering::SeqCst);
             }
-            let comptee = commande.comptee();
-            if session.envoi.send(commande).is_ok() {
-                true
-            } else {
-                if comptee {
-                    session.attente.fetch_sub(1, Ordering::SeqCst);
+            match session.envoi.send(commande) {
+                Ok(()) => None,
+                Err(mpsc::SendError(commande)) => {
+                    if comptee {
+                        session.attente.fetch_sub(1, Ordering::SeqCst);
+                    }
+                    Some(commande)
                 }
-                false
             }
         };
-        if !envoye {
+        if let Some(commande) = refusee {
+            // Le fil du compte s'est arrêté sans rendre son issue : on le
+            // relance, la commande attendra la connexion au lieu d'être perdue.
             self.as_mut().rust_mut().sessions.remove(&compte);
+            if self.identites.contains_key(&compte) {
+                return self.as_mut().lancer(compte, vec![commande]);
+            }
             self.as_mut().set_erreur(QString::from("la session du compte s'est fermée"));
+            self.as_mut().rafraichir_occupe();
+            return false;
         }
         self.as_mut().rafraichir_occupe();
-        envoye
+        true
     }
 
     /// Lâche la session d'un compte sans l'attendre. Son fil s'arrête de
@@ -1626,6 +1638,18 @@ impl qobject::Boite {
                 }
                 self.as_mut()
                     .deplacement_termine(rapport.deplaces as i32, &QString::from(&erreurs));
+            }
+            Issue::DeplacementEchoue { message } => {
+                // Le message d'erreur arrive par l'échec qui suit, ou par celui
+                // de la connexion : ici, seulement de quoi rendre les lignes.
+                self.as_mut().deplacement_termine(0, &QString::from(&message));
+            }
+            Issue::MarquageAbandonne { chemin } => {
+                if let Some(magasin) = self.magasin.as_ref() {
+                    if let Ok(id) = magasin.dossier_id(compte, &chemin) {
+                        let _ = magasin.oublier_modseq(id);
+                    }
+                }
             }
             Issue::Prepare { jeton, contenu } => {
                 self.as_mut().preparation(&QString::from(&jeton), &QString::from(&contenu));
@@ -1801,28 +1825,36 @@ fn dossier_indesirables(dossiers: &[DossierLocal]) -> Option<String> {
         .map(|d| d.chemin.clone())
 }
 
-/// Vrai si un dossier est une corbeille ou un dossier d'indésirables, donc
-/// candidat au vidage en masse. On se fie d'abord au rôle SPECIAL-USE (`Trash`,
-/// `Junk`), fiable sur les serveurs qui l'annoncent ; à défaut, on reconnaît
-/// les noms usuels, en français comme en anglais, car tous les serveurs ne
-/// posent pas ces attributs.
-fn est_indesirable(role: &str, nom: &str) -> bool {
-    if role == "Trash" || role == "Junk" {
-        return true;
-    }
-    let nom = nom.to_lowercase();
-    [
-        "indésirable",
-        "indesirable",
-        "pourriel",
-        "spam",
-        "junk",
-        "corbeille",
-        "trash",
-        "deleted items",
-    ]
-    .iter()
-    .any(|motif| nom.contains(motif))
+/// Noms usuels d'une corbeille ou d'un dossier d'indésirables, pour un
+/// serveur qui n'annonce aucun rôle. Comparés au nom entier : « Spambox » ou
+/// « Signalements spam » sont des dossiers de l'utilisateur.
+const NOMS_A_VIDER: &[&str] = &[
+    "trash",
+    "corbeille",
+    "deleted items",
+    "deleted messages",
+    "éléments supprimés",
+    "junk",
+    "junk e-mail",
+    "spam",
+    "indésirables",
+    "courrier indésirable",
+    "pourriel",
+];
+
+/// Dossiers que « Vider les corbeilles » purge définitivement. Dès que le
+/// serveur annonce des rôles (SPECIAL-USE), seuls ceux qui portent `\Trash`
+/// ou `\Junk` : un nom ne suffit jamais à justifier une purge. Sans aucun rôle
+/// annoncé, les noms usuels, à l'identique.
+fn dossiers_a_vider(dossiers: &[DossierLocal]) -> Vec<String> {
+    let par_role = |d: &DossierLocal| d.role == "Trash" || d.role == "Junk";
+    let roles_annonces = dossiers.iter().any(|d| !d.role.is_empty());
+    dossiers
+        .iter()
+        .filter(|d| d.selectionnable)
+        .filter(|d| if roles_annonces { par_role(d) } else { NOMS_A_VIDER.contains(&d.nom.to_lowercase().as_str()) })
+        .map(|d| d.chemin.clone())
+        .collect()
 }
 
 // -------------------------------------------------------------- fil de travail
@@ -1844,6 +1876,10 @@ struct Etabli {
     annexes: HashMap<i64, Client>,
     /// Identifiants des autres boîtes, reçus avec les commandes.
     identites: HashMap<i64, Identifiants>,
+    /// Dossier que l'utilisateur regarde, celui que la veille resynchronise.
+    /// Pas forcément le dossier sélectionné : un vidage, une reprise ou un
+    /// envoi différé en sélectionnent d'autres.
+    ouvert: Option<String>,
 }
 
 impl Travail {
@@ -1866,13 +1902,51 @@ impl Travail {
         }
     }
 
+    /// Rend l'issue d'une commande qui ne sera jamais traitée (connexion
+    /// impossible, session perdue) : une rédaction ne doit pas rester « en
+    /// cours d'envoi », ni une ligne masquée par un déplacement qui n'aura pas
+    /// lieu, ni un marquage local que le serveur n'a pas reçu.
+    fn abandonner(&self, commande: Commande, motif: &str) {
+        let issue = match commande {
+            Commande::Envoyer { redaction, .. } => Issue::EchecRedaction {
+                jeton: redaction.jeton,
+                message: format!("{motif} — le message n'est pas parti"),
+            },
+            Commande::Brouillon { redaction } => Issue::EchecRedaction {
+                jeton: redaction.jeton,
+                message: format!("{motif} — le brouillon n'est pas enregistré"),
+            },
+            Commande::Preparer { jeton, .. } => Issue::EchecRedaction { jeton, message: motif.to_string() },
+            Commande::Deplacer { .. } => {
+                Issue::DeplacementEchoue { message: format!("{motif} — messages non déplacés") }
+            }
+            Commande::MarquerLu { chemin, .. } | Commande::MarquerSuivi { chemin, .. } => {
+                Issue::MarquageAbandonne { chemin }
+            }
+            _ => return,
+        };
+        self.remettre(issue);
+    }
+
+    fn abandonner_toutes(&self, commandes: Vec<Commande>, cause: &Issue) {
+        let motif = match cause {
+            Issue::Echec { message, .. } => message.as_str(),
+            _ => "session perdue",
+        };
+        for commande in commandes {
+            self.abandonner(commande, motif);
+        }
+    }
+
     fn executer(self, identifiants: Identifiants, reception: Receiver<Commande>) {
         let mut etabli = match self.etablir(&identifiants) {
             Ok(etabli) => etabli,
             Err(issue) => {
-                // La connexion et les commandes qui l'attendaient sont perdues.
-                let restantes = reception.try_iter().filter(Commande::comptee).count();
-                self.terminer(1 + restantes);
+                // La connexion et les commandes qui l'attendaient sont perdues ;
+                // chacune rend son issue avant l'échec, qui ferme la session.
+                let restantes: Vec<Commande> = reception.try_iter().collect();
+                self.terminer(1 + restantes.iter().filter(|c| c.comptee()).count());
+                self.abandonner_toutes(restantes, &issue);
                 self.remettre(issue);
                 return;
             }
@@ -1884,9 +1958,13 @@ impl Travail {
         // La boîte de réception se lit hors connexion : elle se précharge dès
         // la connexion ouverte.
         let mut file: Vec<Commande> = vec![Commande::Precharger { chemin: "INBOX".into() }];
+        // Échéance fixe : les commandes reçues entre-temps ne la repoussent pas.
+        // Mesurée en temps d'inactivité, la veille ne venait jamais — la
+        // minuterie des envois différés écrit à chaque compte toutes les minutes.
+        let mut veille = Instant::now() + VEILLE;
         loop {
             if file.is_empty() {
-                match reception.recv_timeout(VEILLE) {
+                match reception.recv_timeout(veille.saturating_duration_since(Instant::now())) {
                     Ok(commande) => file.push(commande),
                     Err(RecvTimeoutError::Timeout) => file.push(Commande::Veille),
                     Err(RecvTimeoutError::Disconnected) => break,
@@ -1902,6 +1980,11 @@ impl Travail {
                     }
                 }
             }
+            // Échéance passée pendant un long préchargement : la veille passe
+            // devant lui.
+            if Instant::now() >= veille && !file.iter().any(|c| matches!(c, Commande::Veille)) {
+                file.push(Commande::Veille);
+            }
             let (restantes, abandonnees) = regrouper(file);
             file = restantes;
             // Le préchargement passe après tout ce que l'utilisateur demande.
@@ -1912,11 +1995,15 @@ impl Travail {
             // Un dossier qu'on vient de lire se précharge ensuite.
             let a_precharger = match &commande {
                 Commande::OuvrirDossier(chemin) => Some(chemin.clone()),
-                Commande::Veille => etabli.client.selection().map(str::to_string),
+                Commande::Veille => etabli.ouvert.clone(),
                 _ => None,
             };
+            let est_veille = matches!(commande, Commande::Veille);
             let comptee = commande.comptee();
             let issue = self.traiter(commande, &mut etabli);
+            if est_veille {
+                veille = Instant::now() + VEILLE;
+            }
             let perdue = matches!(issue, Some(Issue::Echec { session_perdue: true, .. }));
             self.terminer(comptee as usize);
             let issue = match issue {
@@ -1931,14 +2018,20 @@ impl Travail {
             if let (false, Some(chemin)) = (perdue, a_precharger) {
                 file.push(Commande::Precharger { chemin });
             }
+            if perdue {
+                // Les commandes en attente ne seront pas traitées : chacune
+                // rend son issue avant l'échec, qui ferme la session — après
+                // lui, l'interface ne les écouterait plus.
+                let restantes: Vec<Commande> = file.drain(..).chain(reception.try_iter()).collect();
+                self.terminer(restantes.iter().filter(|c| c.comptee()).count());
+                if let Some(issue) = issue {
+                    self.abandonner_toutes(restantes, &issue);
+                    self.remettre(issue);
+                }
+                return;
+            }
             if let Some(issue) = issue {
                 self.remettre(issue);
-            }
-            if perdue {
-                let restantes = reception.try_iter().filter(Commande::comptee).count()
-                    + file.iter().filter(|c| c.comptee()).count();
-                self.terminer(restantes);
-                return;
             }
         }
         etabli.client.fermer();
@@ -1957,7 +2050,7 @@ impl Travail {
         })?;
         synchro::arborescence(&mut client, &magasin, self.compte)
             .map_err(|e| perdue("connexion", format!("lecture des dossiers : {e}")))?;
-        Ok(Etabli { client, magasin, annexes: HashMap::new(), identites: HashMap::new() })
+        Ok(Etabli { client, magasin, annexes: HashMap::new(), identites: HashMap::new(), ouvert: None })
     }
 
     fn traiter(&self, commande: Commande, e: &mut Etabli) -> Option<Issue> {
@@ -1968,6 +2061,7 @@ impl Travail {
                 Err(err) => echec("dossier", format!("lecture des dossiers : {err}"), &err),
             }),
             Commande::OuvrirDossier(chemin) => {
+                e.ouvert = Some(chemin.clone());
                 Some(match synchro::synchroniser(&mut e.client, &e.magasin, compte, &chemin) {
                     Ok(_) => Issue::Dossier { chemin, veille: false },
                     Err(err) => echec("dossier", format!("ouverture de {chemin} : {err}"), &err),
@@ -2030,7 +2124,15 @@ impl Travail {
                 let _ = synchro::arborescence(&mut e.client, &e.magasin, compte);
                 Some(match resultat {
                     Ok(rapport) => Issue::Deplace { cible: cible.compte, chemin_cible: cible.chemin, rapport },
-                    Err(err) => self.echec_de_tri(e, cible.compte, err),
+                    Err(err) => {
+                        let issue = self.echec_de_tri(e, cible.compte, err);
+                        // Avant l'échec, qui peut fermer la session : l'interface
+                        // doit remettre les lignes quoi qu'il arrive ensuite.
+                        if let Issue::Echec { message, .. } = &issue {
+                            self.remettre(Issue::DeplacementEchoue { message: message.clone() });
+                        }
+                        issue
+                    }
                 })
             }
             Commande::ViderDossiers { chemins } => {
@@ -2096,12 +2198,9 @@ impl Travail {
                     }
                     self.remettre(issue);
                 }
-                let selection = e.client.selection().map(str::to_string);
-                match selection {
+                match e.ouvert.clone() {
                     Some(chemin) => Some(match synchro::synchroniser(&mut e.client, &e.magasin, compte, &chemin) {
-                        Ok(bilan) if bilan.nouveaux > 0 || bilan.retires > 0 => {
-                            Issue::Dossier { chemin, veille: true }
-                        }
+                        Ok(bilan) if bilan.change_la_liste() => Issue::Dossier { chemin, veille: true },
                         Ok(_) => Issue::Arborescence,
                         Err(err) => echec("reseau", format!("veille : {err}"), &err),
                     }),
@@ -2186,7 +2285,9 @@ impl Travail {
             if e.client.noop().is_ok() {
                 return Issue::Echec {
                     etape: "tri",
-                    message: format!("déplacement interrompu, il reprendra : {err}"),
+                    message: format!(
+                        "déplacement interrompu ({err}) : ce qui n'a pas été déplacé est resté à sa place"
+                    ),
                     session_perdue: false,
                 };
             }
@@ -2195,11 +2296,28 @@ impl Travail {
     }
 }
 
+/// Messages du dossier des envois différés (sélectionné) arrivés à échéance,
+/// avec leur `MODSEQ` : ceux qu'un client a déjà réservés (`\Deleted`) en
+/// sont exclus.
+fn differes_echus(client: &mut Client, maintenant: i64) -> Result<Vec<(u32, u64)>, Erreur> {
+    Ok(client
+        .champs("1:*", &redaction::ENTETE_DIFFERE.to_ascii_uppercase())?
+        .into_iter()
+        .filter(|en| !en.supprime() && redaction::echeance(&en.brut).is_some_and(|t| t <= maintenant))
+        .map(|en| (en.uid, en.modseq))
+        .collect())
+}
+
 /// Session annexe ouverte sur une autre boîte, retirée de la réserve pour
 /// l'opération en cours.
 fn annexe(e: &mut Etabli, compte: i64) -> Result<Client, Echec> {
-    if let Some(client) = e.annexes.remove(&compte) {
-        return Ok(client);
+    if let Some(mut client) = e.annexes.remove(&compte) {
+        // Gardée depuis le dernier déplacement : le serveur a pu la fermer
+        // entre-temps (Dovecot coupe une session inactive). Un premier dépôt
+        // échouait alors, et les messages suivants n'étaient pas traités.
+        if client.noop().is_ok() {
+            return Ok(client);
+        }
     }
     let identifiants = e
         .identites
@@ -2300,17 +2418,21 @@ impl Travail {
                 return Ok((0, Vec::new()));
             }
             let maintenant = maintenant();
-            let echus: Vec<u32> = e
-                .client
-                .champs("1:*", &redaction::ENTETE_DIFFERE.to_ascii_uppercase())
-                .map_err(|x| x.to_string())?
-                .into_iter()
-                .filter(|en| redaction::echeance(&en.brut).is_some_and(|t| t <= maintenant))
-                .map(|en| en.uid)
-                .collect();
+            let echus = differes_echus(&mut e.client, maintenant).map_err(|x| x.to_string())?;
             let envoyes = self.dossier_de_role(e, "Sent");
             let (mut nombre, mut erreurs) = (0, Vec::new());
-            for uid in echus {
+            for (uid, modseq) in echus {
+                // Réservé d'abord : tout MMail ouvert sur le compte fait ce même
+                // relevé chaque minute. Celui qui pose `\Deleted` le premier
+                // envoie ; les autres voient le message modifié et passent.
+                match e.client.reserver(uid, modseq) {
+                    Ok(true) => {}
+                    Ok(false) => continue,
+                    Err(x) => {
+                        erreurs.push(format!("message {uid} : {x}"));
+                        continue;
+                    }
+                }
                 let envoi = e
                     .client
                     .corps(uid)
@@ -2319,6 +2441,7 @@ impl Travail {
                 let envoi = match envoi {
                     Ok(envoi) => envoi,
                     Err(x) => {
+                        let _ = e.client.marquer(&[uid], "\\Deleted", false);
                         erreurs.push(format!("message {uid} : {x}"));
                         continue;
                     }
@@ -2332,6 +2455,9 @@ impl Travail {
                     &envoi.envoi,
                     envoi.accuse,
                 ) {
+                    // Pas parti : la réservation est levée, il repartira à la
+                    // prochaine minute.
+                    let _ = e.client.marquer(&[uid], "\\Deleted", false);
                     erreurs.push(format!("message {uid} : {x}"));
                     continue;
                 }
@@ -2339,7 +2465,8 @@ impl Travail {
                 if let Some(envoyes) = &envoyes {
                     let _ = e.client.deposer(envoyes, &["\\Seen".into()], "", &envoi.copie);
                 }
-                // Parti : il quitte « Envoi différé » pour ne pas repartir.
+                // Parti : il quitte « Envoi différé ». S'il y reste, il garde
+                // `\Deleted` et ne repartira pas.
                 if let Err(x) = e.client.supprimer(&[uid]) {
                     erreurs.push(format!("message {uid} envoyé mais resté dans « {DOSSIER_DIFFERE} » : {x}"));
                 }
@@ -3014,6 +3141,78 @@ mod tests {
         let (file, abandonnees) = regrouper(vec![Commande::Veille, dossier("INBOX")]);
         assert_eq!(noms(&file), vec!["ouvrir INBOX"]);
         assert_eq!(abandonnees, 0, "la veille n'a pas été comptée à l'envoi");
+    }
+
+    #[test]
+    fn la_veille_n_est_pas_chassee_par_une_tache_de_fond() {
+        // La minuterie des envois différés écrit à chaque compte toutes les
+        // minutes : elle ne doit pas faire sauter la veille.
+        let differes = Commande::EnvoyerDifferes {
+            identifiants: Identifiants { hote: "h".into(), utilisateur: "u".into(), mot_de_passe: "p".into() },
+        };
+        let (file, _) = regrouper(vec![Commande::Veille, differes]);
+        assert_eq!(noms(&file), vec!["veille", "differes"]);
+        let (file, _) = regrouper(vec![Commande::Veille, Commande::Veille]);
+        assert_eq!(noms(&file), vec!["veille"]);
+    }
+
+    fn local(chemin: &str, role: &str) -> DossierLocal {
+        let nom = chemin.rsplit('/').next().unwrap_or(chemin).to_string();
+        DossierLocal { chemin: chemin.into(), nom, role: role.into(), selectionnable: true, ..Default::default() }
+    }
+
+    #[test]
+    fn seuls_les_roles_corbeille_et_indesirables_sont_vides() {
+        let dossiers = vec![
+            local("INBOX", ""),
+            local("Trash", "Trash"),
+            local("Junk", "Junk"),
+            local("Spambox", ""),
+            local("Clients/Signalements spam", ""),
+            local("Corbeille", ""),
+            local("Sent", "Sent"),
+        ];
+        assert_eq!(dossiers_a_vider(&dossiers), vec!["Trash", "Junk"]);
+    }
+
+    #[test]
+    fn sans_role_annonce_seuls_les_noms_exacts() {
+        let mut non_selectionnable = local("Deleted Items", "");
+        non_selectionnable.selectionnable = false;
+        let dossiers = vec![
+            local("INBOX", ""),
+            local("INBOX/Trash", ""),
+            local("Courrier indésirable", ""),
+            local("Spambox", ""),
+            local("Archives/spam 2025", ""),
+            non_selectionnable,
+        ];
+        assert_eq!(dossiers_a_vider(&dossiers), vec!["INBOX/Trash", "Courrier indésirable"]);
+    }
+
+    #[test]
+    fn differes_echus_sans_ceux_deja_reserves() {
+        use crate::simule::{echange, session, DOVECOT};
+        let entete = |t: i64| format!("X-MMail-Envoi-Differe: {t}\r\n\r\n");
+        let fetch = |seq: u32, uid: u32, modseq: u64, drapeaux: &str, t: i64| {
+            let e = entete(t);
+            format!(
+                "* {seq} FETCH (UID {uid} FLAGS ({drapeaux}) INTERNALDATE \"05-Oct-2026 10:00:00 +0200\" \
+                 RFC822.SIZE 9 MODSEQ ({modseq}) BODY[HEADER.FIELDS (X-MMAIL-ENVOI-DIFFERE)] {{{}}}\r\n{e})\r\n",
+                e.len()
+            )
+        };
+        let reponses = [
+            fetch(1, 11, 300, "", 1_000),
+            fetch(2, 12, 301, "\\Deleted", 1_000),
+            fetch(3, 13, 302, "", 9_000),
+        ]
+        .concat();
+        let (mut client, journal) =
+            session(DOVECOT, vec![echange("UID FETCH 1:* (UID FLAGS INTERNALDATE RFC822.SIZE MODSEQ", &reponses, "OK")]);
+        // 12 est réservé par un autre poste, 13 n'est pas échu.
+        assert_eq!(differes_echus(&mut client, 5_000).unwrap(), vec![(11, 300)]);
+        assert!(journal.lock().unwrap()[0].contains("X-MMAIL-ENVOI-DIFFERE"));
     }
 
     #[test]

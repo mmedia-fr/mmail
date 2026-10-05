@@ -614,7 +614,7 @@ fn agenda_decouvert_synchronise_et_suivi() {
     let magasin = Magasin::en_memoire().unwrap();
     let compte = magasin.compte(&utilisateur, &hote, 993, &utilisateur).unwrap();
     let acces = Acces { utilisateur: &utilisateur, mot_de_passe: &mot_de_passe };
-    let synchro = |insister| caldav::synchroniser(&magasin, compte, &hote, &utilisateur, &acces, maintenant, insister).expect("synchronisation");
+    let synchro = |insister| caldav::synchroniser(&magasin, compte, &hote, &acces, maintenant, insister).expect("synchronisation");
 
     let bilan = synchro(false);
     assert!(bilan.agendas >= 1, "{bilan:?}");

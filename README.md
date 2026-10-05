@@ -107,7 +107,7 @@ de projet interne.
 **Agenda en lecture** (bouton « Agenda », Ctrl+2 ; Ctrl+1 ramène au courrier) :
 les agendas CalDAV des boîtes connectées — SOGo pour une boîte Mailcow, ou tout
 serveur CalDAV qui accepte les identifiants de la boîte —, trouvés sans
-réglage (`/.well-known/caldav`, RFC 6764). Vues jour, semaine et mois à la
+réglage sur le serveur de la boîte (`/.well-known/caldav`, RFC 6764). Vues jour, semaine et mois à la
 manière d'Outlook ; un agenda se coche ou se décoche ; un clic sur un
 événement en montre la fiche (horaire, lieu, description, agenda). Les
 répétitions, leurs exceptions et les occurrences déplacées sont calculées sur

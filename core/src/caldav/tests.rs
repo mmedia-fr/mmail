@@ -219,7 +219,7 @@ fn profil() -> (Magasin, i64) {
 }
 
 fn synchro(magasin: &Magasin, compte: i64, faux: &Faux, maintenant: i64, insister: bool) -> Resultat<Bilan> {
-    synchroniser(magasin, compte, "dav.exemple.fr", "alice@exemple.fr", faux, maintenant, insister)
+    synchroniser(magasin, compte, "dav.exemple.fr", faux, maintenant, insister)
 }
 
 /// Titres des événements d'octobre 2026 des agendas affichés.
@@ -315,16 +315,17 @@ fn boite_sans_agenda_et_identifiants_refuses() {
     let mut faux = Faux::nouveau();
     faux.statut = Some(404);
     assert_eq!(synchro(&magasin, compte, &faux, 1000, false).unwrap(), Bilan::default());
-    // Le serveur, le domaine de l'adresse, puis l'adresse de SOGo.
-    assert_eq!(faux.requetes(), ["PROPFIND /.well-known/caldav 0", "PROPFIND /.well-known/caldav 0", "PROPFIND /SOGo/dav/ 0"]);
+    // Le serveur de la boîte, puis l'adresse de SOGo ; jamais le domaine de
+    // l'adresse.
+    assert_eq!(faux.requetes(), ["PROPFIND /.well-known/caldav 0", "PROPFIND /SOGo/dav/ 0"]);
     assert_eq!(magasin.caldav(compte).unwrap(), (String::new(), 1000));
     // Moins d'un jour après : pas de nouvel essai, sauf à la demande.
     synchro(&magasin, compte, &faux, 1000 + 3600, false).unwrap();
     assert!(faux.requetes().is_empty());
     synchro(&magasin, compte, &faux, 1000 + 3600, true).unwrap();
-    assert_eq!(faux.requetes().len(), 3);
+    assert_eq!(faux.requetes().len(), 2);
     synchro(&magasin, compte, &faux, 1000 + 3600 + 86400, false).unwrap();
-    assert_eq!(faux.requetes().len(), 3);
+    assert_eq!(faux.requetes().len(), 2);
 
     faux.statut = Some(401);
     let erreur = synchro(&magasin, compte, &faux, 1000 + 3 * 86400, true).unwrap_err();

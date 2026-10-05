@@ -872,7 +872,7 @@ impl qobject::Boite {
                 Ok(magasin) => {
                     for (compte, adresse, id) in &comptes {
                         let acces = crate::caldav::Acces { utilisateur: &id.utilisateur, mot_de_passe: &id.mot_de_passe };
-                        match crate::caldav::synchroniser(&magasin, *compte, &id.hote, adresse, &acces, maintenant(), insister) {
+                        match crate::caldav::synchroniser(&magasin, *compte, &id.hote, &acces, maintenant(), insister) {
                             Ok(bilan) => change |= bilan.change,
                             Err(e) => erreurs.push(format!("{adresse} : {e}")),
                         }

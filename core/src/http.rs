@@ -29,7 +29,7 @@ const TAILLE_MAX: usize = 256 * 1024;
 /// Motif du refus d'une réponse plus grande que la limite demandée.
 pub const TROP_VOLUMINEUSE: &str = "réponse trop volumineuse";
 
-/// Redirections suivies au plus, pour une requête GET.
+/// Redirections suivies au plus, pour une lecture (GET, PROPFIND, REPORT).
 const REDIRECTIONS_MAX: usize = 3;
 
 #[derive(Debug, PartialEq)]

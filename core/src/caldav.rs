@@ -3,8 +3,10 @@
 //! objets, sur le client HTTPS du programme.
 //!
 //! Découverte selon la RFC 6764 : `/.well-known/caldav` sur le serveur de la
-//! boîte, puis sur le domaine de l'adresse, puis l'adresse de SOGo (Mailcow) ;
-//! de là le principal de l'utilisateur, puis la collection de ses agendas.
+//! boîte, puis l'adresse de SOGo (Mailcow) ; de là le principal de
+//! l'utilisateur, puis la collection de ses agendas. Les identifiants ne
+//! partent que vers le serveur de la boîte : le domaine de l'adresse, que la
+//! RFC propose aussi d'interroger, est souvent un site hébergé chez un tiers.
 //!
 //! Synchronisation par comparaison, sans `sync-collection` : l'étiquette de
 //! chaque agenda (`getctag`) dit s'il a changé ; s'il a changé, la liste des
@@ -275,15 +277,8 @@ fn texte(reponse: &Reponse) -> String {
 /// Adresse de la collection des agendas d'une boîte, ou `None` si aucun
 /// serveur CalDAV ne s'est fait connaître. Un refus des identifiants est
 /// rendu comme tel : il dit que le serveur existe.
-pub fn decouvrir(hote: &str, adresse_boite: &str, dav: &impl Dav) -> Resultat<Option<String>> {
-    let mut departs = vec![format!("https://{hote}/.well-known/caldav")];
-    if let Some((_, domaine)) = adresse_boite.trim().rsplit_once('@') {
-        let domaine = domaine.to_ascii_lowercase();
-        if !domaine.is_empty() && domaine != hote {
-            departs.push(format!("https://{domaine}/.well-known/caldav"));
-        }
-    }
-    departs.push(format!("https://{hote}/SOGo/dav/"));
+pub fn decouvrir(hote: &str, dav: &impl Dav) -> Resultat<Option<String>> {
+    let departs = [format!("https://{hote}/.well-known/caldav"), format!("https://{hote}/SOGo/dav/")];
     let mut refus = None;
     for depart in departs {
         match collection_depuis(&depart, dav) {
@@ -324,7 +319,6 @@ pub fn synchroniser(
     magasin: &Magasin,
     compte: i64,
     hote: &str,
-    adresse_boite: &str,
     dav: &impl Dav,
     maintenant: i64,
     insister: bool,
@@ -336,7 +330,7 @@ pub fn synchroniser(
         if !insister && essai > 0 && maintenant - essai < REESSAI_DECOUVERTE {
             return Ok(bilan);
         }
-        match decouvrir(hote, adresse_boite, dav) {
+        match decouvrir(hote, dav) {
             Ok(Some(trouvee)) => {
                 magasin.poser_caldav(compte, &trouvee, 0).map_err(index)?;
                 collection = trouvee;

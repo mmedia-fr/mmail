@@ -42,6 +42,14 @@ pub struct Reponse {
     /// Adresse qui a rendu la réponse, redirections suivies : c'est d'elle que
     /// partent les adresses relatives du corps.
     pub adresse: String,
+    /// En-têtes, noms en minuscules.
+    pub entetes: Vec<(String, String)>,
+}
+
+impl Reponse {
+    pub fn entete(&self, nom: &str) -> Option<&str> {
+        self.entetes.iter().find(|(n, _)| n.eq_ignore_ascii_case(nom)).map(|(_, v)| v.as_str())
+    }
 }
 
 /// Une requête : méthode, adresse, en-têtes ajoutés et corps.
@@ -309,6 +317,7 @@ fn analyser_reponse_bornee(brut: &[u8], taille_max: usize) -> Resultat<Reponse> 
         redirection: entete("location").map(str::to_string),
         corps,
         adresse: String::new(),
+        entetes: entetes.clone(),
     })
 }
 

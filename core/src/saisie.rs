@@ -14,7 +14,7 @@ use std::hash::{BuildHasher, Hasher};
 use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, Offset, TimeZone, Utc, Weekday};
 use serde::{Deserialize, Serialize};
 
-use crate::agenda::{self, analyser, echapper, Alarme, Composant, Moment, Propriete};
+use crate::agenda::{self, analyser, echapper, personnes, Alarme, Composant, Moment, Propriete};
 
 /// Le formulaire d'un événement, tel que l'interface l'échange avec le noyau.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -42,6 +42,13 @@ pub struct Saisie {
     pub jusqu_au: String,
     /// Minutes avant le début ; -1 : pas de rappel.
     pub rappel: i64,
+    /// Participants, « Nom <adresse> » ou adresse ; `None` : inchangés. Une
+    /// liste vide fait de la réunion un événement simple.
+    pub participants: Option<Vec<String>>,
+    /// L'organisateur — la boîte de l'agenda —, posé par l'appelant.
+    pub organisateur: String,
+    #[serde(rename = "nomOrganisateur")]
+    pub nom_organisateur: String,
 }
 
 /// Fuseau du poste, nommé à la manière IANA : la variable `TZ` si elle en
@@ -247,7 +254,7 @@ fn bornes(racine: &Composant, c: &Composant) -> Option<(Moment, Duration)> {
     Some((debut, duree.max(Duration::zero())))
 }
 
-fn origine_de(racine: &Composant, c: &Composant) -> Option<i64> {
+pub(crate) fn origine_de(racine: &Composant, c: &Composant) -> Option<i64> {
     c.propriete("RECURRENCE-ID").and_then(|p| moment_de(racine, p)).map(|m| m.utc().timestamp())
 }
 
@@ -283,7 +290,17 @@ pub fn saisie_de(ical: &str, occurrence: Option<i64>, tz: chrono_tz::Tz) -> Opti
         (None, Some(r)) => repetition_de(&r.valeur, jour_debut, tz),
         _ => (String::new(), String::new()),
     };
+    let (organisateur, invites) = personnes(source);
+    let organisateur = organisateur.unwrap_or_default();
+    let participants: Vec<String> = invites
+        .iter()
+        .filter(|p| p.adresse != organisateur.adresse)
+        .map(|p| if p.nom.is_empty() { p.adresse.clone() } else { format!("{} <{}>", p.nom, p.adresse) })
+        .collect();
     Some(Saisie {
+        participants: (!participants.is_empty()).then_some(participants),
+        organisateur: organisateur.adresse,
+        nom_organisateur: organisateur.nom,
         agenda: 0,
         objet: 0,
         occurrence: occurrence.map(|o| o.to_string()).unwrap_or_default(),
@@ -387,10 +404,67 @@ fn rappel_valarm(titre: &str, minutes: i64) -> Composant {
     a
 }
 
+/// « Nom <adresse> » ou « adresse » : le nom et l'adresse en minuscules.
+fn lire_adresse(texte: &str) -> Option<(String, String)> {
+    let t = texte.trim();
+    let (nom, adresse) = match (t.rfind('<'), t.rfind('>')) {
+        (Some(i), Some(j)) if i < j => (t[..i].trim().trim_matches('"').trim(), t[i + 1..j].trim()),
+        _ => ("", t),
+    };
+    let adresse = adresse.to_lowercase();
+    let valide = adresse.contains('@') && !adresse.starts_with('@') && !adresse.ends_with('@')
+        && !adresse.chars().any(|c| c.is_whitespace() || c == ',' || c == ';');
+    valide.then(|| (nom.to_string(), adresse))
+}
+
+/// Organisateur et participants d'une saisie. Une réponse déjà reçue est
+/// gardée, sauf si l'horaire a changé : les invités ont alors à se prononcer
+/// sur le nouveau. Sans participants, la réunion redevient un événement
+/// simple. Le serveur (SOGo) envoie lui-même invitations et annulations.
+fn poser_participants(c: &mut Composant, s: &Saisie, horaire_change: bool) -> Result<(), String> {
+    let Some(liste) = &s.participants else { return Ok(()) };
+    let mut voulus: Vec<(String, String)> = Vec::new();
+    for texte in liste.iter().filter(|t| !t.trim().is_empty()) {
+        let (nom, adresse) = lire_adresse(texte).ok_or_else(|| format!("adresse de participant invalide : {texte}"))?;
+        if adresse != s.organisateur.to_lowercase() && !voulus.iter().any(|(_, a)| *a == adresse) {
+            voulus.push((nom, adresse));
+        }
+    }
+    let anciens = personnes(c).1;
+    c.retirer("ATTENDEE");
+    if voulus.is_empty() {
+        c.retirer("ORGANIZER");
+        return Ok(());
+    }
+    if s.organisateur.trim().is_empty() {
+        return Err("organisateur inconnu".into());
+    }
+    let cn = s.nom_organisateur.trim();
+    let params: Vec<(&str, &str)> = if cn.is_empty() { Vec::new() } else { vec![("CN", cn)] };
+    c.poser(Propriete::nouvelle("ORGANIZER", &params, &format!("mailto:{}", s.organisateur.trim().to_lowercase())));
+    for (nom, adresse) in voulus {
+        let statut = anciens
+            .iter()
+            .find(|p| p.adresse == adresse && !horaire_change)
+            .map(|p| p.statut.clone())
+            .unwrap_or_else(|| "NEEDS-ACTION".into());
+        let mut params = vec![("ROLE", "REQ-PARTICIPANT"), ("PARTSTAT", statut.as_str()), ("RSVP", "TRUE")];
+        if !nom.is_empty() {
+            params.insert(0, ("CN", nom.as_str()));
+        }
+        c.proprietes.push(Propriete::nouvelle("ATTENDEE", &params, &format!("mailto:{adresse}")));
+    }
+    Ok(())
+}
+
 /// Titre, lieu, description, horaires et rappel de la saisie sur un VEVENT.
 /// Le rappel n'est remplacé que s'il a changé : un rappel d'une forme que le
 /// formulaire ignore reste en place.
-fn poser_champs(c: &mut Composant, s: &Saisie, bornes: &Bornes, tz: chrono_tz::Tz) {
+fn poser_champs(c: &mut Composant, s: &Saisie, bornes: &Bornes, tz: chrono_tz::Tz) -> Result<(), String> {
+    let horaire = |c: &Composant| {
+        ["DTSTART", "DTEND"].map(|n| c.propriete(n).map(|p| (p.valeur.clone(), p.param("TZID").map(str::to_string))))
+    };
+    let avant = horaire(c);
     c.poser(Propriete::nouvelle("SUMMARY", &[], &echapper(s.titre.trim())));
     for (nom, valeur) in [("LOCATION", s.lieu.trim()), ("DESCRIPTION", s.description.trim())] {
         if valeur.is_empty() {
@@ -406,6 +480,8 @@ fn poser_champs(c: &mut Composant, s: &Saisie, bornes: &Bornes, tz: chrono_tz::T
             c.enfants.push(rappel_valarm(s.titre.trim(), s.rappel));
         }
     }
+    let change = avant != horaire(c);
+    poser_participants(c, s, change)
 }
 
 /// Date de modification et numéro de version d'un VEVENT.
@@ -443,7 +519,7 @@ pub fn creer(s: &Saisie, tz: chrono_tz::Tz, maintenant: DateTime<Utc>) -> Result
     e.proprietes.push(Propriete::nouvelle("CREATED", &[], &horodatage(maintenant)));
     e.proprietes.push(Propriete::nouvelle("TRANSP", &[], if s.journee { "TRANSPARENT" } else { "OPAQUE" }));
     // Sans rappel encore, `poser_champs` pose celui de la saisie s'il y en a un.
-    poser_champs(&mut e, s, &bornes, tz);
+    poser_champs(&mut e, s, &bornes, tz)?;
     if let Some(regle) = regle_de(s, &bornes, tz)? {
         e.poser(Propriete::nouvelle("RRULE", &[], &regle));
     }
@@ -488,7 +564,7 @@ pub fn modifier(ical: &str, s: &Saisie, tz: chrono_tz::Tz, maintenant: DateTime<
         let regle_avant = racine.enfants[i].propriete("RRULE").map(|p| p.valeur.clone());
         let regle = if s.repetition == "AUTRE" { None } else { Some(regle_de(s, &nouvelles, tz)?) };
         let m = &mut racine.enfants[i];
-        poser_champs(m, s, &nouvelles, tz);
+        poser_champs(m, s, &nouvelles, tz)?;
         if let Some(regle) = regle {
             match regle {
                 Some(regle) => m.poser(Propriete::nouvelle("RRULE", &[], &regle)),
@@ -522,7 +598,7 @@ pub fn modifier(ical: &str, s: &Saisie, tz: chrono_tz::Tz, maintenant: DateTime<
             }
         };
         let o = &mut racine.enfants[j];
-        poser_champs(o, s, &nouvelles, tz);
+        poser_champs(o, s, &nouvelles, tz)?;
         estampiller(o, maintenant);
     }
     assurer_vtimezone(&mut racine, &nouvelles, tz);

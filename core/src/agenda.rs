@@ -523,6 +523,37 @@ pub(crate) fn alarmes(c: &Composant) -> Vec<Alarme> {
         .collect()
 }
 
+/// Organisateur ou participant d'une réunion.
+#[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
+pub struct Personne {
+    pub nom: String,
+    /// Adresse en minuscules, sans `mailto:`.
+    pub adresse: String,
+    /// Réponse (`PARTSTAT`) : `NEEDS-ACTION`, `ACCEPTED`, `TENTATIVE`, `DECLINED`…
+    pub statut: String,
+}
+
+/// Adresse d'une valeur `mailto:…`, en minuscules.
+pub(crate) fn adresse_de(valeur: &str) -> String {
+    let v = valeur.trim();
+    let v = if v.len() >= 7 && v[..7].eq_ignore_ascii_case("mailto:") { &v[7..] } else { v };
+    v.trim().to_lowercase()
+}
+
+pub(crate) fn personne(p: &Propriete) -> Personne {
+    Personne {
+        nom: p.param("CN").map(|n| n.trim().to_string()).unwrap_or_default(),
+        adresse: adresse_de(&p.valeur),
+        statut: p.param("PARTSTAT").map(|s| s.trim().to_ascii_uppercase()).unwrap_or_else(|| "NEEDS-ACTION".into()),
+    }
+}
+
+/// Organisateur et participants d'un `VEVENT`.
+pub(crate) fn personnes(c: &Composant) -> (Option<Personne>, Vec<Personne>) {
+    let organisateur = c.propriete("ORGANIZER").map(|p| Personne { statut: String::new(), ..personne(p) });
+    (organisateur, c.toutes("ATTENDEE").map(personne).collect())
+}
+
 /// Un `VEVENT` lu.
 #[derive(Debug, Clone)]
 struct Evenement {
@@ -539,9 +570,9 @@ struct Evenement {
     recurrence: Option<Moment>,
     annule: bool,
     alarmes: Vec<Alarme>,
-    /// Réunion : des participants (`ATTENDEE`), qu'une modification devrait
-    /// prévenir.
-    participants: bool,
+    /// Réunion : son organisateur et ses participants (`ATTENDEE`).
+    organisateur: Option<Personne>,
+    participants: Vec<Personne>,
 }
 
 fn evenements(racine: &Composant) -> Vec<Evenement> {
@@ -580,7 +611,8 @@ fn evenements(racine: &Composant) -> Vec<Evenement> {
                 recurrence: c.propriete("RECURRENCE-ID").and_then(&moment),
                 annule: c.propriete("STATUS").is_some_and(|s| s.valeur.trim().eq_ignore_ascii_case("CANCELLED")),
                 alarmes: alarmes(c),
-                participants: c.propriete("ATTENDEE").is_some(),
+                organisateur: personnes(c).0,
+                participants: personnes(c).1,
             })
         })
         .collect()
@@ -608,7 +640,8 @@ pub struct Occurrence {
     pub origine: DateTime<Utc>,
     /// Partie d'une série.
     pub repete: bool,
-    pub participants: bool,
+    pub organisateur: Option<Personne>,
+    pub participants: Vec<Personne>,
     /// Heures de ses rappels.
     pub rappels: Vec<DateTime<Utc>>,
 }
@@ -642,7 +675,8 @@ fn occurrence(e: &Evenement, debut: Moment, origine: DateTime<Utc>, repete: bool
         objet: 0,
         origine,
         repete,
-        participants: e.participants,
+        organisateur: e.organisateur.clone(),
+        participants: e.participants.clone(),
         rappels,
     }
 }
@@ -843,10 +877,14 @@ pub struct Fiche {
     /// Modifiable depuis MMail ; sinon `motif` dit pourquoi.
     pub modifiable: bool,
     pub motif: String,
+    /// Réunion : organisateur et participants.
+    pub organisateur: Option<Personne>,
+    pub participants: Vec<Personne>,
+    /// Réponse de la boîte de l'agenda, si elle est invitée (posée par `vue`) ;
+    /// vide sinon.
+    #[serde(rename = "maReponse")]
+    pub ma_reponse: String,
 }
-
-/// Pourquoi une réunion ne se modifie pas encore.
-const MOTIF_REUNION: &str = "réunion avec participants : elle se modifiera avec la gestion des invitations";
 
 /// Une occurrence placée dans le bandeau des journées entières : colonnes
 /// `de` à `a` (exclue), sur la ligne `ligne`.
@@ -940,8 +978,11 @@ fn fiche<T: TimeZone>(o: &Occurrence, tz: &T) -> Fiche {
         objet: o.objet,
         occurrence: o.origine.timestamp().to_string(),
         repete: o.repete,
-        modifiable: !o.participants,
-        motif: if o.participants { MOTIF_REUNION.into() } else { String::new() },
+        modifiable: true,
+        motif: String::new(),
+        organisateur: o.organisateur.clone(),
+        participants: o.participants.clone(),
+        ma_reponse: String::new(),
     }
 }
 
@@ -1137,6 +1178,7 @@ pub fn vue_dans<T: TimeZone>(magasin: &Magasin, genre: &str, date: NaiveDate, au
     let minuit = |d: NaiveDate| local_vers_utc(tz, &d.and_hms_opt(0, 0, 0).unwrap()).unwrap_or_else(|| Utc.from_utc_datetime(&d.and_hms_opt(0, 0, 0).unwrap()));
     let (de, a) = (minuit(premier), minuit(premier + Duration::days(jours as i64)));
     let agendas = magasin.agendas().unwrap_or_default();
+    let comptes = magasin.comptes().unwrap_or_default();
     let mut liste = Vec::new();
     for (objet, agenda, ical) in magasin.evenements_periode(de.timestamp(), a.timestamp()).unwrap_or_default() {
         for mut o in occurrences(&ical, de, a) {
@@ -1151,6 +1193,14 @@ pub fn vue_dans<T: TimeZone>(magasin: &Magasin, genre: &str, date: NaiveDate, au
             if let Some(a) = agendas.iter().find(|a| a.id == f.agenda) {
                 f.nom_agenda = a.nom.clone();
                 f.couleur = couleur(a);
+                // Une réunion ne se modifie que chez son organisateur ; un invité
+                // y répond.
+                let moi = comptes.iter().find(|c| c.id == a.compte).map(|c| c.adresse.to_lowercase()).unwrap_or_default();
+                if let Some(o) = f.organisateur.as_ref().filter(|o| !f.participants.is_empty() && o.adresse != moi) {
+                    f.modifiable = false;
+                    f.motif = format!("réunion organisée par {} : seul l'organisateur la modifie", if o.nom.is_empty() { &o.adresse } else { &o.nom });
+                    f.ma_reponse = f.participants.iter().find(|p| p.adresse == moi).map(|p| p.statut.clone()).unwrap_or_default();
+                }
                 if !a.ecriture && f.modifiable {
                     f.modifiable = false;
                     f.motif = "agenda en lecture seule".into();
@@ -1191,6 +1241,16 @@ pub fn vue_dans<T: TimeZone>(magasin: &Magasin, genre: &str, date: NaiveDate, au
         sortie["fiches"] = json!(g.fiches);
     }
     sortie.to_string()
+}
+
+/// Horaire d'un objet en clair, dans le fuseau `tz` — celui de sa première
+/// occurrence, ou de l'occurrence seule qu'il décrit — et vrai s'il se répète.
+pub fn quand_de<T: TimeZone>(ical: &str, tz: &T) -> Option<(String, bool)> {
+    let racine = analyser(ical)?;
+    let evenements = evenements(&racine);
+    let e = evenements.iter().find(|e| e.recurrence.is_none()).or(evenements.first())?;
+    let o = occurrence(e, e.debut, e.debut.utc(), e.regle.is_some());
+    Some((fiche(&o, tz).quand, e.regle.is_some()))
 }
 
 // ------------------------------------------------------------- rappels

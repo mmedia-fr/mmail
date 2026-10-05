@@ -25,7 +25,7 @@ pub type Resultat<T> = Result<T, Erreur>;
 const LOT_ECRITURE: usize = 500;
 
 /// Version du schéma, portée par `PRAGMA user_version`.
-const VERSION_SCHEMA: i32 = 8;
+const VERSION_SCHEMA: i32 = 9;
 
 #[derive(Debug)]
 pub struct Erreur(pub String);
@@ -396,6 +396,12 @@ impl Magasin {
                      pose      INTEGER NOT NULL DEFAULT (strftime('%s','now'))
                  );",
             )?;
+        }
+        // Version 9 : les invitations. Le serveur d'agenda du compte les
+        // distribue-t-il lui-même (`calendar-auto-schedule`) ? -1 : pas encore
+        // demandé.
+        if version < 9 {
+            self.ajouter_colonne("accounts", "caldav_planification", "INTEGER NOT NULL DEFAULT -1")?;
         }
         self.base.pragma_update(None, "user_version", VERSION_SCHEMA)?;
         Ok(())
@@ -1292,6 +1298,42 @@ impl Magasin {
             .query_map(params![de, a], |l| Ok((l.get(0)?, l.get(1)?, l.get(2)?)))?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(objets)
+    }
+
+    /// Le serveur d'agenda du compte distribue-t-il les invitations ? `None` :
+    /// pas encore demandé.
+    pub fn planification(&self, compte: i64) -> Resultat<Option<bool>> {
+        let valeur: Option<i64> = self
+            .base
+            .query_row("SELECT caldav_planification FROM accounts WHERE id = ?1", params![compte], |l| l.get(0))
+            .optional()?;
+        Ok(valeur.filter(|v| *v >= 0).map(|v| v != 0))
+    }
+
+    pub fn poser_planification(&self, compte: i64, planification: Option<bool>) -> Resultat<()> {
+        let valeur = planification.map_or(-1, |p| p as i64);
+        self.base.execute("UPDATE accounts SET caldav_planification = ?2 WHERE id = ?1", params![compte, valeur])?;
+        Ok(())
+    }
+
+    /// Objet des agendas d'un compte qui porte l'UID `uid`. Le texte est filtré
+    /// sur un morceau de l'UID — une ligne longue peut être pliée plus loin —,
+    /// puis l'UID de chaque candidat vérifié.
+    pub fn objet_par_uid(&self, compte: i64, uid: &str) -> Resultat<Option<ObjetLocal>> {
+        if uid.is_empty() {
+            return Ok(None);
+        }
+        let morceau: String = uid.chars().take(40).collect();
+        let mut requete = self.base.prepare(
+            "SELECT e.id, e.agenda_id, e.href, e.etag, e.ical FROM evenements e JOIN agendas g ON g.id = e.agenda_id
+             WHERE g.account_id = ?1 AND instr(e.ical, ?2) > 0",
+        )?;
+        let candidats = requete
+            .query_map(params![compte, morceau], |l| {
+                Ok(ObjetLocal { id: l.get(0)?, agenda: l.get(1)?, href: l.get(2)?, etag: l.get(3)?, ical: l.get(4)? })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(candidats.into_iter().find(|o| crate::invitation::identite(&o.ical).is_some_and(|(u, _)| u == uid)))
     }
 
     pub fn objet(&self, id: i64) -> Resultat<Option<ObjetLocal>> {

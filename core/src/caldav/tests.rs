@@ -104,7 +104,14 @@ struct Faux {
 }
 
 fn reponse(adresse: &str, statut: u16, corps: String) -> Resultat<Reponse> {
-    Ok(Reponse { statut, type_contenu: "application/xml".into(), redirection: None, corps: corps.into_bytes(), adresse: adresse.into() })
+    Ok(Reponse {
+        statut,
+        type_contenu: "application/xml".into(),
+        redirection: None,
+        corps: corps.into_bytes(),
+        adresse: adresse.into(),
+        entetes: vec![("dav".into(), "1, 2, calendar-access, calendar-auto-schedule".into())],
+    })
 }
 
 fn multistatus(reponses: &[String]) -> String {
@@ -151,6 +158,9 @@ impl Dav for Faux {
             return reponse(url, statut, String::new());
         }
         let agendas = self.agendas.borrow();
+        if methode == "OPTIONS" {
+            return reponse(url, 200, String::new());
+        }
         if profondeur == "0" && agendas.values().any(|a| a.objets.contains_key(&chemin)) {
             // ETag d'un objet seul, relu avant un retrait.
             let (etag, _) = agendas.values().find_map(|a| a.objets.get(&chemin)).unwrap();
@@ -302,10 +312,13 @@ fn decouverte_puis_synchronisations_successives() {
             "PROPFIND /.well-known/caldav 0",
             "PROPFIND /dav/alice/ 0",
             "PROPFIND /dav/alice/agendas/ 1",
+            // Une fois pour toutes : le serveur distribue-t-il les invitations ?
+            "OPTIONS /dav/alice/agendas/ 0",
             "PROPFIND /dav/alice/agendas/perso/ 1",
             "REPORT /dav/alice/agendas/perso/ 1",
         ]
     );
+    assert_eq!(magasin.planification(compte).unwrap(), Some(true));
 
     // Rien n'a changé : une seule requête, celle des étiquettes.
     assert_eq!(synchro(&magasin, compte, &faux, 2000, false).unwrap(), Bilan { change: false, agendas: 1, lus: 0, retires: 0 });
@@ -421,13 +434,13 @@ fn depot_conflit_et_retrait() {
     let etags = magasin.etags(magasin.agendas().unwrap()[0].id).unwrap();
     let href_b = format!("{AGENDAS}perso/b.ics");
     faux.requetes();
-    let perime = retirer(&faux, &agenda, &format!("{agenda}b.ics"), "\"périmé\"").unwrap_err();
+    let perime = retirer(&faux, &agenda, &format!("{agenda}b.ics"), Some("\"périmé\"")).unwrap_err();
     assert!(perime.to_string().contains(CONFLIT));
     assert!(faux.ecritures().is_empty());
-    retirer(&faux, &agenda, &format!("{agenda}b.ics"), &etags[&href_b]).unwrap();
+    retirer(&faux, &agenda, &format!("{agenda}b.ics"), Some(&etags[&href_b])).unwrap();
     assert_eq!(faux.ecritures(), [format!("DELETE {href_b} {}", etags[&href_b])]);
     // Déjà absent : rien à faire.
-    retirer(&faux, &agenda, &format!("{agenda}b.ics"), &etags[&href_b]).unwrap();
+    retirer(&faux, &agenda, &format!("{agenda}b.ics"), Some(&etags[&href_b])).unwrap();
     synchro(&magasin, compte, &faux, 4000, false).unwrap();
     assert_eq!(titres(&magasin), ["Alpha 2"]);
 }

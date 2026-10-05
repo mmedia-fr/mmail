@@ -2765,16 +2765,22 @@ ApplicationWindow {
                 id: zone
                 anchors.fill: parent
                 acceptedButtons: Qt.LeftButton | Qt.RightButton
-                // Au doigt, glisser fait défiler la liste : le tri passe par
-                // l'appui long et le menu.
-                drag.target: fenetre.compact ? null : etiquette
+                // Au doigt — téléphone, ou écran tactile —, glisser fait défiler
+                // la liste : pas de glisser-déposer (le tri passe par l'appui
+                // long et le menu), et pas de choix à l'appui. Choisir à l'appui
+                // ouvrait le message au premier contact, avant que la liste ait
+                // reconnu le geste : elle ne défilait plus (APK, retour de Manu
+                // du 05/10). Au doigt, un message s'ouvre au toucher bref.
+                property bool auDoigt: fenetre.compact
+                drag.target: auDoigt ? null : etiquette
                 drag.threshold: 8
                 // Vrai si l'appui a déjà choisi la ligne : le clic n'a alors
                 // plus rien à faire.
                 property bool choisieAuPress: false
 
                 onPressed: function(souris) {
-                    choisieAuPress = souris.button === Qt.LeftButton && !ligne.choisi
+                    auDoigt = fenetre.compact || souris.source !== Qt.MouseEventNotSynthesized
+                    choisieAuPress = !auDoigt && souris.button === Qt.LeftButton && !ligne.choisi
                             && !(souris.modifiers & (Qt.ControlModifier | Qt.ShiftModifier))
                     // Glisser une ligne non choisie la choisit d'abord.
                     if (choisieAuPress)

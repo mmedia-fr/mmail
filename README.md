@@ -69,6 +69,10 @@ de projet interne.
 - **déplacement par glisser-déposer ou par clic droit**, vers un dossier de la
   même boîte ou de n'importe quelle autre boîte connectée ; dialogue
   « Déplacer vers… » avec filtre (Ctrl+Maj+V) ;
+- **recherche** (Ctrl+E), comme dans Outlook : dans le dossier actif — objet
+  et expéditeur d'après l'index, sans attendre, puis le texte entier des
+  messages par le serveur —, ou dans toutes les boîtes (index du poste), un clic
+  sur un résultat ouvrant son dossier ;
 - **Supprimer** envoie à la corbeille de la boîte (touche Suppr) ;
 - **vider les corbeilles et indésirables** de tous les comptes : seuls les
   dossiers que le serveur désigne comme tels (`\Trash`, `\Junk`) sont purgés,
@@ -179,9 +183,14 @@ variable d'environnement :
 |---|---|---|
 | `DossierProfil` | `MMAIL_DOSSIER_PROFIL` | emplacement du profil, variables développées — par exemple `D:\MMail\%USERNAME%`. Un profil itinérant ou redirigé partirait sur le réseau, où l'index SQLite se comporte mal |
 | `JoursCache` | `MMAIL_JOURS_CACHE` | jours de messages gardés sur le poste (31 par défaut ; 0 : aucun) |
+| `AvisVersion` | `MMAIL_AVIS_VERSION` | 0 : ne pas signaler les nouvelles versions (parc dont l'administrateur déploie les mises à jour) |
 
 Un seul MMail s'ouvre par profil : un second lancement ramène au premier plan
 la fenêtre déjà ouverte, puis s'arrête.
+
+MMail signale une nouvelle version par un bandeau, après avoir demandé à
+l'API de GitHub la dernière publication du dépôt — au démarrage, puis une fois
+par jour. Rien d'autre n'est envoyé ; `AvisVersion` à 0 le coupe.
 
 ## Limites connues
 

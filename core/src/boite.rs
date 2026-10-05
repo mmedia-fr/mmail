@@ -175,6 +175,26 @@ pub mod qobject {
         #[cxx_name = "changementsListe"]
         fn changements_liste(self: Pin<&mut Boite>, complet: bool) -> QString;
 
+        /// Messages dont chaque mot de `texte` figure dans l'objet, le nom ou
+        /// l'adresse de l'expéditeur, d'après l'index : du dossier ouvert, ou
+        /// de tous les comptes si `partout` — chaque ligne porte alors son
+        /// compte, son chemin et le nom de son dossier. JSON, du plus récent au
+        /// plus ancien, 500 au plus.
+        #[qinvokable]
+        #[cxx_name = "chercher"]
+        fn chercher(&self, texte: &QString, partout: bool) -> QString;
+
+        /// Cherche aussi dans le texte entier des messages du dossier ouvert,
+        /// sur le serveur. Issue : `resultatsServeur`.
+        #[qinvokable]
+        #[cxx_name = "chercherSurLeServeur"]
+        fn chercher_sur_le_serveur(self: Pin<&mut Boite>, texte: &QString) -> bool;
+
+        /// Lignes du dossier ouvert pour des UID (« 3,5,7 »), en JSON.
+        #[qinvokable]
+        #[cxx_name = "messagesParUid"]
+        fn messages_par_uid(&self, uids: &QString) -> QString;
+
         /// Demande le corps affichable d'un message du dossier ouvert, et le
         /// marque comme lu. Issue : `corpsRecu`.
         #[qinvokable]
@@ -447,6 +467,12 @@ pub mod qobject {
         #[cxx_name = "programme"]
         fn programme(self: Pin<&mut Boite>, jeton: &QString, echeance: &QString);
 
+        /// UID des messages du dossier `chemin` dont le texte contient chacun
+        /// des mots de `texte`, d'après le serveur (« 3,5,7 »).
+        #[qsignal]
+        #[cxx_name = "resultatsServeur"]
+        fn resultats_serveur(self: Pin<&mut Boite>, compte: i32, chemin: &QString, texte: &QString, uids: &QString);
+
         /// Messages différés partis ; `erreurs` non vide si certains ont échoué.
         #[qsignal]
         #[cxx_name = "differesEnvoyes"]
@@ -533,6 +559,8 @@ enum Commande {
     /// Le serveur a signalé, pendant `IDLE`, un changement du dossier ouvert :
     /// il est resynchronisé. Émise par le fil lui-même.
     Signale,
+    /// Chercher un texte dans les messages d'un dossier, sur le serveur.
+    Chercher { chemin: String, texte: String },
     /// Garder sur le poste les messages récents d'un dossier (décision 17),
     /// par petits lots, après tout ce que l'utilisateur demande.
     Precharger { chemin: String },
@@ -553,6 +581,7 @@ impl Commande {
                 | (Arborescence, Arborescence)
                 | (EnvoyerDifferes { .. }, EnvoyerDifferes { .. })
                 | (Signale, Signale)
+                | (Chercher { .. }, Chercher { .. })
         ) || (matches!(anterieure, Veille) && (self.comptee() || matches!(self, Veille)))
     }
 
@@ -601,6 +630,8 @@ enum Issue {
     /// Un déplacement n'aura pas lieu (échec, ou commande abandonnée avec la
     /// session) : l'interface remet les lignes qu'elle avait retirées.
     DeplacementEchoue { message: String },
+    /// UID trouvés par le serveur pour une recherche.
+    Recherche { chemin: String, texte: String, uids: Vec<u32> },
     /// Un marquage n'a pas atteint le serveur : l'index du dossier a peut-être
     /// pris de l'avance, il sera réconcilié à la prochaine ouverture.
     MarquageAbandonne { chemin: String },
@@ -1004,6 +1035,40 @@ impl qobject::Boite {
         let json = changements.unwrap_or_else(|| format!(r#"{{"complet":{}}}"#, json_messages(&apres)));
         self.as_mut().rust_mut().liste = Some((id, empreintes));
         QString::from(&json)
+    }
+
+    pub fn chercher(&self, texte: &QString, partout: bool) -> QString {
+        let Some(magasin) = self.magasin.as_ref() else {
+            return QString::from("[]");
+        };
+        let texte = texte.to_string();
+        if partout {
+            return QString::from(&json_trouves(&magasin.chercher(None, &texte, RECHERCHE_MAX).unwrap_or_default()));
+        }
+        let Some((_, _, id)) = self.courant.as_ref() else {
+            return QString::from("[]");
+        };
+        let trouves = magasin.chercher(Some(*id), &texte, RECHERCHE_MAX).unwrap_or_default();
+        let messages: Vec<MessageLocal> = trouves.into_iter().map(|t| t.message).collect();
+        QString::from(&json_messages(&messages))
+    }
+
+    pub fn chercher_sur_le_serveur(mut self: Pin<&mut Self>, texte: &QString) -> bool {
+        let Some((compte, chemin, _)) = self.courant.clone() else {
+            return false;
+        };
+        let texte = texte.to_string().trim().to_string();
+        if texte.is_empty() || !self.sessions.contains_key(&compte) {
+            return false;
+        }
+        self.as_mut().envoyer(compte, Commande::Chercher { chemin, texte })
+    }
+
+    pub fn messages_par_uid(&self, uids: &QString) -> QString {
+        let (Some(magasin), Some((_, _, id))) = (self.magasin.as_ref(), self.courant.as_ref()) else {
+            return QString::from("[]");
+        };
+        QString::from(&json_messages(&magasin.messages_par_uid(*id, &lire_uids(uids)).unwrap_or_default()))
     }
 
     pub fn demander_corps(self: Pin<&mut Self>, uid: i32) -> bool {
@@ -1719,6 +1784,15 @@ impl qobject::Boite {
                 // de la connexion : ici, seulement de quoi rendre les lignes.
                 self.as_mut().deplacement_termine(0, &QString::from(&message));
             }
+            Issue::Recherche { chemin, texte, uids } => {
+                let uids: Vec<String> = uids.iter().map(u32::to_string).collect();
+                self.as_mut().resultats_serveur(
+                    compte_qt,
+                    &QString::from(&chemin),
+                    &QString::from(&texte),
+                    &QString::from(&uids.join(",")),
+                );
+            }
             Issue::MarquageAbandonne { chemin } => {
                 if let Some(magasin) = self.magasin.as_ref() {
                     if let Ok(id) = magasin.dossier_id(compte, &chemin) {
@@ -2329,6 +2403,15 @@ impl Travail {
                 Some(match self.enregistrer_brouillon(e, &redaction) {
                     Ok(uid) => Issue::BrouillonEnregistre { jeton, uid },
                     Err(message) => Issue::EchecRedaction { jeton, message },
+                })
+            }
+            Commande::Chercher { chemin, texte } => {
+                let resultat = assurer_selection(&mut e.client, &chemin).and_then(|()| Ok(e.client.chercher_texte(&texte)?));
+                Some(match resultat {
+                    Ok(uids) => Issue::Recherche { chemin, texte, uids },
+                    Err(err) if err.reseau() => echec("reseau", format!("recherche : {err}"), &err),
+                    // Refusée par le serveur : l'index seul répond.
+                    Err(_) => Issue::Recherche { chemin, texte, uids: Vec::new() },
                 })
             }
             Commande::Signale => {
@@ -3271,29 +3354,51 @@ fn json_pieces(pieces: &[crate::index::PieceJointe]) -> String {
     format!("[{}]", corps.join(","))
 }
 
-/// Sérialise une liste de messages pour l'interface.
-fn json_messages(messages: &[MessageLocal]) -> String {
-    let corps: Vec<String> = messages
+/// Résultats d'une recherche dans l'index ; au-delà, l'interface demande de
+/// préciser.
+const RECHERCHE_MAX: usize = 500;
+
+/// Messages trouvés dans tous les comptes : la ligne d'une liste, plus son
+/// compte, son chemin et le nom de son dossier.
+fn json_trouves(trouves: &[crate::magasin::Trouve]) -> String {
+    let corps: Vec<String> = trouves
         .iter()
-        .map(|m| {
+        .map(|t| {
+            let ligne = json_message(&t.message);
             format!(
-                r#"{{"uid":{},"h":{},"expediteur":{},"adresse":{},"sujet":{},"date":{},"taille":{},"lu":{},"repondu":{},"pieces":{},"suivi":{},"importance":{}}}"#,
-                m.uid,
-                m.horodatage,
-                texte_json(&m.expediteur),
-                texte_json(&m.adresse),
-                texte_json(&m.sujet),
-                texte_json(&m.date),
-                m.taille,
-                m.lu,
-                m.repondu,
-                m.pieces,
-                m.suivi,
-                m.importance
+                r#"{},"compte":{},"chemin":{},"dossier":{}}}"#,
+                &ligne[..ligne.len() - 1],
+                t.compte,
+                texte_json(&t.chemin),
+                texte_json(&t.nom_dossier)
             )
         })
         .collect();
     format!("[{}]", corps.join(","))
+}
+
+/// Sérialise une liste de messages pour l'interface.
+fn json_messages(messages: &[MessageLocal]) -> String {
+    let corps: Vec<String> = messages.iter().map(json_message).collect();
+    format!("[{}]", corps.join(","))
+}
+
+fn json_message(m: &MessageLocal) -> String {
+    format!(
+        r#"{{"uid":{},"h":{},"expediteur":{},"adresse":{},"sujet":{},"date":{},"taille":{},"lu":{},"repondu":{},"pieces":{},"suivi":{},"importance":{}}}"#,
+        m.uid,
+        m.horodatage,
+        texte_json(&m.expediteur),
+        texte_json(&m.adresse),
+        texte_json(&m.sujet),
+        texte_json(&m.date),
+        m.taille,
+        m.lu,
+        m.repondu,
+        m.pieces,
+        m.suivi,
+        m.importance
+    )
 }
 
 /// Au-delà, l'interface relit la liste entière plutôt que d'appliquer les
@@ -3395,6 +3500,7 @@ mod tests {
                 Commande::Reprendre(_) => "reprendre".into(),
                 Commande::Veille => "veille".into(),
                 Commande::Signale => "signale".into(),
+                Commande::Chercher { texte, .. } => format!("chercher {texte}"),
                 Commande::Precharger { chemin } => format!("precharger {chemin}"),
                 Commande::Preparer { .. } => "preparer".into(),
                 Commande::Envoyer { .. } => "envoyer".into(),

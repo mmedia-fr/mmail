@@ -184,6 +184,11 @@ int main(int argc, char* argv[])
   // En contrôle de fabrication, l'interface ne touche ni au coffre ni au réseau
   // de sa propre initiative.
   engine.rootContext()->setContextProperty(QStringLiteral("modeControle"), smoke);
+  // Avis de nouvelle version : coupé pour la machine (« AvisVersion » à 0) sur
+  // un parc dont l'administrateur déploie lui-même les mises à jour.
+  engine.rootContext()->setContextProperty(
+    QStringLiteral("avisVersion"),
+    reglageMachine("MMAIL_AVIS_VERSION", QStringLiteral("AvisVersion")) != QStringLiteral("0"));
   // Version de Qt réellement chargée, pour « À propos » : elle diffère d'une
   // cible à l'autre, et c'est la première chose à demander sur un défaut
   // d'affichage.

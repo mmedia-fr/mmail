@@ -50,6 +50,22 @@ ApplicationWindow {
             fenetre.lienEnCours = ""
             dlgLien.ouvrir(lien, qsTr("Ce lien n'a pas pu être lu — %1").arg(message))
         }
+        onVersionDisponible: function(version, adresse) {
+            fenetre.versionNouvelle = version
+            fenetre.pageVersion = adresse
+        }
+    }
+    // Avis de nouvelle version : un quart de minute après le démarrage, puis une
+    // fois par jour. Coupé pour la machine par « AvisVersion » à 0.
+    Timer {
+        interval: 15000
+        running: typeof avisVersion !== "undefined" && avisVersion
+                 && !(typeof modeControle !== "undefined" && modeControle)
+        repeat: true
+        onTriggered: {
+            interval = 24 * 3600 * 1000
+            configuration.verifierVersion()
+        }
     }
     PressePapier { id: pressePapier }
     ReglePressePapier { id: reglePresse }
@@ -95,6 +111,13 @@ ApplicationWindow {
     // Messages retirés de la liste en attendant la fin de leur déplacement :
     // l'interface reflète le tri tout de suite, le serveur suit (décision 16).
     property var enDeplacement: ({})
+    // Recherche dans le dossier ouvert : le texte cherché (vide hors recherche),
+    // et les UID que le serveur a trouvés dans le texte des messages.
+    property string recherche: ""
+    property var uidsServeur: []
+    // Version plus récente publiée, et sa page ; vide sinon.
+    property string versionNouvelle: ""
+    property string pageVersion: ""
     property int deplacementsEnVol: 0
     // Cumul des messages effacés par « Vider les corbeilles » (un compte par
     // signal), remis à zéro à chaque lancement.
@@ -350,10 +373,45 @@ ApplicationWindow {
         }
     }
 
+    // Nouvelle version publiée : jusqu'à « Plus tard », qui le tait jusqu'au
+    // prochain démarrage.
+    Rectangle {
+        id: bandeauVersion
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: parent.top
+        height: visible ? ligneVersion.implicitHeight + 12 : 0
+        visible: fenetre.versionNouvelle.length > 0
+        color: Qt.tint(fenetre.palette.base, "#3388c86a")
+        RowLayout {
+            id: ligneVersion
+            anchors.fill: parent
+            anchors.leftMargin: 10
+            anchors.rightMargin: 6
+            spacing: 8
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                text: qsTr("Une nouvelle version de MMail est disponible : %1 (vous utilisez la %2).")
+                      .arg(fenetre.versionNouvelle).arg(Qt.application.version)
+            }
+            Button {
+                text: qsTr("Télécharger")
+                onClicked: Qt.openUrlExternally(fenetre.pageVersion)
+            }
+            Button {
+                text: qsTr("Plus tard")
+                flat: true
+                onClicked: fenetre.versionNouvelle = ""
+            }
+        }
+    }
+
     // ------------------------------------------------------------- volets
     SplitView {
         id: volets
         anchors.fill: parent
+        anchors.topMargin: bandeauVersion.height
         orientation: Qt.Horizontal
 
         // --- arborescence -------------------------------------------------
@@ -508,63 +566,111 @@ ApplicationWindow {
         }
 
         // --- liste des messages -------------------------------------------
-        ScrollView {
-            id: voletListe
+        ColumnLayout {
+            id: colonneListe
             visible: !fenetre.compact || fenetre.vue === 1
-            ScrollBar.vertical.policy: ScrollBar.vertical.size < 1 ? ScrollBar.AlwaysOn : ScrollBar.AsNeeded
-            rightPadding: ScrollBar.vertical.size < 1 ? ScrollBar.vertical.width : 0
             SplitView.preferredWidth: fenetre.compact ? fenetre.width : reglages.largeurListe
             SplitView.minimumWidth: 240
             SplitView.fillWidth: fenetre.compact
-            clip: true
-            contentWidth: availableWidth
-            font.pointSize: fenetre.tailleListe
-            background: Rectangle { color: fenetre.palette.base }
+            spacing: 0
             onWidthChanged: if (!fenetre.compact && visible) reglages.largeurListe = width
 
-            ListView {
-                id: vueMessages
-                model: ListModel { id: modeleMessages }
-                // Les lignes qui sortent de l'écran servent à celles qui entrent,
-                // au lieu d'être détruites et recréées à chaque défilement.
-                reuseItems: true
-                boundsBehavior: Flickable.StopAtBounds
-                currentIndex: -1
-                focus: true
-                keyNavigationEnabled: false
-                delegate: ligneMessage
-
-                Keys.onUpPressed: function(touche) {
-                    fenetre.deplacerCurseur(-1, touche.modifiers & Qt.ShiftModifier)
-                }
-                Keys.onDownPressed: function(touche) {
-                    fenetre.deplacerCurseur(1, touche.modifiers & Qt.ShiftModifier)
-                }
-
-                HoverHandler { onHoveredChanged: if (hovered) fenetre.colonneActive = "liste" }
-
-                WheelHandler {
-                    acceptedModifiers: Qt.ControlModifier
-                    onWheel: function(roue) {
-                        fenetre.zoomer("liste", roue.angleDelta.y > 0 ? 1.1 : 1 / 1.1)
+            // Recherche, comme dans Outlook : dans le dossier ouvert (objet,
+            // expéditeur, puis texte entier par le serveur), ou dans toutes les
+            // boîtes (index local).
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.margins: 4
+                spacing: 4
+                TextField {
+                    id: champRecherche
+                    Layout.fillWidth: true
+                    placeholderText: qsTr("Rechercher (Ctrl+E)")
+                    selectByMouse: true
+                    onTextEdited: minuterieRecherche.restart()
+                    onAccepted: {
+                        minuterieRecherche.stop()
+                        fenetre.lancerRecherche()
                     }
+                    Keys.onEscapePressed: fenetre.quitterRecherche()
                 }
-                PinchHandler {
-                    target: null
-                    property real depart: 1
-                    onActiveChanged: if (active) depart = reglages.zoomListe
-                    onActiveScaleChanged: if (active) fenetre.poserZoom("liste", depart * activeScale)
+                ComboBox {
+                    id: porteeRecherche
+                    readonly property bool partout: currentIndex === 1
+                    model: [qsTr("Dossier actif"), qsTr("Toutes les boîtes")]
+                    implicitContentWidthPolicy: ComboBox.WidestText
+                    onActivated: if (champRecherche.text.trim().length > 0) fenetre.lancerRecherche()
                 }
-
-                Label {
-                    anchors.centerIn: parent
-                    visible: modeleMessages.count === 0
-                    opacity: 0.6
-                    text: boite.dossierCourant.length === 0
-                          ? qsTr("Choisissez un dossier.")
-                          : qsTr("Aucun message.")
+                ToolButton {
+                    text: "✕"
+                    visible: champRecherche.text.length > 0 || fenetre.recherche.length > 0
+                    onClicked: fenetre.quitterRecherche()
+                    ToolTip.visible: hovered
+                    ToolTip.text: qsTr("Effacer la recherche (Échap)")
+                }
+                Timer {
+                    id: minuterieRecherche
+                    interval: 300
+                    onTriggered: fenetre.lancerRecherche()
                 }
             }
+
+            ScrollView {
+                id: voletListe
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                ScrollBar.vertical.policy: ScrollBar.vertical.size < 1 ? ScrollBar.AlwaysOn : ScrollBar.AsNeeded
+                rightPadding: ScrollBar.vertical.size < 1 ? ScrollBar.vertical.width : 0
+                clip: true
+                contentWidth: availableWidth
+                font.pointSize: fenetre.tailleListe
+                background: Rectangle { color: fenetre.palette.base }
+
+                ListView {
+                    id: vueMessages
+                    model: ListModel { id: modeleMessages }
+                    // Les lignes qui sortent de l'écran servent à celles qui entrent,
+                    // au lieu d'être détruites et recréées à chaque défilement.
+                    reuseItems: true
+                    boundsBehavior: Flickable.StopAtBounds
+                    currentIndex: -1
+                    focus: true
+                    keyNavigationEnabled: false
+                    delegate: ligneMessage
+
+                    Keys.onUpPressed: function(touche) {
+                        fenetre.deplacerCurseur(-1, touche.modifiers & Qt.ShiftModifier)
+                    }
+                    Keys.onDownPressed: function(touche) {
+                        fenetre.deplacerCurseur(1, touche.modifiers & Qt.ShiftModifier)
+                    }
+
+                    HoverHandler { onHoveredChanged: if (hovered) fenetre.colonneActive = "liste" }
+
+                    WheelHandler {
+                        acceptedModifiers: Qt.ControlModifier
+                        onWheel: function(roue) {
+                            fenetre.zoomer("liste", roue.angleDelta.y > 0 ? 1.1 : 1 / 1.1)
+                        }
+                    }
+                    PinchHandler {
+                        target: null
+                        property real depart: 1
+                        onActiveChanged: if (active) depart = reglages.zoomListe
+                        onActiveScaleChanged: if (active) fenetre.poserZoom("liste", depart * activeScale)
+                    }
+
+                    Label {
+                        anchors.centerIn: parent
+                        visible: modeleMessages.count === 0
+                        opacity: 0.6
+                        text: boite.dossierCourant.length === 0
+                              ? qsTr("Choisissez un dossier.")
+                              : qsTr("Aucun message.")
+                    }
+                }
+            }
+
         }
 
         // --- message ------------------------------------------------------
@@ -950,10 +1056,17 @@ ApplicationWindow {
             }
         }
         var texte = ligne ? ligne.adresse + " › " + libelleLigne(ligne) : boite.dossierCourant
-        var total = ligne ? ligne.messages : modeleMessages.count
-        texte += "  —  " + accord(total, qsTr("message"), qsTr("messages"))
-        if (ligne && ligne.nonLus > 0)
-            texte += ", " + accord(ligne.nonLus, qsTr("non lu"), qsTr("non lus"))
+        if (recherche.length > 0) {
+            texte += "  —  " + (modeleMessages.count >= 500
+                    ? qsTr("recherche « %1 » : les 500 plus récents, précisez la recherche").arg(recherche)
+                    : qsTr("recherche « %1 » : %2").arg(recherche)
+                      .arg(accord(modeleMessages.count, qsTr("résultat"), qsTr("résultats"))))
+        } else {
+            var total = ligne ? ligne.messages : modeleMessages.count
+            texte += "  —  " + accord(total, qsTr("message"), qsTr("messages"))
+            if (ligne && ligne.nonLus > 0)
+                texte += ", " + accord(ligne.nonLus, qsTr("non lu"), qsTr("non lus"))
+        }
         var choisis = Object.keys(selection).length
         if (choisis > 1)
             texte += "  —  " + accord(choisis, qsTr("sélectionné"), qsTr("sélectionnés"))
@@ -2867,6 +2980,15 @@ ApplicationWindow {
         enabled: !fenetre.dialogueOuvert() && fenetre.uidCourant > 0
         onActivated: fenetre.rediger("transferer")
     }
+    // Rechercher, comme dans Outlook (Ctrl+F y transfère).
+    Shortcut {
+        sequence: "Ctrl+E"
+        enabled: !fenetre.dialogueOuvert()
+        onActivated: {
+            champRecherche.forceActiveFocus()
+            champRecherche.selectAll()
+        }
+    }
     Shortcut {
         sequences: [StandardKey.HelpContents]
         enabled: !fenetre.dialogueOuvert()
@@ -3546,6 +3668,70 @@ ApplicationWindow {
         }
     }
 
+    // Résultats d'une recherche dans toutes les boîtes, sous le champ : un
+    // clic ouvre le dossier du message et l'y choisit.
+    Popup {
+        id: panneauResultats
+        property var resultats: []
+        property string texte: ""
+        parent: Overlay.overlay
+        width: Math.min(Math.max(colonneListe.width, 480), fenetre.width - 24)
+        height: Math.min(fenetre.height * 0.7, 70 + Math.max(1, resultats.length) * 48)
+        padding: 6
+        onAboutToShow: {
+            var p = champRecherche.mapToItem(Overlay.overlay, 0, champRecherche.height + 2)
+            x = Math.max(6, Math.min(p.x, fenetre.width - width - 6))
+            y = p.y
+        }
+        ColumnLayout {
+            anchors.fill: parent
+            spacing: 4
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                opacity: 0.8
+                text: panneauResultats.resultats.length === 0
+                      ? qsTr("Rien trouvé pour « %1 » dans les boîtes.").arg(panneauResultats.texte)
+                      : panneauResultats.resultats.length >= 500
+                        ? qsTr("« %1 » dans toutes les boîtes (objet, expéditeur) : les 500 plus récents, précisez la recherche.")
+                          .arg(panneauResultats.texte)
+                        : qsTr("« %1 » dans toutes les boîtes (objet, expéditeur) : %2.").arg(panneauResultats.texte)
+                          .arg(fenetre.accord(panneauResultats.resultats.length, qsTr("message"), qsTr("messages")))
+            }
+            ListView {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                clip: true
+                model: panneauResultats.resultats
+                ScrollBar.vertical: ScrollBar {}
+                delegate: ItemDelegate {
+                    width: ListView.view.width
+                    contentItem: ColumnLayout {
+                        spacing: 0
+                        Label {
+                            Layout.fillWidth: true
+                            elide: Text.ElideRight
+                            font.bold: !modelData.lu
+                            text: modelData.sujet.length > 0 ? modelData.sujet : qsTr("(sans objet)")
+                        }
+                        Label {
+                            Layout.fillWidth: true
+                            elide: Text.ElideRight
+                            opacity: 0.7
+                            text: {
+                                var c = fenetre.compteParId(modelData.compte)
+                                return (modelData.expediteur || modelData.adresse) + "  —  "
+                                        + (c ? c.adresse + " › " : "") + modelData.dossier
+                                        + "  —  " + fenetre.dateCourte(modelData.date)
+                            }
+                        }
+                    }
+                    onClicked: fenetre.allerAuMessage(modelData.compte, modelData.chemin, modelData.uid)
+                }
+            }
+        }
+    }
+
     Dialog {
         id: dlgViderCorbeilles
         title: qsTr("Vider les corbeilles et indésirables ?")
@@ -3662,6 +3848,15 @@ ApplicationWindow {
             fenetre.derniereSynchro = new Date()
             if (compte !== boite.compteCourant || chemin !== boite.dossierCourant)
                 return
+            // Scénario « recherche » : le texte de MMAIL_DOSSIER est cherché dans
+            // INBOX, une fois le dossier synchronisé.
+            if (fenetre.essai && fenetre.essai.scenario === "recherche" && !fenetre.essai.cherche) {
+                fenetre.essai.cherche = true
+                champRecherche.text = identifiantsEssai.dossier
+                fenetre.lancerRecherche()
+                console.log("scenario: l'index trouve", modeleMessages.count, "message(s)")
+                return
+            }
             fenetre.rafraichirListe()
             if (!veille)
                 messageEtat.texte = qsTr("%1 : %2.").arg(fenetre.libelleCourant())
@@ -3828,6 +4023,25 @@ ApplicationWindow {
             }
             if (fenetre.essai && fenetre.essai.scenario === "pieces")
                 console.log("scenario: piece ecrite", chemin, ouvrir)
+        }
+
+        // Ce que le serveur a trouvé dans le texte des messages, ajouté aux
+        // résultats de l'index si la recherche n'a pas changé entre-temps.
+        function onResultatsServeur(compte, chemin, texte, uids) {
+            if (fenetre.essai && fenetre.essai.scenario === "recherche")
+                console.log("scenario: le serveur trouve", uids.length > 0 ? uids.split(",").length : 0,
+                            "message(s) pour", texte)
+            if (texte !== fenetre.recherche || compte !== boite.compteCourant || chemin !== boite.dossierCourant)
+                return
+            fenetre.uidsServeur = uids.length > 0 ? uids.split(",").map(Number) : []
+            fenetre.poserResultats()
+            messageEtat.texte = qsTr("Recherche « %1 » : %2.").arg(texte)
+                    .arg(fenetre.accord(modeleMessages.count, qsTr("résultat"), qsTr("résultats")))
+            if (fenetre.essai && fenetre.essai.scenario === "recherche") {
+                console.log("scenario: liste après le serveur :", modeleMessages.count, "| premier :",
+                            modeleMessages.count > 0 ? modeleMessages.get(0).sujet : "—")
+                Qt.quit()
+            }
         }
 
         function onDeplacementTermine(nombre, erreurs) {
@@ -4220,6 +4434,10 @@ ApplicationWindow {
 
     function ouvrirDossier(compte, chemin) {
         if (compte !== boite.compteCourant || chemin !== boite.dossierCourant) {
+            recherche = ""
+            uidsServeur = []
+            if (!porteeRecherche.partout)
+                champRecherche.text = ""
             viderListe()
             if (boite.ouvrirDossier(compte, chemin)) {
                 // L'index s'affiche tout de suite ; la synchronisation suit —
@@ -4253,6 +4471,12 @@ ApplicationWindow {
     /// d'un dossier, après de très nombreux changements, ou si `complet` —
     /// quand des lignes retirées d'avance doivent réapparaître.
     function rafraichirListe(complet) {
+        // En recherche, la liste est celle des résultats : on la recherche à
+        // nouveau, et l'index tient compte des changements.
+        if (recherche.length > 0) {
+            poserResultats()
+            return
+        }
         var c = JSON.parse(boite.changementsListe(complet === true))
         if (c.complet !== undefined) {
             poserListe(c.complet)
@@ -4325,6 +4549,71 @@ ApplicationWindow {
             sujetAffiche.text = ""
             auteurAffiche.text = ""
             afficherTexte(qsTr("Aucun message sélectionné."))
+        }
+    }
+
+    // ---- recherche
+
+    /// Lance la recherche saisie : dans le dossier ouvert, la liste devient
+    /// celle des résultats ; dans toutes les boîtes, un panneau les présente.
+    function lancerRecherche() {
+        var texte = champRecherche.text.trim()
+        if (texte.length === 0) {
+            quitterRecherche()
+            return
+        }
+        if (porteeRecherche.partout) {
+            panneauResultats.resultats = JSON.parse(boite.chercher(texte, true))
+            panneauResultats.texte = texte
+            panneauResultats.open()
+            return
+        }
+        if (boite.dossierCourant.length === 0)
+            return
+        recherche = texte
+        uidsServeur = []
+        poserResultats()
+        if (!boite.chercherSurLeServeur(texte))
+            messageEtat.texte = qsTr("Recherche dans l'index seulement (compte hors ligne).")
+    }
+
+    /// Résultats de l'index, et ceux que le serveur a trouvés dans le texte
+    /// des messages, du plus récent au plus ancien.
+    function poserResultats() {
+        var lignes = JSON.parse(boite.chercher(recherche, false))
+        var vus = {}
+        for (var i = 0; i < lignes.length; ++i)
+            vus[lignes[i].uid] = true
+        var manquants = uidsServeur.filter(function(u) { return !vus[u] })
+        if (manquants.length > 0) {
+            lignes = lignes.concat(JSON.parse(boite.messagesParUid(manquants.join(","))))
+            lignes.sort(function(a, b) { return b.h - a.h || b.uid - a.uid })
+        }
+        poserListe(lignes)
+    }
+
+    /// Sort de la recherche : la liste du dossier revient entière.
+    function quitterRecherche() {
+        minuterieRecherche.stop()
+        champRecherche.text = ""
+        panneauResultats.close()
+        if (recherche.length === 0)
+            return
+        recherche = ""
+        uidsServeur = []
+        rafraichirListe(true)
+    }
+
+    /// Ouvre le dossier d'un résultat trouvé dans toutes les boîtes, et y
+    /// choisit le message.
+    function allerAuMessage(compte, chemin, uid) {
+        panneauResultats.close()
+        champRecherche.text = ""
+        ouvrirDossier(compte, chemin)
+        var i = indexDe(uid)
+        if (i >= 0) {
+            choisir(i, 0)
+            vueMessages.positionViewAtIndex(i, ListView.Center)
         }
     }
 
@@ -4859,6 +5148,12 @@ ApplicationWindow {
             // session précédente doit suffire à lire la boîte de réception.
             // Scénario « mesure-liste » : aucune connexion ; chronomètre
             // l'ouverture d'INBOX depuis l'index et ses rafraîchissements.
+            if (essai.scenario === "mesure-recherche") {
+                var mesureRecherche = Qt.createQmlObject('import QtQuick; Timer { interval: 1500 }', fenetre)
+                mesureRecherche.triggered.connect(etapeScenarioMesureRecherche)
+                mesureRecherche.start()
+                return
+            }
             if (essai.scenario === "mesure-liste") {
                 var mesure = Qt.createQmlObject('import QtQuick; Timer { interval: 1500 }', fenetre)
                 mesure.triggered.connect(etapeScenarioMesure)
@@ -4941,6 +5236,28 @@ ApplicationWindow {
                         vueCorps.text.indexOf("Chargement") === 0 || vueCorps.text.length < 20 ? "ECHEC" : "OK")
         })
         attente.start()
+    }
+
+    /// Scénario « mesure-recherche » : temps d'une recherche dans le dossier
+    /// ouvert (index seul, hors connexion), du retour à la liste entière, et
+    /// d'une recherche dans toutes les boîtes.
+    function etapeScenarioMesureRecherche() {
+        var c = comptesConnus[0]
+        ouvrirDossier(c.compte, "INBOX")
+        champRecherche.text = "Correspondant 12"
+        var t = Date.now()
+        lancerRecherche()
+        console.log("mesure: recherche dans le dossier,", modeleMessages.count, "résultats,", Date.now() - t, "ms")
+        t = Date.now()
+        quitterRecherche()
+        console.log("mesure: sortie de recherche,", modeleMessages.count, "messages,", Date.now() - t, "ms")
+        porteeRecherche.currentIndex = 1
+        champRecherche.text = "dossier 39"
+        t = Date.now()
+        lancerRecherche()
+        console.log("mesure: recherche dans toutes les boîtes,", panneauResultats.resultats.length, "résultats,",
+                    Date.now() - t, "ms")
+        Qt.quit()
     }
 
     /// Scénario « mesure-liste » : temps d'ouverture d'INBOX depuis l'index,

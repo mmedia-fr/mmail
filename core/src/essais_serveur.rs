@@ -534,3 +534,27 @@ fn idle_signale_un_nouveau_message() {
     assert!(compter(&mut a, "INBOX", &id).is_empty());
     assert!(signal.is_some(), "aucun EXISTS reçu en IDLE");
 }
+
+#[test]
+#[ignore = "exige un serveur IMAP et un compte"]
+fn recherche_dans_le_texte() {
+    // Un mot qui n'est que dans le corps, et un mot accentué : seul le serveur
+    // les trouve (l'index ne porte que les en-têtes).
+    let mut client = session();
+    let unique = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let id = format!("mmail-recherche-{unique}@exemple.fr");
+    let mot = format!("zorglub{}", unique % 100_000);
+    let brut = format!(
+        "From: Essai <mmail@exemple.fr>\r\nTo: test@exemple.fr\r\nSubject: Recherche\r\n\
+         Message-ID: <{id}>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\
+         Content-Transfer-Encoding: 8bit\r\n\r\nLe mot {mot} et une échéance.\r\n"
+    );
+    let uid = client.deposer("INBOX", &[], DATE_ESSAI, brut.as_bytes()).expect("APPEND").expect("APPENDUID");
+    client.selectionner("INBOX", None).expect("SELECT");
+    let trouves = client.chercher_texte(&mot).expect("SEARCH");
+    let accent = client.chercher_texte(&format!("{mot} échéance")).expect("SEARCH accentué");
+    client.supprimer(&[uid]).expect("purge");
+    assert_eq!(trouves, vec![uid]);
+    assert_eq!(accent, vec![uid]);
+    assert!(compter(&mut client, "INBOX", &id).is_empty());
+}

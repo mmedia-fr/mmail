@@ -462,6 +462,30 @@ impl Client {
         Ok(protocole::analyser_appenduid(&texte).map(|(_, uid)| uid))
     }
 
+    /// UID des messages du dossier sélectionné dont le texte — en-têtes et
+    /// corps — contient chacun des mots : un critère `TEXT` par mot, en UTF-8.
+    /// Les mots partent en littéraux non synchronisés (LITERAL+) ; sans eux,
+    /// seul un mot ASCII peut s'écrire entre guillemets.
+    pub fn chercher_texte(&mut self, texte: &str) -> Resultat<Vec<u32>> {
+        let mots: Vec<&str> = texte.split_whitespace().collect();
+        if mots.is_empty() {
+            return Ok(Vec::new());
+        }
+        let litteraux = self.sait("LITERAL+");
+        let mut criteres = String::new();
+        for mot in mots {
+            if litteraux {
+                criteres.push_str(&format!(" TEXT {{{}+}}\r\n{mot}", mot.len()));
+            } else if mot.is_ascii() {
+                criteres.push_str(&format!(" TEXT {}", citer(mot)));
+            } else {
+                return Err(Erreur::Refuse("le serveur ne sait pas chercher ce texte".into()));
+            }
+        }
+        let (texte, _) = self.commande(&format!("UID SEARCH CHARSET UTF-8{criteres}"))?;
+        Ok(protocole::analyser_search(&texte))
+    }
+
     /// UID des messages du dossier sélectionné portant un `Message-ID` donné :
     /// sert à reprendre un déplacement interrompu sans créer de doublon.
     pub fn chercher_message_id(&mut self, message_id: &str) -> Resultat<Vec<u32>> {
@@ -725,6 +749,22 @@ mod tests {
         // Revenir à INBOX refait le SELECT au lieu de croire qu'il tient encore.
         crate::synchro::assurer_selection(&mut client, "INBOX").unwrap();
         assert_eq!(journal.lock().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn recherche_par_mots_en_utf8() {
+        let (mut client, journal) = session(
+            &format!("{DOVECOT} LITERAL+"),
+            vec![echange("UID SEARCH CHARSET UTF-8 TEXT {7 octets}facture", "* SEARCH 4 9\r\n", "OK fait")],
+        );
+        assert_eq!(client.chercher_texte(" facture  été ").unwrap(), vec![4, 9]);
+        assert_eq!(
+            journal.lock().unwrap()[0],
+            "UID SEARCH CHARSET UTF-8 TEXT {7 octets}facture TEXT {5 octets}été"
+        );
+        // Sans LITERAL+, un mot accentué ne s'écrit pas.
+        let (mut client, _) = session(DOVECOT, vec![]);
+        assert!(client.chercher_texte("été").is_err());
     }
 
     #[test]

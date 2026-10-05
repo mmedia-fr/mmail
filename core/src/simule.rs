@@ -54,7 +54,13 @@ impl FluxSimule {
                 if self.entree.len() < taille {
                     return;
                 }
-                self.entree.drain(..taille);
+                let litteral: Vec<u8> = self.entree.drain(..taille).collect();
+                // Le texte du littéral, lisible dans le journal (recherches).
+                if let Ok(t) = std::str::from_utf8(&litteral) {
+                    if t.len() <= 64 && !t.contains('\n') {
+                        self.commande.push_str(t);
+                    }
+                }
                 self.litteral = None;
                 continue;
             }
@@ -63,11 +69,14 @@ impl FluxSimule {
             };
             let ligne: Vec<u8> = self.entree.drain(..fin + 2).collect();
             let ligne = String::from_utf8_lossy(&ligne[..fin]).into_owned();
-            // « … {12} » : littéral synchronisé, le client attend l'invite.
-            if let Some(taille) = taille_litteral(&ligne) {
+            // « … {12} » : littéral synchronisé, le client attend l'invite ;
+            // « … {12+} » (LITERAL+) : il envoie la suite sans attendre.
+            if let Some((taille, synchronise)) = taille_litteral(&ligne) {
                 self.commande.push_str(&ligne[..ligne.rfind('{').unwrap_or(ligne.len())]);
                 self.commande.push_str(&format!("{{{taille} octets}}"));
-                self.sortie.extend(b"+ pret\r\n");
+                if synchronise {
+                    self.sortie.extend(b"+ pret\r\n");
+                }
                 self.litteral = Some(taille);
                 continue;
             }
@@ -112,9 +121,11 @@ impl FluxSimule {
     }
 }
 
-fn taille_litteral(ligne: &str) -> Option<usize> {
+fn taille_litteral(ligne: &str) -> Option<(usize, bool)> {
     let debut = ligne.rfind('{')?;
-    ligne[debut + 1..].strip_suffix('}')?.parse().ok()
+    let contenu = ligne[debut + 1..].strip_suffix('}')?;
+    let synchronise = !contenu.ends_with('+');
+    Some((contenu.trim_end_matches('+').parse().ok()?, synchronise))
 }
 
 impl Flux for FluxSimule {}

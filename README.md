@@ -92,8 +92,11 @@ de projet interne.
   (M-Media), système — menu « Affichage » ;
 - mot de passe confié au **coffre du système**, jamais écrit par MMail ;
 - **synchronisation incrémentale** (QRESYNC) : seul ce qui a changé depuis la
-  dernière visite est relu ; les compteurs et le dossier ouvert se mettent à
-  jour d'eux-mêmes toutes les deux minutes, ou sur F5.
+  dernière visite est relu ; le dossier ouvert suit le serveur en temps réel
+  (IDLE) — un message arrivé apparaît en quelques secondes —, les compteurs des
+  autres dossiers se mettent à jour toutes les deux minutes, ou sur F5. Une
+  liste de dizaines de milliers de messages ne se met à jour que des lignes
+  qui changent.
 
 ### Le déplacement entre boîtes
 

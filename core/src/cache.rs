@@ -77,8 +77,18 @@ impl Cache {
 
     /// Retire tout ce que l'index ne désigne plus comme gardé — messages
     /// effacés, déplacés, dossier relu en entier — et les écritures
-    /// interrompues. Rend le nombre de fichiers retirés.
+    /// interrompues. Rend le nombre de fichiers retirés. Un fichier de moins de
+    /// dix minutes est épargné : le rangement tourne pendant que les fils des
+    /// comptes préchargent, et un message qui vient d'être écrit n'est pas
+    /// encore noté gardé dans l'index.
     pub fn ranger(&self, gardes: &HashSet<i64>) -> usize {
+        let recent = |chemin: &std::path::Path| {
+            std::fs::metadata(chemin)
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.elapsed().ok())
+                .is_some_and(|age| age < std::time::Duration::from_secs(600))
+        };
         let mut retires = 0;
         let Ok(sous) = std::fs::read_dir(&self.racine) else {
             return 0;
@@ -93,7 +103,7 @@ impl Cache {
                         .and_then(|s| s.to_str())
                         .and_then(|s| s.parse::<i64>().ok())
                         .is_some_and(|id| gardes.contains(&id));
-                if !garde && std::fs::remove_file(&chemin).is_ok() {
+                if !garde && !recent(&chemin) && std::fs::remove_file(&chemin).is_ok() {
                     retires += 1;
                 }
             }
@@ -118,6 +128,16 @@ mod tests {
         // 7 et 263 tombent dans le même sous-dossier (07).
         assert!(racine.join("messages/07/263.eml").exists());
         std::fs::write(racine.join("messages/07/9.partiel"), b"coupe").unwrap();
+        // Tout juste écrits, 7 et 9.partiel sont épargnés ; vieillis, ils partent.
+        assert_eq!(cache.ranger(&HashSet::from([263])), 0);
+        for nom in ["7.eml", "9.partiel"] {
+            std::fs::File::options()
+                .write(true)
+                .open(racine.join("messages/07").join(nom))
+                .unwrap()
+                .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(3600))
+                .unwrap();
+        }
         assert_eq!(cache.ranger(&HashSet::from([263])), 2);
         assert!(cache.lire(7).is_none());
         assert!(cache.lire(263).is_some());

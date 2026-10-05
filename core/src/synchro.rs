@@ -107,18 +107,20 @@ pub fn synchroniser(
     let mut bilan = Bilan { dossier_id: id, ..Default::default() };
 
     let rupture = local.uid_validity != 0 && local.uid_validity != etat.uid_validity;
-    if rupture {
-        // L'index du dossier est caduc : on le vide tout de suite, l'état
-        // complet n'étant noté qu'à la fin.
+    if local.uid_validity == 0 || rupture {
+        // Première visite, ou index caduc (vidé ici même par `poser_etat`).
+        // L'UIDVALIDITY est notée tout de suite, sans UIDNEXT ni HIGHESTMODSEQ :
+        // une coupure en cours de lecture laisse un état dont la visite
+        // suivante repart par la réconciliation, qui ne relit que les messages
+        // encore absents — au lieu de tout recommencer.
         magasin.poser_etat(
             id,
             &EtatDossier { uid_validity: etat.uid_validity, ..Default::default() },
         )?;
-    }
-
-    if local.uid_validity == 0 || rupture {
+        let (nouveaux, retires) = reconcilier(client, magasin, id, &etat, true)?;
         bilan.complet = true;
-        bilan.nouveaux = relire_tout(client, magasin, id, &etat)?;
+        bilan.nouveaux = nouveaux;
+        bilan.retires = retires;
     } else if selection.reprise {
         magasin.retirer_intervalles(id, &selection.disparus)?;
         bilan.retires = selection.disparus.iter().map(|(a, b)| (b - a + 1) as usize).sum();
@@ -128,7 +130,7 @@ pub fn synchroniser(
             bilan.nouveaux = lire_depuis(client, magasin, id, local.uid_next.max(1))?;
         }
     } else {
-        let (nouveaux, retires) = reconcilier(client, magasin, id, &etat)?;
+        let (nouveaux, retires) = reconcilier(client, magasin, id, &etat, false)?;
         bilan.complet = true;
         bilan.nouveaux = nouveaux;
         bilan.retires = retires;
@@ -137,7 +139,7 @@ pub fn synchroniser(
     // Contrôle de cohérence : l'index doit compter autant de messages que le
     // serveur. Un écart se répare par la liste des UID, sans tout relire.
     if !bilan.complet && magasin.uids(id)?.len() as u32 != etat.messages {
-        let (nouveaux, retires) = reconcilier(client, magasin, id, &etat)?;
+        let (nouveaux, retires) = reconcilier(client, magasin, id, &etat, false)?;
         bilan.complet = true;
         bilan.nouveaux += nouveaux;
         bilan.retires += retires;
@@ -146,30 +148,6 @@ pub fn synchroniser(
     magasin.poser_etat(id, &etat)?;
     magasin.recompter(id)?;
     Ok(bilan)
-}
-
-/// Relit tout le dossier : en-têtes de chaque message.
-fn relire_tout(
-    client: &mut Client,
-    magasin: &Magasin,
-    id: i64,
-    etat: &EtatDossier,
-) -> Result<usize, Echec> {
-    if etat.messages == 0 {
-        // « 1:* » sur un dossier vide fait répondre une erreur à certains
-        // serveurs ; et ce qui traînait dans l'index n'existe plus.
-        let connus = magasin.uids(id)?;
-        magasin.retirer(id, &connus)?;
-        return Ok(0);
-    }
-    let entetes = client.entetes("1:*")?;
-    let presents: HashSet<u32> = entetes.iter().map(|e| e.uid).collect();
-    let perimes: Vec<u32> =
-        magasin.uids(id)?.into_iter().filter(|u| !presents.contains(u)).collect();
-    magasin.retirer(id, &perimes)?;
-    let lignes: Vec<MessageLocal> = entetes.iter().map(ligne_index).collect();
-    magasin.poser_messages(id, &lignes)?;
-    Ok(lignes.len())
 }
 
 /// En-têtes des messages arrivés à partir d'un UID.
@@ -187,14 +165,21 @@ fn lire_depuis(client: &mut Client, magasin: &Magasin, id: i64, depuis: u32) -> 
 }
 
 /// Réconciliation complète par la liste des UID et de leurs drapeaux : ne
-/// relit les en-têtes que des messages absents de l'index.
+/// relit les en-têtes que des messages absents de l'index — de tous si
+/// `tout_relire` (première visite, ou index à reconstituer). Les en-têtes
+/// viennent par paquets, les plus récents d'abord, et chaque paquet est écrit
+/// aussitôt : la mémoire reste bornée, et une coupure ne perd que le paquet
+/// en cours.
 fn reconcilier(
     client: &mut Client,
     magasin: &Magasin,
     id: i64,
     etat: &EtatDossier,
+    tout_relire: bool,
 ) -> Result<(usize, usize), Echec> {
     if etat.messages == 0 {
+        // « 1:* » sur un dossier vide fait répondre une erreur à certains
+        // serveurs ; et ce qui traînait dans l'index n'existe plus.
         let connus = magasin.uids(id)?;
         magasin.retirer(id, &connus)?;
         return Ok((0, connus.len()));
@@ -207,7 +192,13 @@ fn reconcilier(
     magasin.retirer(id, &perimes)?;
     magasin.poser_drapeaux(id, &serveur)?;
 
-    let manquants: Vec<u32> = presents.difference(&connus).copied().collect();
+    let mut manquants: Vec<u32> = if tout_relire {
+        presents.iter().copied().collect()
+    } else {
+        presents.difference(&connus).copied().collect()
+    };
+    // UID décroissants : les messages récents apparaissent d'abord.
+    manquants.sort_unstable_by(|a, b| b.cmp(a));
     let mut nouveaux = 0;
     // Par paquets : une commande par millier d'UID reste de taille raisonnable
     // même quand les UID sont épars.
@@ -339,6 +330,86 @@ mod tests {
         let premier = m.messages(id).unwrap().into_iter().find(|l| l.uid == 1).unwrap();
         assert!(premier.lu && premier.suivi);
         assert_eq!(m.dossier(id).unwrap().unwrap().highest_mod_seq, 12);
+    }
+
+    /// Réponse FETCH d'en-têtes pour un UID, littéral compris.
+    fn fetch_entete(seq: u32, uid: u32) -> String {
+        let entete = format!("From: x@exemple.fr\r\nSubject: m{uid}\r\n\r\n");
+        format!(
+            "* {seq} FETCH (UID {uid} FLAGS () INTERNALDATE \"05-Oct-2026 10:00:00 +0200\" RFC822.SIZE 40 \
+             BODY[HEADER.FIELDS (FROM SUBJECT)] {{{}}}\r\n{entete})\r\n",
+            entete.len()
+        )
+    }
+
+    fn index_vierge() -> (Magasin, i64, i64) {
+        let m = Magasin::en_memoire().unwrap();
+        let compte = m.compte("a@exemple.fr", "h", 993, "a@exemple.fr").unwrap();
+        m.poser_dossiers(compte, &[inbox()]).unwrap();
+        let id = m.dossier_id(compte, "INBOX").unwrap();
+        (m, compte, id)
+    }
+
+    const SELECT_NEUF: &str = "* 3 EXISTS\r\n* OK [UIDVALIDITY 7] v\r\n* OK [UIDNEXT 4] n\r\n* OK [HIGHESTMODSEQ 5] m\r\n";
+
+    #[test]
+    fn premiere_visite_par_la_reconciliation() {
+        let (m, compte, id) = index_vierge();
+        let (mut client, journal) = session(
+            DOVECOT,
+            vec![
+                echange("SELECT \"INBOX\"", SELECT_NEUF, "OK [READ-WRITE] fait"),
+                echange(
+                    "UID FETCH 1:* (UID FLAGS)",
+                    "* 1 FETCH (UID 1 FLAGS ())\r\n* 2 FETCH (UID 2 FLAGS (\\Seen))\r\n* 3 FETCH (UID 3 FLAGS ())\r\n",
+                    "OK",
+                ),
+                echange("UID FETCH 1:3 (UID FLAGS INTERNALDATE", &[fetch_entete(3, 3), fetch_entete(2, 2), fetch_entete(1, 1)].concat(), "OK"),
+            ],
+        );
+        let bilan = synchroniser(&mut client, &m, compte, "INBOX").unwrap();
+        assert_eq!(journal.lock().unwrap().len(), 3, "drapeaux, puis en-têtes en un paquet");
+        assert!(bilan.complet);
+        assert_eq!(bilan.nouveaux, 3);
+        let mut uids = m.uids(id).unwrap();
+        uids.sort();
+        assert_eq!(uids, vec![1, 2, 3]);
+        let etat = m.dossier(id).unwrap().unwrap();
+        assert_eq!((etat.uid_validity, etat.uid_next, etat.highest_mod_seq), (7, 4, 5));
+    }
+
+    #[test]
+    fn premiere_visite_coupee_reprend_sans_tout_relire() {
+        let (m, compte, id) = index_vierge();
+        // Première tentative : la lecture des en-têtes échoue.
+        let (mut client, _) = session(
+            DOVECOT,
+            vec![
+                echange("SELECT \"INBOX\"", SELECT_NEUF, "OK [READ-WRITE] fait"),
+                echange("UID FETCH 1:* (UID FLAGS)", "* 1 FETCH (UID 1 FLAGS ())\r\n* 2 FETCH (UID 2 FLAGS ())\r\n* 3 FETCH (UID 3 FLAGS ())\r\n", "OK"),
+                echange("UID FETCH 1:3", "", "NO [UNAVAILABLE] coupure"),
+            ],
+        );
+        assert!(synchroniser(&mut client, &m, compte, "INBOX").is_err());
+        // L'UIDVALIDITY est déjà notée, sans HIGHESTMODSEQ : la visite suivante
+        // ne recommence pas tout, elle réconcilie.
+        let etat = m.dossier(id).unwrap().unwrap();
+        assert_eq!((etat.uid_validity, etat.highest_mod_seq), (7, 0));
+        // Entre-temps, un message (UID 3) est arrivé dans l'index par ailleurs :
+        // seuls 1 et 2 sont relus.
+        m.poser_messages(id, &[MessageLocal { uid: 3, horodatage: 3, ..Default::default() }]).unwrap();
+        let (mut client, journal) = session(
+            DOVECOT,
+            vec![
+                echange("SELECT \"INBOX\"", SELECT_NEUF, "OK [READ-WRITE] fait"),
+                echange("UID FETCH 1:* (UID FLAGS)", "* 1 FETCH (UID 1 FLAGS ())\r\n* 2 FETCH (UID 2 FLAGS ())\r\n* 3 FETCH (UID 3 FLAGS ())\r\n", "OK"),
+                echange("UID FETCH 1:2 (UID FLAGS INTERNALDATE", &[fetch_entete(2, 2), fetch_entete(1, 1)].concat(), "OK"),
+            ],
+        );
+        let bilan = synchroniser(&mut client, &m, compte, "INBOX").unwrap();
+        assert_eq!(bilan.nouveaux, 2);
+        assert_eq!(journal.lock().unwrap().len(), 3);
+        assert_eq!(m.uids(id).unwrap().len(), 3);
     }
 
     #[test]

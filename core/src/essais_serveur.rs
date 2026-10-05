@@ -505,3 +505,32 @@ fn reservation_par_deux_postes() {
     a.supprimer(&[uid]).expect("purge");
     assert!(compter(&mut a, "INBOX", &id).is_empty());
 }
+
+#[test]
+#[ignore = "exige un serveur IMAP et un compte"]
+fn idle_signale_un_nouveau_message() {
+    // Une session en IDLE sur INBOX ; une autre y dépose un message : la
+    // première doit l'apprendre sans rien demander.
+    let mut a = session();
+    let mut b = session();
+    a.selectionner("INBOX", None).expect("SELECT");
+    a.idle_commencer().expect("IDLE");
+    let (id, brut) = message_essai("IDLE");
+    let debut = std::time::Instant::now();
+    let uid = b.deposer("INBOX", &[], DATE_ESSAI, &brut).expect("APPEND").expect("APPENDUID");
+    let mut signal = None;
+    while debut.elapsed() < std::time::Duration::from_secs(15) {
+        if let Some(ligne) = a.idle_attendre(std::time::Duration::from_millis(200)).expect("attente") {
+            if ligne.ends_with("EXISTS") {
+                signal = Some(ligne);
+                break;
+            }
+        }
+    }
+    println!("signal {:?} après {:?}", signal, debut.elapsed());
+    a.idle_terminer().expect("DONE");
+    b.selectionner("INBOX", None).expect("SELECT B");
+    b.supprimer(&[uid]).expect("purge");
+    assert!(compter(&mut a, "INBOX", &id).is_empty());
+    assert!(signal.is_some(), "aucun EXISTS reçu en IDLE");
+}

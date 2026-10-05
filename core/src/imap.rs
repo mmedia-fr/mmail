@@ -80,8 +80,22 @@ impl From<std::io::Error> for Erreur {
 
 /// Flux d'une session : TLS vers le serveur en service, faux serveur dans
 /// les tests (`crate::simule`).
-pub(crate) trait Flux: Read + Write + Send {}
-impl<T: Read + Write + Send> Flux for T {}
+pub(crate) trait Flux: Read + Write + Send {
+    /// Délai d'attente d'une lecture : court pendant `IDLE`, pour revenir
+    /// voir si l'interface a demandé quelque chose.
+    fn delai_lecture(&mut self, _delai: Duration) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Session TLS sur TCP, celle du service.
+type Tls = rustls::StreamOwned<rustls::ClientConnection, TcpStream>;
+
+impl Flux for Tls {
+    fn delai_lecture(&mut self, delai: Duration) -> std::io::Result<()> {
+        self.sock.set_read_timeout(Some(delai))
+    }
+}
 
 /// Session IMAP ouverte sur un serveur.
 pub struct Client {
@@ -94,6 +108,8 @@ pub struct Client {
     qresync: bool,
     /// Dossier sélectionné, s'il y en a un.
     selection: Option<String>,
+    /// Étiquette de la commande `IDLE` en cours, s'il y en a une.
+    idle: Option<String>,
 }
 
 impl Client {
@@ -119,6 +135,7 @@ impl Client {
             capacites: Vec::new(),
             qresync: false,
             selection: None,
+            idle: None,
         };
         // Salutation : une seule ligne non étiquetée.
         let salutation = client.lire_ligne()?;
@@ -455,6 +472,56 @@ impl Client {
         Ok(protocole::analyser_search(&texte))
     }
 
+    /// Entre en `IDLE` (RFC 2177) sur le dossier sélectionné : le serveur
+    /// signale alors de lui-même messages arrivés, retirés et drapeaux changés.
+    pub fn idle_commencer(&mut self) -> Resultat<()> {
+        self.compteur += 1;
+        let etiquette = format!("m{:04}", self.compteur);
+        self.flux.write_all(format!("{etiquette} IDLE\r\n").as_bytes())?;
+        self.flux.flush()?;
+        loop {
+            let ligne = self.lire_ligne()?;
+            if ligne.starts_with('+') {
+                self.idle = Some(etiquette);
+                return Ok(());
+            }
+            if let Some(refus) = ligne.strip_prefix(&etiquette) {
+                return Err(Erreur::Refuse(refus.trim().to_string()));
+            }
+        }
+    }
+
+    /// Attend au plus `delai` une ligne du serveur pendant `IDLE`. `None` :
+    /// rien n'est venu — c'est le cas courant, la session reste en `IDLE`.
+    pub fn idle_attendre(&mut self, delai: Duration) -> Resultat<Option<String>> {
+        if let Some(ligne) = self.ligne_en_attente() {
+            return Ok(Some(ligne));
+        }
+        self.flux.delai_lecture(delai)?;
+        let mut tampon = [0u8; 16384];
+        let lu = self.flux.read(&mut tampon);
+        self.flux.delai_lecture(DELAI)?;
+        match lu {
+            Ok(0) => Err(Erreur::Reseau("connexion fermée par le serveur".into())),
+            Ok(n) => {
+                self.reste.extend_from_slice(&tampon[..n]);
+                Ok(self.ligne_en_attente())
+            }
+            Err(e) if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Sort d'`IDLE` (`DONE`) et rend les réponses arrivées entre-temps.
+    pub fn idle_terminer(&mut self) -> Resultat<String> {
+        let Some(etiquette) = self.idle.take() else {
+            return Ok(String::new());
+        };
+        self.flux.write_all(b"DONE\r\n")?;
+        self.flux.flush()?;
+        Ok(self.lire_reponse(&etiquette)?.0)
+    }
+
     /// Maintient la session et laisse le serveur signaler ses changements.
     pub fn noop(&mut self) -> Resultat<()> {
         self.commande("NOOP")?;
@@ -508,6 +575,13 @@ impl Client {
                 };
             }
         }
+    }
+
+    /// Ligne complète déjà reçue, s'il y en a une.
+    fn ligne_en_attente(&mut self) -> Option<String> {
+        let fin = trouver(&self.reste, b"\r\n")?;
+        let ligne = self.reste.drain(..fin + 2).collect::<Vec<_>>();
+        Some(String::from_utf8_lossy(&ligne[..fin]).into_owned())
     }
 
     /// Lit une ligne terminée par CRLF, sans le CRLF.
@@ -651,6 +725,27 @@ mod tests {
         // Revenir à INBOX refait le SELECT au lieu de croire qu'il tient encore.
         crate::synchro::assurer_selection(&mut client, "INBOX").unwrap();
         assert_eq!(journal.lock().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn idle_signale_puis_se_termine() {
+        let (mut client, journal) = session(
+            DOVECOT,
+            vec![
+                echange("SELECT \"INBOX\"", "* 3 EXISTS\r\n", "OK [READ-WRITE] fait"),
+                echange("IDLE", "* 4 EXISTS\r\n", ""),
+                echange("DONE", "", "OK Idle completed"),
+            ],
+        );
+        client.selectionner("INBOX", None).unwrap();
+        client.idle_commencer().unwrap();
+        assert_eq!(client.idle_attendre(Duration::from_millis(10)).unwrap().as_deref(), Some("* 4 EXISTS"));
+        // Plus rien : le délai s'écoule, la session reste en IDLE.
+        assert_eq!(client.idle_attendre(Duration::from_millis(10)).unwrap(), None);
+        client.idle_terminer().unwrap();
+        assert_eq!(journal.lock().unwrap().as_slice(), ["SELECT \"INBOX\"", "IDLE", "DONE"]);
+        // Hors IDLE, terminer ne fait rien.
+        assert!(client.idle_terminer().unwrap().is_empty());
     }
 
     #[test]

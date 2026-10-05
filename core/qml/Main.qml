@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Fenêtre principale de MMail : arborescence, liste des messages, message.
+// Fenêtre principale de MMail : arborescence, liste des messages, message ;
+// et l'agenda (cf. Agenda.qml), à la place des trois volets.
 //
 // Trois volets côte à côte, dans l'ordre de lecture d'Outlook, qui sert de
 // référence de conception (décision 1) : l'arborescence tient un seul volet à
@@ -101,6 +102,9 @@ ApplicationWindow {
     // 2 message.
     readonly property bool compact: width < 760
     property int vue: 0
+    // « courrier » ou « agenda » : ce qu'occupe la fenêtre sous la barre
+    // d'outils.
+    property string module: "courrier"
 
     // Sélection de la liste : uid → vrai. Réaffectée à chaque changement pour
     // que les liaisons qui la lisent soient réévaluées.
@@ -317,11 +321,40 @@ ApplicationWindow {
             spacing: 6
 
             ToolButton {
-                visible: fenetre.compact && fenetre.vue > 0
+                visible: fenetre.compact && fenetre.vue > 0 && fenetre.module === "courrier"
                 text: "‹"
                 font.pixelSize: 22
                 onClicked: fenetre.vue = fenetre.vue - 1
             }
+            // Courrier ou agenda : deux boutons, un seul qui bascule sur un
+            // écran étroit.
+            ToolButton {
+                visible: fenetre.compact
+                text: fenetre.module === "agenda" ? qsTr("Courrier") : qsTr("Agenda")
+                onClicked: fenetre.module = fenetre.module === "agenda" ? "courrier" : "agenda"
+            }
+            ButtonGroup { id: groupeModule }
+            ToolButton {
+                visible: !fenetre.compact
+                text: qsTr("Courrier")
+                checkable: true
+                checked: fenetre.module === "courrier"
+                ButtonGroup.group: groupeModule
+                onClicked: fenetre.module = "courrier"
+                ToolTip.visible: hovered
+                ToolTip.text: qsTr("Courrier (Ctrl+1)")
+            }
+            ToolButton {
+                visible: !fenetre.compact
+                text: qsTr("Agenda")
+                checkable: true
+                checked: fenetre.module === "agenda"
+                ButtonGroup.group: groupeModule
+                onClicked: fenetre.module = "agenda"
+                ToolTip.visible: hovered
+                ToolTip.text: qsTr("Agenda (Ctrl+2)")
+            }
+            ToolSeparator { visible: !fenetre.compact }
             ToolButton {
                 text: qsTr("Nouveau message")
                 font.bold: true
@@ -335,10 +368,10 @@ ApplicationWindow {
             }
             ToolButton {
                 text: qsTr("Actualiser")
-                onClicked: boite.actualiser()
+                onClicked: fenetre.module === "agenda" ? boite.synchroniserAgendas(true) : boite.actualiser()
             }
             ToolButton {
-                visible: !fenetre.compact || fenetre.vue === 0
+                visible: (!fenetre.compact || fenetre.vue === 0) && fenetre.module === "courrier"
                 checkable: true
                 checked: reglages.afficherMasques
                 text: qsTr("Dossiers masqués")
@@ -359,13 +392,13 @@ ApplicationWindow {
                 onClicked: menuAide.popup(boutonAide, 0, boutonAide.height)
             }
             Label {
-                text: fenetre.compact && fenetre.vue > 0 ? fenetre.libelleCourant() : ""
+                text: fenetre.compact && fenetre.vue > 0 && fenetre.module === "courrier" ? fenetre.libelleCourant() : ""
                 elide: Text.ElideRight
                 font.bold: true
                 Layout.fillWidth: true
             }
             BusyIndicator {
-                running: boite.occupe
+                running: boite.occupe || boite.agendaOccupe
                 visible: running
                 Layout.preferredHeight: 26
                 Layout.preferredWidth: 26
@@ -408,11 +441,34 @@ ApplicationWindow {
     }
 
     // ------------------------------------------------------------- volets
+    Agenda {
+        id: vueAgenda
+        anchors.fill: parent
+        anchors.topMargin: bandeauVersion.height
+        visible: fenetre.module === "agenda"
+        boite: boite
+        compact: fenetre.compact
+    }
+
+    // Agendas tenus à jour en arrière-plan, quel que soit le module affiché :
+    // un quart d'heure, et peu après la connexion d'un compte.
+    Timer {
+        id: minuteurAgendas
+        interval: 15 * 60 * 1000
+        repeat: true
+        running: true
+        onTriggered: {
+            interval = 15 * 60 * 1000
+            boite.synchroniserAgendas(false)
+        }
+    }
+
     SplitView {
         id: volets
         anchors.fill: parent
         anchors.topMargin: bandeauVersion.height
         orientation: Qt.Horizontal
+        visible: fenetre.module === "courrier"
 
         // --- arborescence -------------------------------------------------
         // Deux listes : la rubrique Favoris, fixée en haut — elle reste à
@@ -2982,6 +3038,14 @@ ApplicationWindow {
     }
     // Rechercher, comme dans Outlook (Ctrl+F y transfère).
     Shortcut {
+        sequence: "Ctrl+1"
+        onActivated: fenetre.module = "courrier"
+    }
+    Shortcut {
+        sequence: "Ctrl+2"
+        onActivated: fenetre.module = "agenda"
+    }
+    Shortcut {
         sequence: "Ctrl+E"
         enabled: !fenetre.dialogueOuvert()
         onActivated: {
@@ -3822,6 +3886,15 @@ ApplicationWindow {
         target: boite
 
         function onConnecte(compte, adresse) {
+            // Les agendas suivent, une fois les connexions du démarrage faites.
+            minuteurAgendas.interval = 5000
+            minuteurAgendas.restart()
+            // Scénario « agenda » : MMAIL_DOSSIER donne la vue (jour, semaine, mois).
+            if (fenetre.essai && fenetre.essai.scenario === "agenda") {
+                if (identifiantsEssai.dossier)
+                    vueAgenda.genre = identifiantsEssai.dossier
+                fenetre.module = "agenda"
+            }
             var secret = fenetre.secretsAConserver[adresse]
             if (secret) {
                 coffre.ecrire(secret.cle, secret.motDePasse)
@@ -3971,6 +4044,17 @@ ApplicationWindow {
             if (fenetre.essai && fenetre.essai.scenario === "garde-serveur")
                 console.log("scenario: brouillon enregistré", uid, "| modifiée", r.modifie,
                             "| gardées après", JSON.parse(boite.redactionsGardees()).length, "| note", r.note)
+        }
+
+        function onAgendasSynchronises(change, erreurs) {
+            if (erreurs.length > 0 && fenetre.module === "agenda")
+                fenetre.annoncer(qsTr("Agenda : %1").arg(erreurs.split("\n")[0]), true)
+            if (fenetre.essai && fenetre.essai.scenario === "agenda") {
+                var v = JSON.parse(boite.vueAgenda("semaine", Qt.formatDate(new Date(), "yyyy-MM-dd")))
+                console.log("scenario: agendas synchronisés | changement", change, "| erreurs", JSON.stringify(erreurs),
+                            "| agendas", JSON.parse(boite.agendas()).length, "| cette semaine", v.nombre,
+                            "| titre", v.titre)
+            }
         }
 
         function onEchecRedaction(jeton, message) {
@@ -5103,8 +5187,12 @@ ApplicationWindow {
     }
 
     onClosing: function(fermeture) {
-        // Sur téléphone, le retour arrière remonte d'un volet avant de quitter.
-        if (compact && vue > 0) {
+        // Sur téléphone, le retour arrière ramène de l'agenda au courrier, puis
+        // remonte d'un volet avant de quitter.
+        if (compact && module === "agenda") {
+            fermeture.accepted = false
+            module = "courrier"
+        } else if (compact && vue > 0) {
             fermeture.accepted = false
             vue = vue - 1
         }

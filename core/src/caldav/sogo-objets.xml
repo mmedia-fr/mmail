@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<D:multistatus xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav"><D:response><D:href>/SOGo/dav/alice@exemple.fr/Calendar/personal/mmail-essai-hebdo.ics</D:href><D:propstat><D:prop><C:calendar-data>BEGIN:VCALENDAR
+PRODID:-//MMail//Essai//FR
+VERSION:2.0
+BEGIN:VTIMEZONE
+TZID:Europe/Paris
+BEGIN:DAYLIGHT
+TZOFFSETFROM:+0100
+TZOFFSETTO:+0200
+TZNAME:CEST
+DTSTART:19700329T020000
+RRULE:FREQ=YEARLY;BYMONTH=3;BYDAY=-1SU
+END:DAYLIGHT
+BEGIN:STANDARD
+TZOFFSETFROM:+0200
+TZOFFSETTO:+0100
+TZNAME:CET
+DTSTART:19701025T030000
+RRULE:FREQ=YEARLY;BYMONTH=10;BYDAY=-1SU
+END:STANDARD
+END:VTIMEZONE
+BEGIN:VEVENT
+UID:mmail-essai-hebdo
+DTSTAMP:20261005T140000Z
+DTSTART;TZID=Europe/Paris:20260921T080000
+DTEND;TZID=Europe/Paris:20260921T083000
+RRULE:FREQ=WEEKLY;UNTIL=20261231T225959Z;BYDAY=MO,TH
+EXDATE;TZID=Europe/Paris:20261012T080000
+SUMMARY:Point hebdomadaire (essai)
+CLASS:PUBLIC
+END:VEVENT
+BEGIN:VEVENT
+UID:mmail-essai-hebdo
+DTSTAMP:20261005T140000Z
+RECURRENCE-ID;TZID=Europe/Paris:20261008T080000
+DTSTART;TZID=Europe/Paris:20261008T140000
+DTEND;TZID=Europe/Paris:20261008T150000
+SUMMARY:Point hebdomadaire (d&#233;plac&#233;, essai)
+CLASS:PUBLIC
+END:VEVENT
+END:VCALENDAR</C:calendar-data><D:getetag>&quot;gcs00000000&quot;</D:getetag></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response><D:response><D:href>/SOGo/dav/alice@exemple.fr/Calendar/personal/mmail-essai-windows.ics</D:href><D:propstat><D:prop><C:calendar-data>BEGIN:VCALENDAR
+PRODID:-//Microsoft Corporation//Outlook 16.0 MIMEDIR//EN
+VERSION:2.0
+BEGIN:VTIMEZONE
+TZID:Romance Standard Time
+BEGIN:STANDARD
+DTSTART:16011028T030000
+RRULE:FREQ=YEARLY;BYMONTH=10;BYDAY=-1SU
+TZOFFSETFROM:+0200
+TZOFFSETTO:+0100
+END:STANDARD
+BEGIN:DAYLIGHT
+DTSTART:16010325T020000
+RRULE:FREQ=YEARLY;BYMONTH=3;BYDAY=-1SU
+TZOFFSETFROM:+0100
+TZOFFSETTO:+0200
+END:DAYLIGHT
+END:VTIMEZONE
+BEGIN:VEVENT
+UID:mmail-essai-windows
+DTSTAMP:20261005T140000Z
+DTSTART;TZID=Romance Standard Time:20261008T100000
+DTEND;TZID=Romance Standard Time:20261008T113000
+SUMMARY:Rendez-vous import&#233; d'Outlook (essai)
+CLASS:PUBLIC
+END:VEVENT
+END:VCALENDAR</C:calendar-data><D:getetag>&quot;gcs00000000&quot;</D:getetag></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response><D:response><D:href>/SOGo/dav/alice@exemple.fr/Calendar/personal/absent.ics</D:href><D:status>HTTP/1.1 404 Not Found</D:status></D:response></D:multistatus>

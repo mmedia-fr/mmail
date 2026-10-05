@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Épreuve du client contre un vrai Dovecot.
+//! Épreuve du client contre un vrai Dovecot — et, pour l'agenda, contre le
+//! SOGo du même serveur.
 //!
 //! Ignoré par défaut : il exige un serveur et deux comptes, donnés par
 //! l'environnement. Aucune identification n'est écrite ici.
@@ -557,4 +558,95 @@ fn recherche_dans_le_texte() {
     assert_eq!(trouves, vec![uid]);
     assert_eq!(accent, vec![uid]);
     assert!(compter(&mut client, "INBOX", &id).is_empty());
+}
+
+// ------------------------------------------------------------- agenda
+
+/// Requête directe sur le serveur d'agenda, pour déposer et retirer
+/// l'événement d'essai : le client, lui, ne fait que lire.
+fn requete_agenda(methode: &str, url: &str, corps: &str) -> u16 {
+    let (utilisateur, mot_de_passe) = (variable("MMAIL_UTILISATEUR"), variable("MMAIL_MOTDEPASSE"));
+    let jeton = crate::smtp::base64(format!("{utilisateur}:{mot_de_passe}").as_bytes());
+    let entetes = [
+        ("Authorization", format!("Basic {jeton}")),
+        ("Content-Type", "text/calendar; charset=utf-8".to_string()),
+    ];
+    crate::http::envoyer(&crate::http::Demande {
+        methode,
+        url,
+        accepte: "*/*",
+        entetes: &entetes,
+        corps: corps.as_bytes(),
+        taille_max: 1 << 20,
+    })
+    .unwrap_or_else(|e| panic!("{methode} {url} : {e}"))
+    .statut
+}
+
+fn evenement_essai(uid: &str, titre: &str, nombre: u32) -> String {
+    format!(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//MMail//Epreuve//FR\r\nBEGIN:VEVENT\r\nUID:{uid}\r\n\
+DTSTAMP:20260101T000000Z\r\nDTSTART;TZID=Europe/Paris:20300107T100000\r\nDTEND;TZID=Europe/Paris:20300107T110000\r\n\
+RRULE:FREQ=WEEKLY;COUNT={nombre}\r\nSUMMARY:{titre}\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+    )
+}
+
+/// Titres et débuts des occurrences de janvier 2030 portant `uid`.
+fn occurrences_janvier_2030(magasin: &Magasin, uid: &str) -> Vec<(String, String)> {
+    let (de, a) = ("2030-01-01T00:00:00Z".parse().unwrap(), "2030-02-01T00:00:00Z".parse().unwrap());
+    magasin
+        .evenements_periode(1893456000, 1896134400)
+        .unwrap()
+        .iter()
+        .flat_map(|(_, ical)| crate::agenda::occurrences(ical, de, a))
+        .filter(|o| o.uid == uid)
+        .map(|o| (o.resume, o.debut.format("%Y-%m-%dT%H:%MZ").to_string()))
+        .collect()
+}
+
+#[test]
+#[ignore = "exige un serveur CalDAV et un compte"]
+fn agenda_decouvert_synchronise_et_suivi() {
+    use crate::caldav::{self, Acces};
+    let hote = variable("MMAIL_HOTE");
+    let (utilisateur, mot_de_passe) = (variable("MMAIL_UTILISATEUR"), variable("MMAIL_MOTDEPASSE"));
+    let maintenant = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
+    let magasin = Magasin::en_memoire().unwrap();
+    let compte = magasin.compte(&utilisateur, &hote, 993, &utilisateur).unwrap();
+    let acces = Acces { utilisateur: &utilisateur, mot_de_passe: &mot_de_passe };
+    let synchro = |insister| caldav::synchroniser(&magasin, compte, &hote, &utilisateur, &acces, maintenant, insister).expect("synchronisation");
+
+    let bilan = synchro(false);
+    assert!(bilan.agendas >= 1, "{bilan:?}");
+    let collection = magasin.caldav(compte).unwrap().0;
+    assert!(collection.starts_with("https://"), "{collection}");
+    // Rien n'a changé : rien n'est relu.
+    assert_eq!(synchro(false).lus, 0);
+
+    let agendas = magasin.agendas().unwrap();
+    let agenda = agendas.iter().find(|a| a.adresse.ends_with("/personal/")).unwrap_or(&agendas[0]);
+    let uid = format!("mmail-epreuve-{maintenant}");
+    let url = format!("{}{uid}.ics", agenda.adresse);
+    assert_eq!(requete_agenda("PUT", &url, &evenement_essai(&uid, "Épreuve MMail", 3)), 201);
+    let bilan = synchro(false);
+    assert!(bilan.lus >= 1, "{bilan:?}");
+    // Lundi 7 janvier 2030 à 10 h à Paris, puis chaque semaine : 9 h UTC.
+    assert_eq!(
+        occurrences_janvier_2030(&magasin, &uid),
+        [
+            ("Épreuve MMail".to_string(), "2030-01-07T09:00Z".to_string()),
+            ("Épreuve MMail".to_string(), "2030-01-14T09:00Z".to_string()),
+            ("Épreuve MMail".to_string(), "2030-01-21T09:00Z".to_string()),
+        ]
+    );
+
+    assert!(matches!(requete_agenda("PUT", &url, &evenement_essai(&uid, "Épreuve modifiée", 2)), 201 | 204));
+    assert!(synchro(false).lus >= 1);
+    let modifie = occurrences_janvier_2030(&magasin, &uid);
+    assert_eq!(modifie.len(), 2);
+    assert!(modifie.iter().all(|(titre, _)| titre == "Épreuve modifiée"));
+
+    assert!(matches!(requete_agenda("DELETE", &url, ""), 200 | 204));
+    assert!(synchro(false).retires >= 1);
+    assert!(occurrences_janvier_2030(&magasin, &uid).is_empty());
 }

@@ -62,6 +62,8 @@ pub mod qobject {
         #[qproperty(QString, dossier_courant, cxx_name = "dossierCourant")]
         /// Déplacements entre boîtes inscrits et pas encore soldés.
         #[qproperty(i32, en_attente, cxx_name = "enAttente")]
+        /// Vrai pendant une synchronisation des agendas.
+        #[qproperty(bool, agenda_occupe, cxx_name = "agendaOccupe")]
         type Boite = super::BoiteRust;
 
         /// Ouvre l'index local du profil. Local et immédiat ; à appeler avant
@@ -368,6 +370,31 @@ pub mod qobject {
         #[qinvokable]
         #[cxx_name = "roleCourant"]
         fn role_courant(&self) -> QString;
+
+        /// Agendas de tous les comptes, en JSON : `[{id, compte, boite, nom,
+        /// couleur, affiche}]`.
+        #[qinvokable]
+        #[cxx_name = "agendas"]
+        fn agendas(&self) -> QString;
+
+        /// Coche ou décoche un agenda : ses événements paraissent ou non.
+        #[qinvokable]
+        #[cxx_name = "afficherAgenda"]
+        fn afficher_agenda(&self, agenda: i32, affiche: bool);
+
+        /// Vue de l'agenda — `jour`, `semaine` ou `mois` — autour de la date
+        /// `aaaa-mm-jj`, en JSON (cf. `agenda::vue`). Locale et immédiate.
+        #[qinvokable]
+        #[cxx_name = "vueAgenda"]
+        fn vue_agenda(&self, genre: &QString, date: &QString) -> QString;
+
+        /// Synchronise dans un fil à part les agendas des comptes connectés.
+        /// `insister` : à la demande de l'utilisateur, une boîte sans agenda
+        /// connu est réinterrogée sans attendre. Sans effet pendant une
+        /// synchronisation. Issue : `agendasSynchronises`.
+        #[qinvokable]
+        #[cxx_name = "synchroniserAgendas"]
+        fn synchroniser_agendas(self: Pin<&mut Boite>, insister: bool);
     }
 
     impl cxx_qt::Threading for Boite {}
@@ -482,6 +509,12 @@ pub mod qobject {
         #[qsignal]
         #[cxx_name = "echecRedaction"]
         fn echec_redaction(self: Pin<&mut Boite>, jeton: &QString, message: &QString);
+
+        /// Synchronisation des agendas terminée : `change` si la vue est à
+        /// relire ; `erreurs` : une ligne par boîte en échec.
+        #[qsignal]
+        #[cxx_name = "agendasSynchronises"]
+        fn agendas_synchronises(self: Pin<&mut Boite>, change: bool, erreurs: &QString);
     }
 }
 
@@ -702,6 +735,7 @@ pub struct BoiteRust {
     /// son UID, sa date et l'empreinte de ses champs. De quoi ne lui renvoyer
     /// que ce qui a changé.
     liste: Option<(i64, Vec<(u32, i64, u64)>)>,
+    agenda_occupe: bool,
 }
 
 impl Default for BoiteRust {
@@ -723,6 +757,7 @@ impl Default for BoiteRust {
             generation: 0,
             courant: None,
             liste: None,
+            agenda_occupe: false,
         }
     }
 }
@@ -771,6 +806,87 @@ impl qobject::Boite {
                 self.as_mut().set_erreur(QString::from(&format!("index local : {e}")));
                 false
             }
+        }
+    }
+
+    pub fn agendas(&self) -> QString {
+        let Some(magasin) = self.magasin.as_ref() else {
+            return QString::from("[]");
+        };
+        let comptes = magasin.comptes().unwrap_or_default();
+        let liste: Vec<serde_json::Value> = magasin
+            .agendas()
+            .unwrap_or_default()
+            .iter()
+            .map(|a| {
+                serde_json::json!({
+                    "id": a.id,
+                    "compte": a.compte,
+                    "boite": comptes.iter().find(|c| c.id == a.compte).map(|c| c.adresse.as_str()).unwrap_or(""),
+                    "nom": a.nom,
+                    "couleur": crate::agenda::couleur(a),
+                    "affiche": a.affiche,
+                })
+            })
+            .collect();
+        QString::from(&serde_json::Value::from(liste).to_string())
+    }
+
+    pub fn afficher_agenda(&self, agenda: i32, affiche: bool) {
+        if let Some(magasin) = self.magasin.as_ref() {
+            let _ = magasin.afficher_agenda(agenda as i64, affiche);
+        }
+    }
+
+    pub fn vue_agenda(&self, genre: &QString, date: &QString) -> QString {
+        let Some(magasin) = self.magasin.as_ref() else {
+            return QString::from("{}");
+        };
+        let date = chrono::NaiveDate::parse_from_str(&date.to_string(), "%Y-%m-%d")
+            .unwrap_or_else(|_| chrono::Local::now().date_naive());
+        QString::from(&crate::agenda::vue(magasin, &genre.to_string(), date))
+    }
+
+    pub fn synchroniser_agendas(mut self: Pin<&mut Self>, insister: bool) {
+        if self.agenda_occupe {
+            return;
+        }
+        let Some(magasin) = self.magasin.as_ref() else { return };
+        // Les comptes dont on a le mot de passe : ceux qui sont connectés.
+        let comptes: Vec<(i64, String, Identifiants)> = magasin
+            .comptes()
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|c| self.identites.get(&c.id).map(|id| (c.id, c.adresse, id.clone())))
+            .collect();
+        if comptes.is_empty() {
+            return;
+        }
+        let profil = self.profil.clone();
+        let fil = self.qt_thread();
+        self.as_mut().set_agenda_occupe(true);
+        let lance = thread::Builder::new().name("mmail-agenda".into()).spawn(move || {
+            let mut change = false;
+            let mut erreurs = Vec::new();
+            match Magasin::ouvrir(&profil) {
+                Ok(magasin) => {
+                    for (compte, adresse, id) in &comptes {
+                        let acces = crate::caldav::Acces { utilisateur: &id.utilisateur, mot_de_passe: &id.mot_de_passe };
+                        match crate::caldav::synchroniser(&magasin, *compte, &id.hote, adresse, &acces, maintenant(), insister) {
+                            Ok(bilan) => change |= bilan.change,
+                            Err(e) => erreurs.push(format!("{adresse} : {e}")),
+                        }
+                    }
+                }
+                Err(e) => erreurs.push(format!("index local : {e}")),
+            }
+            let _ = fil.queue(move |mut boite: Pin<&mut qobject::Boite>| {
+                boite.as_mut().set_agenda_occupe(false);
+                boite.as_mut().agendas_synchronises(change, &QString::from(&erreurs.join("\n")));
+            });
+        });
+        if lance.is_err() {
+            self.as_mut().set_agenda_occupe(false);
         }
     }
 

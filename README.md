@@ -102,6 +102,20 @@ de projet interne.
   liste de dizaines de milliers de messages ne se met à jour que des lignes
   qui changent.
 
+### L'agenda
+
+**Agenda en lecture** (bouton « Agenda », Ctrl+2 ; Ctrl+1 ramène au courrier) :
+les agendas CalDAV des boîtes connectées — SOGo pour une boîte Mailcow, ou tout
+serveur CalDAV qui accepte les identifiants de la boîte —, trouvés sans
+réglage (`/.well-known/caldav`, RFC 6764). Vues jour, semaine et mois à la
+manière d'Outlook ; un agenda se coche ou se décoche ; un clic sur un
+événement en montre la fiche (horaire, lieu, description, agenda). Les
+répétitions, leurs exceptions et les occurrences déplacées sont calculées sur
+le poste, dans le fuseau du poste ; les fuseaux nommés à la manière de Windows
+(« Romance Standard Time ») sont reconnus. L'agenda reste consultable hors
+connexion ; il se synchronise au démarrage, tous les quarts d'heure, et sur
+« Actualiser ». La création et la modification d'événements viendront ensuite.
+
 ### Le déplacement entre boîtes
 
 Aucun protocole ne déplace un message d'une boîte vers une autre. MMail le lit
@@ -159,8 +173,9 @@ passe n'est confié au coffre qu'une fois accepté par le serveur.
 ## Données sur le poste
 
 Le serveur reste la référence : MMail garde sur le poste un **index** (dossiers,
-en-têtes des messages, favoris, ordre des comptes) et, pour lire hors
-connexion, les **messages des 31 derniers jours**, entiers, en fichiers `.eml`.
+en-têtes des messages, favoris, ordre des comptes, événements des agendas) et,
+pour lire hors connexion, les **messages des 31 derniers jours**, entiers, en
+fichiers `.eml`.
 La boîte de réception et chaque dossier ouvert se préchargent en arrière-plan ;
 au-delà de la fenêtre, un message est relu sur le serveur.
 
@@ -203,6 +218,8 @@ par jour. Rien d'autre n'est envoyé ; `AvisVersion` à 0 le coupe.
   ailleurs ; leur ouverture n'a pas été éprouvée sur un téléphone.
 - Hors connexion, un message ouvert reste non lu sur le serveur ; pas de
   filtres.
+- L'agenda est en lecture seule : ni création, ni modification, ni réponse aux
+  invitations. Les tâches (VTODO) ne s'affichent pas.
 - L'envoi passe par le même serveur que la lecture, sur le port 465.
 - Sous Android, les autorités de certification sont celles de Mozilla,
   embarquées dans l'application — et non celles du téléphone.

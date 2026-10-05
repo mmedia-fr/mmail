@@ -16,6 +16,7 @@ pub mod pont_presse_papier;
 pub mod presse_papier;
 pub mod redaction;
 pub mod rendu;
+pub mod saisie;
 pub mod signature;
 pub mod smtp;
 pub mod socle;

@@ -448,6 +448,179 @@ ApplicationWindow {
         visible: fenetre.module === "agenda"
         boite: boite
         compact: fenetre.compact
+        onAnnoncer: function(texte, erreur) { fenetre.annoncer(texte, erreur) }
+    }
+
+    // Rappels de l'agenda : contrôlés toutes les 30 secondes, quel que soit
+    // le module affiché ; la fenêtre clignote dans la barre des tâches.
+    Timer {
+        interval: 30 * 1000
+        repeat: true
+        running: true
+        triggeredOnStart: true
+        onTriggered: fenetre.verifierRappels()
+    }
+
+    // Scénario « agenda-ecriture » : demain à 10 h, un événement créé,
+    // retrouvé dans la vue, renommé, puis supprimé — chaque étape après la
+    // relecture de l'agenda qui suit l'écriture.
+    function etapeEcriture() {
+        var e = fenetre.essai
+        var demain = new Date()
+        demain.setDate(demain.getDate() + 1)
+        var jour = Qt.formatDate(demain, "yyyy-MM-dd")
+        var trouver = function(titre) {
+            var v = JSON.parse(boite.vueAgenda("jour", jour))
+            return (v.fiches || []).find(function(f) { return f.titre === titre })
+        }
+        e.etape = e.etape || 0
+        if (e.etape === 0) {
+            var modifiables = JSON.parse(boite.agendas()).filter(function(a) { return a.ecriture })
+            console.log("scenario: agendas modifiables", modifiables.length)
+            if (modifiables.length === 0)
+                return
+            e.etape = 1
+            boite.enregistrerEvenement(JSON.stringify({
+                agenda: modifiables[0].id, titre: "Essai d'écriture MMail", lieu: "Salle 2",
+                journee: false, debut: jour + "T10:00", fin: jour + "T11:00", rappel: 15
+            }))
+        } else if (e.etape === 1) {
+            var f = trouver("Essai d'écriture MMail")
+            console.log("scenario: créé", !!f, f ? f.quand + " | " + f.lieu : "")
+            if (!f)
+                return
+            var s = JSON.parse(boite.saisieEvenement(f.objet, f.occurrence, true))
+            console.log("scenario: formulaire", s.debut, s.fin, "rappel", s.rappel)
+            s.titre = "Essai d'écriture MMail (modifié)"
+            s.debut = jour + "T15:00"
+            s.fin = jour + "T16:30"
+            e.etape = 2
+            boite.enregistrerEvenement(JSON.stringify(s))
+        } else if (e.etape === 2) {
+            var g = trouver("Essai d'écriture MMail (modifié)")
+            console.log("scenario: modifié", !!g, g ? g.quand : "")
+            if (!g)
+                return
+            e.etape = 3
+            boite.supprimerEvenement(g.objet, g.occurrence, true)
+        } else if (e.etape === 3) {
+            e.etape = 4
+            console.log("scenario: supprimé", !trouver("Essai d'écriture MMail (modifié)"))
+        }
+    }
+
+    function verifierRappels() {
+        var liste = JSON.parse(boite.rappelsEchus())
+        popupRappels.rappels = liste
+        if (liste.length === 0) {
+            popupRappels.close()
+            return
+        }
+        if (!popupRappels.opened) {
+            popupRappels.open()
+            fenetre.alert(0)
+        }
+    }
+
+    Popup {
+        id: popupRappels
+        property var rappels: []
+        anchors.centerIn: Overlay.overlay
+        width: Math.min(fenetre.width - 32, 480)
+        height: Math.min(fenetre.height - 48, implicitHeight)
+        modal: false
+        focus: true
+        closePolicy: Popup.NoAutoClose
+        padding: 16
+        contentItem: ColumnLayout {
+            spacing: 10
+            Label {
+                text: popupRappels.rappels.length > 1 ? qsTr("%1 rappels").arg(popupRappels.rappels.length) : qsTr("Rappel")
+                font.bold: true
+                font.pixelSize: 17
+            }
+            ListView {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                implicitHeight: Math.min(contentHeight, 320)
+                clip: true
+                spacing: 8
+                model: popupRappels.rappels
+                delegate: RowLayout {
+                    id: ligneRappel
+                    required property var modelData
+                    width: ListView.view.width
+                    spacing: 8
+                    Rectangle {
+                        Layout.preferredWidth: 10
+                        Layout.preferredHeight: 10
+                        Layout.alignment: Qt.AlignTop
+                        Layout.topMargin: 5
+                        radius: 3
+                        color: ligneRappel.modelData.couleur || palette.highlight
+                    }
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        spacing: 0
+                        Label {
+                            Layout.fillWidth: true
+                            text: ligneRappel.modelData.titre
+                            font.bold: true
+                            wrapMode: Text.Wrap
+                        }
+                        Label {
+                            Layout.fillWidth: true
+                            text: ligneRappel.modelData.quand
+                                  + (ligneRappel.modelData.lieu.length > 0 ? " — " + ligneRappel.modelData.lieu : "")
+                            wrapMode: Text.Wrap
+                            opacity: 0.8
+                        }
+                    }
+                    Button {
+                        text: qsTr("Ouvrir")
+                        flat: true
+                        onClicked: {
+                            fenetre.module = "agenda"
+                            vueAgenda.allerAuJour(ligneRappel.modelData.date)
+                        }
+                    }
+                    Button {
+                        text: qsTr("Ignorer")
+                        onClicked: {
+                            boite.rappelVu(ligneRappel.modelData.cle)
+                            fenetre.verifierRappels()
+                        }
+                    }
+                }
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                Label { text: qsTr("Répéter dans") }
+                ComboBox {
+                    id: delaiRappel
+                    model: [qsTr("5 minutes"), qsTr("10 minutes"), qsTr("15 minutes"), qsTr("30 minutes"), qsTr("1 heure")]
+                    readonly property var minutes: [5, 10, 15, 30, 60]
+                }
+                Button {
+                    text: qsTr("Répéter")
+                    onClicked: {
+                        for (var i = 0; i < popupRappels.rappels.length; ++i)
+                            boite.repousserRappel(popupRappels.rappels[i].cle, delaiRappel.minutes[delaiRappel.currentIndex])
+                        fenetre.verifierRappels()
+                    }
+                }
+                Item { Layout.fillWidth: true }
+                Button {
+                    visible: popupRappels.rappels.length > 1
+                    text: qsTr("Tout ignorer")
+                    onClicked: {
+                        for (var i = 0; i < popupRappels.rappels.length; ++i)
+                            boite.rappelVu(popupRappels.rappels[i].cle)
+                        fenetre.verifierRappels()
+                    }
+                }
+            }
+        }
     }
 
     // Agendas tenus à jour en arrière-plan, quel que soit le module affiché :
@@ -3889,9 +4062,10 @@ ApplicationWindow {
             // Les agendas suivent, une fois les connexions du démarrage faites.
             minuteurAgendas.interval = 5000
             minuteurAgendas.restart()
-            // Scénario « agenda » : MMAIL_DOSSIER donne la vue (jour, semaine, mois).
-            if (fenetre.essai && fenetre.essai.scenario === "agenda") {
-                if (identifiantsEssai.dossier)
+            // Scénario « agenda » : MMAIL_DOSSIER donne la vue (jour, semaine,
+            // mois) ou « saisie » pour le formulaire d'un nouvel événement.
+            if (fenetre.essai && (fenetre.essai.scenario === "agenda" || fenetre.essai.scenario === "agenda-ecriture")) {
+                if (identifiantsEssai.dossier && identifiantsEssai.dossier !== "saisie")
                     vueAgenda.genre = identifiantsEssai.dossier
                 fenetre.module = "agenda"
             }
@@ -4049,12 +4223,24 @@ ApplicationWindow {
         function onAgendasSynchronises(change, erreurs) {
             if (erreurs.length > 0 && fenetre.module === "agenda")
                 fenetre.annoncer(qsTr("Agenda : %1").arg(erreurs.split("\n")[0]), true)
+            if (fenetre.essai && fenetre.essai.scenario === "agenda-ecriture")
+                fenetre.etapeEcriture()
+            if (fenetre.essai && fenetre.essai.scenario === "agenda" && identifiantsEssai.dossier === "saisie"
+                    && !fenetre.essai.saisie) {
+                fenetre.essai.saisie = true
+                vueAgenda.nouvelEvenement(Qt.formatDate(new Date(), "yyyy-MM-dd"), 14 * 60, false)
+            }
             if (fenetre.essai && fenetre.essai.scenario === "agenda") {
                 var v = JSON.parse(boite.vueAgenda("semaine", Qt.formatDate(new Date(), "yyyy-MM-dd")))
                 console.log("scenario: agendas synchronisés | changement", change, "| erreurs", JSON.stringify(erreurs),
                             "| agendas", JSON.parse(boite.agendas()).length, "| cette semaine", v.nombre,
                             "| titre", v.titre)
             }
+        }
+
+        function onEvenementEnregistre(ok, message) {
+            if (fenetre.essai && fenetre.essai.scenario === "agenda-ecriture")
+                console.log("scenario: écriture", fenetre.essai.etape || 0, ok, JSON.stringify(message))
         }
 
         function onEchecRedaction(jeton, message) {

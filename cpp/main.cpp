@@ -25,6 +25,7 @@
 #include <QtQml/qqml.h>
 
 #include "coffre.h"
+#include "fenetre.h"
 #include "presse_papier.h"
 #include "mise_en_forme.h"
 
@@ -158,11 +159,15 @@ int main(int argc, char* argv[])
   bool smoke = false;
   QString capture;
   int delaiCapture = 600;
+  bool ramener = false;
   const QStringList arguments = argumentsUnicode();
   for (int i = 1; i < arguments.size(); ++i) {
     const QString argument = arguments.at(i);
     if (argument == QStringLiteral("--smoke"))
       smoke = true;
+    // Clic droit sur la barre des tâches, « Ramener la fenêtre » (cf. fenetre.h).
+    else if (argument == QStringLiteral("--ramener"))
+      ramener = true;
     else if (argument == QStringLiteral("--capture") && i + 1 < arguments.size())
       capture = arguments.at(++i);
     // Délai avant la capture, en millisecondes : le temps qu'une session
@@ -246,7 +251,7 @@ int main(int argc, char* argv[])
     QLocalSocket appel;
     appel.connectToServer(canal);
     if (appel.waitForConnected(1000)) {
-      appel.write("montrer\n");
+      appel.write(ramener ? "ramener\n" : "montrer\n");
       appel.waitForBytesWritten(1000);
     }
     std::fprintf(stderr, "MMail est déjà ouvert sur ce profil.\n");
@@ -255,17 +260,28 @@ int main(int argc, char* argv[])
   QLocalServer reveil;
   QLocalServer::removeServer(canal);
   reveil.listen(canal);
+  // Le second lancement dit ce qu'il veut : « montrer » la fenêtre, ou la
+  // « ramener » au centre de l'écran principal.
   QObject::connect(&reveil, &QLocalServer::newConnection, &app, [&reveil, &engine] {
-    while (QLocalSocket* appel = reveil.nextPendingConnection())
+    while (QLocalSocket* appel = reveil.nextPendingConnection()) {
       QObject::connect(appel, &QLocalSocket::disconnected, appel, &QObject::deleteLater);
-    if (engine.rootObjects().isEmpty())
-      return;
-    if (auto* fenetre = qobject_cast<QQuickWindow*>(engine.rootObjects().first())) {
-      if (fenetre->windowStates() & Qt::WindowMinimized)
-        fenetre->showNormal();
-      fenetre->show();
-      fenetre->raise();
-      fenetre->requestActivate();
+      QObject::connect(appel, &QLocalSocket::readyRead, appel, [appel, &engine] {
+        if (!appel->canReadLine() || engine.rootObjects().isEmpty())
+          return;
+        const QByteArray demande = appel->readLine().trimmed();
+        auto* principale = qobject_cast<QQuickWindow*>(engine.rootObjects().first());
+        if (!principale)
+          return;
+        if (demande == "ramener") {
+          fenetre::ramener(principale);
+          return;
+        }
+        if (principale->windowStates() & Qt::WindowMinimized)
+          principale->showNormal();
+        principale->show();
+        principale->raise();
+        principale->requestActivate();
+      });
     }
   });
 
@@ -278,6 +294,21 @@ int main(int argc, char* argv[])
     },
     Qt::QueuedConnection);
   engine.load(url);
+
+#ifndef Q_OS_ANDROID
+  // Position de la fenêtre retenue d'une session à l'autre — sauf pour les
+  // contrôles et les captures, qui veulent une fenêtre à la taille de départ.
+  if (!smoke && capture.isEmpty() && !engine.rootObjects().isEmpty()) {
+    if (auto* principale = qobject_cast<QQuickWindow*>(engine.rootObjects().first())) {
+      fenetre::suivre(principale);
+      if (ramener)
+        fenetre::ramener(principale);
+    }
+  }
+#endif
+#ifdef Q_OS_WIN
+  fenetre::poserListeRaccourcis();
+#endif
 
   if (smoke) {
     // Contrôle de fabrication : la fenêtre existe, le noyau Rust répond, et

@@ -104,6 +104,15 @@ pub struct MessageLocal {
     pub importance: i8,
 }
 
+/// Un message trouvé par une recherche, avec son dossier.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Trouve {
+    pub message: MessageLocal,
+    pub compte: i64,
+    pub chemin: String,
+    pub nom_dossier: String,
+}
+
 /// Étape d'un déplacement entre boîtes (décision 16).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Etape {
@@ -838,6 +847,61 @@ impl Magasin {
         Ok(uids)
     }
 
+    /// Messages dont chaque mot de `texte` figure dans l'objet, le nom ou
+    /// l'adresse de l'expéditeur : d'un dossier, ou de tous les comptes
+    /// (`dossier` absent), les plus récents d'abord, `limite` au plus.
+    pub fn chercher(&self, dossier: Option<i64>, texte: &str, limite: usize) -> Resultat<Vec<Trouve>> {
+        let mots: Vec<String> = texte
+            .split_whitespace()
+            .map(|m| format!("%{}%", m.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")))
+            .collect();
+        if mots.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut conditions: Vec<String> = (0..mots.len())
+            .map(|i| {
+                let n = i + 2;
+                format!(
+                    "(m.sujet LIKE ?{n} ESCAPE '\\' OR m.expediteur LIKE ?{n} ESCAPE '\\' OR m.adresse LIKE ?{n} ESCAPE '\\')"
+                )
+            })
+            .collect();
+        if dossier.is_some() {
+            conditions.push("m.folder_id = ?1".into());
+        }
+        let sql = format!(
+            "SELECT m.uid, m.message_id, m.expediteur, m.adresse, m.sujet, m.date, m.horodatage, m.taille,
+                    m.lu, m.repondu, m.pieces, m.suivi, m.importance, f.account_id, f.chemin, f.nom
+             FROM messages m JOIN folders f ON f.id = m.folder_id
+             WHERE {}
+             ORDER BY m.horodatage DESC, m.uid DESC LIMIT {limite}",
+            conditions.join(" AND ")
+        );
+        let mut valeurs: Vec<rusqlite::types::Value> = vec![dossier.unwrap_or(0).into()];
+        valeurs.extend(mots.into_iter().map(rusqlite::types::Value::from));
+        let mut requete = self.base.prepare(&sql)?;
+        let trouves = requete
+            .query_map(rusqlite::params_from_iter(valeurs), |l| {
+                Ok(Trouve { message: lire_message(l)?, compte: l.get(13)?, chemin: l.get(14)?, nom_dossier: l.get(15)? })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(trouves)
+    }
+
+    /// Messages d'un dossier désignés par leur UID, du plus récent au plus
+    /// ancien.
+    pub fn messages_par_uid(&self, dossier: i64, uids: &[u32]) -> Resultat<Vec<MessageLocal>> {
+        let mut trouves = Vec::new();
+        let mut requete = self.base.prepare(&format!("{SELECT_MESSAGE} WHERE folder_id = ?1 AND uid = ?2"))?;
+        for uid in uids {
+            if let Some(m) = requete.query_row(params![dossier, uid], lire_message).optional()? {
+                trouves.push(m);
+            }
+        }
+        trouves.sort_by(|a, b| (b.horodatage, b.uid).cmp(&(a.horodatage, a.uid)));
+        Ok(trouves)
+    }
+
     /// Messages d'un dossier, du plus récent au plus ancien — par date de
     /// réception, que le déplacement entre boîtes conserve, et non par UID,
     /// qu'il renouvelle.
@@ -1457,6 +1521,43 @@ mod tests {
         let drapeaux: Vec<(u32, Vec<String>)> = (1..=1203).map(|uid| (uid, vec!["\\Seen".to_string()])).collect();
         m.poser_drapeaux(id, &drapeaux).unwrap();
         assert!(m.messages(id).unwrap().iter().all(|l| l.lu));
+    }
+
+    #[test]
+    fn recherche_dans_l_index() {
+        let m = Magasin::en_memoire().unwrap();
+        let compte = m.compte("a@exemple.fr", "h", 993, "a@exemple.fr").unwrap();
+        m.poser_dossiers(compte, &[dossier("INBOX", &[]), dossier("Archives", &[])]).unwrap();
+        let inbox = m.dossier_id(compte, "INBOX").unwrap();
+        let archives = m.dossier_id(compte, "Archives").unwrap();
+        let recu = |uid, h, nom: &str, sujet: &str| MessageLocal {
+            uid,
+            horodatage: h,
+            expediteur: nom.into(),
+            adresse: format!("{}@exemple.fr", nom.to_lowercase()),
+            sujet: sujet.into(),
+            ..Default::default()
+        };
+        m.poser_messages(inbox, &[recu(1, 10, "Martin", "Facture de mars"), recu(2, 20, "Durand", "Réunion"), recu(3, 30, "Promo", "Remise 50%_ici")])
+            .unwrap();
+        m.poser_messages(archives, &[recu(1, 5, "Martin", "Facture de février")]).unwrap();
+        let sujets = |t: &[Trouve]| t.iter().map(|x| x.message.sujet.clone()).collect::<Vec<_>>();
+        // Dossier ouvert seulement ; chaque mot doit figurer quelque part.
+        assert_eq!(sujets(&m.chercher(Some(inbox), "facture", 50).unwrap()), vec!["Facture de mars"]);
+        assert_eq!(sujets(&m.chercher(Some(inbox), "martin mars", 50).unwrap()), vec!["Facture de mars"]);
+        assert!(m.chercher(Some(inbox), "martin réunion", 50).unwrap().is_empty());
+        // Partout, les plus récents d'abord, avec leur dossier.
+        let partout = m.chercher(None, "FACTURE", 50).unwrap();
+        assert_eq!(sujets(&partout), vec!["Facture de mars", "Facture de février"]);
+        assert_eq!(partout[1].chemin, "Archives");
+        assert_eq!(partout[1].compte, compte);
+        // « % » et « _ » cherchés tels quels ; texte vide : rien.
+        assert_eq!(m.chercher(Some(inbox), "50%_", 50).unwrap().len(), 1);
+        assert!(m.chercher(Some(inbox), "5_%", 50).unwrap().is_empty());
+        assert!(m.chercher(None, "   ", 50).unwrap().is_empty());
+        // Par UID, du plus récent au plus ancien.
+        let par_uid = m.messages_par_uid(inbox, &[1, 3, 9]).unwrap();
+        assert_eq!(par_uid.iter().map(|l| l.uid).collect::<Vec<_>>(), vec![3, 1]);
     }
 
     #[test]

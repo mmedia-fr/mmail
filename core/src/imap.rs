@@ -78,9 +78,14 @@ impl From<std::io::Error> for Erreur {
     }
 }
 
+/// Flux d'une session : TLS vers le serveur en service, faux serveur dans
+/// les tests (`crate::simule`).
+pub(crate) trait Flux: Read + Write + Send {}
+impl<T: Read + Write + Send> Flux for T {}
+
 /// Session IMAP ouverte sur un serveur.
 pub struct Client {
-    flux: rustls::StreamOwned<rustls::ClientConnection, TcpStream>,
+    flux: Box<dyn Flux>,
     /// Octets lus mais pas encore consommés.
     reste: Vec<u8>,
     compteur: u32,
@@ -102,9 +107,13 @@ impl Client {
         let tcp = joindre(hote, port)?;
         tcp.set_read_timeout(Some(DELAI))?;
         tcp.set_write_timeout(Some(DELAI))?;
+        Client::sur(Box::new(rustls::StreamOwned::new(connexion, tcp)))
+    }
 
+    /// Session sur un flux déjà ouvert, dont on lit la salutation.
+    pub(crate) fn sur(flux: Box<dyn Flux>) -> Resultat<Client> {
         let mut client = Client {
-            flux: rustls::StreamOwned::new(connexion, tcp),
+            flux,
             reste: Vec::new(),
             compteur: 0,
             capacites: Vec::new(),
@@ -155,6 +164,12 @@ impl Client {
 
     pub fn sait(&self, capacite: &str) -> bool {
         self.capacites.iter().any(|c| c == capacite)
+    }
+
+    /// Vrai si le serveur tient un `MODSEQ` par message (CONDSTORE, que
+    /// QRESYNC emporte) : de quoi poser un drapeau sous condition.
+    pub fn condstore(&self) -> bool {
+        self.qresync || self.sait("CONDSTORE")
     }
 
     /// Arborescence complète des dossiers.
@@ -215,6 +230,9 @@ impl Client {
             _ => format!("SELECT {}", citer(chemin)),
         };
         let reprise_demandee = commande.contains("QRESYNC");
+        // Un SELECT refusé laisse le serveur sans dossier sélectionné (RFC 3501
+        // § 6.3.1) : l'ancienne sélection ne vaut plus, quoi qu'il arrive.
+        self.selection = None;
         let (texte, litteraux) = self.commande(&commande)?;
         self.selection = Some(chemin.to_string());
         let etat = protocole::analyser_select(&texte);
@@ -254,10 +272,12 @@ impl Client {
         Ok(protocole::analyser_fetch(&texte, &litteraux))
     }
 
-    /// Quelques champs d'en-tête, désignés, des messages d'un intervalle.
+    /// Quelques champs d'en-tête, désignés, des messages d'un intervalle, avec
+    /// le `MODSEQ` de chacun quand le serveur en tient (cf. `reserver`).
     pub fn champs(&mut self, intervalle: &str, champs: &str) -> Resultat<Vec<Entete>> {
+        let modseq = if self.condstore() { " MODSEQ" } else { "" };
         let (texte, litteraux) = self.commande(&format!(
-            "UID FETCH {intervalle} (UID FLAGS INTERNALDATE RFC822.SIZE BODY.PEEK[HEADER.FIELDS ({champs})])"
+            "UID FETCH {intervalle} (UID FLAGS INTERNALDATE RFC822.SIZE{modseq} BODY.PEEK[HEADER.FIELDS ({champs})])"
         ))?;
         Ok(protocole::analyser_fetch(&texte, &litteraux))
     }
@@ -311,6 +331,20 @@ impl Client {
             protocole::ensemble_uid(uids)
         ))?;
         Ok(())
+    }
+
+    /// Réserve un message du dossier sélectionné en le marquant `\Deleted`,
+    /// à condition que personne ne l'ait modifié depuis le `MODSEQ` lu
+    /// (`UNCHANGEDSINCE`, RFC 7162 § 3.1.3). Rend faux si un autre client l'a
+    /// touché entre-temps — il l'a sans doute réservé lui-même. Sans CONDSTORE,
+    /// ou sans `MODSEQ` connu, le marquage se fait sans condition.
+    pub fn reserver(&mut self, uid: u32, modseq: u64) -> Resultat<bool> {
+        let condition =
+            if self.condstore() && modseq > 0 { format!(" (UNCHANGEDSINCE {modseq})") } else { String::new() };
+        let (texte, _) = self.commande(&format!("UID STORE {uid}{condition} +FLAGS.SILENT (\\Deleted)"))?;
+        // Échec de la condition : « OK [MODIFIED 7] », la commande réussit
+        // sans rien marquer.
+        Ok(!texte.lines().any(|l| l.contains("[MODIFIED")))
     }
 
     /// Déplace des messages du dossier sélectionné vers un autre dossier de la
@@ -575,6 +609,48 @@ mod tests {
         assert_eq!(citer("simple"), "\"simple\"");
         // Un mot de passe peut contenir des caractères réservés du protocole.
         assert_eq!(citer(r#"a"b\c"#), r#""a\"b\\c""#);
+    }
+
+    use crate::simule::{echange, session, DOVECOT};
+
+    #[test]
+    fn reservation_sous_condition() {
+        let (mut client, journal) = session(
+            DOVECOT,
+            vec![
+                echange("UID STORE 7 (UNCHANGEDSINCE 120) +FLAGS.SILENT (\\Deleted)", "", "OK fait"),
+                echange("UID STORE 8 (UNCHANGEDSINCE 90) +FLAGS.SILENT (\\Deleted)", "", "OK [MODIFIED 8] Conditional STORE failed"),
+            ],
+        );
+        assert!(client.reserver(7, 120).unwrap());
+        // Un autre client l'a touché depuis le relevé : il n'est pas à nous.
+        assert!(!client.reserver(8, 90).unwrap());
+        assert_eq!(journal.lock().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn reservation_sans_condstore() {
+        let (mut client, _) =
+            session("UIDPLUS", vec![echange("UID STORE 7 +FLAGS.SILENT (\\Deleted)", "", "OK fait")]);
+        assert!(client.reserver(7, 120).unwrap());
+    }
+
+    #[test]
+    fn select_refuse_efface_la_selection() {
+        let (mut client, journal) = session(
+            DOVECOT,
+            vec![
+                echange("SELECT \"INBOX\"", "* 3 EXISTS\r\n* OK [UIDVALIDITY 1] v\r\n", "OK [READ-WRITE] fait"),
+                echange("SELECT \"Disparu\"", "", "NO Mailbox doesn't exist: Disparu"),
+                echange("SELECT \"INBOX\"", "* 3 EXISTS\r\n", "OK [READ-WRITE] fait"),
+            ],
+        );
+        client.selectionner("INBOX", None).unwrap();
+        assert!(client.selectionner("Disparu", None).is_err());
+        assert_eq!(client.selection(), None);
+        // Revenir à INBOX refait le SELECT au lieu de croire qu'il tient encore.
+        crate::synchro::assurer_selection(&mut client, "INBOX").unwrap();
+        assert_eq!(journal.lock().unwrap().len(), 3);
     }
 
     #[test]

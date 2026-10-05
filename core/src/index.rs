@@ -501,6 +501,7 @@ mod tests {
             drapeaux: vec!["\\Seen".to_string()],
             date_interne: "16-Sep-2026 18:00:00 +0200".to_string(),
             brut: brut.as_bytes().to_vec(),
+            modseq: 0,
         }
     }
 

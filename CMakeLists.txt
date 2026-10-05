@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # MMail — noyau Rust (core/), interface Qt 6 / QML, coffre des mots de passe natif.
 cmake_minimum_required(VERSION 3.24)
-project(mmail VERSION 0.4.3 LANGUAGES CXX)
+project(mmail VERSION 0.4.4 LANGUAGES CXX)
 
 if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
   set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreadedDLL")
@@ -13,15 +13,17 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # QuickDialogs2 sert les boîtes Ouvrir / Enregistrer / Message, LabsSettings la
 # persistance de la géométrie de la fenêtre (module QtCore QML à partir de 6.5,
-# que la machine de développement en 6.4 n'a pas).
-find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 QuickDialogs2 LabsSettings)
+# que la machine de développement en 6.4 n'a pas). Network : le canal local par
+# lequel une seconde instance réveille la première (Qml en dépend déjà, il est
+# donc livré de toute façon).
+find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Network Qml Quick QuickControls2 QuickDialogs2 LabsSettings)
 if(NOT ANDROID)
   find_package(Qt6 REQUIRED COMPONENTS QmlImportScanner)
 endif()
 qt_standard_project_setup()
 
 if(MSVC)
-  set_property(TARGET Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::QuickControls2
+  set_property(TARGET Qt6::Core Qt6::Gui Qt6::Network Qt6::Qml Qt6::Quick Qt6::QuickControls2
                       Qt6::QuickDialogs2 Qt6::LabsSettings
                PROPERTY MAP_IMPORTED_CONFIG_DEBUG "RELEASE")
 endif()
@@ -139,7 +141,7 @@ if(NOT ANDROID)
     PREFIX "/"
     FILES assets/mmail.ico)
 endif()
-target_link_libraries(mmail PRIVATE mmail_qml_module Qt::Quick Qt::QuickControls2
+target_link_libraries(mmail PRIVATE mmail_qml_module Qt::Network Qt::Quick Qt::QuickControls2
                                       Qt::QuickDialogs2 Qt::LabsSettings coffre)
 target_compile_definitions(mmail PRIVATE MMAIL_VERSION="${PROJECT_VERSION}")
 

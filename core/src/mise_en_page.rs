@@ -26,6 +26,12 @@ const LARGEUR_PLEINE: u32 = 400;
 /// Éléments sans contenu ni balise fermante.
 const VIDES: &[&str] = &["br", "hr", "img", "col", "wbr"];
 
+/// Imbrication au-delà de laquelle le HTML est rendu tel quel. `transformer`,
+/// `ecrire` et la libération de l'arbre sont récursifs : un message hostile ou
+/// mal généré (des milliers de `<div>` imbriqués, qu'`ammonia` laisse passer)
+/// dépasserait la pile et arrêterait tout le programme.
+const PROFONDEUR_MAX: usize = 256;
+
 /// Attributs repris par le bloc qui remplace une cellule ou un tableau.
 const ATTRIBUTS_REPRIS: &[&str] = &["class", "dir", "lang"];
 
@@ -69,6 +75,8 @@ fn analyser(html: &str) -> Option<Vec<Noeud>> {
             let (nom, attributs) = lire_balise(balise)?;
             if VIDES.contains(&nom.as_str()) {
                 pile.last_mut()?.2.push(Noeud::Element { nom, attributs, enfants: Vec::new() });
+            } else if pile.len() > PROFONDEUR_MAX {
+                return None;
             } else {
                 pile.push((nom, attributs, Vec::new()));
             }
@@ -343,5 +351,16 @@ mod tests {
         for html in ["<div><p>x</div>", "<div>x", "x</div>", "<table><tr><td>x</td>"] {
             assert_eq!(aplatir(html), html);
         }
+    }
+
+    #[test]
+    fn imbrication_hostile_rendue_telle_quelle() {
+        // Cent mille niveaux, bien formés : sans borne, la récursion de
+        // `transformer` arrêtait le programme.
+        let html = format!("{}x{}", "<div>".repeat(100_000), "</div>".repeat(100_000));
+        assert_eq!(aplatir(&html), html);
+        // Une imbrication ordinaire est toujours traitée.
+        let html = format!("{}<table><tr><td>x</td></tr></table>{}", "<div>".repeat(50), "</div>".repeat(50));
+        assert!(!aplatir(&html).contains("<table"));
     }
 }

@@ -170,6 +170,26 @@ Pane {
         boite.supprimerEvenement(f.objet, f.occurrence, serie)
     }
 
+    // Réponse de la boîte à une réunion où elle est invitée ; le serveur en
+    // avertit l'organisateur.
+    function repondre(f, reponse) {
+        popupFiche.close()
+        ecritureEnCours = "reponse"
+        boite.repondreEvenement(f.objet, reponse)
+    }
+
+    function libelleReponse(statut) {
+        return { "ACCEPTED": qsTr("acceptée"), "DECLINED": qsTr("refusée"), "TENTATIVE": qsTr("provisoire"),
+                 "NEEDS-ACTION": qsTr("en attente") }[statut] || statut
+    }
+
+    // Le serveur d'agenda de la boîte de cet agenda distribue-t-il les
+    // invitations ?
+    function invitationsPossibles(idAgenda) {
+        var a = agendas.find(function(x) { return x.id === idAgenda })
+        return a ? a.invitations === true : false
+    }
+
     // Texte lisible sur une couleur : noir sur une couleur claire, blanc sinon.
     function encre(c) {
         return 0.299 * c.r + 0.587 * c.g + 0.114 * c.b > 0.6 ? "#000000" : "#ffffff"
@@ -228,6 +248,8 @@ Pane {
                 }
             } else if (enCours === "suppression") {
                 agenda.annoncer(ok ? qsTr("Événement supprimé.") : qsTr("Suppression impossible : %1").arg(message), !ok)
+            } else if (enCours === "reponse") {
+                agenda.annoncer(ok ? qsTr("Réponse envoyée à l'organisateur.") : qsTr("Réponse impossible : %1").arg(message), !ok)
             }
         }
     }
@@ -990,6 +1012,45 @@ Pane {
             }
             Label {
                 Layout.fillWidth: true
+                visible: (popupFiche.f.participants || []).length > 0
+                wrapMode: Text.Wrap
+                font.pixelSize: 12
+                text: {
+                    var f = popupFiche.f
+                    if (!f.participants || f.participants.length === 0)
+                        return ""
+                    var o = f.organisateur || {}
+                    var lignes = [qsTr("Organisateur : %1").arg(o.nom || o.adresse || "")]
+                    var liste = f.participants.slice(0, 12).map(function(p) {
+                        return (p.nom || p.adresse) + " (" + agenda.libelleReponse(p.statut) + ")"
+                    })
+                    lignes.push(qsTr("Participants : %1").arg(liste.join(", "))
+                                + (f.participants.length > 12 ? qsTr(", et %1 autres").arg(f.participants.length - 12) : ""))
+                    return lignes.join("\n")
+                }
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                visible: (popupFiche.f.maReponse || "").length > 0
+                spacing: 6
+                Label {
+                    Layout.fillWidth: true
+                    wrapMode: Text.Wrap
+                    text: qsTr("Votre réponse : %1").arg(agenda.libelleReponse(popupFiche.f.maReponse || ""))
+                }
+                Repeater {
+                    model: [["ACCEPTED", qsTr("Accepter")], ["TENTATIVE", qsTr("Provisoire")], ["DECLINED", qsTr("Refuser")]]
+                    delegate: Button {
+                        required property var modelData
+                        text: modelData[1]
+                        highlighted: popupFiche.f.maReponse === modelData[0]
+                        enabled: agenda.invitationsPossibles(popupFiche.f.agenda)
+                        onClicked: agenda.repondre(popupFiche.f, modelData[0])
+                    }
+                }
+            }
+            Label {
+                Layout.fillWidth: true
                 visible: !popupFiche.f.modifiable && (popupFiche.f.motif || "").length > 0
                 text: qsTr("Non modifiable ici : %1.").arg(popupFiche.f.motif || "")
                 wrapMode: Text.Wrap
@@ -1105,8 +1166,14 @@ Pane {
         closePolicy: Popup.CloseOnEscape
         padding: 16
 
+        // Participants proposés : le serveur de la boîte de l'agenda doit
+        // distribuer les invitations, et une occurrence seule n'en change pas.
+        readonly property bool reunionPossible: !occurrence && agenda.invitationsPossibles(
+            nouveau ? (agenda.agendasModifiables()[choixAgenda.currentIndex] || {}).id : s.agenda)
+
         function ouvrir(saisie) {
             s = saisie
+            champParticipants.text = (s.participants || []).join(", ")
             erreur = ""
             enCours = false
             champTitre.text = s.titre || ""
@@ -1174,7 +1241,14 @@ Pane {
                 }
             }
             var modifiables = agenda.agendasModifiables()
+            var participants = null
+            if (reunionPossible)
+                participants = champParticipants.text.split(/[,;\n]/).map(function(t) { return t.trim() })
+                                                     .filter(function(t) { return t.length > 0 })
             var saisie = {
+                participants: participants,
+                organisateur: s.organisateur || "",
+                nomOrganisateur: s.nomOrganisateur || "",
                 agenda: nouveau ? (modifiables.length > 0 ? modifiables[choixAgenda.currentIndex].id : 0) : s.agenda,
                 objet: s.objet || 0,
                 occurrence: s.occurrence || "",
@@ -1322,6 +1396,54 @@ Pane {
                             ToolTip.visible: hovered
                             ToolTip.text: qsTr("Choisir dans le calendrier")
                             onClicked: popupCalendrier.ouvrirPour(champJusquAu)
+                        }
+                    }
+                    Label {
+                        visible: popupSaisie.reunionPossible
+                        text: qsTr("Participants")
+                    }
+                    ColumnLayout {
+                        visible: popupSaisie.reunionPossible
+                        Layout.fillWidth: true
+                        spacing: 0
+                        TextField {
+                            id: champParticipants
+                            Layout.fillWidth: true
+                            placeholderText: qsTr("adresses, séparées par des virgules")
+                            // Propositions pour l'adresse en cours de saisie : la
+                            // dernière de la liste.
+                            property var propositions: []
+                            onTextEdited: {
+                                var dernier = text.split(/[,;]/).pop().trim()
+                                propositions = dernier.length >= 2 ? JSON.parse(agenda.boite.adressesConnues(dernier)).slice(0, 6) : []
+                            }
+                            onActiveFocusChanged: if (!activeFocus) propositions = []
+                        }
+                        Repeater {
+                            model: champParticipants.propositions
+                            delegate: ItemDelegate {
+                                required property var modelData
+                                Layout.fillWidth: true
+                                padding: 4
+                                text: modelData.nom ? modelData.nom + " <" + modelData.adresse + ">" : modelData.adresse
+                                onClicked: {
+                                    var morceaux = champParticipants.text.split(/[,;]/)
+                                    morceaux.pop()
+                                    morceaux.push(" " + text)
+                                    champParticipants.text = morceaux.map(function(m) { return m.trim() })
+                                                                     .filter(function(m) { return m.length > 0 }).join(", ") + ", "
+                                    champParticipants.propositions = []
+                                    champParticipants.forceActiveFocus()
+                                }
+                            }
+                        }
+                        Label {
+                            Layout.fillWidth: true
+                            visible: champParticipants.text.trim().length > 0
+                            wrapMode: Text.Wrap
+                            font.pixelSize: 11
+                            opacity: 0.7
+                            text: qsTr("Le serveur envoie les invitations, et leurs mises à jour, à l'enregistrement.")
                         }
                     }
                     Label { text: qsTr("Rappel") }

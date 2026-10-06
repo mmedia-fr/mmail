@@ -125,6 +125,16 @@ modifié ailleurs entre-temps n'est pas écrasé : l'agenda est relu et la
 modification est à refaire. Les propriétés que MMail ne gère pas (celles d'un
 autre logiciel) sont conservées.
 
+**Invitations** : un courriel d'invitation affiche un bandeau — objet, horaire,
+lieu, organisateur — avec « Accepter », « Provisoire », « Refuser » ; la réunion
+entre dans l'agenda (un refus l'en retire) et l'organisateur reçoit la réponse.
+Une réponse reçue s'inscrit d'elle-même dans l'agenda de l'organisateur, une
+annulation propose de retirer la réunion. Dans l'agenda, une réunion où l'on
+est invité se répond depuis sa fiche ; « Participants » fait d'un événement une
+réunion. C'est le serveur d'agenda qui envoie les courriels d'invitation, de
+mise à jour, d'annulation et de réponse (SOGo le fait ; un serveur qui ne le
+fait pas laisse ces boutons inactifs).
+
 **Rappels** : ceux des agendas affichés, posés depuis MMail ou ailleurs,
 s'affichent à l'heure dite tant que MMail est ouvert, avec « Ignorer » et
 « Répéter dans… » ; la fenêtre clignote dans la barre des tâches.
@@ -237,8 +247,7 @@ par jour. Rien d'autre n'est envoyé ; `AvisVersion` à 0 le coupe.
   ailleurs ; leur ouverture n'a pas été éprouvée sur un téléphone.
 - Hors connexion, un message ouvert reste non lu sur le serveur ; pas de
   filtres.
-- Agenda : les réunions avec participants ne se modifient pas encore, et les
-  invitations ne se traitent pas ; une écriture exige la connexion ; les rappels
+- Agenda : une écriture exige la connexion ; les rappels
   ne s'affichent que MMail ouvert (pas de notification du système, ni sous
   Android en arrière-plan). Les tâches (VTODO) ne s'affichent pas.
 - L'envoi passe par le même serveur que la lecture, sur le port 465.

@@ -723,7 +723,95 @@ fn agenda_ecriture_serie_occurrence_conflit_retrait() {
     synchro();
     assert_eq!(debuts_fevrier_2030(&magasin, &uid), ["04 09:00", "11 13:00", "25 09:00"]);
     let o = objet_par_uid(&magasin, &uid).unwrap();
-    caldav::retirer(&acces, &agenda.adresse, &url, &o.etag).expect("retrait de la série");
+    caldav::retirer(&acces, &agenda.adresse, &url, Some(&o.etag)).expect("retrait de la série");
     synchro();
     assert!(objet_par_uid(&magasin, &uid).is_none());
+}
+
+/// Attend, au plus une minute, un message de la boîte dont le texte contient
+/// `motif`, et rend son contenu.
+fn attendre_message(client: &mut Client, motif: &str) -> Vec<u8> {
+    for _ in 0..30 {
+        client.selectionner("INBOX", None).unwrap();
+        if let Some(uid) = client.chercher_texte(motif).unwrap().into_iter().max() {
+            return client.corps(uid).unwrap();
+        }
+        std::thread::sleep(std::time::Duration::from_secs(2));
+    }
+    panic!("aucun message contenant « {motif} »");
+}
+
+#[test]
+#[ignore = "exige un serveur CalDAV à planification (SOGo) et deux comptes"]
+fn invitation_acceptee_puis_inscrite_et_annulee() {
+    use crate::caldav::{self, Acces};
+    use crate::saisie::{self, Saisie};
+    let hote = variable("MMAIL_HOTE");
+    let (ua, ma) = (variable("MMAIL_UTILISATEUR"), variable("MMAIL_MOTDEPASSE"));
+    let (ub, mb) = (variable("MMAIL_UTILISATEUR2"), variable("MMAIL_MOTDEPASSE2"));
+    let maintenant = chrono::Utc::now();
+    let magasin = Magasin::en_memoire().unwrap();
+    let (ca, cb) = (magasin.compte(&ua, &hote, 993, &ua).unwrap(), magasin.compte(&ub, &hote, 993, &ub).unwrap());
+    let (aa, ab) = (Acces { utilisateur: &ua, mot_de_passe: &ma }, Acces { utilisateur: &ub, mot_de_passe: &mb });
+    let synchro = |compte, acces: &Acces| caldav::synchroniser(&magasin, compte, &hote, acces, maintenant.timestamp(), false).expect("synchronisation");
+    synchro(ca, &aa);
+    synchro(cb, &ab);
+    assert_eq!(magasin.planification(ca).unwrap(), Some(true), "le serveur doit distribuer les invitations");
+    let paris: chrono_tz::Tz = "Europe/Paris".parse().unwrap();
+    let agenda_de = |compte| magasin.agendas().unwrap().into_iter().find(|a| a.compte == compte && a.ecriture).unwrap();
+
+    // A invite B : le serveur envoie l'invitation et la dépose chez B.
+    let titre = format!("Épreuve d'invitation MMail {}", maintenant.timestamp());
+    let s = Saisie {
+        titre: titre.clone(),
+        debut: "2030-03-04T10:00".into(),
+        fin: "2030-03-04T11:00".into(),
+        rappel: -1,
+        participants: Some(vec![ub.clone()]),
+        organisateur: ua.clone(),
+        ..Default::default()
+    };
+    let (uid, ical) = saisie::creer(&s, paris, maintenant).unwrap();
+    let url_a = format!("{}/{uid}.ics", agenda_de(ca).adresse.trim_end_matches('/'));
+    caldav::deposer(&aa, &url_a, &ical, None).expect("dépôt de la réunion");
+    let mut b = session2();
+    let courriel = attendre_message(&mut b, &maintenant.timestamp().to_string());
+    let invitation = crate::invitation::extraire(&courriel).expect("partie calendrier de l'invitation");
+    assert_eq!(invitation.methode, "REQUEST");
+    synchro(cb, &ab);
+    let chez_b = magasin.objet_par_uid(cb, &uid).unwrap().expect("réunion déposée chez l'invité");
+    assert_eq!(crate::invitation::reponse_de(&chez_b.ical, &ub), "NEEDS-ACTION");
+
+    // B accepte : le serveur envoie la réponse à A, qui l'inscrit dans sa copie.
+    let accepte = crate::invitation::repondre(&invitation.ical, Some(&chez_b.ical), &ub, "ACCEPTED").unwrap();
+    let url_b = caldav::adresse(&agenda_de(cb).adresse, &chez_b.href).unwrap();
+    caldav::deposer(&ab, &url_b, &accepte, Some(&chez_b.etag)).expect("réponse de l'invité");
+    let mut a = session();
+    let reponse = attendre_message(&mut a, &maintenant.timestamp().to_string());
+    let reponse = crate::invitation::extraire(&reponse).expect("partie calendrier de la réponse");
+    assert_eq!(reponse.methode, "REPLY");
+    // Invité du même serveur, répondant sur la copie que le serveur lui a
+    // déposée : SOGo reporte déjà la réponse chez l'organisateur. Sinon — un
+    // invité d'ailleurs, dont la réponse arrive par courriel —, MMail l'inscrit.
+    synchro(ca, &aa);
+    let chez_a = magasin.objet_par_uid(ca, &uid).unwrap().unwrap();
+    if let Some(inscrite) = crate::invitation::inscrire_reponse(&chez_a.ical, &reponse.ical).unwrap() {
+        caldav::deposer(&aa, &url_a, &inscrite, Some(&chez_a.etag)).expect("inscription de la réponse");
+    }
+    synchro(ca, &aa);
+    let chez_a = magasin.objet_par_uid(ca, &uid).unwrap().unwrap();
+    assert_eq!(crate::invitation::reponse_de(&chez_a.ical, &ub), "ACCEPTED");
+
+    // A annule : la réunion disparaît de chez B.
+    caldav::retirer(&aa, &agenda_de(ca).adresse, &url_a, Some(&chez_a.etag)).expect("annulation");
+    std::thread::sleep(std::time::Duration::from_secs(5));
+    synchro(cb, &ab);
+    assert!(magasin.objet_par_uid(cb, &uid).unwrap().is_none(), "réunion encore chez l'invité");
+    // Les courriels de l'épreuve — invitation, réponse, annulation — retirés.
+    let motif = maintenant.timestamp().to_string();
+    for client in [&mut a, &mut b] {
+        client.selectionner("INBOX", None).unwrap();
+        let uids = client.chercher_texte(&motif).unwrap();
+        client.supprimer(&uids).expect("purge de nettoyage");
+    }
 }

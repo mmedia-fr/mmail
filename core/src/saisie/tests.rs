@@ -189,3 +189,52 @@ fn identifiants_au_format_uuid_et_distincts() {
     assert_eq!(a.matches('-').count(), 4);
     assert_eq!(a.as_bytes()[14], b'4');
 }
+
+#[test]
+fn reunion_participants_et_reponses_gardees() {
+    let s = Saisie {
+        participants: Some(vec!["Bob Durand <Bob@Exemple.fr>".into(), "carole@exemple.fr".into(), "alice@exemple.fr".into(), "".into()]),
+        organisateur: "alice@exemple.fr".into(),
+        nom_organisateur: "Alice Martin".into(),
+        ..saisie("Point", "2026-10-20T10:00", "2026-10-20T11:00")
+    };
+    let (_, ical) = creer(&s, paris(), maintenant()).unwrap();
+    assert!(ical.contains("ORGANIZER;CN=Alice Martin:mailto:alice@exemple.fr"), "{ical}");
+    let racine = analyser(&ical).unwrap();
+    let (organisateur, invites) = personnes(&racine.enfants.iter().find(|c| c.nom == "VEVENT").unwrap());
+    assert_eq!(organisateur.unwrap().adresse, "alice@exemple.fr");
+    assert_eq!(
+        invites.iter().map(|p| (p.nom.as_str(), p.adresse.as_str(), p.statut.as_str())).collect::<Vec<_>>(),
+        [("Bob Durand", "bob@exemple.fr", "NEEDS-ACTION"), ("", "carole@exemple.fr", "NEEDS-ACTION")]
+    );
+    let relue = saisie_de(&ical, None, paris()).unwrap();
+    assert_eq!(relue.participants, Some(vec!["Bob Durand <bob@exemple.fr>".to_string(), "carole@exemple.fr".to_string()]));
+    assert_eq!((relue.organisateur.as_str(), relue.nom_organisateur.as_str()), ("alice@exemple.fr", "Alice Martin"));
+
+    // Bob a accepté. Un nouveau titre garde sa réponse ; un nouvel horaire la
+    // remet en attente.
+    let accepte = crate::invitation::repondre(&ical, None, "bob@exemple.fr", "ACCEPTED").unwrap();
+    assert_eq!(crate::invitation::reponse_de(&accepte, "bob@exemple.fr"), "ACCEPTED");
+    let mut m = saisie_de(&accepte, None, paris()).unwrap();
+    m.titre = "Point d'étape".into();
+    let titre = modifier(&accepte, &m, paris(), maintenant()).unwrap();
+    assert_eq!(crate::invitation::reponse_de(&titre, "bob@exemple.fr"), "ACCEPTED");
+    m.debut = "2026-10-20T14:00".into();
+    m.fin = "2026-10-20T15:00".into();
+    let horaire = modifier(&accepte, &m, paris(), maintenant()).unwrap();
+    assert_eq!(crate::invitation::reponse_de(&horaire, "bob@exemple.fr"), "NEEDS-ACTION");
+    // Sans participants : un événement simple.
+    m.participants = Some(Vec::new());
+    let simple = modifier(&accepte, &m, paris(), maintenant()).unwrap();
+    assert!(!simple.contains("ATTENDEE") && !simple.contains("ORGANIZER"), "{simple}");
+    // Participants absents de la saisie : inchangés.
+    m.participants = None;
+    m.titre = "Autre".into();
+    m.debut = "2026-10-20T10:00".into();
+    m.fin = "2026-10-20T11:00".into();
+    let inchange = modifier(&accepte, &m, paris(), maintenant()).unwrap();
+    assert_eq!(crate::invitation::reponse_de(&inchange, "bob@exemple.fr"), "ACCEPTED");
+
+    let mauvais = Saisie { participants: Some(vec!["pas une adresse".into()]), organisateur: "alice@exemple.fr".into(), ..saisie("X", "2026-10-20T10:00", "2026-10-20T11:00") };
+    assert!(creer(&mauvais, paris(), maintenant()).unwrap_err().contains("invalide"));
+}

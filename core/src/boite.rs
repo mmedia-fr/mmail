@@ -431,6 +431,26 @@ pub mod qobject {
         #[qinvokable]
         #[cxx_name = "repousserRappel"]
         fn repousser_rappel(&self, cle: &QString, minutes: i32);
+
+        /// Répond à l'invitation reçue dans la boîte `compte` (`ical` : sa
+        /// partie calendrier) : `ACCEPTED`, `TENTATIVE` ou `DECLINED`. La
+        /// réunion est écrite dans l'agenda de la boîte — retirée après un
+        /// refus —, et le serveur en envoie la réponse à l'organisateur.
+        /// Issue : `evenementEnregistre`.
+        #[qinvokable]
+        #[cxx_name = "repondreInvitation"]
+        fn repondre_invitation(self: Pin<&mut Boite>, compte: i32, ical: &QString, reponse: &QString);
+
+        /// Retire de l'agenda de la boîte `compte` la réunion — ou l'occurrence
+        /// — qu'annule ce courriel. Issue : `evenementEnregistre`.
+        #[qinvokable]
+        #[cxx_name = "retirerAnnulee"]
+        fn retirer_annulee(self: Pin<&mut Boite>, compte: i32, ical: &QString);
+
+        /// Répond, depuis l'agenda, à une réunion où la boîte est invitée.
+        #[qinvokable]
+        #[cxx_name = "repondreEvenement"]
+        fn repondre_evenement(self: Pin<&mut Boite>, objet: i32, reponse: &QString);
     }
 
     impl cxx_qt::Threading for Boite {}
@@ -557,6 +577,13 @@ pub mod qobject {
         #[qsignal]
         #[cxx_name = "evenementEnregistre"]
         fn evenement_enregistre(self: Pin<&mut Boite>, ok: bool, message: &QString);
+
+        /// Le message affiché porte une invitation, une réponse ou une
+        /// annulation : de quoi en montrer le bandeau, en JSON (cf.
+        /// `decrire_invitation`) ; vide sinon.
+        #[qsignal]
+        #[cxx_name = "invitationRecue"]
+        fn invitation_recue(self: Pin<&mut Boite>, uid: i32, invitation: &QString);
     }
 }
 
@@ -869,6 +896,7 @@ impl qobject::Boite {
                     "couleur": crate::agenda::couleur(a),
                     "affiche": a.affiche,
                     "ecriture": a.ecriture,
+                    "invitations": magasin.planification(a.compte).ok().flatten().unwrap_or(false),
                 })
             })
             .collect();
@@ -956,7 +984,16 @@ impl qobject::Boite {
                 return;
             }
         };
+        let mut saisie = saisie;
         let objet = if saisie.objet > 0 { self.magasin.as_ref().and_then(|m| m.objet(saisie.objet).ok().flatten()) } else { None };
+        // L'organisateur d'une réunion nouvelle : la boîte de l'agenda.
+        if saisie.organisateur.is_empty() {
+            let agenda = objet.as_ref().map(|o| o.agenda).unwrap_or(saisie.agenda);
+            if let Some(m) = self.magasin.as_ref() {
+                let compte = m.agendas().unwrap_or_default().into_iter().find(|a| a.id == agenda).map(|a| a.compte).unwrap_or(0);
+                saisie.organisateur = m.compte_par_id(compte).ok().flatten().map(|c| c.adresse).unwrap_or_default();
+            }
+        }
         if saisie.objet > 0 && objet.is_none() {
             self.as_mut().evenement_enregistre(false, &QString::from("événement introuvable dans l'index"));
             return;
@@ -970,12 +1007,12 @@ impl qobject::Boite {
                     None => {
                         let (uid, ical) = crate::saisie::creer(&saisie, tz, maintenant)?;
                         let url = format!("{}/{uid}.ics", agenda.adresse.trim_end_matches('/'));
-                        crate::caldav::deposer(dav, &url, &ical, None).map_err(|e| e.to_string())
+                        crate::caldav::deposer(dav, &url, &ical, None).map(|_| ()).map_err(|e| e.to_string())
                     }
                     Some(o) => {
                         let ical = crate::saisie::modifier(&o.ical, &saisie, tz, maintenant)?;
                         let url = crate::caldav::adresse(&agenda.adresse, &o.href).ok_or("adresse de l'événement invalide")?;
-                        crate::caldav::deposer(dav, &url, &ical, Some(&o.etag)).map_err(|e| e.to_string())
+                        crate::caldav::deposer(dav, &url, &ical, Some(&o.etag)).map(|_| ()).map_err(|e| e.to_string())
                     }
                 }
             }),
@@ -994,10 +1031,10 @@ impl qobject::Boite {
             Box::new(move |dav, agenda| {
                 let url = crate::caldav::adresse(&agenda.adresse, &o.href).ok_or("adresse de l'événement invalide")?;
                 match occurrence {
-                    None => crate::caldav::retirer(dav, &agenda.adresse, &url, &o.etag).map_err(|e| e.to_string()),
+                    None => crate::caldav::retirer(dav, &agenda.adresse, &url, Some(&o.etag)).map_err(|e| e.to_string()),
                     Some(origine) => {
                         let ical = crate::saisie::retirer_occurrence(&o.ical, origine, chrono::Utc::now())?;
-                        crate::caldav::deposer(dav, &url, &ical, Some(&o.etag)).map_err(|e| e.to_string())
+                        crate::caldav::deposer(dav, &url, &ical, Some(&o.etag)).map(|_| ()).map_err(|e| e.to_string())
                     }
                 }
             }),
@@ -1028,6 +1065,189 @@ impl qobject::Boite {
             if let Ok(magasin) = Magasin::ouvrir(&profil) {
                 let _ = crate::caldav::synchroniser(&magasin, local.compte, &id.hote, &acces, maintenant(), false);
             }
+            let _ = fil.queue(move |mut boite: Pin<&mut qobject::Boite>| {
+                let message = issue.as_ref().err().cloned().unwrap_or_default();
+                boite.as_mut().agendas_synchronises(true, &QString::from(""));
+                boite.as_mut().evenement_enregistre(issue.is_ok(), &QString::from(&message));
+            });
+        });
+        if lance.is_err() {
+            self.as_mut().evenement_enregistre(false, &QString::from("impossible de lancer l'écriture"));
+        }
+    }
+
+    /// Bandeau d'une invitation, en JSON : sa description (cf.
+    /// `invitation::Invitation`), la boîte et son adresse, si le serveur
+    /// distribue les invitations, la réunion telle que l'agenda la connaît, et
+    /// la partie calendrier (`ical`), rendue telle quelle aux actions. Une
+    /// réponse reçue par l'organisateur est inscrite dans sa copie au passage.
+    fn decrire_invitation(mut self: Pin<&mut Self>, compte: i64, extrait: &crate::invitation::Extrait) -> String {
+        let Some(magasin) = self.magasin.as_ref() else { return String::new() };
+        let moi = magasin.compte_par_id(compte).ok().flatten().map(|c| c.adresse.to_lowercase()).unwrap_or_default();
+        let tz = crate::saisie::fuseau_du_poste();
+        let Some(description) = crate::invitation::decrire(extrait, &tz) else { return String::new() };
+        let objet = magasin.objet_par_uid(compte, &description.uid).ok().flatten();
+        // `null` : pas encore demandé au serveur (première synchronisation de
+        // l'agenda à venir) — les boutons restent actifs.
+        let planification = magasin.planification(compte).ok().flatten();
+        let (sequence_agenda, ma_reponse) = objet
+            .as_ref()
+            .map(|o| (crate::invitation::identite(&o.ical).map(|(_, s)| s).unwrap_or(0), crate::invitation::reponse_de(&o.ical, &moi)))
+            .unwrap_or((-1, String::new()));
+        let mut inscrite = false;
+        if extrait.methode == "REPLY" {
+            // Seule la copie de l'organisateur — la boîte — reçoit les réponses.
+            let organisateur = description.organisateur.as_ref().is_some_and(|p| p.adresse == moi);
+            if let Some(o) = objet.as_ref().filter(|_| organisateur) {
+                if let Ok(Some(ical)) = crate::invitation::inscrire_reponse(&o.ical, &extrait.ical) {
+                    inscrite = true;
+                    let (agenda, href, etag) = (o.agenda, o.href.clone(), o.etag.clone());
+                    self.as_mut().lancer_ecriture(
+                        agenda,
+                        Box::new(move |dav, agenda| {
+                            let url = crate::caldav::adresse(&agenda.adresse, &href).ok_or("adresse de l'événement invalide")?;
+                            crate::caldav::deposer(dav, &url, &ical, Some(&etag)).map(|_| ()).map_err(|e| e.to_string())
+                        }),
+                    );
+                }
+            }
+        }
+        serde_json::json!({
+            "invitation": description,
+            "compte": compte,
+            "moi": moi,
+            "planification": planification,
+            "dansAgenda": objet.is_some(),
+            "sequenceAgenda": sequence_agenda,
+            "maReponse": ma_reponse,
+            "inscrite": inscrite,
+            "ical": extrait.ical,
+        })
+        .to_string()
+    }
+
+    /// Agenda où écrire une réunion reçue par la boîte `compte` : celui qui
+    /// la porte déjà, sinon l'agenda personnel, sinon le premier qui accepte
+    /// l'écriture.
+    fn agenda_de_reception(magasin: &Magasin, compte: i64, objet: Option<&crate::magasin::ObjetLocal>) -> Option<crate::magasin::AgendaLocal> {
+        let agendas: Vec<_> = magasin.agendas().ok()?.into_iter().filter(|a| a.compte == compte).collect();
+        if let Some(o) = objet {
+            return agendas.into_iter().find(|a| a.id == o.agenda);
+        }
+        let modifiables: Vec<_> = agendas.into_iter().filter(|a| a.ecriture).collect();
+        modifiables
+            .iter()
+            .find(|a| a.adresse.trim_end_matches('/').ends_with("/personal"))
+            .or(modifiables.first())
+            .cloned()
+    }
+
+    /// Écrit, depuis un fil à part, la réponse `reponse` de la boîte `compte`
+    /// à la réunion `uid` — `ical` : l'invitation, ou la réunion telle que
+    /// l'agenda la connaît. L'agenda est d'abord relu : la réunion a pu y
+    /// arriver depuis (SOGo y dépose l'invitation d'un collègue), et l'écrire
+    /// à côté en ferait un doublon. Le serveur avertit l'organisateur ; après
+    /// un refus, la réunion est retirée, comme le fait Outlook.
+    fn ecrire_reponse(mut self: Pin<&mut Self>, compte: i64, uid: String, ical: String, reponse: String) {
+        let moi = self
+            .magasin
+            .as_ref()
+            .and_then(|m| m.compte_par_id(compte).ok().flatten())
+            .map(|c| c.adresse.to_lowercase())
+            .unwrap_or_default();
+        self.as_mut().lancer_pour_compte(
+            compte,
+            Box::new(move |dav, magasin| {
+                let objet = magasin.objet_par_uid(compte, &uid).map_err(|e| e.to_string())?;
+                let agenda = Self::agenda_de_reception(magasin, compte, objet.as_ref())
+                    .ok_or("aucun agenda de cette boîte n'accepte l'écriture")?;
+                let ecrit = crate::invitation::repondre(&ical, objet.as_ref().map(|o| o.ical.as_str()), &moi, &reponse)?;
+                let url = match &objet {
+                    Some(o) => crate::caldav::adresse(&agenda.adresse, &o.href).ok_or("adresse de l'événement invalide")?,
+                    None => format!("{}/{}.ics", agenda.adresse.trim_end_matches('/'), nom_d_objet(&uid)),
+                };
+                let etag = crate::caldav::deposer(dav, &url, &ecrit, objet.as_ref().map(|o| o.etag.as_str())).map_err(|e| e.to_string())?;
+                if reponse == "DECLINED" {
+                    crate::caldav::retirer(dav, &agenda.adresse, &url, etag.as_deref()).map_err(|e| e.to_string())?;
+                }
+                Ok(())
+            }),
+        );
+    }
+
+    pub fn repondre_invitation(mut self: Pin<&mut Self>, compte: i32, ical: &QString, reponse: &QString) {
+        let ical = ical.to_string();
+        let Some((uid, _)) = crate::invitation::identite(&ical) else {
+            self.as_mut().evenement_enregistre(false, &QString::from("invitation illisible"));
+            return;
+        };
+        self.ecrire_reponse(compte as i64, uid, ical, reponse.to_string());
+    }
+
+    pub fn repondre_evenement(mut self: Pin<&mut Self>, objet: i32, reponse: &QString) {
+        let Some(magasin) = self.magasin.as_ref() else { return };
+        let Some(o) = magasin.objet(objet as i64).ok().flatten() else {
+            self.as_mut().evenement_enregistre(false, &QString::from("événement introuvable dans l'index"));
+            return;
+        };
+        let compte = magasin.agendas().unwrap_or_default().into_iter().find(|a| a.id == o.agenda).map(|a| a.compte).unwrap_or(0);
+        let uid = crate::invitation::identite(&o.ical).map(|(u, _)| u).unwrap_or_default();
+        self.ecrire_reponse(compte, uid, o.ical, reponse.to_string());
+    }
+
+    pub fn retirer_annulee(mut self: Pin<&mut Self>, compte: i32, ical: &QString) {
+        let (compte, ical) = (compte as i64, ical.to_string());
+        let Some((uid, _)) = crate::invitation::identite(&ical) else {
+            self.as_mut().evenement_enregistre(false, &QString::from("annulation illisible"));
+            return;
+        };
+        // Une occurrence annulée : une exception dans la série ; la réunion
+        // entière : l'objet retiré.
+        let occurrence = crate::agenda::analyser(&ical).and_then(|r| {
+            r.enfants.iter().filter(|c| c.nom == "VEVENT").find_map(|c| crate::saisie::origine_de(&r, c))
+        });
+        self.as_mut().lancer_pour_compte(
+            compte,
+            Box::new(move |dav, magasin| {
+                let Some(o) = magasin.objet_par_uid(compte, &uid).map_err(|e| e.to_string())? else { return Ok(()) };
+                let agenda = Self::agenda_de_reception(magasin, compte, Some(&o)).ok_or("agenda introuvable")?;
+                let url = crate::caldav::adresse(&agenda.adresse, &o.href).ok_or("adresse de l'événement invalide")?;
+                match occurrence {
+                    Some(origine) => {
+                        let ical = crate::saisie::retirer_occurrence(&o.ical, origine, chrono::Utc::now())?;
+                        crate::caldav::deposer(dav, &url, &ical, Some(&o.etag)).map(|_| ()).map_err(|e| e.to_string())
+                    }
+                    None => crate::caldav::retirer(dav, &agenda.adresse, &url, Some(&o.etag)).map_err(|e| e.to_string()),
+                }
+            }),
+        );
+    }
+
+    /// Comme `lancer_ecriture`, pour une écriture dont l'agenda ne se décide
+    /// qu'après avoir relu ceux de la boîte `compte` : le travail reçoit
+    /// l'index à jour.
+    fn lancer_pour_compte(
+        mut self: Pin<&mut Self>,
+        compte: i64,
+        travail: Box<dyn FnOnce(&crate::caldav::Acces, &Magasin) -> Result<(), String> + Send>,
+    ) {
+        let Some(id) = self.identites.get(&compte).cloned() else {
+            self.as_mut().evenement_enregistre(false, &QString::from("cette boîte n'est pas connectée"));
+            return;
+        };
+        let profil = self.profil.clone();
+        let fil = self.qt_thread();
+        let lance = thread::Builder::new().name("mmail-agenda-ecriture".into()).spawn(move || {
+            let acces = crate::caldav::Acces { utilisateur: &id.utilisateur, mot_de_passe: &id.mot_de_passe };
+            let issue = match Magasin::ouvrir(&profil) {
+                Ok(magasin) => {
+                    let _ = crate::caldav::synchroniser(&magasin, compte, &id.hote, &acces, maintenant(), true);
+                    let issue = travail(&acces, &magasin);
+                    let _ = crate::caldav::synchroniser(&magasin, compte, &id.hote, &acces, maintenant(), false);
+                    issue
+                }
+                Err(e) => Err(format!("index local : {e}")),
+            };
             let _ = fil.queue(move |mut boite: Pin<&mut qobject::Boite>| {
                 let message = issue.as_ref().err().cloned().unwrap_or_default();
                 boite.as_mut().agendas_synchronises(true, &QString::from(""));
@@ -2019,6 +2239,8 @@ impl qobject::Boite {
                     &QString::from(&lu.pieces),
                     &QString::from(&lu.confirmation),
                 );
+                let invitation = lu.invitation.as_ref().map(|e| self.as_mut().decrire_invitation(compte, e)).unwrap_or_default();
+                self.as_mut().invitation_recue(uid as i32, &QString::from(&invitation));
             }
             Issue::Programme { jeton, echeance } => {
                 self.as_mut().reviser();
@@ -3242,6 +3464,17 @@ fn lire_fichiers(chemins: &[String]) -> Result<Vec<Fichier>, String> {
         .collect()
 }
 
+/// Nom de fichier d'un nouvel objet de l'agenda, tiré de son UID quand il s'y
+/// prête — lettres, chiffres, tiret, point —, aléatoire sinon : un UID
+/// d'Outlook contient souvent `/`, `+` ou `=`.
+fn nom_d_objet(uid: &str) -> String {
+    if !uid.is_empty() && uid.len() <= 120 && uid.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')) {
+        uid.to_string()
+    } else {
+        crate::saisie::nouvel_uid()
+    }
+}
+
 fn maintenant() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -3261,6 +3494,8 @@ struct Lu {
     pieces: String,
     /// Adresse à qui confirmer la lecture, si l'expéditeur le demande.
     confirmation: String,
+    /// Partie calendrier d'une invitation, d'une réponse ou d'une annulation.
+    invitation: Option<crate::invitation::Extrait>,
 }
 
 /// Lit le corps d'un message du dossier ouvert ; un message affiché (et non sa
@@ -3330,7 +3565,8 @@ fn preparer_lu(octets: &[u8], brut: bool, distantes: bool, compte: i64, atelier:
     } else {
         redaction::confirmation_demandee(octets).unwrap_or_default()
     };
-    let mut lu = Lu { texte: String::new(), brut, html: false, bloquees: 0, pieces: String::new(), confirmation };
+    let invitation = if brut { None } else { crate::invitation::extraire(octets) };
+    let mut lu = Lu { texte: String::new(), brut, html: false, bloquees: 0, pieces: String::new(), confirmation, invitation };
     if brut {
         lu.texte = String::from_utf8_lossy(octets).into_owned();
     } else if let Some(corps) = crate::rendu::corps_html(octets) {

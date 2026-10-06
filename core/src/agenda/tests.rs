@@ -201,7 +201,8 @@ fn occ(debut: &str, fin: &str, titre: &str) -> Occurrence {
         objet: 0,
         origine: utc(debut),
         repete: false,
-        participants: false,
+        organisateur: None,
+        participants: Vec::new(),
         rappels: Vec::new(),
     }
 }

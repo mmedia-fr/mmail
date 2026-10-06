@@ -328,6 +328,16 @@ fn collection_depuis(depart: &str, dav: &impl Dav) -> Resultat<Option<String>> {
     Ok(lire_href(&texte(&reponse), false, "calendar-home-set").and_then(|href| adresse(&reponse.adresse, &href)))
 }
 
+/// Le serveur distribue-t-il lui-même invitations et réponses (RFC 6638,
+/// `calendar-auto-schedule` dans l'en-tête `DAV` d'un OPTIONS) ?
+pub fn planification(dav: &impl Dav, url: &str) -> Resultat<bool> {
+    let reponse = dav.envoyer("OPTIONS", url, "0", "")?;
+    if !(200..300).contains(&reponse.statut) {
+        return Err(Erreur::Protocole(format!("OPTIONS {url} : HTTP {}", reponse.statut)));
+    }
+    Ok(reponse.entete("dav").is_some_and(|v| v.split(',').any(|c| c.trim().eq_ignore_ascii_case("calendar-auto-schedule"))))
+}
+
 /// Ce qu'a fait une synchronisation.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Bilan {
@@ -380,6 +390,12 @@ pub fn synchroniser(
         }
         401 | 403 => return Err(Erreur::Refuse(format!("accès à l'agenda refusé (HTTP {})", reponse.statut))),
         statut => return Err(Erreur::Protocole(format!("PROPFIND {collection} : HTTP {statut}"))),
+    }
+    // Une fois pour toutes : le serveur distribue-t-il les invitations ?
+    if magasin.planification(compte).map_err(index)?.is_none() {
+        if let Ok(p) = planification(dav, &collection) {
+            magasin.poser_planification(compte, Some(p)).map_err(index)?;
+        }
     }
     let distants: Vec<AgendaDistant> = lire_agendas(&texte(&reponse))
         .into_iter()
@@ -474,27 +490,32 @@ fn issue_ecriture(reponse: &Reponse) -> Resultat<()> {
 }
 
 /// Dépose un objet : nouveau sans ETag, remplacé avec l'ETag connu — un
-/// objet changé entre-temps sur le serveur n'est pas écrasé.
-pub fn deposer(dav: &impl Dav, url: &str, ical: &str, etag: Option<&str>) -> Resultat<()> {
-    issue_ecriture(&dav.ecrire("PUT", url, ical, etag)?)
+/// objet changé entre-temps sur le serveur n'est pas écrasé. Rend l'ETag du
+/// dépôt, si le serveur le donne.
+pub fn deposer(dav: &impl Dav, url: &str, ical: &str, etag: Option<&str>) -> Resultat<Option<String>> {
+    let reponse = dav.ecrire("PUT", url, ical, etag)?;
+    issue_ecriture(&reponse)?;
+    Ok(reponse.entete("etag").map(str::to_string))
 }
 
-/// Retire un objet, s'il n'a pas changé depuis que l'index l'a lu. SOGo
-/// ignore `If-Match` sur un DELETE : l'ETag est relu d'abord. Un objet déjà
-/// absent est tenu pour retiré.
-pub fn retirer(dav: &impl Dav, collection: &str, url: &str, etag: &str) -> Resultat<()> {
-    let reponse = dav.envoyer("PROPFIND", url, "0", DEMANDE_ETAGS)?;
-    match reponse.statut {
-        404 | 410 => return Ok(()),
-        207 => {
-            let actuel = lire_objets(&texte(&reponse), collection).into_iter().next().map(|o| o.etag);
-            if actuel.as_deref().is_some_and(|e| e != etag) {
-                return Err(Erreur::Refuse(CONFLIT.into()));
+/// Retire un objet, s'il n'a pas changé depuis que l'index l'a lu (ETag
+/// donné). SOGo ignore `If-Match` sur un DELETE : l'ETag est relu d'abord. Un
+/// objet déjà absent est tenu pour retiré.
+pub fn retirer(dav: &impl Dav, collection: &str, url: &str, etag: Option<&str>) -> Resultat<()> {
+    if let Some(etag) = etag {
+        let reponse = dav.envoyer("PROPFIND", url, "0", DEMANDE_ETAGS)?;
+        match reponse.statut {
+            404 | 410 => return Ok(()),
+            207 => {
+                let actuel = lire_objets(&texte(&reponse), collection).into_iter().next().map(|o| o.etag);
+                if actuel.as_deref().is_some_and(|e| e != etag) {
+                    return Err(Erreur::Refuse(CONFLIT.into()));
+                }
             }
+            _ => issue_ecriture(&reponse)?,
         }
-        _ => issue_ecriture(&reponse)?,
     }
-    let reponse = dav.ecrire("DELETE", url, "", Some(etag))?;
+    let reponse = dav.ecrire("DELETE", url, "", etag)?;
     if matches!(reponse.statut, 404 | 410) {
         return Ok(());
     }

@@ -111,6 +111,11 @@ ApplicationWindow {
     property var selection: ({})
     property int ancre: -1
     property int uidCourant: 0
+    // Invitation, réponse ou annulation portée par le message affiché (cf.
+    // `Boite.invitationRecue`) ; et la réponse en cours d'envoi.
+    property var invitation: ({})
+    property string reponseInvitation: ""
+    onUidCourantChanged: invitation = ({})
     property bool sourceVisible: false
     // Messages retirés de la liste en attendant la fin de leur déplacement :
     // l'interface reflète le tri tout de suite, le serveur suit (décision 16).
@@ -507,6 +512,50 @@ ApplicationWindow {
             e.etape = 4
             console.log("scenario: supprimé", !trouver("Essai d'écriture MMail (modifié)"))
         }
+    }
+
+    // « accepte », « refuse »… : le verbe d'une réponse à une invitation.
+    function verbeReponse(statut) {
+        return { "ACCEPTED": qsTr("accepte"), "DECLINED": qsTr("refuse"), "TENTATIVE": qsTr("accepte provisoirement"),
+                 "DELEGATED": qsTr("délègue") }[statut] || qsTr("répond à")
+    }
+
+    function libelleReponse(statut) {
+        return { "ACCEPTED": qsTr("acceptée"), "DECLINED": qsTr("refusée"), "TENTATIVE": qsTr("provisoire"),
+                 "NEEDS-ACTION": qsTr("en attente") }[statut] || statut
+    }
+
+    // Ce que le bandeau dit de l'invitation au regard de l'agenda.
+    function etatInvitation() {
+        var i = fenetre.invitation
+        var inv = i.invitation || {}
+        if (!inv.methode)
+            return ""
+        if (i.planification === false && inv.methode === "REQUEST")
+            return qsTr("Le serveur d'agenda de cette boîte ne transmet pas les réponses : répondez depuis le webmail.")
+        if (inv.methode === "REPLY")
+            return i.inscrite ? qsTr("Réponse inscrite dans l'agenda.")
+                 : i.dansAgenda ? qsTr("Réponse déjà inscrite dans l'agenda.")
+                 : qsTr("Cette réunion n'est pas dans l'agenda de cette boîte.")
+        if (inv.methode === "CANCEL")
+            return i.dansAgenda ? "" : qsTr("Elle n'est pas, ou plus, dans l'agenda.")
+        var texte = ""
+        if (i.dansAgenda && i.maReponse && i.maReponse !== "NEEDS-ACTION")
+            texte = qsTr("Votre réponse : %1.").arg(libelleReponse(i.maReponse))
+        else if (i.dansAgenda)
+            texte = qsTr("Dans l'agenda, en attente de votre réponse.")
+        if (i.sequenceAgenda > inv.sequence)
+            texte += (texte.length > 0 ? " " : "") + qsTr("Une version plus récente de cette réunion est déjà dans l'agenda.")
+        return texte
+    }
+
+    function donnerSuite(action) {
+        var i = fenetre.invitation
+        fenetre.reponseInvitation = action
+        if (action === "RETIRER")
+            boite.retirerAnnulee(i.compte, i.ical)
+        else
+            boite.repondreInvitation(i.compte, i.ical, action)
     }
 
     function verifierRappels() {
@@ -1028,6 +1077,89 @@ ApplicationWindow {
                         onClicked: {
                             boite.repondreConfirmation(fenetre.uidCourant, false)
                             fenetre.confirmationDemandee = ""
+                        }
+                    }
+                }
+            }
+
+            // Invitation, réponse ou annulation portée par le message : le
+            // bandeau d'Outlook, avec de quoi y donner suite. Le serveur
+            // d'agenda (SOGo) envoie lui-même la réponse à l'organisateur.
+            Pane {
+                id: bandeauInvitation
+                readonly property var inv: fenetre.invitation.invitation || ({})
+                readonly property string methode: inv.methode || ""
+                readonly property var organisateur: inv.organisateur || ({})
+                readonly property var repondant: (inv.participants || [])[0] || ({})
+                readonly property bool active: fenetre.invitation.planification !== false
+                Layout.fillWidth: true
+                visible: fenetre.uidCourant > 0 && !fenetre.sourceVisible && methode.length > 0
+                font.pointSize: fenetre.tailleMessage
+                padding: 8
+                background: Rectangle {
+                    color: Qt.tint(fenetre.palette.base, "#263a7bd5")
+                    border.color: "#3a7bd5"
+                    border.width: 1
+                    radius: 3
+                }
+                ColumnLayout {
+                    width: parent.width
+                    spacing: 3
+                    Label {
+                        Layout.fillWidth: true
+                        font.bold: true
+                        wrapMode: Text.Wrap
+                        text: bandeauInvitation.methode === "CANCEL" ? qsTr("Réunion annulée : %1").arg(bandeauInvitation.inv.titre || "")
+                              : bandeauInvitation.methode === "REPLY"
+                                ? qsTr("Réponse de %1 : %2 « %3 »").arg(bandeauInvitation.repondant.nom || bandeauInvitation.repondant.adresse || "")
+                                      .arg(fenetre.verbeReponse(bandeauInvitation.repondant.statut)).arg(bandeauInvitation.inv.titre || "")
+                              : qsTr("Invitation : %1").arg(bandeauInvitation.inv.titre || "")
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        wrapMode: Text.Wrap
+                        text: (bandeauInvitation.inv.quand || "") + (bandeauInvitation.inv.repete ? qsTr(" — se répète") : "")
+                              + ((bandeauInvitation.inv.lieu || "").length > 0 ? " — " + bandeauInvitation.inv.lieu : "")
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        visible: bandeauInvitation.methode !== "REPLY" && (bandeauInvitation.organisateur.adresse || "").length > 0
+                        wrapMode: Text.Wrap
+                        opacity: 0.8
+                        text: qsTr("Organisateur : %1").arg(bandeauInvitation.organisateur.nom
+                              ? bandeauInvitation.organisateur.nom + " <" + bandeauInvitation.organisateur.adresse + ">"
+                              : bandeauInvitation.organisateur.adresse || "")
+                              + ((bandeauInvitation.inv.participants || []).length > 0
+                                 ? qsTr(" — %1").arg(fenetre.accord(bandeauInvitation.inv.participants.length, qsTr("participant"), qsTr("participants"))) : "")
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        wrapMode: Text.Wrap
+                        opacity: 0.8
+                        text: fenetre.etatInvitation()
+                        visible: text.length > 0
+                    }
+                    Flow {
+                        Layout.fillWidth: true
+                        spacing: 6
+                        visible: bandeauInvitation.methode === "REQUEST" || (bandeauInvitation.methode === "CANCEL" && fenetre.invitation.dansAgenda)
+                        Repeater {
+                            model: bandeauInvitation.methode === "REQUEST"
+                                   ? [["ACCEPTED", qsTr("Accepter")], ["TENTATIVE", qsTr("Provisoire")], ["DECLINED", qsTr("Refuser")]]
+                                   : [["RETIRER", qsTr("Retirer de l'agenda")]]
+                            delegate: Button {
+                                required property var modelData
+                                text: modelData[1]
+                                enabled: bandeauInvitation.active && fenetre.reponseInvitation.length === 0
+                                highlighted: fenetre.invitation.maReponse === modelData[0]
+                                onClicked: fenetre.donnerSuite(modelData[0])
+                            }
+                        }
+                        BusyIndicator {
+                            running: fenetre.reponseInvitation.length > 0
+                            visible: running
+                            height: 28
+                            width: 28
                         }
                     }
                 }
@@ -4071,7 +4203,7 @@ ApplicationWindow {
             // Scénario « agenda » : MMAIL_DOSSIER donne la vue (jour, semaine,
             // mois) ou « saisie » pour le formulaire d'un nouvel événement.
             if (fenetre.essai && (fenetre.essai.scenario === "agenda" || fenetre.essai.scenario === "agenda-ecriture")) {
-                if (identifiantsEssai.dossier && identifiantsEssai.dossier !== "saisie")
+                if (identifiantsEssai.dossier && identifiantsEssai.dossier !== "saisie" && identifiantsEssai.dossier.indexOf("fiche:") !== 0)
                     vueAgenda.genre = identifiantsEssai.dossier
                 fenetre.module = "agenda"
             }
@@ -4141,6 +4273,22 @@ ApplicationWindow {
 
         function onDrapeauxModifies() {
             fenetre.rafraichirListe()
+        }
+
+        function onInvitationRecue(uid, invitation) {
+            if (uid === fenetre.uidCourant)
+                fenetre.invitation = invitation.length > 0 ? JSON.parse(invitation) : ({})
+            // Scénario « invitation » : l'invitation affichée est acceptée par
+            // le bandeau.
+            if (fenetre.essai && fenetre.essai.scenario === "invitation" && invitation.length > 0) {
+                var i = fenetre.invitation
+                console.log("scenario: bandeau", i.invitation.methode, "|", i.invitation.titre, "|", i.invitation.quand,
+                            "| dans l'agenda", i.dansAgenda, "| ma réponse", i.maReponse, "| planification", i.planification)
+                if (i.invitation.methode === "REQUEST" && !fenetre.essai.repondu) {
+                    fenetre.essai.repondu = true
+                    fenetre.donnerSuite("ACCEPTED")
+                }
+            }
         }
 
         function onCorpsRecu(uid, texte, brut, html, bloquees, pieces, confirmation) {
@@ -4231,6 +4379,17 @@ ApplicationWindow {
                 fenetre.annoncer(qsTr("Agenda : %1").arg(erreurs.split("\n")[0]), true)
             if (fenetre.essai && fenetre.essai.scenario === "agenda-ecriture")
                 fenetre.etapeEcriture()
+            // « fiche:aaaa-mm-jj » : la fiche du premier événement de ce jour.
+            if (fenetre.essai && fenetre.essai.scenario === "agenda" && identifiantsEssai.dossier.indexOf("fiche:") === 0
+                    && !fenetre.essai.fiche) {
+                fenetre.essai.fiche = true
+                vueAgenda.allerAuJour(identifiantsEssai.dossier.substring(6))
+                Qt.callLater(function() {
+                    var fiches = vueAgenda.donnees.fiches || []
+                    var i = fiches.findIndex(function(f) { return (f.participants || []).length > 0 })
+                    vueAgenda.montrerFiche(Math.max(0, i))
+                })
+            }
             if (fenetre.essai && fenetre.essai.scenario === "agenda" && identifiantsEssai.dossier === "saisie"
                     && !fenetre.essai.saisie) {
                 fenetre.essai.saisie = true
@@ -4245,6 +4404,27 @@ ApplicationWindow {
         }
 
         function onEvenementEnregistre(ok, message) {
+            if (fenetre.essai && fenetre.essai.scenario === "invitation")
+                console.log("scenario: écriture", ok, JSON.stringify(message), "| réponse", fenetre.reponseInvitation)
+            if (fenetre.reponseInvitation.length > 0) {
+                var action = fenetre.reponseInvitation
+                fenetre.reponseInvitation = ""
+                if (ok) {
+                    var i = Object.assign({}, fenetre.invitation)
+                    if (action === "RETIRER") {
+                        i.dansAgenda = false
+                        fenetre.annoncer(qsTr("Réunion retirée de l'agenda."), false)
+                    } else {
+                        i.maReponse = action
+                        i.dansAgenda = action !== "DECLINED"
+                        fenetre.annoncer(action === "DECLINED" ? qsTr("Invitation refusée : l'organisateur en est averti.")
+                                                               : qsTr("Réponse envoyée à l'organisateur ; la réunion est dans l'agenda."), false)
+                    }
+                    fenetre.invitation = i
+                } else {
+                    fenetre.annoncer(qsTr("Réponse impossible : %1").arg(message), true)
+                }
+            }
             if (fenetre.essai && fenetre.essai.scenario === "agenda-ecriture")
                 console.log("scenario: écriture", fenetre.essai.etape || 0, ok, JSON.stringify(message))
         }
@@ -5405,6 +5585,7 @@ ApplicationWindow {
             essai = { afficherPremier: !identifiantsEssai.scenario
                                        || identifiantsEssai.scenario === "pieces"
                                        || identifiantsEssai.scenario === "images"
+                                       || identifiantsEssai.scenario === "invitation"
                                        || identifiantsEssai.scenario.indexOf("signature") === 0,
                       connecter2: null, scenario: identifiantsEssai.scenario || "",
                       etape: 0, sujet: "", examines: 0 }

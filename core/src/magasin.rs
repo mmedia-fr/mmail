@@ -15,7 +15,7 @@ use std::collections::{HashMap, HashSet};
 
 use rusqlite::{params, Connection, OptionalExtension};
 
-use crate::protocole::{Dossier, EtatDossier, Statut};
+use crate::protocole::{self, Dossier, EtatDossier, Statut};
 
 pub type Resultat<T> = Result<T, Erreur>;
 
@@ -25,7 +25,7 @@ pub type Resultat<T> = Result<T, Erreur>;
 const LOT_ECRITURE: usize = 500;
 
 /// Version du schéma, portée par `PRAGMA user_version`.
-const VERSION_SCHEMA: i32 = 9;
+const VERSION_SCHEMA: i32 = 10;
 
 #[derive(Debug)]
 pub struct Erreur(pub String);
@@ -133,6 +133,8 @@ pub struct MessageLocal {
     pub taille: u32,
     pub lu: bool,
     pub repondu: bool,
+    /// Transféré (`$Forwarded`), par MMail ou par un autre client.
+    pub transfere: bool,
     /// Pièces jointes : supposées d'après les en-têtes, puis constatées à la
     /// lecture du message.
     pub pieces: bool,
@@ -402,6 +404,13 @@ impl Magasin {
         // demandé.
         if version < 9 {
             self.ajouter_colonne("accounts", "caldav_planification", "INTEGER NOT NULL DEFAULT -1")?;
+        }
+        // Version 10 : « transféré » (`$Forwarded`), jusque-là ni lu ni gardé.
+        // Les `HIGHESTMODSEQ` sont oubliés : chaque dossier relit tous ses
+        // drapeaux à sa prochaine ouverture (une commande), pas ses en-têtes.
+        if version < 10 {
+            self.ajouter_colonne("messages", "transfere", "INTEGER NOT NULL DEFAULT 0")?;
+            self.base.execute("UPDATE folders SET highestmodseq = 0", [])?;
         }
         self.base.pragma_update(None, "user_version", VERSION_SCHEMA)?;
         Ok(())
@@ -752,11 +761,11 @@ impl Magasin {
                 let mut insertion = transaction.prepare(
                     "INSERT OR IGNORE INTO messages
                        (folder_id, uid, message_id, expediteur, adresse, sujet, date, horodatage,
-                        taille, lu, repondu, pieces, suivi, importance)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                        taille, lu, repondu, pieces, suivi, importance, transfere)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
                 )?;
                 let mut mise_a_jour = transaction.prepare(
-                    "UPDATE messages SET lu = ?3, repondu = ?4, suivi = ?6, importance = ?7,
+                    "UPDATE messages SET lu = ?3, repondu = ?4, suivi = ?6, importance = ?7, transfere = ?8,
                         pieces = CASE WHEN pieces_certain = 1 THEN pieces ELSE ?5 END
                      WHERE folder_id = ?1 AND uid = ?2",
                 )?;
@@ -781,7 +790,8 @@ impl Magasin {
                         m.repondu as i32,
                         m.pieces as i32,
                         m.suivi as i32,
-                        m.importance as i32
+                        m.importance as i32,
+                        m.transfere as i32
                     ])? == 1;
                     if nouveau {
                         if !m.adresse.is_empty() {
@@ -795,7 +805,8 @@ impl Magasin {
                             m.repondu as i32,
                             m.pieces as i32,
                             m.suivi as i32,
-                            m.importance as i32
+                            m.importance as i32,
+                            m.transfere as i32
                         ])?;
                     }
                 }
@@ -811,11 +822,13 @@ impl Magasin {
             let transaction = self.base.unchecked_transaction()?;
             for (uid, liste) in lot {
                 let lu = liste.iter().any(|d| d.eq_ignore_ascii_case("\\Seen"));
-                let repondu = liste.iter().any(|d| d.eq_ignore_ascii_case("\\Answered"));
+                let repondu = protocole::porte(liste, protocole::REPONDU);
+                let transfere = protocole::porte(liste, protocole::TRANSFERE);
                 let suivi = liste.iter().any(|d| d.eq_ignore_ascii_case("\\Flagged"));
                 transaction.execute(
-                    "UPDATE messages SET lu = ?3, repondu = ?4, suivi = ?5 WHERE folder_id = ?1 AND uid = ?2",
-                    params![dossier, uid, lu as i32, repondu as i32, suivi as i32],
+                    "UPDATE messages SET lu = ?3, repondu = ?4, suivi = ?5, transfere = ?6
+                     WHERE folder_id = ?1 AND uid = ?2",
+                    params![dossier, uid, lu as i32, repondu as i32, suivi as i32, transfere as i32],
                 )?;
             }
             transaction.commit()?;
@@ -959,7 +972,7 @@ impl Magasin {
         }
         let sql = format!(
             "SELECT m.uid, m.message_id, m.expediteur, m.adresse, m.sujet, m.date, m.horodatage, m.taille,
-                    m.lu, m.repondu, m.pieces, m.suivi, m.importance, f.account_id, f.chemin, f.nom
+                    m.lu, m.repondu, m.pieces, m.suivi, m.importance, m.transfere, f.account_id, f.chemin, f.nom
              FROM messages m JOIN folders f ON f.id = m.folder_id
              WHERE {}
              ORDER BY m.horodatage DESC, m.uid DESC LIMIT {limite}",
@@ -970,7 +983,7 @@ impl Magasin {
         let mut requete = self.base.prepare(&sql)?;
         let trouves = requete
             .query_map(rusqlite::params_from_iter(valeurs), |l| {
-                Ok(Trouve { message: lire_message(l)?, compte: l.get(13)?, chemin: l.get(14)?, nom_dossier: l.get(15)? })
+                Ok(Trouve { message: lire_message(l)?, compte: l.get(14)?, chemin: l.get(15)?, nom_dossier: l.get(16)? })
             })?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(trouves)
@@ -1394,7 +1407,7 @@ fn lire_dossier(l: &rusqlite::Row<'_>) -> rusqlite::Result<DossierLocal> {
 }
 
 const SELECT_MESSAGE: &str = "SELECT uid, message_id, expediteur, adresse, sujet, date,
-        horodatage, taille, lu, repondu, pieces, suivi, importance
+        horodatage, taille, lu, repondu, pieces, suivi, importance, transfere
      FROM messages";
 
 fn lire_message(l: &rusqlite::Row<'_>) -> rusqlite::Result<MessageLocal> {
@@ -1412,6 +1425,7 @@ fn lire_message(l: &rusqlite::Row<'_>) -> rusqlite::Result<MessageLocal> {
         pieces: l.get::<_, i32>(10)? != 0,
         suivi: l.get::<_, i32>(11)? != 0,
         importance: l.get::<_, i32>(12)?.clamp(-1, 1) as i8,
+        transfere: l.get::<_, i32>(13)? != 0,
     })
 }
 
@@ -1753,6 +1767,49 @@ mod tests {
         assert!(!m.messages(id).unwrap()[0].suivi);
         m.poser_drapeaux(id, &[(1, vec!["\\Flagged".into()])]).unwrap();
         assert!(m.messages(id).unwrap()[0].suivi);
+    }
+
+    #[test]
+    fn repondu_et_transfere_poses_par_un_autre_logiciel() {
+        let m = Magasin::en_memoire().unwrap();
+        let compte = m.compte("a@b.fr", "h", 993, "a@b.fr").unwrap();
+        m.poser_dossiers(compte, &[dossier("INBOX", &[])]).unwrap();
+        let id = m.dossier_id(compte, "INBOX").unwrap();
+        m.poser_messages(id, &[1, 2].map(|uid| MessageLocal { uid, sujet: format!("m{uid}"), ..Default::default() }))
+            .unwrap();
+        // Posés sur le téléphone : relus du serveur, sans égard à la casse.
+        m.poser_drapeaux(id, &[(1, vec!["\\Seen".into(), "$Forwarded".into()]), (2, vec!["$answered".into()])])
+            .unwrap();
+        let (m1, m2) = (m.message(id, 1).unwrap().unwrap(), m.message(id, 2).unwrap().unwrap());
+        assert!(m1.transfere && !m1.repondu);
+        assert!(m2.repondu && !m2.transfere);
+        // La recherche les rend aussi.
+        assert!(m.chercher(Some(id), "m1", 10).unwrap()[0].message.transfere);
+        // Retirés ailleurs, ils s'effacent ici.
+        m.poser_drapeaux(id, &[(1, vec![])]).unwrap();
+        assert!(!m.message(id, 1).unwrap().unwrap().transfere);
+        // Un message relu en entier garde ce que portent ses en-têtes.
+        m.poser_messages(id, &[MessageLocal { uid: 2, transfere: true, ..Default::default() }]).unwrap();
+        assert!(m.message(id, 2).unwrap().unwrap().transfere);
+    }
+
+    #[test]
+    fn migration_version_10_fait_relire_les_drapeaux() {
+        let m = Magasin::en_memoire().unwrap();
+        let compte = m.compte("a@b.fr", "h", 993, "a@b.fr").unwrap();
+        m.poser_dossiers(compte, &[dossier("INBOX", &[])]).unwrap();
+        let id = m.dossier_id(compte, "INBOX").unwrap();
+        m.poser_etat(id, &EtatDossier { messages: 1, uid_validity: 42, uid_next: 2, highest_mod_seq: 99 }).unwrap();
+        m.poser_messages(id, &[MessageLocal { uid: 1, sujet: "ancien".into(), ..Default::default() }]).unwrap();
+        // Retour à un index de version 9, sans la colonne « transfere ».
+        m.base.execute_batch("ALTER TABLE messages DROP COLUMN transfere; PRAGMA user_version = 9;").unwrap();
+        m.migrer().unwrap();
+        let d = m.dossier(id).unwrap().unwrap();
+        assert_eq!(d.highest_mod_seq, 0, "drapeaux à relire");
+        assert_eq!(d.uid_validity, 42, "en-têtes gardés");
+        assert_eq!(m.messages(id).unwrap()[0].sujet, "ancien");
+        m.poser_drapeaux(id, &[(1, vec!["$Forwarded".into()])]).unwrap();
+        assert!(m.message(id, 1).unwrap().unwrap().transfere);
     }
 
     #[test]

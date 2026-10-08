@@ -1903,19 +1903,24 @@ ApplicationWindow {
                 etatGarde = ""
             }
 
-            // Sur le poste toutes les 10 s, sur le serveur toutes les 2 min,
-            // tant que la rédaction a changé.
+            // Sur le poste toutes les 10 s, tant que la rédaction a changé.
             Timer {
                 interval: 10000
                 repeat: true
                 running: true
                 onTriggered: redac.garder()
             }
+            // Sur le serveur : 30 s après la première frappe, de sorte que le
+            // brouillon paraisse dans son dossier pendant la rédaction, puis
+            // une minute après chaque reprise de la frappe. La minuterie part
+            // avec la modification et s'arrête une fois le brouillon à jour ;
+            // un enregistrement manqué (hors ligne) se retente au tour suivant.
             Timer {
-                interval: 120000
+                id: minuterieBrouillon
+                interval: redac.brouillonUid > 0 ? 60000 : 30000
                 repeat: true
-                running: true
-                onTriggered: if (redac.modifie && !redac.occupe && !redac.chargement) redac.enregistrer(true)
+                running: redac.modifie && !redac.chargement
+                onTriggered: if (!redac.occupe) redac.enregistrer(true)
             }
 
             // ---- adresses proposées à la saisie
@@ -2855,6 +2860,34 @@ ApplicationWindow {
                         font.bold: true
                         color: ligne.highlighted ? fenetre.palette.highlightedText
                              : model.importance > 0 ? "#c42b1c" : "#1a4480"
+                    }
+                    // Répondu (flèche vers la gauche) et transféré (vers la
+                    // droite), par MMail ou par un autre logiciel : le serveur
+                    // porte les drapeaux. Dessinés : « ↩ » et « ↪ » manquent à
+                    // certaines polices et s'affichaient en carrés. Une seule
+                    // image, à la taille implicite : deux images côte à côte, à
+                    // largeur préférée, laissaient la première à largeur nulle.
+                    Canvas {
+                        readonly property bool repondu: model.repondu === true
+                        readonly property bool transfere: model.transfere === true
+                        visible: repondu || transfere
+                        implicitHeight: dateLigne.implicitHeight
+                        implicitWidth: dateLigne.implicitHeight * ((repondu ? 1 : 0) + (transfere ? 1 : 0))
+                        property color encreRepondu: ligne.highlighted ? fenetre.palette.highlightedText : "#6b3fa0"
+                        property color encreTransfere: ligne.highlighted ? fenetre.palette.highlightedText : "#1a4480"
+                        onEncreReponduChanged: requestPaint()
+                        onReponduChanged: requestPaint()
+                        onTransfereChanged: requestPaint()
+                        onWidthChanged: requestPaint()
+                        onHeightChanged: requestPaint()
+                        onPaint: {
+                            var ctx = getContext("2d")
+                            ctx.reset()
+                            if (repondu)
+                                fenetre.dessinerFleche(ctx, 0, height, height, encreRepondu, false)
+                            if (transfere)
+                                fenetre.dessinerFleche(ctx, repondu ? height : 0, height, height, encreTransfere, true)
+                        }
                     }
                     Label {
                         text: model.sujet
@@ -3889,7 +3922,8 @@ ApplicationWindow {
                     + "(Ctrl+Maj+R), « Transférer » (Ctrl+F) — boutons au-dessus du message, ou clic "
                     + "droit. Un double clic répond ; dans les brouillons, il reprend le brouillon. "
                     + "Dans la fenêtre de rédaction : Ctrl+Entrée envoie, Ctrl+S enregistre le "
-                    + "brouillon sur le serveur — ce que MMail fait aussi seul toutes les 2 minutes, "
+                    + "brouillon sur le serveur — ce que MMail fait aussi seul, 30 secondes après la "
+                    + "première frappe puis chaque minute tant que le message change, "
                     + "et le message est gardé sur le poste toutes les 10 secondes : si MMail se "
                     + "ferme avant l'envoi, il le propose à la reprise au démarrage suivant ; "
                     + "« Joindre… » ou un glisser-déposer de fichiers "
@@ -3907,7 +3941,9 @@ ApplicationWindow {
                     + "<b>Suivi</b><br>"
                     + "Un clic au bout de la seconde ligne d'un message, ou la touche Insertion, pose "
                     + "ou retire un drapeau de suivi, que les autres logiciels de messagerie voient "
-                    + "aussi. « ! » signale un message d'importance haute, « ↓ » d'importance basse. "
+                    + "aussi. « ! » signale un message d'importance haute, « ↓ » d'importance basse ; "
+                    + "une flèche vers la gauche, un message auquel on a répondu, vers la droite, un "
+                    + "message transféré — ici ou depuis un autre logiciel. "
                     + "Quand un expéditeur demande une confirmation de lecture, MMail propose de "
                     + "l'envoyer ou de l'ignorer.<br><br>"
                     + "<b>Favoris</b><br>"
@@ -4372,6 +4408,8 @@ ApplicationWindow {
             if (fenetre.essai && fenetre.essai.scenario === "garde-serveur")
                 console.log("scenario: brouillon enregistré", uid, "| modifiée", r.modifie,
                             "| gardées après", JSON.parse(boite.redactionsGardees()).length, "| note", r.note)
+            if (fenetre.essai && fenetre.essai.scenario === "brouillon-auto")
+                fenetre.etapeScenarioBrouillonAuto(r, uid)
         }
 
         function onAgendasSynchronises(change, erreurs) {
@@ -4595,6 +4633,28 @@ ApplicationWindow {
         ctx.lineTo(x(6), y(10.5))
         ctx.arc(x(5), y(10.5), x(1), 0, Math.PI, false)
         ctx.lineTo(x(4), y(5.5))
+        ctx.stroke()
+    }
+
+    /// Flèche de réponse (vers la gauche) ou de transfert (vers la droite),
+    /// comme dans Outlook : une hampe coudée et une pointe.
+    /// `gauche` : abscisse de la case où la dessiner ; le contexte n'est pas
+    /// effacé, une seconde flèche peut suivre.
+    function dessinerFleche(ctx, gauche, w, h, encre, versLaDroite) {
+        var x = function(v) { return gauche + (versLaDroite ? 1 - v : v) * w }
+        var y = function(v) { return v * h }
+        ctx.strokeStyle = encre
+        ctx.lineWidth = Math.max(1.2, w * 0.12)
+        ctx.lineCap = "round"
+        ctx.lineJoin = "round"
+        ctx.beginPath()
+        ctx.moveTo(x(0.86), y(0.84))
+        ctx.lineTo(x(0.86), y(0.66))
+        ctx.quadraticCurveTo(x(0.86), y(0.4), x(0.6), y(0.4))
+        ctx.lineTo(x(0.14), y(0.4))
+        ctx.moveTo(x(0.38), y(0.16))
+        ctx.lineTo(x(0.14), y(0.4))
+        ctx.lineTo(x(0.38), y(0.64))
         ctx.stroke()
     }
 
@@ -5605,6 +5665,11 @@ ApplicationWindow {
                 delai.triggered.connect(etapeScenarioGardeServeur)
                 delai.start()
             }
+            if (essai.scenario === "brouillon-auto") {
+                var attente = Qt.createQmlObject('import QtQuick; Timer { interval: 6000 }', fenetre)
+                attente.triggered.connect(function() { etapeScenarioBrouillonAuto(null, 0) })
+                attente.start()
+            }
             // Scénario « horsligne » : aucune connexion ; le profil d'une
             // session précédente doit suffire à lire la boîte de réception.
             // Scénario « mesure-liste » : aucune connexion ; chronomètre
@@ -5665,6 +5730,50 @@ ApplicationWindow {
         r.garder()
         console.log("scenario: gardées avant", JSON.parse(boite.redactionsGardees()).length)
         r.enregistrer(true)
+    }
+
+    /// Scénario « brouillon-auto » : un message neuf que l'on ne touche pas ne
+    /// passe pas pour modifié ; modifié, il est enregistré sur le serveur sans
+    /// rien demander 30 s plus tard, puis une minute après la frappe suivante,
+    /// la version précédente effacée (UID rendus par le serveur).
+    function etapeScenarioBrouillonAuto(r, uid) {
+        var ecoule = function() { return Math.round((Date.now() - essai.depart) / 1000) }
+        if (essai.etape === 0) {
+            essai.etape = 1
+            var n = ouvrirRedaction(comptesConnus[0].compte)
+            n.pret()
+            var controle = Qt.createQmlObject('import QtQuick; Timer { interval: 3000 }', fenetre)
+            controle.triggered.connect(function() {
+                console.log("scenario: message neuf, modifié", n.modifie)
+                n.remplir({ a: "destinataire@exemple.fr", objet: "Essai brouillon automatique " + Date.now(),
+                            texte: "Première frappe.", mode: "brouillon" })
+                n.modifie = true
+                essai.depart = Date.now()
+                var garde = Qt.createQmlObject('import QtQuick; Timer { interval: 150000 }', fenetre)
+                garde.triggered.connect(function() {
+                    if (essai.etape < 3)
+                        console.log("scenario: ECHEC, étape", essai.etape, "| note", n.note)
+                })
+                garde.start()
+            })
+            controle.start()
+        } else if (essai.etape === 1) {
+            essai.etape = 2
+            essai.premier = uid
+            console.log("scenario: 1er enregistrement après", ecoule(), "s | uid", uid, "| modifiée", r.modifie,
+                        "| note", r.note)
+            // La frappe reprend un peu plus tard.
+            var reprise = Qt.createQmlObject('import QtQuick; Timer { interval: 5000 }', fenetre)
+            reprise.triggered.connect(function() {
+                r.modifie = true
+                essai.depart = Date.now()
+            })
+            reprise.start()
+        } else if (essai.etape === 2) {
+            essai.etape = 3
+            console.log("scenario: 2e enregistrement après", ecoule(), "s | uid", uid, "| précédent", essai.premier,
+                        "| modifiée", r.modifie)
+        }
     }
 
     function etapeScenarioReprise() {

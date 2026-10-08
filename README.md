@@ -46,6 +46,10 @@ de projet interne.
 - **drapeau de suivi** (`\Flagged`) posé ou retiré d'un clic en bout de ligne,
   par le menu ou la touche Insertion ; importance des messages reçus signalée
   dans la liste (« ! », « ↓ ») et dans l'en-tête ;
+- **répondu et transféré** signalés dans la liste par une flèche, vers la
+  gauche ou vers la droite comme dans Outlook, que la réponse ou le transfert
+  vienne de MMail ou d'un autre logiciel — téléphone, webmail (`\Answered`,
+  `$Forwarded`) ;
 - **confirmation de lecture** demandée par un expéditeur : proposée, jamais
   envoyée d'office ; la réponse — envoi ou refus — n'est demandée qu'une fois
   (`$MDNSent`) ;
@@ -74,6 +78,10 @@ de projet interne.
   messages par le serveur —, ou dans toutes les boîtes (index du poste), un clic
   sur un résultat ouvrant son dossier ;
 - **Supprimer** envoie à la corbeille de la boîte (touche Suppr) ;
+- **dossiers de rôle** — brouillons, éléments envoyés, corbeille — désignés
+  par le serveur (SPECIAL-USE) ; à défaut (OVH), reconnus à leur nom usuel,
+  « Drafts » ou « Brouillons », « Sent » ou « Éléments envoyés »… : le moins
+  profond d'abord, puis le nom standard avant sa traduction ;
 - **vider les corbeilles et indésirables** de tous les comptes : seuls les
   dossiers que le serveur désigne comme tels (`\Trash`, `\Junk`) sont purgés,
   jamais un dossier sur la foi de son nom ;
@@ -203,8 +211,9 @@ La boîte de réception et chaque dossier ouvert se préchargent en arrière-pla
 au-delà de la fenêtre, un message est relu sur le serveur.
 
 Un message en cours de rédaction est gardé sur le poste toutes les 10 secondes
-et à la fermeture de MMail, et enregistré en brouillon sur le serveur toutes
-les 2 minutes tant qu'il change. Si MMail se ferme avant son envoi (mise à
+et à la fermeture de MMail, et enregistré en brouillon sur le serveur 30
+secondes après la première frappe, puis chaque minute tant qu'il change : le
+brouillon paraît dans son dossier pendant la rédaction. Si MMail se ferme avant son envoi (mise à
 jour, arrêt du poste), il est proposé à la reprise au démarrage suivant.
 
 | | Windows | Linux |

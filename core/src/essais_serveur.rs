@@ -225,6 +225,46 @@ fn synchronisation_incrementale() {
     assert_eq!(magasin.uids(id).unwrap().len(), premier_compte(&magasin, id));
 }
 
+/// Réponse et transfert faits sur le téléphone : l'autre session pose
+/// `\Answered` et `$Forwarded`, la reprise QRESYNC les rend à l'index.
+#[test]
+#[ignore = "exige un serveur IMAP et un compte"]
+fn repondu_et_transfere_poses_par_un_autre_logiciel() {
+    let mut a = session();
+    let mut telephone = session();
+    let (magasin, compte, _) = index(&mut a, None);
+    let id = magasin.dossier_id(compte, "INBOX").unwrap();
+    synchro::synchroniser(&mut a, &magasin, compte, "INBOX").expect("sync 1");
+
+    let (message_id, brut) = message_essai("Transfert ailleurs");
+    let uid = telephone
+        .deposer("INBOX", &["\\Seen".into()], DATE_ESSAI, &brut)
+        .expect("APPEND")
+        .expect("APPENDUID");
+    synchro::synchroniser(&mut a, &magasin, compte, "INBOX").expect("sync 2");
+    let ligne = magasin.message(id, uid).unwrap().expect("message indexé");
+    assert!(!ligne.repondu && !ligne.transfere);
+
+    telephone.selectionner("INBOX", None).unwrap();
+    telephone.marquer(&[uid], "$Forwarded", true).unwrap();
+    telephone.marquer(&[uid], "\\Answered", true).unwrap();
+    let bilan = synchro::synchroniser(&mut a, &magasin, compte, "INBOX").expect("sync 3");
+    assert!(!bilan.complet, "la reprise doit suffire : {bilan:?}");
+    let ligne = magasin.message(id, uid).unwrap().unwrap();
+    assert!(ligne.transfere, "$Forwarded posé ailleurs");
+    assert!(ligne.repondu, "\\Answered posé ailleurs");
+
+    // Un index d'avant la 0.5.4 : HIGHESTMODSEQ oublié par la migration, tous
+    // les drapeaux sont relus.
+    magasin.oublier_modseq(id).unwrap();
+    telephone.marquer(&[uid], "\\Answered", false).unwrap();
+    synchro::synchroniser(&mut a, &magasin, compte, "INBOX").expect("sync 4");
+    let ligne = magasin.message(id, uid).unwrap().unwrap();
+    assert!(ligne.transfere && !ligne.repondu);
+
+    nettoyer(&mut telephone, "INBOX", &message_id);
+}
+
 fn premier_compte(magasin: &Magasin, id: i64) -> usize {
     magasin.dossier(id).unwrap().unwrap().messages as usize
 }

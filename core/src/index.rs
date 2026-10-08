@@ -18,6 +18,7 @@ pub fn ligne_index(entete: &Entete) -> MessageLocal {
         taille: entete.taille,
         lu: entete.lu(),
         repondu: entete.repondu(),
+        transfere: entete.transfere(),
         ..Default::default()
     };
 

@@ -10,6 +10,20 @@
 /// n'emploie jamais, suivi de l'indice du littéral et du même caractère.
 pub const MARQUEUR: char = '\u{1}';
 
+/// Drapeaux d'un message répondu : `\Answered`, et le mot-clé `$Answered`
+/// que posent certains clients (relevé sur une boîte partagée Mailcow).
+pub const REPONDU: &[&str] = &["\\Answered", "$Answered"];
+
+/// Drapeaux d'un message transféré. Il n'y a pas de drapeau système : c'est
+/// le mot-clé `$Forwarded` (celui des téléphones, de Thunderbird, de MMail), et
+/// `Forwarded`, sans `$`, de clients plus anciens.
+pub const TRANSFERE: &[&str] = &["$Forwarded", "Forwarded"];
+
+/// Vrai si la liste porte l'un de ces drapeaux, sans égard à la casse.
+pub fn porte(drapeaux: &[String], noms: &[&str]) -> bool {
+    drapeaux.iter().any(|d| noms.iter().any(|n| d.eq_ignore_ascii_case(n)))
+}
+
 /// Un dossier tel que l'annonce `LIST`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Dossier {
@@ -91,7 +105,11 @@ impl Entete {
     }
 
     pub fn repondu(&self) -> bool {
-        self.drapeaux.iter().any(|d| d == "\\Answered")
+        porte(&self.drapeaux, REPONDU)
+    }
+
+    pub fn transfere(&self) -> bool {
+        porte(&self.drapeaux, TRANSFERE)
     }
 
     /// Drapeau de suivi (`\Flagged`), celui qu'Outlook appelle « assurer un
@@ -521,6 +539,19 @@ mod tests {
         let d = analyser_list(r#"* LIST (\HasChildren \Marked) "/" Essais"#).unwrap();
         assert_eq!(d.chemin, "Essais");
         assert!(d.attributs.contains(&"\\HasChildren".to_string()));
+    }
+
+    #[test]
+    fn drapeaux_repondu_et_transfere() {
+        let e = |d: &[&str]| Entete { drapeaux: d.iter().map(|s| s.to_string()).collect(), ..Default::default() };
+        assert!(e(&["\\Answered"]).repondu());
+        assert!(e(&["\\ANSWERED"]).repondu());
+        assert!(e(&["$Answered"]).repondu());
+        assert!(!e(&["\\Seen", "$Forwarded"]).repondu());
+        assert!(e(&["$Forwarded"]).transfere());
+        assert!(e(&["$forwarded"]).transfere());
+        assert!(e(&["Forwarded"]).transfere());
+        assert!(!e(&["\\Answered"]).transfere());
     }
 
     #[test]

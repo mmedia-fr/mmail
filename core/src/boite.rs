@@ -1702,13 +1702,8 @@ impl qobject::Boite {
         let Some((compte, source, _)) = self.courant.clone() else {
             return false;
         };
-        let corbeille = self.magasin.as_ref().and_then(|m| {
-            m.dossiers(compte)
-                .ok()?
-                .into_iter()
-                .find(|d| d.role == "Trash")
-                .map(|d| d.chemin)
-        });
+        let corbeille =
+            self.magasin.as_ref().and_then(|m| dossier_de_role(&m.dossiers(compte).ok()?, "Trash"));
         match corbeille {
             Some(corbeille) if corbeille != source => {
                 self.deplacer(uids, compte as i32, &QString::from(&corbeille))
@@ -1934,17 +1929,23 @@ impl qobject::Boite {
                 .ok()
                 .flatten()
                 .map(|d| {
-                    if d.role.is_empty() && d.profondeur == 0 && d.nom == DOSSIER_DIFFERE {
-                        "Differe".to_string()
-                    } else if d.role.is_empty()
-                        && m.dossiers(*compte).ok().as_deref().and_then(dossier_indesirables).as_ref() == Some(chemin)
-                    {
-                        // Dossier d'indésirables reconnu à son nom, faute
-                        // d'attribut SPECIAL-USE.
-                        "Junk".to_string()
-                    } else {
-                        d.role
+                    if !d.role.is_empty() {
+                        return d.role;
                     }
+                    if d.profondeur == 0 && d.nom == DOSSIER_DIFFERE {
+                        return "Differe".to_string();
+                    }
+                    // Rôle reconnu au nom du dossier, faute d'attribut
+                    // SPECIAL-USE : un brouillon s'y reprend d'un double clic.
+                    let dossiers = m.dossiers(*compte).unwrap_or_default();
+                    if dossier_indesirables(&dossiers).as_ref() == Some(chemin) {
+                        return "Junk".to_string();
+                    }
+                    ["Drafts", "Sent", "Trash"]
+                        .into_iter()
+                        .find(|role| dossier_de_role(&dossiers, role).as_ref() == Some(chemin))
+                        .unwrap_or_default()
+                        .to_string()
                 })
                 .unwrap_or_default(),
             _ => String::new(),
@@ -2479,6 +2480,40 @@ fn dossier_indesirables(dossiers: &[DossierLocal]) -> Option<String> {
             })
         })
         .map(|d| d.chemin.clone())
+}
+
+/// Noms usuels des dossiers de rôle, pour un serveur qui ne les désigne pas
+/// (OVH n'annonce pas SPECIAL-USE). Les noms standard d'abord : sur la boîte
+/// d'essai OVH, « Sent » et « Éléments envoyés » coexistent, et « Sent » est
+/// celui qui a reçu le dernier envoi (relevé du 08/10/2026).
+fn noms_de_role(role: &str) -> &'static [&'static str] {
+    match role {
+        "Drafts" => &["drafts", "brouillons"],
+        "Sent" => &["sent", "sent items", "sent messages", "envoyés", "éléments envoyés", "messages envoyés"],
+        "Trash" => &["trash", "deleted items", "deleted messages", "corbeille", "éléments supprimés"],
+        _ => &[],
+    }
+}
+
+/// Dossier qui tient un rôle : celui qui porte l'attribut SPECIAL-USE ; à
+/// défaut, un dossier sans rôle qui en porte un nom usuel — le moins profond
+/// d'abord, puis dans l'ordre de `noms_de_role`. Sert à ranger (brouillons,
+/// copie des envois, corbeille où déplacer), jamais à purger : cf.
+/// `dossiers_a_vider`.
+fn dossier_de_role(dossiers: &[DossierLocal], role: &str) -> Option<String> {
+    if let Some(d) = dossiers.iter().find(|d| d.role == role) {
+        return Some(d.chemin.clone());
+    }
+    let noms = noms_de_role(role);
+    dossiers
+        .iter()
+        .filter(|d| d.selectionnable && d.role.is_empty())
+        .filter_map(|d| {
+            let nom = d.nom.to_lowercase();
+            noms.iter().position(|n| *n == nom).map(|rang| ((d.profondeur, rang), d))
+        })
+        .min_by_key(|(cle, _)| *cle)
+        .map(|(_, d)| d.chemin.clone())
 }
 
 /// Noms usuels d'une corbeille ou d'un dossier d'indésirables, pour un
@@ -3119,9 +3154,10 @@ fn annexe(e: &mut Etabli, compte: i64) -> Result<Client, Echec> {
 // ------------------------------------------------------------- rédaction
 
 impl Travail {
-    /// Chemin du dossier de ce compte qui porte un rôle SPECIAL-USE.
+    /// Chemin du dossier de ce compte qui tient un rôle (« Drafts », « Sent »,
+    /// « Trash ») : cf. `dossier_de_role`.
     fn dossier_de_role(&self, e: &Etabli, role: &str) -> Option<String> {
-        e.magasin.dossiers(self.compte).ok()?.into_iter().find(|d| d.role == role).map(|d| d.chemin)
+        dossier_de_role(&e.magasin.dossiers(self.compte).ok()?, role)
     }
 
     /// Fait une opération dans un autre dossier que celui qui est sélectionné,
@@ -3906,7 +3942,7 @@ fn json_messages(messages: &[MessageLocal]) -> String {
 
 fn json_message(m: &MessageLocal) -> String {
     format!(
-        r#"{{"uid":{},"h":{},"expediteur":{},"adresse":{},"sujet":{},"date":{},"taille":{},"lu":{},"repondu":{},"pieces":{},"suivi":{},"importance":{}}}"#,
+        r#"{{"uid":{},"h":{},"expediteur":{},"adresse":{},"sujet":{},"date":{},"taille":{},"lu":{},"repondu":{},"transfere":{},"pieces":{},"suivi":{},"importance":{}}}"#,
         m.uid,
         m.horodatage,
         texte_json(&m.expediteur),
@@ -3916,6 +3952,7 @@ fn json_message(m: &MessageLocal) -> String {
         m.taille,
         m.lu,
         m.repondu,
+        m.transfere,
         m.pieces,
         m.suivi,
         m.importance
@@ -4351,6 +4388,59 @@ mod tests {
         let mut inbox = liste.clone();
         inbox[0].replie = true;
         assert_eq!(ordre(&inbox), vec!["INBOX", "Sent", "Eléments infectés", "Spambox"]);
+    }
+
+    #[test]
+    fn dossiers_de_role_par_le_nom_sans_special_use() {
+        // Arborescence d'une boîte d'essai chez OVH, relevée le
+        // 08/10 : aucun attribut de rôle, des doublons laissés par d'autres
+        // clients sous « INBOX.INBOX ».
+        let d = |chemin: &str| DossierLocal {
+            chemin: chemin.into(),
+            nom: chemin.rsplit('.').next().unwrap_or(chemin).into(),
+            profondeur: chemin.matches('.').count() as u32,
+            selectionnable: true,
+            ..Default::default()
+        };
+        let ovh = [
+            d("INBOX"),
+            d("INBOX.Éléments supprimés"),
+            d("INBOX.Éléments envoyés"),
+            d("INBOX.INBOX.Junk"),
+            d("INBOX.INBOX.Trash"),
+            d("INBOX.INBOX.Drafts"),
+            d("INBOX.INBOX.Sent"),
+            d("INBOX.Courrier indésirable"),
+            d("INBOX.Brouillons"),
+            d("INBOX.Trash"),
+            d("INBOX.Spambox"),
+            d("INBOX.Sent"),
+        ];
+        assert_eq!(dossier_de_role(&ovh, "Drafts").as_deref(), Some("INBOX.Brouillons"));
+        assert_eq!(dossier_de_role(&ovh, "Sent").as_deref(), Some("INBOX.Sent"));
+        assert_eq!(dossier_de_role(&ovh, "Trash").as_deref(), Some("INBOX.Trash"));
+        assert_eq!(dossier_de_role(&ovh, "Archive"), None);
+        // Seuls les noms traduits : ils suffisent.
+        let traduits = [d("INBOX"), d("INBOX.Éléments envoyés"), d("INBOX.Corbeille")];
+        assert_eq!(dossier_de_role(&traduits, "Sent").as_deref(), Some("INBOX.Éléments envoyés"));
+        assert_eq!(dossier_de_role(&traduits, "Trash").as_deref(), Some("INBOX.Corbeille"));
+        assert_eq!(dossier_de_role(&traduits, "Drafts"), None);
+
+        // L'attribut prime sur le nom ; un dossier qui porte un autre rôle ou
+        // ne s'ouvre pas n'est jamais retenu pour son nom.
+        let mut noeud = d("Drafts");
+        noeud.selectionnable = false;
+        let mut archive = d("Sent");
+        archive.role = "Archive".into();
+        let mut envoyes = d("Envois");
+        envoyes.role = "Sent".into();
+        let mailcow = [d("INBOX"), noeud, archive, envoyes];
+        assert_eq!(dossier_de_role(&mailcow, "Sent").as_deref(), Some("Envois"));
+        assert_eq!(dossier_de_role(&mailcow, "Drafts"), None);
+
+        // Et la purge reste aux seuls rôles annoncés, ou aux noms exacts
+        // quand aucun ne l'est : la reconnaissance par le nom n'y change rien.
+        assert_eq!(dossiers_a_vider(&ovh), vec!["INBOX.Éléments supprimés", "INBOX.INBOX.Junk", "INBOX.INBOX.Trash", "INBOX.Courrier indésirable", "INBOX.Trash"]);
     }
 
     #[test]

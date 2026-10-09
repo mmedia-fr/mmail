@@ -26,6 +26,7 @@
 
 #include "coffre.h"
 #include "fenetre.h"
+#include "lanceur.h"
 #include "presse_papier.h"
 #include "mise_en_forme.h"
 
@@ -182,6 +183,8 @@ int main(int argc, char* argv[])
   // Presse-papier du système, que QML ne sait pas lire : la copie automatique
   // de la sélection en a besoin pour ne pas écraser ce qu'un tiers y a déposé.
   qmlRegisterType<PressePapier>("fr.mmedia.mmail.natif", 1, 0, "PressePapier");
+  // Lancement d'un logiciel choisi sur une pièce jointe (décision 9).
+  qmlRegisterType<Lanceur>("fr.mmedia.mmail.natif", 1, 0, "Lanceur");
   // Mise en forme du message en cours de rédaction (gras, listes, liens…).
   qmlRegisterType<MiseEnForme>("fr.mmedia.mmail.natif", 1, 0, "MiseEnForme");
 

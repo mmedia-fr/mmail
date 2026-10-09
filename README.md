@@ -102,9 +102,13 @@ de projet interne.
   l'adresse de l'expéditeur ou l'objet ;
 - **barre d'information** : compte et dossier ouverts, nombre de messages et de
   non-lus, sélection, état de la synchronisation, déplacements en attente ;
-- **pièces jointes** listées sous l'en-tête du message : « Ouvrir » avec le
-  logiciel du système, « Enregistrer sous… » ; un programme ou un script
-  (`.exe`, `.js`, `.bat`…) ne s'ouvre pas depuis MMail, il s'enregistre ;
+- **pièces jointes** mises en valeur sous l'en-tête du message, une ligne par
+  pièce : type en couleur (PDF, XLSX, JPG…), nom, taille, « Ouvrir » et
+  « Enregistrer sous… » ; clic droit, « Ouvrir avec… » un logiciel choisi, pour
+  cette fois ou pour tous les fichiers du même type — retenu sur ce poste
+  seulement, revu par « Logiciels d'ouverture… » (menu « Affichage ») ; sans
+  choix, le logiciel du système. Un programme ou un script (`.exe`, `.js`,
+  `.bat`…) ne s'ouvre pas depuis MMail, il s'enregistre ;
 - **zoom propre à chaque colonne** : Ctrl + molette sur la colonne, ou Ctrl +,
   Ctrl − et Ctrl 0 sur la dernière colonne survolée ; pincement au doigt ;
 - **trois apparences**, celles de MMdedit : classique (Windows 9x), moderne

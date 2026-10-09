@@ -69,6 +69,18 @@ ApplicationWindow {
         }
     }
     PressePapier { id: pressePapier }
+    Lanceur { id: lanceur }
+
+    // Logiciel choisi pour ouvrir les pièces jointes, par extension (décision
+    // 9) : { "pdf": "C:/…/Acrobat.exe" }, en JSON. Sur ce poste seulement.
+    Settings {
+        id: reglagesPieces
+        category: "pieces"
+        property string logiciels: "{}"
+    }
+    // « Ouvrir avec… » d'une seule fois : { extension, programme }, repris
+    // quand le noyau a écrit la pièce.
+    property var ouvertureAvec: null
     ReglePressePapier { id: reglePresse }
 
     Settings {
@@ -1262,33 +1274,86 @@ ApplicationWindow {
                 }
             }
 
-            // Pièces jointes du message affiché : un bouton par pièce, qui ouvre
-            // son menu (Ouvrir, Enregistrer sous…).
+            // Pièces jointes du message affiché, mises en valeur sous l'en-tête :
+            // une ligne par pièce — type, nom, taille, « Ouvrir », « Enregistrer
+            // sous… » (forme choisie par Manu le 09/10 sur maquettes). Clic droit,
+            // ou appui long : ouvrir avec un autre logiciel, joindre à un message.
             Pane {
                 Layout.fillWidth: true
                 visible: fenetre.uidCourant > 0 && !fenetre.sourceVisible && fenetre.pieces.length > 0
                 font.pointSize: fenetre.tailleMessage
-                padding: 4
+                padding: 6
                 background: Rectangle { color: fenetre.palette.window }
-                Flow {
+                ColumnLayout {
                     width: parent.width
-                    spacing: 4
+                    spacing: 2
                     Label {
-                        text: qsTr("Pièces jointes :")
-                        opacity: 0.7
-                        height: boutonsPieces.count > 0 ? boutonsPieces.itemAt(0).height : implicitHeight
-                        verticalAlignment: Text.AlignVCenter
+                        text: qsTr("Pièces jointes (%1)").arg(fenetre.pieces.length)
+                        font.bold: true
                     }
                     Repeater {
-                        id: boutonsPieces
                         model: fenetre.pieces
-                        delegate: Button {
+                        delegate: RowLayout {
+                            id: lignePiece
                             required property var modelData
-                            flat: true
-                            text: modelData.nom + "  (" + fenetre.tailleLisible(modelData.taille) + ")"
-                            onClicked: menuPiece.ouvrir(modelData, this)
-                            ToolTip.visible: hovered && modelData.risquee
-                            ToolTip.text: qsTr("Programme ou script : il s'enregistre, il ne s'ouvre pas depuis MMail.")
+                            readonly property var genre: fenetre.genrePiece(modelData.nom)
+                            readonly property string logiciel: Qt.platform.os === "android" ? ""
+                                                               : fenetre.logicielPour(modelData.nom)
+                            Layout.fillWidth: true
+                            spacing: 8
+                            TapHandler {
+                                acceptedButtons: Qt.RightButton
+                                onTapped: menuPiece.ouvrir(lignePiece.modelData, lignePiece)
+                            }
+                            TapHandler {
+                                acceptedDevices: PointerDevice.TouchScreen
+                                onLongPressed: menuPiece.ouvrir(lignePiece.modelData, lignePiece)
+                            }
+                            // Étiquette du type, en couleur : PDF, XLSX, JPG…
+                            Rectangle {
+                                implicitWidth: 38
+                                implicitHeight: 20
+                                radius: 3
+                                color: lignePiece.genre.couleur
+                                Label {
+                                    anchors.centerIn: parent
+                                    text: lignePiece.genre.libelle
+                                    color: "white"
+                                    font.bold: true
+                                    font.pointSize: fenetre.tailleMessage * 0.6
+                                }
+                            }
+                            Label {
+                                text: lignePiece.modelData.nom
+                                elide: Text.ElideMiddle
+                                Layout.fillWidth: true
+                            }
+                            Label {
+                                text: fenetre.tailleLisible(lignePiece.modelData.taille)
+                                opacity: 0.65
+                            }
+                            Button {
+                                text: qsTr("Ouvrir")
+                                flat: true
+                                enabled: !lignePiece.modelData.risquee
+                                onClicked: fenetre.ouvrirPiece(lignePiece.modelData)
+                                ToolTip.visible: hovered
+                                ToolTip.delay: 500
+                                ToolTip.text: lignePiece.logiciel.length > 0
+                                              ? qsTr("Avec %1, choisi pour les fichiers .%2 (clic droit : ouvrir avec…)")
+                                                .arg(lanceur.nom(lignePiece.logiciel)).arg(fenetre.extensionDe(lignePiece.modelData.nom))
+                                              : qsTr("Avec le logiciel du système (clic droit : ouvrir avec…)")
+                            }
+                            Button {
+                                text: qsTr("Enregistrer sous…")
+                                flat: true
+                                // Sous Android, le dialogue rend une adresse
+                                // « content:// » que le noyau ne sait pas écrire.
+                                visible: Qt.platform.os !== "android"
+                                onClicked: fenetre.enregistrerPiece(lignePiece.modelData)
+                                ToolTip.visible: hovered && lignePiece.modelData.risquee
+                                ToolTip.text: qsTr("Programme ou script : il s'enregistre, il ne s'ouvre pas depuis MMail.")
+                            }
                         }
                     }
                 }
@@ -3263,6 +3328,13 @@ ApplicationWindow {
         }
         MenuSeparator {}
         MenuItem {
+            text: qsTr("Logiciels d'ouverture des pièces jointes…")
+            visible: Qt.platform.os !== "android"
+            height: visible ? implicitHeight : 0
+            onTriggered: dlgLogiciels.open()
+        }
+        MenuSeparator {}
+        MenuItem {
             text: qsTr("Agrandir la colonne survolée (Ctrl +)")
             onTriggered: fenetre.zoomer(fenetre.colonneActive, 1.1)
         }
@@ -3295,6 +3367,16 @@ ApplicationWindow {
             onTriggered: fenetre.ouvrirPiece(menuPiece.piece)
         }
         MenuItem {
+            text: qsTr("Ouvrir avec…")
+            visible: Qt.platform.os !== "android"
+            height: visible ? implicitHeight : 0
+            enabled: menuPiece.piece !== null && !menuPiece.piece.risquee
+            onTriggered: {
+                dlgChoisirLogiciel.piece = menuPiece.piece
+                dlgChoisirLogiciel.open()
+            }
+        }
+        MenuItem {
             text: qsTr("Enregistrer sous…")
             // Sous Android, le dialogue rend une adresse « content:// » que le
             // noyau ne sait pas écrire : l'ouverture y suffit.
@@ -3316,6 +3398,121 @@ ApplicationWindow {
         MenuItem {
             text: qsTr("Joindre à un nouveau message")
             onTriggered: fenetre.joindrePiece(menuPiece.piece, "nouveau")
+        }
+        MenuSeparator {
+            visible: Qt.platform.os !== "android"
+            height: visible ? implicitHeight : 0
+        }
+        MenuItem {
+            text: qsTr("Logiciels d'ouverture…")
+            visible: Qt.platform.os !== "android"
+            height: visible ? implicitHeight : 0
+            onTriggered: dlgLogiciels.open()
+        }
+    }
+
+    // « Ouvrir avec… » : un logiciel du poste, pour cette fois ou pour toutes
+    // les pièces de la même extension (décision 9).
+    FileDialog {
+        id: dlgChoisirLogiciel
+        property var piece: null
+        title: qsTr("Ouvrir « %1 » avec…").arg(piece ? piece.nom : "")
+        fileMode: FileDialog.OpenFile
+        nameFilters: Qt.platform.os === "windows" ? [qsTr("Programmes (*.exe)"), qsTr("Tous les fichiers (*)")] : []
+        onAccepted: dlgOuvrirAvec.ouvrir(piece, selectedFile.toString())
+    }
+
+    Dialog {
+        id: dlgOuvrirAvec
+        property var piece: null
+        property string programme: ""
+        readonly property string extension: piece ? fenetre.extensionDe(piece.nom) : ""
+        function ouvrir(p, prog) {
+            piece = p
+            programme = prog
+            toujoursAvec.checked = false
+            open()
+        }
+        title: qsTr("Ouvrir avec %1").arg(lanceur.nom(programme))
+        modal: true
+        anchors.centerIn: Overlay.overlay
+        width: Math.min(480, fenetre.width - 24)
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        ColumnLayout {
+            width: dlgOuvrirAvec.availableWidth
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                text: qsTr("Ouvrir « %1 » avec %2.").arg(dlgOuvrirAvec.piece ? dlgOuvrirAvec.piece.nom : "")
+                      .arg(lanceur.nom(dlgOuvrirAvec.programme))
+            }
+            CheckBox {
+                id: toujoursAvec
+                visible: dlgOuvrirAvec.extension.length > 0
+                text: qsTr("Toujours ouvrir les fichiers .%1 avec ce logiciel").arg(dlgOuvrirAvec.extension)
+            }
+        }
+        onAccepted: {
+            if (toujoursAvec.checked && extension.length > 0)
+                fenetre.retenirLogiciel(extension, programme)
+            fenetre.ouvrirPiece(piece, programme)
+        }
+    }
+
+    // Les logiciels retenus, par extension, sur ce poste ; « Retirer » rend le
+    // type au logiciel du système.
+    Dialog {
+        id: dlgLogiciels
+        property var liste: []
+        function actualiser() {
+            var m = fenetre.logicielsPieces()
+            liste = Object.keys(m).sort().map(function(e) { return { extension: e, programme: m[e] } })
+        }
+        onAboutToShow: actualiser()
+        title: qsTr("Logiciels d'ouverture des pièces jointes")
+        modal: true
+        anchors.centerIn: Overlay.overlay
+        width: Math.min(560, fenetre.width - 24)
+        standardButtons: Dialog.Close
+        ColumnLayout {
+            width: dlgLogiciels.availableWidth
+            spacing: 4
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                opacity: 0.8
+                text: dlgLogiciels.liste.length === 0
+                      ? qsTr("Aucun : les pièces jointes s'ouvrent avec le logiciel du système. Pour en choisir un : clic droit sur une pièce, « Ouvrir avec… ».")
+                      : qsTr("Sur ce poste, ces types de fichiers s'ouvrent avec le logiciel choisi ; les autres, avec celui du système.")
+            }
+            Repeater {
+                model: dlgLogiciels.liste
+                delegate: RowLayout {
+                    required property var modelData
+                    Layout.fillWidth: true
+                    Label {
+                        text: "." + modelData.extension
+                        font.bold: true
+                        Layout.preferredWidth: 70
+                    }
+                    Label {
+                        text: lanceur.nom(modelData.programme)
+                        elide: Text.ElideMiddle
+                        Layout.fillWidth: true
+                        HoverHandler { id: survolLogiciel }
+                        ToolTip.visible: survolLogiciel.hovered
+                        ToolTip.text: lanceur.chemin(modelData.programme)
+                    }
+                    Button {
+                        text: qsTr("Retirer")
+                        flat: true
+                        onClicked: {
+                            fenetre.retenirLogiciel(modelData.extension, "")
+                            dlgLogiciels.actualiser()
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -4160,10 +4357,12 @@ ApplicationWindow {
                     + "sélectionné part au presse-papier, sauf ce qu'un autre logiciel vient d'y "
                     + "déposer, protégé une minute.<br><br>"
                     + "<b>Pièces jointes</b><br>"
-                    + "Listées sous l'en-tête du message : « Ouvrir » avec le logiciel du système, "
-                    + "« Enregistrer sous… ». Un programme ou un script ne s'ouvre pas depuis MMail, il "
-                    + "s'enregistre. « Joindre au message en cours » ou « Joindre à un nouveau message » "
-                    + "reprend une pièce reçue dans un autre courrier.")
+                    + "Une ligne par pièce sous l'en-tête du message : son type, son nom, sa taille, "
+                    + "« Ouvrir » et « Enregistrer sous… ». Clic droit sur une pièce : « Ouvrir avec… » un "
+                    + "autre logiciel, pour cette fois ou pour tous les fichiers du même type (menu "
+                    + "Affichage, « Logiciels d'ouverture… », pour les revoir) ; « Joindre au message en "
+                    + "cours » ou « Joindre à un nouveau message ». Un programme ou un script ne s'ouvre "
+                    + "pas depuis MMail, il s'enregistre.")
             }
         }
     }
@@ -4481,6 +4680,8 @@ ApplicationWindow {
             }
             if (fenetre.essai && fenetre.essai.scenario === "pieces")
                 fenetre.etapeScenarioPieces()
+            if (fenetre.essai && fenetre.essai.scenario === "ouvrir-avec")
+                fenetre.etapeScenarioOuvrirAvec()
             // Scénario « joindre » : la première pièce du message affiché,
             // jointe à un nouveau message.
             if (fenetre.essai && fenetre.essai.scenario === "joindre" && !brut
@@ -4645,10 +4846,23 @@ ApplicationWindow {
 
         function onPieceEcrite(url, chemin, ouvrir) {
             if (ouvrir) {
-                if (!Qt.openUrlExternally(url))
+                // Le logiciel d'« Ouvrir avec… », ou celui retenu pour
+                // l'extension ; à défaut, ou s'il a disparu, celui du système.
+                var nom = chemin.replace(/\\/g, "/").split("/").pop()
+                var choisi = fenetre.ouvertureAvec
+                fenetre.ouvertureAvec = null
+                var programme = choisi && choisi.extension === fenetre.extensionDe(nom) ? choisi.programme
+                              : Qt.platform.os === "android" ? "" : fenetre.logicielPour(nom)
+                if (programme.length > 0 && lanceur.lancer(programme, chemin)) {
+                    messageEtat.texte = qsTr("Ouverture de %1 avec %2…").arg(chemin).arg(lanceur.nom(programme))
+                } else if (!Qt.openUrlExternally(url)) {
                     messageEtat.texte = qsTr("Aucun logiciel n'a pu ouvrir %1.").arg(chemin)
-                else
-                    messageEtat.texte = qsTr("Ouverture de %1…").arg(chemin)
+                } else {
+                    messageEtat.texte = programme.length > 0
+                            ? qsTr("%1 n'a pas pu être lancé : ouverture de %2 avec le logiciel du système…")
+                              .arg(lanceur.nom(programme)).arg(chemin)
+                            : qsTr("Ouverture de %1…").arg(chemin)
+                }
             } else {
                 messageEtat.texte = qsTr("Pièce jointe enregistrée : %1").arg(chemin)
             }
@@ -5793,11 +6007,61 @@ ApplicationWindow {
             messageEtat.texte = boite.erreur
     }
 
-    function ouvrirPiece(piece) {
+    /// `programme` : « Ouvrir avec… » pour cette fois ; sinon le logiciel
+    /// retenu pour l'extension, à défaut celui du système (cf. onPieceEcrite).
+    function ouvrirPiece(piece, programme) {
         if (!piece || piece.risquee)
             return
+        ouvertureAvec = programme ? { extension: extensionDe(piece.nom), programme: programme } : null
         if (boite.ouvrirPiece(uidCourant, piece.indice))
             messageEtat.texte = qsTr("Préparation de %1…").arg(piece.nom)
+    }
+
+    function extensionDe(nom) {
+        var i = nom.lastIndexOf(".")
+        return i > 0 ? nom.substring(i + 1).toLowerCase() : ""
+    }
+
+    /// Étiquette d'une pièce jointe : l'extension, en couleur selon la famille
+    /// (rouge PDF, bleu traitement de texte, vert tableur, violet image).
+    function genrePiece(nom) {
+        var ext = extensionDe(nom)
+        var libelle = ext.length > 0 ? ext.toUpperCase().substring(0, 4) : "?"
+        if (ext === "pdf")
+            return { libelle: libelle, couleur: "#c42b1c" }
+        if (["doc", "docx", "odt", "rtf", "txt"].indexOf(ext) >= 0)
+            return { libelle: libelle, couleur: "#1a4480" }
+        if (["xls", "xlsx", "xlsm", "ods", "csv"].indexOf(ext) >= 0)
+            return { libelle: libelle, couleur: "#217346" }
+        if (["ppt", "pptx", "odp"].indexOf(ext) >= 0)
+            return { libelle: libelle, couleur: "#b7472a" }
+        if (["jpg", "jpeg", "png", "gif", "bmp", "webp", "heic", "tif", "tiff"].indexOf(ext) >= 0)
+            return { libelle: libelle, couleur: "#6b3fa0" }
+        return { libelle: libelle, couleur: "#5f6368" }
+    }
+
+    function logicielsPieces() {
+        try {
+            var m = JSON.parse(reglagesPieces.logiciels)
+            return m && typeof m === "object" && !Array.isArray(m) ? m : {}
+        } catch (e) {
+            return {}
+        }
+    }
+
+    function logicielPour(nom) {
+        var ext = extensionDe(nom)
+        return ext.length > 0 ? (logicielsPieces()[ext] || "") : ""
+    }
+
+    /// Retient `programme` pour l'extension ; vide : la rend au système.
+    function retenirLogiciel(extension, programme) {
+        var m = logicielsPieces()
+        if (programme.length > 0)
+            m[extension] = programme
+        else
+            delete m[extension]
+        reglagesPieces.logiciels = JSON.stringify(m)
     }
 
     function enregistrerPiece(piece) {
@@ -5884,6 +6148,7 @@ ApplicationWindow {
                 && identifiantsEssai.hote) {
             essai = { afficherPremier: !identifiantsEssai.scenario
                                        || identifiantsEssai.scenario === "pieces"
+                                       || identifiantsEssai.scenario === "ouvrir-avec"
                                        || identifiantsEssai.scenario === "images"
                                        || identifiantsEssai.scenario === "invitation"
                                        || identifiantsEssai.scenario.indexOf("signature") === 0,
@@ -6341,6 +6606,34 @@ ApplicationWindow {
     /// réception du premier compte, le premier message portant une pièce
     /// jointe est affiché, et sa première pièce enregistrée dans le dossier
     /// désigné par MMAIL_SORTIE. Sert à éprouver la chaîne sans écran.
+    /// Scénario « ouvrir-avec » : MMAIL_DOSSIER désigne un programme d'essai.
+    /// Retenu pour les .pdf, il ouvre le PDF du premier message ; « Ouvrir
+    /// avec… » ponctuel sur le tableur ; puis le choix est retiré.
+    function etapeScenarioOuvrirAvec() {
+        if (essai.etape !== 0 || pieces.length === 0)
+            return
+        essai.etape = 1
+        var programme = identifiantsEssai.dossier
+        var de = function(ext) { return pieces.filter(function(p) { return extensionDe(p.nom) === ext })[0] }
+        retenirLogiciel("pdf", programme)
+        console.log("scenario: retenu pour .pdf :", lanceur.nom(logicielPour(de("pdf").nom)))
+        ouvrirPiece(de("pdf"))
+        var suite = Qt.createQmlObject('import QtQuick; Timer { interval: 2500 }', fenetre)
+        suite.triggered.connect(function() {
+            console.log("scenario: après le PDF :", messageEtat.texte)
+            ouvrirPiece(de("xlsx"), programme)
+            var fin = Qt.createQmlObject('import QtQuick; Timer { interval: 2500 }', fenetre)
+            fin.triggered.connect(function() {
+                console.log("scenario: après le tableur :", messageEtat.texte)
+                retenirLogiciel("pdf", "")
+                console.log("scenario: retenus après retrait :", JSON.stringify(logicielsPieces()))
+                Qt.quit()
+            })
+            fin.start()
+        })
+        suite.start()
+    }
+
     function etapeScenarioPieces() {
         if (essai.etape === 0 && pieces.length > 0) {
             essai.etape = 1

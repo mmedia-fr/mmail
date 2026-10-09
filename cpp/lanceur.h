@@ -1,0 +1,54 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// Ouvre un fichier avec un logiciel désigné : les pièces jointes s'ouvrent
+// avec le logiciel choisi par type de fichier, sans dépendre des associations
+// du système (décision 9). QML ne sait pas lancer un programme.
+//
+// Le choix — quel logiciel pour quelle extension — est gardé par l'interface,
+// sur ce poste seulement : un chemin de programme ne vaut que sur la machine
+// où il a été désigné (décision 18).
+#pragma once
+
+#include <QtCore/QFileInfo>
+#include <QtCore/QObject>
+#include <QtCore/QProcess>
+#include <QtCore/QString>
+#include <QtCore/QStringList>
+#include <QtCore/QUrl>
+
+class Lanceur : public QObject
+{
+  Q_OBJECT
+public:
+  explicit Lanceur(QObject* parent = nullptr)
+    : QObject(parent)
+  {
+  }
+
+  /// Lance `programme` sur `fichier`, détaché : MMail ne l'attend pas. L'un et
+  /// l'autre en chemin ou en adresse `file:`. Faux si le programme n'existe
+  /// pas, n'est pas exécutable, ou n'a pas pu démarrer.
+  Q_INVOKABLE bool lancer(const QString& programme, const QString& fichier) const
+  {
+    const QString exe = chemin_(programme);
+    const QFileInfo info(exe);
+    if (exe.isEmpty() || !info.isFile() || !info.isExecutable())
+      return false;
+    return QProcess::startDetached(exe, QStringList{ chemin_(fichier) });
+  }
+
+  /// Nom lisible d'un programme : « C:/…/Acrobat.exe » → « Acrobat ».
+  Q_INVOKABLE QString nom(const QString& programme) const
+  {
+    return QFileInfo(chemin_(programme)).completeBaseName();
+  }
+
+  /// Chemin local d'une adresse `file:` (un chemin est rendu tel quel).
+  Q_INVOKABLE QString chemin(const QString& adresse) const { return chemin_(adresse); }
+
+private:
+  static QString chemin_(const QString& adresse)
+  {
+    return adresse.startsWith(QLatin1String("file:")) ? QUrl(adresse).toLocalFile() : adresse;
+  }
+};

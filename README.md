@@ -24,7 +24,9 @@ de projet interne.
   message, réponse, réponse à tous, transfert — à la manière d'Outlook, avec
   « RE : », « TR : » et le message d'origine sous un bloc « De / Envoyé / À /
   Objet » ; Cc et Cci ; pièces jointes par « Joindre… » ou glisser-déposer,
-  celles d'un message transféré reprises d'office ; envoi par la soumission
+  celles d'un message transféré reprises d'office ; une capture d'écran se
+  colle dans le corps (Ctrl+V) et une image glissée sur le corps s'y insère,
+  intégrée au message à l'envoi ; envoi par la soumission
   SMTP du serveur (port 465), copie dans « Éléments envoyés », original marqué
   « répondu » ou « transféré » ; brouillons enregistrés sur le serveur et
   repris d'un double clic ;

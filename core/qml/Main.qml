@@ -1905,6 +1905,44 @@ ApplicationWindow {
                 }
             }
 
+            /// Images dans le corps — collées, ou glissées sur le corps (demande
+            /// de Manu, 08/10). Elles exigent la mise en forme ; l'envoi les
+            /// intègre au message (`cid:`), copiées parmi les images collées du
+            /// profil. Larges, elles s'affichent sur 800 pixels.
+            function insererImages(urls) {
+                if (urls.length === 0)
+                    return false
+                miseEnForme = true
+                for (var i = 0; i < urls.length; ++i)
+                    mef.insererImage(urls[i], 800)
+                modifie = true
+                return true
+            }
+
+            /// Ctrl+V : une image seule du presse-papier (capture d'écran) ou des
+            /// images copiées dans l'explorateur entrent dans le corps ; d'autres
+            /// fichiers copiés sont joints. Rien de tel : le collage ordinaire.
+            function collerImage() {
+                var url = pressePapier.enregistrerImage(boite.dossierImagesCollees())
+                if (url.length > 0)
+                    return insererImages([url])
+                var fichiers = pressePapier.fichiers()
+                if (fichiers.length === 0)
+                    return false
+                var images = [], autres = []
+                for (var i = 0; i < fichiers.length; ++i) {
+                    var copie = boite.importerImage(fichiers[i])
+                    if (copie.length > 0)
+                        images.push(copie)
+                    else
+                        autres.push(fichiers[i])
+                }
+                insererImages(images)
+                if (autres.length > 0)
+                    ajouterFichiers(autres)
+                return true
+            }
+
             function retirerPiece(i) {
                 var liste = pieces.slice()
                 liste.splice(i, 1)
@@ -2367,19 +2405,41 @@ ApplicationWindow {
                         placeholderText: qsTr("Votre message")
                         background: Rectangle { color: fenetre.palette.base }
                         onTextChanged: if (!redac.chargement) redac.modifie = true
+                        Keys.onPressed: function(ev) {
+                            if (ev.matches(StandardKey.Paste) && redac.collerImage())
+                                ev.accepted = true
+                        }
                     }
                 }
             }
 
-            // Fichiers glissés depuis l'explorateur : joints.
+            // Fichiers glissés depuis l'explorateur : joints — sauf les images
+            // déposées sur le corps, qui y entrent à l'endroit du dépôt.
             DropArea {
+                id: depotRedaction
                 anchors.fill: parent
                 onEntered: function(glisse) { glisse.accepted = glisse.hasUrls }
                 onDropped: function(depose) {
-                    if (depose.hasUrls) {
-                        redac.ajouterFichiers(depose.urls)
-                        depose.accept(Qt.CopyAction)
+                    if (!depose.hasUrls)
+                        return
+                    var p = corpsRedaction.mapFromItem(depotRedaction, depose.x, depose.y)
+                    var surCorps = corpsRedaction.visible && p.x >= 0 && p.y >= 0
+                            && p.x <= corpsRedaction.width && p.y <= corpsRedaction.height
+                    var images = [], autres = []
+                    for (var i = 0; i < depose.urls.length; ++i) {
+                        var copie = surCorps ? boite.importerImage(depose.urls[i].toString()) : ""
+                        if (copie.length > 0)
+                            images.push(copie)
+                        else
+                            autres.push(depose.urls[i])
                     }
+                    if (images.length > 0) {
+                        corpsRedaction.cursorPosition = corpsRedaction.positionAt(p.x, p.y)
+                        redac.insererImages(images)
+                    }
+                    if (autres.length > 0)
+                        redac.ajouterFichiers(autres)
+                    depose.accept(Qt.CopyAction)
                 }
             }
 
@@ -4042,7 +4102,8 @@ ApplicationWindow {
                     + "et le message est gardé sur le poste toutes les 10 secondes : si MMail se "
                     + "ferme avant l'envoi, il le propose à la reprise au démarrage suivant ; "
                     + "« Joindre… » ou un glisser-déposer de fichiers "
-                    + "ajoute des pièces jointes. Une copie de chaque message envoyé est gardée dans "
+                    + "ajoute des pièces jointes ; une capture d'écran se colle dans le corps (Ctrl+V), et "
+                    + "une image glissée sur le corps s'y insère. Une copie de chaque message envoyé est gardée dans "
                     + "« Éléments envoyés ». Mise en forme : gras (Ctrl+B), italique (Ctrl+I), souligné "
                     + "(Ctrl+U), listes, liens ; décochez « Mise en forme » pour un message en texte "
                     + "brut. En tapant un destinataire, les adresses connues sont proposées : flèches "
@@ -4482,6 +4543,10 @@ ApplicationWindow {
                             "| gardées après", JSON.parse(boite.redactionsGardees()).length, "| note", r.note)
             if (fenetre.essai && fenetre.essai.scenario === "brouillon-auto")
                 fenetre.etapeScenarioBrouillonAuto(r, uid)
+            if (fenetre.essai && fenetre.essai.scenario === "coller-image") {
+                console.log("scenario: brouillon enregistré", uid, "| note", r.note)
+                Qt.quit()
+            }
         }
 
         function onAgendasSynchronises(change, erreurs) {
@@ -5840,6 +5905,11 @@ ApplicationWindow {
                 delai.triggered.connect(etapeScenarioGardeServeur)
                 delai.start()
             }
+            if (essai.scenario === "coller-image") {
+                var attenteImage = Qt.createQmlObject('import QtQuick; Timer { interval: 6000 }', fenetre)
+                attenteImage.triggered.connect(etapeScenarioCollerImage)
+                attenteImage.start()
+            }
             if (essai.scenario === "brouillon-auto") {
                 var attente = Qt.createQmlObject('import QtQuick; Timer { interval: 6000 }', fenetre)
                 attente.triggered.connect(function() { etapeScenarioBrouillonAuto(null, 0) })
@@ -5905,6 +5975,22 @@ ApplicationWindow {
         r.garder()
         console.log("scenario: gardées avant", JSON.parse(boite.redactionsGardees()).length)
         r.enregistrer(true)
+    }
+
+    /// Scénario « coller-image » : l'image de MMAIL_DOSSIER (un fichier) passe
+    /// par le presse-papier, se colle dans un message neuf, et le brouillon
+    /// part sur le serveur — l'image y doit être intégrée.
+    function etapeScenarioCollerImage() {
+        var r = ouvrirRedaction(comptesConnus[0].compte)
+        r.pret()
+        r.remplir({ a: "destinataire@exemple.fr", objet: "Essai image collée " + Date.now(),
+                    texte: "Avant l'image.", mode: "brouillon" })
+        console.log("scenario: image dans le presse-papier", pressePapier.deposerImage(identifiantsEssai.dossier))
+        console.log("scenario: collée", r.collerImage(), "| mise en forme", r.miseEnForme,
+                    "| image dans le corps", r.htmlActuel().indexOf("<img") >= 0,
+                    "| parmi les images collées", r.htmlActuel().indexOf("images-redaction/collees/collee-") >= 0)
+        essai.etape = 1
+        r.enregistrer(false)
     }
 
     /// Scénario « brouillon-auto » : un message neuf que l'on ne touche pas ne

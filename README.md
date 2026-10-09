@@ -46,10 +46,12 @@ de projet interne.
 - **drapeau de suivi** (`\Flagged`) posé ou retiré d'un clic en bout de ligne,
   par le menu ou la touche Insertion ; importance des messages reçus signalée
   dans la liste (« ! », « ↓ ») et dans l'en-tête ;
-- **répondu et transféré** signalés dans la liste par une flèche, vers la
-  gauche ou vers la droite comme dans Outlook, que la réponse ou le transfert
-  vienne de MMail ou d'un autre logiciel — téléphone, webmail (`\Answered`,
-  `$Forwarded`) ;
+- **répondu et transféré** écrits en toutes lettres au bout de la ligne de
+  l'objet (« Répondu », « Transféré »), que la réponse ou le transfert vienne
+  de MMail ou d'un autre logiciel — téléphone, webmail (`\Answered`,
+  `$Forwarded`) ; « Répondu à tous » pour une réponse à tous faite depuis MMail,
+  qui pose en plus le mot-clé `$ReplyAll` (aucun drapeau standard ne distingue
+  une réponse à tous : faite ailleurs, elle reste « Répondu ») ;
 - **confirmation de lecture** demandée par un expéditeur : proposée, jamais
   envoyée d'office ; la réponse — envoi ou refus — n'est demandée qu'une fois
   (`$MDNSent`) ;

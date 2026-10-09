@@ -2886,34 +2886,6 @@ ApplicationWindow {
                         color: ligne.highlighted ? fenetre.palette.highlightedText
                              : model.importance > 0 ? "#c42b1c" : "#1a4480"
                     }
-                    // Répondu (flèche vers la gauche) et transféré (vers la
-                    // droite), par MMail ou par un autre logiciel : le serveur
-                    // porte les drapeaux. Dessinés : « ↩ » et « ↪ » manquent à
-                    // certaines polices et s'affichaient en carrés. Une seule
-                    // image, à la taille implicite : deux images côte à côte, à
-                    // largeur préférée, laissaient la première à largeur nulle.
-                    Canvas {
-                        readonly property bool repondu: model.repondu === true
-                        readonly property bool transfere: model.transfere === true
-                        visible: repondu || transfere
-                        implicitHeight: dateLigne.implicitHeight
-                        implicitWidth: dateLigne.implicitHeight * ((repondu ? 1 : 0) + (transfere ? 1 : 0))
-                        property color encreRepondu: ligne.highlighted ? fenetre.palette.highlightedText : "#6b3fa0"
-                        property color encreTransfere: ligne.highlighted ? fenetre.palette.highlightedText : "#1a4480"
-                        onEncreReponduChanged: requestPaint()
-                        onReponduChanged: requestPaint()
-                        onTransfereChanged: requestPaint()
-                        onWidthChanged: requestPaint()
-                        onHeightChanged: requestPaint()
-                        onPaint: {
-                            var ctx = getContext("2d")
-                            ctx.reset()
-                            if (repondu)
-                                fenetre.dessinerFleche(ctx, 0, height, height, encreRepondu, false)
-                            if (transfere)
-                                fenetre.dessinerFleche(ctx, repondu ? height : 0, height, height, encreTransfere, true)
-                        }
-                    }
                     Label {
                         text: model.sujet
                         font.bold: !model.lu
@@ -2921,6 +2893,30 @@ ApplicationWindow {
                              : model.lu ? fenetre.palette.windowText : fenetre.palette.highlight
                         elide: Text.ElideRight
                         Layout.fillWidth: true
+                        // Répondu, répondu à tous, transféré — par MMail ou par un
+                        // autre logiciel, le serveur porte les drapeaux : en toutes
+                        // lettres au bout de la ligne (choix de Manu le 09/10, les
+                        // flèches de la 0.5.4 se lisaient mal). Posé dans la marge du
+                        // libellé, hors de la mise en page de la rangée : celle-ci
+                        // laissait une image visible à taille nulle, sans la placer
+                        // (constaté le 09/10/2026, Qt 6.4) ; l'objet se coupe avant.
+                        rightPadding: suiteDonnee.visible ? suiteDonnee.implicitWidth + 8 : 0
+                        Label {
+                            id: suiteDonnee
+                            readonly property bool repondu: model.repondu === true
+                            readonly property bool transfere: model.transfere === true
+                            visible: repondu || transfere
+                            anchors.right: parent.right
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: [repondu ? (model.reponduTous === true ? qsTr("Répondu à tous") : qsTr("Répondu")) : "",
+                                   transfere ? qsTr("Transféré") : ""]
+                                  .filter(function(t) { return t.length > 0 }).join(" · ")
+                            font.pointSize: fenetre.tailleListe * 0.8
+                            font.italic: true
+                            font.bold: false
+                            color: ligne.highlighted ? fenetre.palette.highlightedText
+                                 : transfere && !repondu ? "#1a4480" : "#6b3fa0"
+                        }
                     }
                 }
             }
@@ -3967,8 +3963,9 @@ ApplicationWindow {
                     + "Un clic au bout de la seconde ligne d'un message, ou la touche Insertion, pose "
                     + "ou retire un drapeau de suivi, que les autres logiciels de messagerie voient "
                     + "aussi. « ! » signale un message d'importance haute, « ↓ » d'importance basse ; "
-                    + "une flèche vers la gauche, un message auquel on a répondu, vers la droite, un "
-                    + "message transféré — ici ou depuis un autre logiciel. "
+                    + "« Répondu », « Transféré » en bout de ligne signalent ce qui a été fait du message, "
+                    + "ici ou depuis un autre logiciel ; « Répondu à tous » une réponse à tous faite depuis "
+                    + "MMail (ailleurs, elle reste « Répondu »). "
                     + "Quand un expéditeur demande une confirmation de lecture, MMail propose de "
                     + "l'envoyer ou de l'ignorer.<br><br>"
                     + "<b>Favoris</b><br>"
@@ -4695,28 +4692,6 @@ ApplicationWindow {
         ctx.arc(w * 0.42, h * 0.42, w * 0.3, 0, 2 * Math.PI, false)
         ctx.moveTo(w * 0.64, h * 0.64)
         ctx.lineTo(w * 0.92, h * 0.92)
-        ctx.stroke()
-    }
-
-    /// Flèche de réponse (vers la gauche) ou de transfert (vers la droite),
-    /// comme dans Outlook : une hampe coudée et une pointe.
-    /// `gauche` : abscisse de la case où la dessiner ; le contexte n'est pas
-    /// effacé, une seconde flèche peut suivre.
-    function dessinerFleche(ctx, gauche, w, h, encre, versLaDroite) {
-        var x = function(v) { return gauche + (versLaDroite ? 1 - v : v) * w }
-        var y = function(v) { return v * h }
-        ctx.strokeStyle = encre
-        ctx.lineWidth = Math.max(1.2, w * 0.12)
-        ctx.lineCap = "round"
-        ctx.lineJoin = "round"
-        ctx.beginPath()
-        ctx.moveTo(x(0.86), y(0.84))
-        ctx.lineTo(x(0.86), y(0.66))
-        ctx.quadraticCurveTo(x(0.86), y(0.4), x(0.6), y(0.4))
-        ctx.lineTo(x(0.14), y(0.4))
-        ctx.moveTo(x(0.38), y(0.16))
-        ctx.lineTo(x(0.14), y(0.4))
-        ctx.lineTo(x(0.38), y(0.64))
         ctx.stroke()
     }
 

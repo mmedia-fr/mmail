@@ -151,6 +151,10 @@ pub struct Trouve {
     pub compte: i64,
     pub chemin: String,
     pub nom_dossier: String,
+    /// Séparateur de hiérarchie du compte et rôle SPECIAL-USE du dossier : de
+    /// quoi afficher son chemin complet, comme dans l'arborescence.
+    pub separateur: String,
+    pub role: String,
 }
 
 /// Étape d'un déplacement entre boîtes (décision 16).
@@ -972,7 +976,8 @@ impl Magasin {
         }
         let sql = format!(
             "SELECT m.uid, m.message_id, m.expediteur, m.adresse, m.sujet, m.date, m.horodatage, m.taille,
-                    m.lu, m.repondu, m.pieces, m.suivi, m.importance, m.transfere, f.account_id, f.chemin, f.nom
+                    m.lu, m.repondu, m.pieces, m.suivi, m.importance, m.transfere, f.account_id, f.chemin, f.nom,
+                    f.separateur, f.role
              FROM messages m JOIN folders f ON f.id = m.folder_id
              WHERE {}
              ORDER BY m.horodatage DESC, m.uid DESC LIMIT {limite}",
@@ -983,7 +988,14 @@ impl Magasin {
         let mut requete = self.base.prepare(&sql)?;
         let trouves = requete
             .query_map(rusqlite::params_from_iter(valeurs), |l| {
-                Ok(Trouve { message: lire_message(l)?, compte: l.get(14)?, chemin: l.get(15)?, nom_dossier: l.get(16)? })
+                Ok(Trouve {
+                    message: lire_message(l)?,
+                    compte: l.get(14)?,
+                    chemin: l.get(15)?,
+                    nom_dossier: l.get(16)?,
+                    separateur: l.get(17)?,
+                    role: l.get(18)?,
+                })
             })?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(trouves)

@@ -865,6 +865,31 @@ ApplicationWindow {
                     Layout.fillWidth: true
                     placeholderText: qsTr("Rechercher (Ctrl+E)")
                     selectByMouse: true
+                    // Mis en valeur (demande de Manu, 08/10) : une loupe, un
+                    // cadre de la couleur d'accent sur un fond teinté ; le cadre
+                    // s'épaissit quand le champ a la main.
+                    leftPadding: loupe.width + 13
+                    background: Rectangle {
+                        implicitHeight: 30
+                        radius: 4
+                        color: champRecherche.activeFocus ? fenetre.palette.base
+                               : Qt.rgba(fenetre.palette.highlight.r, fenetre.palette.highlight.g,
+                                         fenetre.palette.highlight.b, 0.08)
+                        border.width: champRecherche.activeFocus ? 2 : 1
+                        border.color: fenetre.palette.highlight
+                    }
+                    Canvas {
+                        id: loupe
+                        anchors.left: parent.left
+                        anchors.leftMargin: 7
+                        anchors.verticalCenter: parent.verticalCenter
+                        height: Math.round(parent.height * 0.5)
+                        width: height
+                        property color encre: fenetre.palette.highlight
+                        onEncreChanged: requestPaint()
+                        onWidthChanged: requestPaint()
+                        onPaint: fenetre.dessinerLoupe(getContext("2d"), width, height, encre)
+                    }
                     onTextEdited: minuterieRecherche.restart()
                     onAccepted: {
                         minuterieRecherche.stop()
@@ -4087,7 +4112,7 @@ ApplicationWindow {
         property string texte: ""
         parent: Overlay.overlay
         width: Math.min(Math.max(colonneListe.width, 480), fenetre.width - 24)
-        height: Math.min(fenetre.height * 0.7, 70 + Math.max(1, resultats.length) * 48)
+        height: Math.min(fenetre.height * 0.7, 70 + Math.max(1, resultats.length) * 66)
         padding: 6
         onAboutToShow: {
             var p = champRecherche.mapToItem(Overlay.overlay, 0, champRecherche.height + 2)
@@ -4118,23 +4143,36 @@ ApplicationWindow {
                 delegate: ItemDelegate {
                     width: ListView.view.width
                     contentItem: ColumnLayout {
-                        spacing: 0
-                        Label {
+                        spacing: 1
+                        RowLayout {
                             Layout.fillWidth: true
-                            elide: Text.ElideRight
-                            font.bold: !modelData.lu
-                            text: modelData.sujet.length > 0 ? modelData.sujet : qsTr("(sans objet)")
+                            Label {
+                                Layout.fillWidth: true
+                                elide: Text.ElideRight
+                                font.bold: !modelData.lu
+                                text: modelData.sujet.length > 0 ? modelData.sujet : qsTr("(sans objet)")
+                            }
+                            Label {
+                                opacity: 0.7
+                                font.pointSize: fenetre.tailleListe * 0.85
+                                text: fenetre.dateCourte(modelData.date)
+                            }
                         }
                         Label {
                             Layout.fillWidth: true
                             elide: Text.ElideRight
                             opacity: 0.7
-                            text: {
-                                var c = fenetre.compteParId(modelData.compte)
-                                return (modelData.expediteur || modelData.adresse) + "  —  "
-                                        + (c ? c.adresse + " › " : "") + modelData.dossier
-                                        + "  —  " + fenetre.dateCourte(modelData.date)
-                            }
+                            text: modelData.expediteur || modelData.adresse
+                        }
+                        // Le dossier du message, sur sa ligne : en fin de ligne
+                        // derrière l'expéditeur, il était coupé (retour de Manu,
+                        // 08/10). Coupé au milieu au besoin : le compte et le
+                        // dossier restent lisibles.
+                        Label {
+                            Layout.fillWidth: true
+                            elide: Text.ElideMiddle
+                            color: fenetre.palette.highlight
+                            text: fenetre.cheminResultat(modelData)
                         }
                     }
                     onClicked: fenetre.allerAuMessage(modelData.compte, modelData.chemin, modelData.uid)
@@ -4276,6 +4314,17 @@ ApplicationWindow {
                 champRecherche.text = identifiantsEssai.dossier
                 fenetre.lancerRecherche()
                 console.log("scenario: l'index trouve", modeleMessages.count, "message(s)")
+                return
+            }
+            // Scénario « recherche-partout » : même texte, dans toutes les
+            // boîtes ; le panneau des résultats reste ouvert pour la capture.
+            if (fenetre.essai && fenetre.essai.scenario === "recherche-partout" && !fenetre.essai.cherche) {
+                fenetre.essai.cherche = true
+                porteeRecherche.currentIndex = 1
+                champRecherche.text = identifiantsEssai.dossier
+                fenetre.lancerRecherche()
+                console.log("scenario: résultats", panneauResultats.resultats.length,
+                            panneauResultats.resultats.length > 0 ? fenetre.cheminResultat(panneauResultats.resultats[0]) : "")
                 return
             }
             fenetre.rafraichirListe()
@@ -4633,6 +4682,19 @@ ApplicationWindow {
         ctx.lineTo(x(6), y(10.5))
         ctx.arc(x(5), y(10.5), x(1), 0, Math.PI, false)
         ctx.lineTo(x(4), y(5.5))
+        ctx.stroke()
+    }
+
+    /// Loupe du champ de recherche : un cercle et un manche.
+    function dessinerLoupe(ctx, w, h, encre) {
+        ctx.reset()
+        ctx.strokeStyle = encre
+        ctx.lineWidth = Math.max(1.5, w * 0.14)
+        ctx.lineCap = "round"
+        ctx.beginPath()
+        ctx.arc(w * 0.42, h * 0.42, w * 0.3, 0, 2 * Math.PI, false)
+        ctx.moveTo(w * 0.64, h * 0.64)
+        ctx.lineTo(w * 0.92, h * 0.92)
         ctx.stroke()
     }
 
@@ -5118,6 +5180,18 @@ ApplicationWindow {
         recherche = ""
         uidsServeur = []
         rafraichirListe(true)
+    }
+
+    /// Chemin lisible du dossier d'un résultat : compte › dossiers parents ›
+    /// dossier, nommés comme dans l'arborescence.
+    function cheminResultat(r) {
+        var c = compteParId(r.compte)
+        var noms = (r.segments && r.segments.length > 0 ? r.segments : [r.dossier]).slice()
+        var dernier = noms.length - 1
+        if (dernier > 0 && noms[0].toUpperCase() === "INBOX")
+            noms[0] = qsTr("Boîte de réception")
+        noms[dernier] = libelleLigne({ genre: "dossier", nom: noms[dernier], role: r.role || "", chemin: r.chemin })
+        return (c ? c.adresse + " › " : "") + noms.join(" › ")
     }
 
     /// Ouvre le dossier d'un résultat trouvé dans toutes les boîtes, et y

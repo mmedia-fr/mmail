@@ -124,6 +124,14 @@ ApplicationWindow {
     // et les UID que le serveur a trouvés dans le texte des messages.
     property string recherche: ""
     property var uidsServeur: []
+    // Recherche dans toutes les boîtes : ses résultats remplissent la liste,
+    // chacun avec son dossier. Le noyau suit le dossier du résultat choisi —
+    // lecture, réponse, déplacement visent le bon —, et la sélection y est
+    // simple : deux boîtes peuvent donner le même UID. On revient au dossier
+    // d'avant en sortant de la recherche.
+    property bool rechercheGlobale: false
+    property string cleChoisie: ""
+    property var dossierAvantRecherche: null
     // Version plus récente publiée, et sa page ; vide sinon.
     property string versionNouvelle: ""
     property string pageVersion: ""
@@ -181,6 +189,8 @@ ApplicationWindow {
         property real zoomArborescence: 1
         property real zoomListe: 1
         property real zoomMessage: 1
+        // Dernières recherches, la plus récente d'abord (JSON).
+        property string historiqueRecherches: "[]"
     }
 
     // ---------------------------------------------------------- apparences
@@ -890,18 +900,72 @@ ApplicationWindow {
                         onWidthChanged: requestPaint()
                         onPaint: fenetre.dessinerLoupe(getContext("2d"), width, height, encre)
                     }
-                    onTextEdited: minuterieRecherche.restart()
+                    // La frappe ne cherche plus : elle propose les dernières
+                    // recherches, que l'on choisit ; Entrée lance la recherche
+                    // (demande de Manu, 09/10).
+                    onActiveFocusChanged: if (activeFocus) fenetre.proposerHistorique()
+                    onTextEdited: fenetre.proposerHistorique()
                     onAccepted: {
-                        minuterieRecherche.stop()
-                        fenetre.lancerRecherche()
+                        if (panneauHistorique.opened && vueHistorique.currentIndex >= 0)
+                            fenetre.lancerRecherche(panneauHistorique.entrees[vueHistorique.currentIndex])
+                        else
+                            fenetre.lancerRecherche()
                     }
-                    Keys.onEscapePressed: fenetre.quitterRecherche()
+                    Keys.onDownPressed: function(ev) {
+                        if (panneauHistorique.opened)
+                            vueHistorique.incrementCurrentIndex()
+                        else
+                            fenetre.proposerHistorique()
+                    }
+                    Keys.onUpPressed: if (panneauHistorique.opened) vueHistorique.decrementCurrentIndex()
+                    Keys.onEscapePressed: {
+                        if (panneauHistorique.opened)
+                            panneauHistorique.close()
+                        else
+                            fenetre.quitterRecherche()
+                    }
+                    // Dernières recherches sous le champ : dix visibles au plus,
+                    // un ascenseur au-delà.
+                    Popup {
+                        id: panneauHistorique
+                        property var entrees: []
+                        y: champRecherche.height + 2
+                        width: champRecherche.width
+                        padding: 1
+                        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutsideParent
+                        onAboutToShow: vueHistorique.currentIndex = -1
+                        background: Rectangle {
+                            color: fenetre.palette.base
+                            border.color: fenetre.palette.highlight
+                            radius: 3
+                        }
+                        contentItem: ListView {
+                            id: vueHistorique
+                            implicitHeight: Math.min(panneauHistorique.entrees.length, 10) * 30
+                            clip: true
+                            model: panneauHistorique.entrees
+                            currentIndex: -1
+                            ScrollBar.vertical: ScrollBar {
+                                policy: panneauHistorique.entrees.length > 10 ? ScrollBar.AlwaysOn : ScrollBar.AsNeeded
+                            }
+                            delegate: ItemDelegate {
+                                width: ListView.view.width
+                                height: 30
+                                text: modelData
+                                highlighted: ListView.isCurrentItem
+                                onClicked: fenetre.lancerRecherche(modelData)
+                            }
+                        }
+                    }
                 }
                 ComboBox {
                     id: porteeRecherche
                     readonly property bool partout: currentIndex === 1
                     model: [qsTr("Dossier actif"), qsTr("Toutes les boîtes")]
                     implicitContentWidthPolicy: ComboBox.WidestText
+                    // Le champ s'étire, la portée garde sa largeur : « Toutes les
+                    // boîtes » était tronqué.
+                    Layout.minimumWidth: Math.max(implicitWidth, 150)
                     onActivated: if (champRecherche.text.trim().length > 0) fenetre.lancerRecherche()
                 }
                 ToolButton {
@@ -910,11 +974,6 @@ ApplicationWindow {
                     onClicked: fenetre.quitterRecherche()
                     ToolTip.visible: hovered
                     ToolTip.text: qsTr("Effacer la recherche (Échap)")
-                }
-                Timer {
-                    id: minuterieRecherche
-                    interval: 300
-                    onTriggered: fenetre.lancerRecherche()
                 }
             }
 
@@ -931,7 +990,20 @@ ApplicationWindow {
 
                 ListView {
                     id: vueMessages
-                    model: ListModel { id: modeleMessages }
+                    model: ListModel {
+                        id: modeleMessages
+                        // La vue ne connaît que les champs présents à son premier
+                        // remplissage : ceux des résultats d'une recherche dans
+                        // toutes les boîtes (dossier de chaque message) sont donc
+                        // déclarés d'avance, puis la ligne est retirée.
+                        ListElement {
+                            uid: 0; h: 0; expediteur: ""; adresse: ""; sujet: ""; date: ""; taille: 0
+                            lu: false; repondu: false; reponduTous: false; transfere: false; pieces: false
+                            suivi: false; importance: 0
+                            compte: 0; chemin: ""; dossier: ""; role: ""; cheminAffiche: ""
+                        }
+                        Component.onCompleted: clear()
+                    }
                     // Les lignes qui sortent de l'écran servent à celles qui entrent,
                     // au lieu d'être détruites et recréées à chaque défilement.
                     reuseItems: true
@@ -1427,6 +1499,13 @@ ApplicationWindow {
     /// Compte et dossier ouverts, leurs compteurs, et la sélection s'il y en a
     /// plusieurs.
     function majInfoDossier() {
+        if (rechercheGlobale) {
+            infoDossier = qsTr("Toutes les boîtes") + "  —  " + (modeleMessages.count >= 500
+                    ? qsTr("recherche « %1 » : les 500 plus récents, précisez la recherche").arg(recherche)
+                    : qsTr("recherche « %1 » : %2").arg(recherche)
+                      .arg(accord(modeleMessages.count, qsTr("résultat"), qsTr("résultats"))))
+            return
+        }
         if (boite.dossierCourant.length === 0) {
             var n = listeComptes().length
             infoDossier = n === 0 ? qsTr("Aucun compte")
@@ -2815,7 +2894,9 @@ ApplicationWindow {
         ItemDelegate {
             id: ligne
             width: ListView.view.width
-            readonly property bool choisi: fenetre.selection[model.uid] === true
+            readonly property bool choisi: fenetre.rechercheGlobale
+                                           ? fenetre.cleChoisie === fenetre.cleResultat(model.compte, model.chemin, model.uid)
+                                           : fenetre.selection[model.uid] === true
             highlighted: choisi
             padding: 0
 
@@ -2918,6 +2999,19 @@ ApplicationWindow {
                                  : transfere && !repondu ? "#1a4480" : "#6b3fa0"
                         }
                     }
+                }
+                // Recherche dans toutes les boîtes : le dossier du message, sur
+                // sa ligne, coupé au milieu au besoin — le compte et le dossier
+                // restent lisibles (demande de Manu, 08/10).
+                Label {
+                    visible: fenetre.rechercheGlobale
+                    Layout.fillWidth: true
+                    Layout.leftMargin: 10
+                    Layout.rightMargin: 8
+                    elide: Text.ElideMiddle
+                    font.pointSize: fenetre.tailleListe * 0.9
+                    color: ligne.highlighted ? fenetre.palette.highlightedText : fenetre.palette.highlight
+                    text: model.cheminAffiche || ""
                 }
             }
 
@@ -4101,83 +4195,6 @@ ApplicationWindow {
         }
     }
 
-    // Résultats d'une recherche dans toutes les boîtes, sous le champ : un
-    // clic ouvre le dossier du message et l'y choisit.
-    Popup {
-        id: panneauResultats
-        property var resultats: []
-        property string texte: ""
-        parent: Overlay.overlay
-        width: Math.min(Math.max(colonneListe.width, 480), fenetre.width - 24)
-        height: Math.min(fenetre.height * 0.7, 70 + Math.max(1, resultats.length) * 66)
-        padding: 6
-        onAboutToShow: {
-            var p = champRecherche.mapToItem(Overlay.overlay, 0, champRecherche.height + 2)
-            x = Math.max(6, Math.min(p.x, fenetre.width - width - 6))
-            y = p.y
-        }
-        ColumnLayout {
-            anchors.fill: parent
-            spacing: 4
-            Label {
-                Layout.fillWidth: true
-                wrapMode: Text.Wrap
-                opacity: 0.8
-                text: panneauResultats.resultats.length === 0
-                      ? qsTr("Rien trouvé pour « %1 » dans les boîtes.").arg(panneauResultats.texte)
-                      : panneauResultats.resultats.length >= 500
-                        ? qsTr("« %1 » dans toutes les boîtes (objet, expéditeur) : les 500 plus récents, précisez la recherche.")
-                          .arg(panneauResultats.texte)
-                        : qsTr("« %1 » dans toutes les boîtes (objet, expéditeur) : %2.").arg(panneauResultats.texte)
-                          .arg(fenetre.accord(panneauResultats.resultats.length, qsTr("message"), qsTr("messages")))
-            }
-            ListView {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                clip: true
-                model: panneauResultats.resultats
-                ScrollBar.vertical: ScrollBar {}
-                delegate: ItemDelegate {
-                    width: ListView.view.width
-                    contentItem: ColumnLayout {
-                        spacing: 1
-                        RowLayout {
-                            Layout.fillWidth: true
-                            Label {
-                                Layout.fillWidth: true
-                                elide: Text.ElideRight
-                                font.bold: !modelData.lu
-                                text: modelData.sujet.length > 0 ? modelData.sujet : qsTr("(sans objet)")
-                            }
-                            Label {
-                                opacity: 0.7
-                                font.pointSize: fenetre.tailleListe * 0.85
-                                text: fenetre.dateCourte(modelData.date)
-                            }
-                        }
-                        Label {
-                            Layout.fillWidth: true
-                            elide: Text.ElideRight
-                            opacity: 0.7
-                            text: modelData.expediteur || modelData.adresse
-                        }
-                        // Le dossier du message, sur sa ligne : en fin de ligne
-                        // derrière l'expéditeur, il était coupé (retour de Manu,
-                        // 08/10). Coupé au milieu au besoin : le compte et le
-                        // dossier restent lisibles.
-                        Label {
-                            Layout.fillWidth: true
-                            elide: Text.ElideMiddle
-                            color: fenetre.palette.highlight
-                            text: fenetre.cheminResultat(modelData)
-                        }
-                    }
-                    onClicked: fenetre.allerAuMessage(modelData.compte, modelData.chemin, modelData.uid)
-                }
-            }
-        }
-    }
-
     Dialog {
         id: dlgViderCorbeilles
         title: qsTr("Vider les corbeilles et indésirables ?")
@@ -4313,19 +4330,28 @@ ApplicationWindow {
                 console.log("scenario: l'index trouve", modeleMessages.count, "message(s)")
                 return
             }
-            // Scénario « recherche-partout » : même texte, dans toutes les
-            // boîtes ; le panneau des résultats reste ouvert pour la capture.
-            if (fenetre.essai && fenetre.essai.scenario === "recherche-partout" && !fenetre.essai.cherche) {
+            // Scénario « historique » : douze recherches passées, proposées
+            // sous le champ (dix visibles, un ascenseur).
+            if (fenetre.essai && fenetre.essai.scenario === "historique" && !fenetre.essai.cherche) {
                 fenetre.essai.cherche = true
-                porteeRecherche.currentIndex = 1
-                champRecherche.text = identifiantsEssai.dossier
-                fenetre.lancerRecherche()
-                console.log("scenario: résultats", panneauResultats.resultats.length,
-                            panneauResultats.resultats.length > 0 ? fenetre.cheminResultat(panneauResultats.resultats[0]) : "")
+                for (var h = 12; h >= 1; --h)
+                    fenetre.noterRecherche(qsTr("recherche passée %1").arg(h))
+                champRecherche.forceActiveFocus()
+                fenetre.proposerHistorique()
+                if (!panneauHistorique.opened) {
+                    panneauHistorique.entrees = fenetre.historiqueRecherches()
+                    panneauHistorique.open()
+                }
+                console.log("scenario: historique proposé", panneauHistorique.entrees.length, "| ouvert", panneauHistorique.opened)
+            }
+            if (fenetre.essai && fenetre.essai.scenario === "recherche-partout" && fenetre.essai.etape < 3) {
+                fenetre.etapeScenarioRecherchePartout(compte, chemin)
                 return
             }
             fenetre.rafraichirListe()
-            if (!veille)
+            // En recherche dans toutes les boîtes, la liste est celle des
+            // résultats : ne pas l'annoncer comme le contenu du dossier.
+            if (!veille && !fenetre.rechercheGlobale)
                 messageEtat.texte = qsTr("%1 : %2.").arg(fenetre.libelleCourant())
                         .arg(fenetre.accord(modeleMessages.count, qsTr("message"), qsTr("messages")))
             if (fenetre.essai && fenetre.essai.afficherPremier && modeleMessages.count > 0) {
@@ -4986,7 +5012,14 @@ ApplicationWindow {
     // ---- liste des messages
 
     function ouvrirDossier(compte, chemin) {
-        if (compte !== boite.compteCourant || chemin !== boite.dossierCourant) {
+        // Un dossier choisi dans l'arborescence met fin à une recherche dans
+        // toutes les boîtes, même s'il est celui du dernier résultat lu.
+        var sortieGlobale = rechercheGlobale
+        if (sortieGlobale) {
+            sortirRechercheGlobale()
+            champRecherche.text = ""
+        }
+        if (sortieGlobale || compte !== boite.compteCourant || chemin !== boite.dossierCourant) {
             recherche = ""
             uidsServeur = []
             if (!porteeRecherche.partout)
@@ -4995,7 +5028,7 @@ ApplicationWindow {
             if (boite.ouvrirDossier(compte, chemin)) {
                 // L'index s'affiche tout de suite ; la synchronisation suit —
                 // sauf hors connexion, que le noyau vient de signaler.
-                rafraichirListe()
+                rafraichirListe(sortieGlobale)
                 if (boite.erreur.indexOf("compte hors ligne") !== 0)
                     messageEtat.texte = qsTr("Lecture de %1…").arg(libelleCourant())
             }
@@ -5107,19 +5140,39 @@ ApplicationWindow {
 
     // ---- recherche
 
-    /// Lance la recherche saisie : dans le dossier ouvert, la liste devient
-    /// celle des résultats ; dans toutes les boîtes, un panneau les présente.
-    function lancerRecherche() {
-        var texte = champRecherche.text.trim()
+    /// Lance la recherche saisie, ou `texteImpose` (une recherche passée, choisie
+    /// dans la liste). Dans le dossier ouvert comme dans toutes les boîtes, la
+    /// liste ne contient plus que les résultats.
+    function lancerRecherche(texteImpose) {
+        var texte = (texteImpose !== undefined ? texteImpose : champRecherche.text).trim()
+        panneauHistorique.close()
         if (texte.length === 0) {
             quitterRecherche()
             return
         }
+        champRecherche.text = texte
+        noterRecherche(texte)
         if (porteeRecherche.partout) {
-            panneauResultats.resultats = JSON.parse(boite.chercher(texte, true))
-            panneauResultats.texte = texte
-            panneauResultats.open()
+            if (!rechercheGlobale)
+                dossierAvantRecherche = boite.dossierCourant.length > 0
+                        ? { compte: boite.compteCourant, chemin: boite.dossierCourant } : null
+            rechercheGlobale = true
+            recherche = texte
+            uidsServeur = []
+            cleChoisie = ""
+            viderListe()
+            poserResultats()
+            messageEtat.texte = qsTr("Recherche « %1 » dans toutes les boîtes : %2.").arg(texte)
+                    .arg(accord(modeleMessages.count, qsTr("résultat"), qsTr("résultats")))
             return
+        }
+        // De toutes les boîtes au dossier actif : celui d'où l'on était parti.
+        if (rechercheGlobale) {
+            var avant = dossierAvantRecherche
+            sortirRechercheGlobale()
+            if (avant)
+                boite.ouvrirDossier(avant.compte, avant.chemin)
+            champRecherche.text = texte
         }
         if (boite.dossierCourant.length === 0)
             return
@@ -5130,9 +5183,18 @@ ApplicationWindow {
             messageEtat.texte = qsTr("Recherche dans l'index seulement (compte hors ligne).")
     }
 
-    /// Résultats de l'index, et ceux que le serveur a trouvés dans le texte
-    /// des messages, du plus récent au plus ancien.
+    /// Résultats de l'index — et, dans le dossier ouvert, ceux que le serveur a
+    /// trouvés dans le texte des messages —, du plus récent au plus ancien.
     function poserResultats() {
+        if (rechercheGlobale) {
+            poserListe(JSON.parse(boite.chercher(recherche, true)).map(function(r) {
+                // Une liste JS deviendrait un sous-modèle dans la ListModel.
+                r.cheminAffiche = cheminResultat(r)
+                delete r.segments
+                return r
+            }))
+            return
+        }
         var lignes = JSON.parse(boite.chercher(recherche, false))
         var vus = {}
         for (var i = 0; i < lignes.length; ++i)
@@ -5145,13 +5207,32 @@ ApplicationWindow {
         poserListe(lignes)
     }
 
-    /// Sort de la recherche : la liste du dossier revient entière.
+    function sortirRechercheGlobale() {
+        rechercheGlobale = false
+        cleChoisie = ""
+        dossierAvantRecherche = null
+        recherche = ""
+        uidsServeur = []
+        viderListe()
+    }
+
+    /// Sort de la recherche : la liste du dossier revient entière — celui d'où
+    /// l'on était parti, après une recherche dans toutes les boîtes.
     function quitterRecherche() {
-        minuterieRecherche.stop()
         champRecherche.text = ""
-        panneauResultats.close()
+        panneauHistorique.close()
         if (recherche.length === 0)
             return
+        if (rechercheGlobale) {
+            var avant = dossierAvantRecherche
+            sortirRechercheGlobale()
+            if (avant)
+                boite.ouvrirDossier(avant.compte, avant.chemin)
+            // Le noyau a suivi les résultats choisis : la liste est relue en
+            // entier, jamais par différence.
+            rafraichirListe(true)
+            return
+        }
         recherche = ""
         uidsServeur = []
         rafraichirListe(true)
@@ -5169,17 +5250,40 @@ ApplicationWindow {
         return (c ? c.adresse + " › " : "") + noms.join(" › ")
     }
 
-    /// Ouvre le dossier d'un résultat trouvé dans toutes les boîtes, et y
-    /// choisit le message.
-    function allerAuMessage(compte, chemin, uid) {
-        panneauResultats.close()
-        champRecherche.text = ""
-        ouvrirDossier(compte, chemin)
-        var i = indexDe(uid)
-        if (i >= 0) {
-            choisir(i, 0)
-            vueMessages.positionViewAtIndex(i, ListView.Center)
+    function cleResultat(compte, chemin, uid) {
+        return compte + "\u0001" + chemin + "\u0001" + uid
+    }
+
+    // ---- historique des recherches
+
+    function historiqueRecherches() {
+        try {
+            var h = JSON.parse(reglages.historiqueRecherches)
+            return Array.isArray(h) ? h : []
+        } catch (e) {
+            return []
         }
+    }
+
+    /// La plus récente en tête, sans doublon (casse ignorée), 50 au plus.
+    function noterRecherche(texte) {
+        var h = historiqueRecherches().filter(function(t) { return t.toLowerCase() !== texte.toLowerCase() })
+        h.unshift(texte)
+        reglages.historiqueRecherches = JSON.stringify(h.slice(0, 50))
+    }
+
+    /// Propose, sous le champ, les recherches passées qui contiennent ce qui
+    /// est tapé (toutes si rien ne l'est).
+    function proposerHistorique() {
+        var filtre = champRecherche.text.trim().toLowerCase()
+        var h = historiqueRecherches().filter(function(t) {
+            return filtre.length === 0 || t.toLowerCase().indexOf(filtre) >= 0
+        })
+        panneauHistorique.entrees = h
+        if (h.length > 0 && champRecherche.activeFocus)
+            panneauHistorique.open()
+        else
+            panneauHistorique.close()
     }
 
     /// Premier rang dont la ligne ne précède pas (h, uid) : la liste est triée
@@ -5216,6 +5320,10 @@ ApplicationWindow {
     function choisir(index, modificateurs) {
         if (index < 0 || index >= modeleMessages.count)
             return
+        if (rechercheGlobale) {
+            choisirResultat(index)
+            return
+        }
         var uid = modeleMessages.get(index).uid
         var nouvelle = {}
         if (modificateurs & Qt.ShiftModifier && ancre >= 0) {
@@ -5244,6 +5352,22 @@ ApplicationWindow {
             messageEtat.texte = accord(nombre, qsTr("message sélectionné."), qsTr("messages sélectionnés."))
     }
 
+    /// Recherche dans toutes les boîtes : un seul résultat à la fois ; le noyau
+    /// passe au dossier du message, sans que la liste des résultats ne change.
+    function choisirResultat(index) {
+        var r = modeleMessages.get(index)
+        cleChoisie = cleResultat(r.compte, r.chemin, r.uid)
+        var s = {}
+        s[r.uid] = true
+        selection = s
+        ancre = index
+        vueMessages.currentIndex = index
+        vueMessages.forceActiveFocus()
+        if (r.compte !== boite.compteCourant || r.chemin !== boite.dossierCourant)
+            boite.ouvrirDossier(r.compte, r.chemin)
+        afficherMessage(r.uid, index)
+    }
+
     function deplacerCurseur(pas, etendre) {
         var index = Math.max(0, Math.min(modeleMessages.count - 1, vueMessages.currentIndex + pas))
         choisir(index, etendre ? Qt.ShiftModifier : 0)
@@ -5251,6 +5375,8 @@ ApplicationWindow {
     }
 
     function toutChoisir() {
+        if (rechercheGlobale)
+            return
         var nouvelle = {}
         for (var i = 0; i < modeleMessages.count; ++i)
             nouvelle[modeleMessages.get(i).uid] = true
@@ -5825,6 +5951,55 @@ ApplicationWindow {
         }
     }
 
+    /// Scénario « recherche-partout » : « Éléments envoyés » puis la boîte de
+    /// réception passent par l'index ; le texte de MMAIL_DOSSIER est cherché
+    /// dans toutes les boîtes ; un résultat d'un autre dossier est choisi — le
+    /// noyau y passe, la liste reste celle des résultats ; Échap ramène au
+    /// dossier de départ. MMAIL_SORTIE_PRECOCE absent : la fenêtre reste sur
+    /// les résultats pour la capture.
+    function etapeScenarioRecherchePartout(compte, chemin) {
+        if (essai.etape === 0) {
+            essai.etape = 1
+            ouvrirDossier(compte, "Sent")
+        } else if (essai.etape === 1 && chemin === "Sent") {
+            essai.etape = 2
+            ouvrirDossier(compte, "INBOX")
+        } else if (essai.etape === 2 && chemin === "INBOX") {
+            essai.etape = 3
+            porteeRecherche.currentIndex = 1
+            champRecherche.text = identifiantsEssai.dossier
+            lancerRecherche()
+            var dossiers = {}
+            var autre = -1
+            for (var i = 0; i < modeleMessages.count; ++i) {
+                var r = modeleMessages.get(i)
+                dossiers[r.chemin] = true
+                if (autre < 0 && r.chemin !== "INBOX")
+                    autre = i
+            }
+            console.log("scenario: résultats", modeleMessages.count, "| dossiers", Object.keys(dossiers).join(", "),
+                        "| premier :", modeleMessages.count > 0 ? modeleMessages.get(0).cheminAffiche : "—",
+                        "| historique", historiqueRecherches().slice(0, 3).join(" / "))
+            if (autre < 0 || identifiantsEssai.sortie.length === 0)
+                return
+            choisir(autre, 0)
+            var suite = Qt.createQmlObject('import QtQuick; Timer { interval: 3000 }', fenetre)
+            suite.triggered.connect(function() {
+                console.log("scenario: choisi", modeleMessages.get(autre).sujet, "| noyau sur", boite.dossierCourant,
+                            "| affiché", sujetAffiche.text, "| liste", modeleMessages.count, "| globale", rechercheGlobale)
+                quitterRecherche()
+                var fin = Qt.createQmlObject('import QtQuick; Timer { interval: 2000 }', fenetre)
+                fin.triggered.connect(function() {
+                    console.log("scenario: après Échap, noyau sur", boite.dossierCourant, "| liste", modeleMessages.count,
+                                "| recherche", JSON.stringify(recherche), "| globale", rechercheGlobale)
+                    Qt.quit()
+                })
+                fin.start()
+            })
+            suite.start()
+        }
+    }
+
     function etapeScenarioReprise() {
         console.log("scenario: proposées", redactionsRetrouvees.length, "| dialogue ouvert", dlgReprise.opened)
         dlgReprise.close()
@@ -5874,7 +6049,7 @@ ApplicationWindow {
         champRecherche.text = "dossier 39"
         t = Date.now()
         lancerRecherche()
-        console.log("mesure: recherche dans toutes les boîtes,", panneauResultats.resultats.length, "résultats,",
+        console.log("mesure: recherche dans toutes les boîtes,", modeleMessages.count, "résultats,",
                     Date.now() - t, "ms")
         Qt.quit()
     }

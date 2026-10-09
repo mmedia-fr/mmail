@@ -75,10 +75,13 @@ de projet interne.
 - **déplacement par glisser-déposer ou par clic droit**, vers un dossier de la
   même boîte ou de n'importe quelle autre boîte connectée ; dialogue
   « Déplacer vers… » avec filtre (Ctrl+Maj+V) ;
-- **recherche** (Ctrl+E), comme dans Outlook : dans le dossier actif — objet
-  et expéditeur d'après l'index, sans attendre, puis le texte entier des
-  messages par le serveur —, ou dans toutes les boîtes (index du poste), un clic
-  sur un résultat ouvrant son dossier ;
+- **recherche** (Ctrl+E), comme dans Outlook : le champ propose les dernières
+  recherches (dix visibles, ascenseur au-delà), Entrée lance la recherche ; la
+  liste des messages ne contient alors que les résultats — dans le dossier
+  actif, objet et expéditeur d'après l'index puis le texte entier des messages
+  par le serveur ; dans toutes les boîtes (index du poste), chaque résultat avec
+  son dossier, un seul choisi à la fois, et l'on revient au dossier de départ
+  en sortant de la recherche (Échap) ;
 - **Supprimer** envoie à la corbeille de la boîte (touche Suppr) ;
 - **dossiers de rôle** — brouillons, éléments envoyés, corbeille — désignés
   par le serveur (SPECIAL-USE) ; à défaut (OVH), reconnus à leur nom usuel,

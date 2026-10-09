@@ -505,7 +505,9 @@ pub fn preparer(brut: &[u8], mode: &str, propres: &[String]) -> Preparation {
     }
 
     p.objet = prefixer(&objet, "RE");
-    p.origine_mode = "repondre".into();
+    // « repondre_tous » gardé jusqu'à l'envoi : le message d'origine y reçoit
+    // `$ReplyAll` en plus de `\Answered`.
+    p.origine_mode = if mode == "repondre_tous" { "repondre_tous" } else { "repondre" }.into();
     let cible = match paires(m.reply_to()) {
         v if !v.is_empty() => v,
         _ => de,
@@ -732,6 +734,7 @@ mod tests {
 
         let t = preparer(ORIGINAL.as_bytes(), "repondre_tous", &propres);
         assert_eq!(t.cc, "Noël <noel@exemple.fr>; compta@exemple.fr", "sans soi-même");
+        assert_eq!(t.origine_mode, "repondre_tous");
     }
 
     #[test]

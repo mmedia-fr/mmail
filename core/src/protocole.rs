@@ -19,6 +19,11 @@ pub const REPONDU: &[&str] = &["\\Answered", "$Answered"];
 /// `Forwarded`, sans `$`, de clients plus anciens.
 pub const TRANSFERE: &[&str] = &["$Forwarded", "Forwarded"];
 
+/// Réponse à tous : aucun drapeau standard ne la distingue d'une réponse. MMail
+/// pose ce mot-clé, en plus de `\Answered`, quand on répond à tous depuis lui ;
+/// une réponse à tous faite ailleurs reste une réponse.
+pub const REPONDU_TOUS: &[&str] = &["$ReplyAll"];
+
 /// Vrai si la liste porte l'un de ces drapeaux, sans égard à la casse.
 pub fn porte(drapeaux: &[String], noms: &[&str]) -> bool {
     drapeaux.iter().any(|d| noms.iter().any(|n| d.eq_ignore_ascii_case(n)))
@@ -110,6 +115,10 @@ impl Entete {
 
     pub fn transfere(&self) -> bool {
         porte(&self.drapeaux, TRANSFERE)
+    }
+
+    pub fn repondu_tous(&self) -> bool {
+        porte(&self.drapeaux, REPONDU_TOUS)
     }
 
     /// Drapeau de suivi (`\Flagged`), celui qu'Outlook appelle « assurer un
@@ -552,6 +561,8 @@ mod tests {
         assert!(e(&["$forwarded"]).transfere());
         assert!(e(&["Forwarded"]).transfere());
         assert!(!e(&["\\Answered"]).transfere());
+        assert!(e(&["\\Answered", "$ReplyAll"]).repondu_tous());
+        assert!(!e(&["\\Answered"]).repondu_tous());
     }
 
     #[test]

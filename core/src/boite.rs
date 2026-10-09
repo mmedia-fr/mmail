@@ -3458,9 +3458,12 @@ impl Travail {
             avertissements.push(format!("brouillon non effacé : {x}"));
         }
         if r.origine_uid > 0 && !r.origine_chemin.is_empty() {
-            let drapeau = if r.origine_mode == "transferer" { "$Forwarded" } else { "\\Answered" };
+            let drapeaux = drapeaux_d_origine(&r.origine_mode);
             let uid = r.origine_uid;
-            if let Err(x) = self.ailleurs(e, &r.origine_chemin, |c| c.marquer(&[uid], drapeau, true)) {
+            let marquage = self.ailleurs(e, &r.origine_chemin, |c| {
+                drapeaux.iter().try_for_each(|d| c.marquer(&[uid], d, true))
+            });
+            if let Err(x) = marquage {
                 avertissements.push(format!("marquage du message d'origine : {x}"));
             }
         }
@@ -3917,17 +3920,41 @@ const RECHERCHE_MAX: usize = 500;
 
 /// Messages trouvés dans tous les comptes : la ligne d'une liste, plus son
 /// compte, son chemin et le nom de son dossier.
+/// Drapeaux posés sur le message d'origine une fois la réponse ou le
+/// transfert parti.
+fn drapeaux_d_origine(mode: &str) -> &'static [&'static str] {
+    match mode {
+        "transferer" => &["$Forwarded"],
+        "repondre_tous" => &["\\Answered", "$ReplyAll"],
+        _ => &["\\Answered"],
+    }
+}
+
+/// Chemin d'un dossier découpé en noms lisibles, du premier niveau au dossier
+/// lui-même : « INBOX.&AMk-l&AOk-ments envoy&AOk-s » → « INBOX »,
+/// « Éléments envoyés ».
+fn segments_du_chemin(chemin: &str, separateur: &str) -> Vec<String> {
+    match separateur.chars().next() {
+        Some(sep) => chemin.split(sep).map(crate::protocole::decoder_utf7).collect(),
+        None => vec![crate::protocole::decoder_utf7(chemin)],
+    }
+}
+
 fn json_trouves(trouves: &[crate::magasin::Trouve]) -> String {
     let corps: Vec<String> = trouves
         .iter()
         .map(|t| {
             let ligne = json_message(&t.message);
+            let segments: Vec<String> =
+                segments_du_chemin(&t.chemin, &t.separateur).iter().map(|s| texte_json(s)).collect();
             format!(
-                r#"{},"compte":{},"chemin":{},"dossier":{}}}"#,
+                r#"{},"compte":{},"chemin":{},"dossier":{},"segments":[{}],"role":{}}}"#,
                 &ligne[..ligne.len() - 1],
                 t.compte,
                 texte_json(&t.chemin),
-                texte_json(&t.nom_dossier)
+                texte_json(&t.nom_dossier),
+                segments.join(","),
+                texte_json(&t.role)
             )
         })
         .collect();
@@ -3942,7 +3969,7 @@ fn json_messages(messages: &[MessageLocal]) -> String {
 
 fn json_message(m: &MessageLocal) -> String {
     format!(
-        r#"{{"uid":{},"h":{},"expediteur":{},"adresse":{},"sujet":{},"date":{},"taille":{},"lu":{},"repondu":{},"transfere":{},"pieces":{},"suivi":{},"importance":{}}}"#,
+        r#"{{"uid":{},"h":{},"expediteur":{},"adresse":{},"sujet":{},"date":{},"taille":{},"lu":{},"repondu":{},"reponduTous":{},"transfere":{},"pieces":{},"suivi":{},"importance":{}}}"#,
         m.uid,
         m.horodatage,
         texte_json(&m.expediteur),
@@ -3952,6 +3979,7 @@ fn json_message(m: &MessageLocal) -> String {
         m.taille,
         m.lu,
         m.repondu,
+        m.repondu_tous,
         m.transfere,
         m.pieces,
         m.suivi,
@@ -4441,6 +4469,30 @@ mod tests {
         // Et la purge reste aux seuls rôles annoncés, ou aux noms exacts
         // quand aucun ne l'est : la reconnaissance par le nom n'y change rien.
         assert_eq!(dossiers_a_vider(&ovh), vec!["INBOX.Éléments supprimés", "INBOX.INBOX.Junk", "INBOX.INBOX.Trash", "INBOX.Courrier indésirable", "INBOX.Trash"]);
+    }
+
+    #[test]
+    fn drapeaux_poses_sur_l_origine() {
+        assert_eq!(drapeaux_d_origine("repondre"), ["\\Answered"]);
+        assert_eq!(drapeaux_d_origine("repondre_tous"), ["\\Answered", "$ReplyAll"]);
+        assert_eq!(drapeaux_d_origine("transferer"), ["$Forwarded"]);
+    }
+
+    #[test]
+    fn chemin_d_un_resultat_de_recherche() {
+        assert_eq!(segments_du_chemin("INBOX/fournisseurs/3CX", "/"), vec!["INBOX", "fournisseurs", "3CX"]);
+        assert_eq!(segments_du_chemin("INBOX.&AMk-l&AOk-ments envoy&AOk-s", "."), vec!["INBOX", "Éléments envoyés"]);
+        assert_eq!(segments_du_chemin("Archives", ""), vec!["Archives"]);
+        let t = crate::magasin::Trouve {
+            message: MessageLocal { uid: 7, sujet: "Devis".into(), ..Default::default() },
+            compte: 2,
+            chemin: "INBOX/Clients".into(),
+            nom_dossier: "Clients".into(),
+            separateur: "/".into(),
+            role: String::new(),
+        };
+        let json = json_trouves(&[t]);
+        assert!(json.contains(r#""segments":["INBOX","Clients"],"role":""}]"#), "{json}");
     }
 
     #[test]

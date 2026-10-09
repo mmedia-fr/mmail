@@ -46,10 +46,12 @@ de projet interne.
 - **drapeau de suivi** (`\Flagged`) posé ou retiré d'un clic en bout de ligne,
   par le menu ou la touche Insertion ; importance des messages reçus signalée
   dans la liste (« ! », « ↓ ») et dans l'en-tête ;
-- **répondu et transféré** signalés dans la liste par une flèche, vers la
-  gauche ou vers la droite comme dans Outlook, que la réponse ou le transfert
-  vienne de MMail ou d'un autre logiciel — téléphone, webmail (`\Answered`,
-  `$Forwarded`) ;
+- **répondu et transféré** écrits en toutes lettres au bout de la ligne de
+  l'objet (« Répondu », « Transféré »), que la réponse ou le transfert vienne
+  de MMail ou d'un autre logiciel — téléphone, webmail (`\Answered`,
+  `$Forwarded`) ; « Répondu à tous » pour une réponse à tous faite depuis MMail,
+  qui pose en plus le mot-clé `$ReplyAll` (aucun drapeau standard ne distingue
+  une réponse à tous : faite ailleurs, elle reste « Répondu ») ;
 - **confirmation de lecture** demandée par un expéditeur : proposée, jamais
   envoyée d'office ; la réponse — envoi ou refus — n'est demandée qu'une fois
   (`$MDNSent`) ;
@@ -73,10 +75,13 @@ de projet interne.
 - **déplacement par glisser-déposer ou par clic droit**, vers un dossier de la
   même boîte ou de n'importe quelle autre boîte connectée ; dialogue
   « Déplacer vers… » avec filtre (Ctrl+Maj+V) ;
-- **recherche** (Ctrl+E), comme dans Outlook : dans le dossier actif — objet
-  et expéditeur d'après l'index, sans attendre, puis le texte entier des
-  messages par le serveur —, ou dans toutes les boîtes (index du poste), un clic
-  sur un résultat ouvrant son dossier ;
+- **recherche** (Ctrl+E), comme dans Outlook : le champ propose les dernières
+  recherches (dix visibles, ascenseur au-delà), Entrée lance la recherche ; la
+  liste des messages ne contient alors que les résultats — dans le dossier
+  actif, objet et expéditeur d'après l'index puis le texte entier des messages
+  par le serveur ; dans toutes les boîtes (index du poste), chaque résultat avec
+  son dossier, un seul choisi à la fois, et l'on revient au dossier de départ
+  en sortant de la recherche (Échap) ;
 - **Supprimer** envoie à la corbeille de la boîte (touche Suppr) ;
 - **dossiers de rôle** — brouillons, éléments envoyés, corbeille — désignés
   par le serveur (SPECIAL-USE) ; à défaut (OVH), reconnus à leur nom usuel,

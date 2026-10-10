@@ -1045,6 +1045,48 @@ impl Magasin {
         Ok(messages)
     }
 
+    /// Une page de la liste d'un dossier, du plus récent au plus ancien : les
+    /// `limite` messages qui suivent `apres` (date, UID) dans cet ordre — ou les
+    /// premiers. Lecture par clé, sans `OFFSET` : l'index
+    /// `messages_par_horodatage` y mène directement, quelle que soit la page.
+    pub fn messages_page(&self, dossier: i64, apres: Option<(i64, u32)>, limite: usize) -> Resultat<Vec<MessageLocal>> {
+        let limite = limite as i64;
+        let messages = match apres {
+            None => self
+                .base
+                .prepare(&format!(
+                    "{SELECT_MESSAGE} WHERE folder_id = ?1 ORDER BY horodatage DESC, uid DESC LIMIT ?2"
+                ))?
+                .query_map(params![dossier, limite], lire_message)?
+                .collect::<Result<Vec<_>, _>>()?,
+            Some((h, uid)) => self
+                .base
+                .prepare(&format!(
+                    "{SELECT_MESSAGE} WHERE folder_id = ?1 AND (horodatage, uid) < (?2, ?3)
+                     ORDER BY horodatage DESC, uid DESC LIMIT ?4"
+                ))?
+                .query_map(params![dossier, h, uid, limite], lire_message)?
+                .collect::<Result<Vec<_>, _>>()?,
+        };
+        Ok(messages)
+    }
+
+    /// Messages d'un dossier jusqu'à `borne` (date, UID) comprise, du plus
+    /// récent au plus ancien ; tous sans borne.
+    pub fn messages_jusqua(&self, dossier: i64, borne: Option<(i64, u32)>) -> Resultat<Vec<MessageLocal>> {
+        let Some((h, uid)) = borne else {
+            return self.messages(dossier);
+        };
+        let mut requete = self.base.prepare(&format!(
+            "{SELECT_MESSAGE} WHERE folder_id = ?1 AND (horodatage, uid) >= (?2, ?3)
+             ORDER BY horodatage DESC, uid DESC"
+        ))?;
+        let messages = requete
+            .query_map(params![dossier, h, uid], lire_message)?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(messages)
+    }
+
     /// Un message de l'index.
     pub fn message(&self, dossier: i64, uid: u32) -> Resultat<Option<MessageLocal>> {
         let mut requete = self
@@ -1524,6 +1566,24 @@ mod tests {
         assert_eq!(m.identite_message(d, 3).unwrap().map(|(id, h, _)| (id, h)), Some((ids[0], 9_000)));
         assert!(m.gardes_perimes(9_000).unwrap().is_empty());
         assert_eq!(m.gardes_perimes(9_001).unwrap(), vec![ids[0]]);
+    }
+
+    #[test]
+    fn liste_par_pages() {
+        let (m, _, d) = boite();
+        // Deux messages à la même date : l'UID les départage.
+        m.poser_messages(d, &[message(1, 100, true), message(2, 300, true), message(3, 300, true), message(4, 200, true), message(5, 50, true)])
+            .unwrap();
+        let uids = |l: Vec<MessageLocal>| l.into_iter().map(|x| x.uid).collect::<Vec<_>>();
+        assert_eq!(uids(m.messages(d).unwrap()), vec![3, 2, 4, 1, 5]);
+        assert_eq!(uids(m.messages_page(d, None, 2).unwrap()), vec![3, 2]);
+        assert_eq!(uids(m.messages_page(d, Some((300, 2)), 2).unwrap()), vec![4, 1]);
+        assert_eq!(uids(m.messages_page(d, Some((100, 1)), 2).unwrap()), vec![5]);
+        assert!(m.messages_page(d, Some((50, 5)), 2).unwrap().is_empty());
+        // Jusqu'à la borne comprise : ce qui a déjà été envoyé.
+        assert_eq!(uids(m.messages_jusqua(d, Some((300, 2))).unwrap()), vec![3, 2]);
+        assert_eq!(uids(m.messages_jusqua(d, Some((200, 4))).unwrap()), vec![3, 2, 4]);
+        assert_eq!(uids(m.messages_jusqua(d, None).unwrap()), vec![3, 2, 4, 1, 5]);
     }
 
     #[test]

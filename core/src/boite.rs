@@ -170,12 +170,20 @@ pub mod qobject {
         fn messages(&self) -> QString;
 
         /// Ce qui a changé dans la liste du dossier ouvert depuis le dernier
-        /// appel : `{"retires":[{uid,h}…],"ajoutes":[…],"modifies":[…]}`. Rend
-        /// `{"complet":[…]}`, la liste entière, à la première lecture d'un
-        /// dossier, si `complet`, ou s'il y a trop de changements.
+        /// appel : `{"retires":[{uid,h}…],"ajoutes":[…],"modifies":[…]}`, dans
+        /// la partie déjà envoyée. Rend `{"complet":[…],"suite":…}`, la liste
+        /// entière, à la première lecture d'un dossier, si `complet`, ou s'il y
+        /// a trop de changements — sa première page seulement, `suite` vrai
+        /// s'il en reste.
         #[qinvokable]
         #[cxx_name = "changementsListe"]
         fn changements_liste(self: Pin<&mut Boite>, complet: bool) -> QString;
+
+        /// Page suivante de la liste envoyée : `{"lignes":[…],"suite":…}`,
+        /// `nombre` messages au plus, relus dans l'index.
+        #[qinvokable]
+        #[cxx_name = "suiteListe"]
+        fn suite_liste(self: Pin<&mut Boite>, nombre: i32) -> QString;
 
         /// Messages dont chaque mot de `texte` figure dans l'objet, le nom ou
         /// l'adresse de l'expéditeur, d'après l'index : du dossier ouvert, ou
@@ -679,6 +687,10 @@ enum Commande {
     /// Envoyer : il faut le mot de passe, que le fil a oublié une fois la
     /// session IMAP ouverte — il revient avec la commande.
     Envoyer { redaction: Redaction, identifiants: Identifiants },
+    /// Le message est parti — par son propre fil, le SMTP ne bloquant plus
+    /// le compte (0.5.9) : sa copie dans « Éléments envoyés », le brouillon
+    /// repris effacé, le message d'origine marqué.
+    ApresEnvoi { redaction: Redaction, copie: Vec<u8> },
     Brouillon { redaction: Redaction },
     /// Veille périodique, émise par le fil lui-même.
     Veille,
@@ -769,6 +781,9 @@ enum Issue {
     Echec { etape: &'static str, message: String, session_perdue: bool },
     Prepare { jeton: String, contenu: String },
     Envoye { jeton: String, avertissement: String },
+    /// Le fil d'envoi a fini : parti, ou `erreur`. Remise même si la session
+    /// du compte a changé entre-temps — un message parti doit avoir sa suite.
+    Parti { redaction: Redaction, copie: Vec<u8>, erreur: Option<String> },
     BrouillonEnregistre { jeton: String, uid: u32 },
     Programme { jeton: String, echeance: i64 },
     DifferesEnvoyes { nombre: usize, erreurs: String },
@@ -824,12 +839,25 @@ pub struct BoiteRust {
     generation: u64,
     /// Dossier ouvert : compte, chemin, identifiant dans l'index.
     courant: Option<(i64, String, i64)>,
-    /// Liste envoyée en dernier à l'interface : dossier, et pour chaque message
-    /// son UID, sa date et l'empreinte de ses champs. De quoi ne lui renvoyer
-    /// que ce qui a changé.
-    liste: Option<(i64, Vec<(u32, i64, u64)>)>,
+    /// Liste envoyée en dernier à l'interface (cf. `ListeEnvoyee`).
+    liste: Option<ListeEnvoyee>,
     agenda_occupe: bool,
 }
+
+/// Liste envoyée à l'interface : dossier, et pour chaque message son UID, sa
+/// date et l'empreinte de ses champs — de quoi ne lui renvoyer que ce qui a
+/// changé. Un gros dossier part par pages (0.5.9) : `fin` est la clé (date,
+/// UID) du dernier message envoyé tant qu'il en reste ; les changements ne
+/// portent que jusque-là, la suite arrive avec les pages.
+struct ListeEnvoyee {
+    dossier: i64,
+    empreintes: Vec<(u32, i64, u64)>,
+    fin: Option<(i64, u32)>,
+}
+
+/// Messages de la première page d'une liste : de quoi remplir l'écran le plus
+/// grand, aussitôt.
+const PREMIERE_PAGE: usize = 200;
 
 impl Default for BoiteRust {
     fn default() -> Self {
@@ -1552,17 +1580,43 @@ impl qobject::Boite {
 
     pub fn changements_liste(mut self: Pin<&mut Self>, complet: bool) -> QString {
         let (Some(magasin), Some((_, _, id))) = (self.magasin.as_ref(), self.courant.as_ref()) else {
-            return QString::from(r#"{"complet":[]}"#);
+            return QString::from(r#"{"complet":[],"suite":false}"#);
         };
         let id = *id;
-        let apres = magasin.messages(id).unwrap_or_default();
-        let empreintes: Vec<(u32, i64, u64)> = apres.iter().map(|m| (m.uid, m.horodatage, empreinte(m))).collect();
-        let changements = match &self.liste {
-            Some((dossier, avant)) if *dossier == id && !complet => changements(avant, &apres, &empreintes),
-            _ => None,
+        if let Some(liste) = self.liste.as_ref().filter(|l| l.dossier == id && !complet) {
+            let fin = liste.fin;
+            let apres = magasin.messages_jusqua(id, fin).unwrap_or_default();
+            let empreintes = empreintes_de(&apres);
+            if let Some(json) = changements(&liste.empreintes, &apres, &empreintes) {
+                self.as_mut().rust_mut().liste = Some(ListeEnvoyee { dossier: id, empreintes, fin });
+                return QString::from(&json);
+            }
+        }
+        // La liste entière — sa première page, la suite par `suiteListe`.
+        let page = magasin.messages_page(id, None, PREMIERE_PAGE).unwrap_or_default();
+        let fin = (page.len() == PREMIERE_PAGE).then(|| page.last().map(|m| (m.horodatage, m.uid))).flatten();
+        let json = format!(r#"{{"complet":{},"suite":{}}}"#, json_messages(&page), fin.is_some());
+        self.as_mut().rust_mut().liste = Some(ListeEnvoyee { dossier: id, empreintes: empreintes_de(&page), fin });
+        QString::from(&json)
+    }
+
+    pub fn suite_liste(mut self: Pin<&mut Self>, nombre: i32) -> QString {
+        const FINI: &str = r#"{"lignes":[],"suite":false}"#;
+        let (Some(magasin), Some((_, _, id))) = (self.magasin.as_ref(), self.courant.as_ref()) else {
+            return QString::from(FINI);
         };
-        let json = changements.unwrap_or_else(|| format!(r#"{{"complet":{}}}"#, json_messages(&apres)));
-        self.as_mut().rust_mut().liste = Some((id, empreintes));
+        let id = *id;
+        let Some(fin) = self.liste.as_ref().filter(|l| l.dossier == id).and_then(|l| l.fin) else {
+            return QString::from(FINI);
+        };
+        let nombre = nombre.max(1) as usize;
+        let page = magasin.messages_page(id, Some(fin), nombre).unwrap_or_default();
+        let fin = (page.len() == nombre).then(|| page.last().map(|m| (m.horodatage, m.uid))).flatten();
+        let json = format!(r#"{{"lignes":{},"suite":{}}}"#, json_messages(&page), fin.is_some());
+        if let Some(liste) = self.as_mut().rust_mut().liste.as_mut() {
+            liste.empreintes.extend(empreintes_de(&page));
+            liste.fin = fin;
+        }
         QString::from(&json)
     }
 
@@ -2361,6 +2415,17 @@ impl qobject::Boite {
                 self.as_mut().reviser();
                 self.as_mut().envoye(&QString::from(&jeton), &QString::from(&avertissement));
             }
+            Issue::Parti { redaction, erreur: Some(message), .. } => {
+                self.as_mut().echec_redaction(&QString::from(&redaction.jeton), &QString::from(&message));
+            }
+            Issue::Parti { redaction, copie, erreur: None } => {
+                // La suite passe par le fil du compte, rouvert au besoin.
+                let jeton = redaction.jeton.clone();
+                if !self.as_mut().envoyer(compte, Commande::ApresEnvoi { redaction, copie }) {
+                    let avertissement = "compte hors ligne : pas de copie dans les éléments envoyés";
+                    self.as_mut().envoye(&QString::from(&jeton), &QString::from(avertissement));
+                }
+            }
             Issue::BrouillonEnregistre { jeton, uid } => {
                 self.as_mut().reviser();
                 self.as_mut().brouillon_enregistre(&QString::from(&jeton), uid as i32);
@@ -2647,18 +2712,38 @@ struct Etabli {
     dernier: Option<(String, u32, u32, Vec<u8>)>,
 }
 
-impl Travail {
-    /// Remet une issue à l'interface, qui l'ignorera si la session a changé.
-    fn remettre(&self, issue: Issue) {
+/// De quoi remettre une issue à l'interface depuis un autre fil que celui du
+/// compte (l'envoi SMTP).
+struct Retour {
+    fil: CxxQtThread<qobject::Boite>,
+    compte: i64,
+    generation: u64,
+}
+
+impl Retour {
+    /// Remet une issue à l'interface, qui l'ignorera si la session a changé
+    /// — sauf `toujours`.
+    fn remettre(&self, issue: Issue, toujours: bool) {
         let generation = self.generation;
         let compte = self.compte;
         // Échoue seulement si l'objet Qt n'existe plus : rien à faire alors.
         let _ = self.fil.queue(move |boite: Pin<&mut qobject::Boite>| {
             let a_jour = boite.sessions.get(&compte).map(|s| s.generation) == Some(generation);
-            if a_jour {
+            if a_jour || toujours {
                 boite.recevoir(compte, issue);
             }
         });
+    }
+}
+
+impl Travail {
+    fn retour(&self) -> Retour {
+        Retour { fil: self.fil.clone(), compte: self.compte, generation: self.generation }
+    }
+
+    /// Remet une issue à l'interface, qui l'ignorera si la session a changé.
+    fn remettre(&self, issue: Issue) {
+        self.retour().remettre(issue, false);
     }
 
     fn terminer(&self, nombre: usize) {
@@ -2680,6 +2765,11 @@ impl Travail {
             Commande::Brouillon { redaction } => Issue::EchecRedaction {
                 jeton: redaction.jeton,
                 message: format!("{motif} — le brouillon n'est pas enregistré"),
+            },
+            // Le message est parti : seule sa suite manque.
+            Commande::ApresEnvoi { redaction, .. } => Issue::Envoye {
+                jeton: redaction.jeton,
+                avertissement: format!("{motif} — pas de copie dans les éléments envoyés"),
             },
             Commande::Preparer { jeton, .. } => Issue::EchecRedaction { jeton, message: motif.to_string() },
             Commande::Deplacer { .. } => {
@@ -3007,12 +3097,10 @@ impl Travail {
                     Err(message) => Issue::EchecRedaction { jeton, message },
                 })
             }
-            Commande::Envoyer { redaction, identifiants } => {
-                let jeton = redaction.jeton.clone();
-                Some(match self.envoyer_redaction(e, &redaction, &identifiants) {
-                    Ok(avertissement) => Issue::Envoye { jeton, avertissement },
-                    Err(message) => Issue::EchecRedaction { jeton, message },
-                })
+            Commande::Envoyer { redaction, identifiants } => self.lancer_envoi(redaction, identifiants),
+            Commande::ApresEnvoi { redaction, copie } => {
+                let avertissement = self.apres_envoi(e, &redaction, &copie);
+                Some(Issue::Envoye { jeton: redaction.jeton, avertissement })
             }
             Commande::Brouillon { redaction } => {
                 let jeton = redaction.jeton.clone();
@@ -3511,15 +3599,38 @@ impl Travail {
         Ok(())
     }
 
-    fn envoyer_redaction(&self, e: &mut Etabli, r: &Redaction, id: &Identifiants) -> Result<String, String> {
-        let fichiers = lire_fichiers(&r.pieces)?;
-        let (r_images, images) = self.avec_images(r);
-        let f = redaction::fabriquer_avec_images(&r_images, maintenant(), &fichiers, &images)?;
-        if f.destinataires.is_empty() {
-            return Err("aucun destinataire".into());
+    /// Fabrique le message, puis l'envoie par SMTP dans un fil à lui : un
+    /// gros envoi, ou un serveur lent, tenait le compte entier — ni message
+    /// à lire, ni dossier à ouvrir jusqu'à la fin. Rien n'est rendu s'il part :
+    /// son issue (`Parti`) revient par l'interface, qui en confie la suite au
+    /// fil du compte.
+    fn lancer_envoi(&self, r: Redaction, id: Identifiants) -> Option<Issue> {
+        let jeton = r.jeton.clone();
+        let fabrique = lire_fichiers(&r.pieces).and_then(|fichiers| {
+            let (r_images, images) = self.avec_images(&r);
+            redaction::fabriquer_avec_images(&r_images, maintenant(), &fichiers, &images)
+        });
+        let f = match fabrique {
+            Ok(f) if f.destinataires.is_empty() => return Some(Issue::EchecRedaction { jeton, message: "aucun destinataire".into() }),
+            Ok(f) => f,
+            Err(message) => return Some(Issue::EchecRedaction { jeton, message }),
+        };
+        let retour = self.retour();
+        let lance = thread::Builder::new().name("mmail-smtp".into()).spawn(move || {
+            let erreur = smtp::envoyer(&id.hote, &id.utilisateur, &id.mot_de_passe, &r.de, &f.destinataires, &f.envoi, r.accuse_remise)
+                .err()
+                .map(|x| format!("envoi : {x}"));
+            retour.remettre(Issue::Parti { redaction: r, copie: f.copie, erreur }, true);
+        });
+        match lance {
+            Ok(_) => None,
+            Err(x) => Some(Issue::EchecRedaction { jeton, message: format!("envoi : {x}") }),
         }
-        smtp::envoyer(&id.hote, &id.utilisateur, &id.mot_de_passe, &r.de, &f.destinataires, &f.envoi, r.accuse_remise)
-            .map_err(|x| format!("envoi : {x}"))?;
+    }
+
+    /// Ce qui suit un envoi réussi. Le message est parti : rien ici ne peut
+    /// plus le faire échouer, seulement donner lieu à un avertissement.
+    fn apres_envoi(&self, e: &mut Etabli, r: &Redaction, copie: &[u8]) -> String {
         // Ceux à qui l'on écrit seront proposés à la prochaine saisie.
         let destinataires: Vec<(String, String)> = [&r.a, &r.cc, &r.cci]
             .iter()
@@ -3527,12 +3638,10 @@ impl Travail {
             .flatten()
             .collect();
         let _ = e.magasin.noter_correspondants(&destinataires, maintenant());
-        // Le message est parti : ce qui suit ne peut plus le faire échouer,
-        // seulement donner lieu à un avertissement.
         let mut avertissements = Vec::new();
         match self.dossier_de_role(e, "Sent") {
             Some(envoyes) => {
-                if let Err(x) = e.client.deposer(&envoyes, &["\\Seen".into()], "", &f.copie) {
+                if let Err(x) = e.client.deposer(&envoyes, &["\\Seen".into()], "", copie) {
                     avertissements.push(format!("copie dans « {envoyes} » : {x}"));
                 }
             }
@@ -3552,7 +3661,7 @@ impl Travail {
             }
         }
         let _ = synchro::arborescence(&mut e.client, &e.magasin, self.compte);
-        Ok(avertissements.join(" ; "))
+        avertissements.join(" ; ")
     }
 
     fn enregistrer_brouillon(&self, e: &mut Etabli, r: &Redaction) -> Result<u32, String> {
@@ -4079,6 +4188,11 @@ fn json_message(m: &MessageLocal) -> String {
 /// changements un à un.
 const CHANGEMENTS_MAX: usize = 2000;
 
+/// UID, date et empreinte de chaque message d'une liste.
+fn empreintes_de(liste: &[MessageLocal]) -> Vec<(u32, i64, u64)> {
+    liste.iter().map(|m| (m.uid, m.horodatage, empreinte(m))).collect()
+}
+
 /// Empreinte des champs affichés d'un message.
 fn empreinte(m: &MessageLocal) -> u64 {
     use std::hash::{Hash, Hasher};
@@ -4178,6 +4292,7 @@ mod tests {
                 Commande::Precharger { chemin } => format!("precharger {chemin}"),
                 Commande::Preparer { .. } => "preparer".into(),
                 Commande::Envoyer { .. } => "envoyer".into(),
+                Commande::ApresEnvoi { .. } => "apres-envoi".into(),
                 Commande::Brouillon { .. } => "brouillon".into(),
             })
             .collect()

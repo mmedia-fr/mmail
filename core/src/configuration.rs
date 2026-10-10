@@ -12,8 +12,7 @@
 //!   l'interroge en POST et reçoit un document JSON, que l'interface valide
 //!   (format décrit dans le README).
 //!
-//! S'y ajoute l'avis de nouvelle version : la dernière publication du dépôt,
-//! demandée à l'API de GitHub.
+//! L'avis de nouvelle version est dans `mise_a_jour`.
 
 #[cxx_qt::bridge]
 pub mod qobject {
@@ -38,12 +37,6 @@ pub mod qobject {
         #[qinvokable]
         #[cxx_name = "lireLien"]
         fn lire_lien(self: Pin<&mut Configuration>, lien: &QString);
-
-        /// Demande en arrière-plan la dernière version publiée de MMail. Issue :
-        /// `versionDisponible`, seulement si elle est plus récente que celle-ci.
-        #[qinvokable]
-        #[cxx_name = "verifierVersion"]
-        fn verifier_version(self: Pin<&mut Configuration>);
     }
 
     impl cxx_qt::Threading for Configuration {}
@@ -64,11 +57,6 @@ pub mod qobject {
         #[qsignal]
         #[cxx_name = "lienEchoue"]
         fn lien_echoue(self: Pin<&mut Configuration>, message: &QString);
-
-        /// Une version plus récente est publiée : son numéro et sa page.
-        #[qsignal]
-        #[cxx_name = "versionDisponible"]
-        fn version_disponible(self: Pin<&mut Configuration>, version: &QString, adresse: &QString);
     }
 }
 
@@ -80,31 +68,6 @@ use cxx_qt_lib::QString;
 
 use crate::http;
 use crate::imap::{Erreur, Resultat};
-
-/// Dernière publication du dépôt : ni préversion ni brouillon.
-const PUBLICATIONS: &str = "https://api.github.com/repos/mmedia-fr/mmail/releases/latest";
-
-/// Numéro et page de la dernière version publiée ; `None` si GitHub ne répond
-/// pas, ou pas comme attendu.
-fn derniere_version() -> Option<(String, String)> {
-    let reponse = http::requete("GET", PUBLICATIONS, "application/vnd.github+json").ok()?;
-    if reponse.statut != 200 {
-        return None;
-    }
-    let v: serde_json::Value = serde_json::from_slice(&reponse.corps).ok()?;
-    let version = v["tag_name"].as_str()?.trim_start_matches('v').to_string();
-    let page = v["html_url"].as_str()?.to_string();
-    // Une page ailleurs que sur le dépôt ne s'ouvre pas depuis MMail.
-    page.starts_with("https://github.com/mmedia-fr/mmail/").then_some((version, page))
-}
-
-/// Vrai si `publiee` (« 0.4.7 ») est plus récente que `actuelle`. Un numéro
-/// qui ne se lit pas — préversion « 0.4.7-essai » comprise — n'est jamais
-/// annoncé.
-fn plus_recente(publiee: &str, actuelle: &str) -> bool {
-    let lire = |v: &str| -> Option<Vec<u32>> { v.trim_start_matches('v').split('.').map(|n| n.parse().ok()).collect() };
-    matches!((lire(publiee), lire(actuelle)), (Some(a), Some(b)) if a > b)
-}
 
 /// Seul port que MMail sait joindre : IMAP sur TLS d'emblée.
 pub const PORT_IMAPS: u16 = 993;
@@ -121,18 +84,6 @@ impl qobject::Configuration {
             let _ = fil.queue(move |objet: Pin<&mut qobject::Configuration>| {
                 objet.serveur_decouvert(&QString::from(&adresse), &QString::from(&hote));
             });
-        });
-    }
-
-    pub fn verifier_version(self: Pin<&mut Self>) {
-        let fil = self.qt_thread();
-        let _ = thread::Builder::new().name("mmail-version".into()).spawn(move || {
-            let Some((version, page)) = derniere_version() else { return };
-            if plus_recente(&version, env!("CARGO_PKG_VERSION")) {
-                let _ = fil.queue(move |objet: Pin<&mut qobject::Configuration>| {
-                    objet.version_disponible(&QString::from(&version), &QString::from(&page));
-                });
-            }
         });
     }
 
@@ -255,26 +206,6 @@ pub fn lire_lien(lien: &str) -> Resultat<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    #[ignore = "interroge l'API de GitHub"]
-    fn derniere_version_publiee() {
-        let (version, page) = derniere_version().expect("réponse de GitHub");
-        println!("dernière version publiée : {version} ({page})");
-        assert!(version.split('.').all(|n| n.parse::<u32>().is_ok()), "{version}");
-        assert!(page.starts_with("https://github.com/mmedia-fr/mmail/releases/tag/"));
-    }
-
-    #[test]
-    fn comparaison_des_versions() {
-        assert!(plus_recente("0.4.7", "0.4.6"));
-        assert!(plus_recente("v0.4.10", "0.4.9"), "nombre, pas texte");
-        assert!(plus_recente("0.5.0", "0.4.12"));
-        assert!(!plus_recente("0.4.6", "0.4.6"));
-        assert!(!plus_recente("0.4.5", "0.4.6"));
-        assert!(!plus_recente("0.4.7-essai", "0.4.6"), "préversion jamais annoncée");
-        assert!(!plus_recente("", "0.4.6"));
-    }
 
     /// Extrait du document servi par Mailcow.
     const MAILCOW: &str = r#"<?xml version="1.0"?><clientConfig version="1.1">

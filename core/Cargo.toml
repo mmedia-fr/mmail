@@ -1,6 +1,6 @@
 [package]
 name = "mmail_core"
-version = "0.5.7"
+version = "0.5.8"
 edition = "2021"
 rust-version = "1.85"
 license = "GPL-3.0-or-later"
@@ -18,6 +18,9 @@ cxx-qt-lib = { version = "0.10", features = ["qt_full"] }
 
 # TLS en pur Rust : pas d'OpenSSL à compiler pour Android.
 rustls = "0.23"
+# Empreinte SHA-256 des paquets de mise à jour : le fournisseur cryptographique
+# que rustls compile déjà, avec les mêmes options — rien de plus à construire.
+aws-lc-rs = { version = "1", default-features = false, features = ["aws-lc-sys", "prebuilt-nasm"] }
 
 # Analyse des en-têtes et des corps MIME. C'est la surface d'attaque du client :
 # d'où un analyseur éprouvé, en Rust, plutôt qu'écrit à la main.

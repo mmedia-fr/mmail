@@ -16,6 +16,9 @@
 #include <QtGui/QFont>
 #include <QtGui/QGuiApplication>
 #include <QtGui/QIcon>
+#if QT_CONFIG(sessionmanager)
+#  include <QtGui/QSessionManager>
+#endif
 #include <QtNetwork/QLocalServer>
 #include <QtNetwork/QLocalSocket>
 #include <QtQml/QQmlApplicationEngine>
@@ -26,6 +29,7 @@
 
 #include "coffre.h"
 #include "fenetre.h"
+#include "installeur.h"
 #include "lanceur.h"
 #include "pastille.h"
 #include "presse_papier.h"
@@ -188,6 +192,8 @@ int main(int argc, char* argv[])
   qmlRegisterType<Lanceur>("fr.mmedia.mmail.natif", 1, 0, "Lanceur");
   // Nombre de non-lus des boîtes de réception sur l'icône de la barre des tâches.
   qmlRegisterType<Pastille>("fr.mmedia.mmail.natif", 1, 0, "Pastille");
+  // Installation d'une mise à jour à la fermeture (cf. core/src/mise_a_jour.rs).
+  qmlRegisterType<Installeur>("fr.mmedia.mmail.natif", 1, 0, "Installeur");
   // Mise en forme du message en cours de rédaction (gras, listes, liens…).
   qmlRegisterType<MiseEnForme>("fr.mmedia.mmail.natif", 1, 0, "MiseEnForme");
 
@@ -356,5 +362,15 @@ int main(int argc, char* argv[])
       QCoreApplication::exit(fenetre->grabWindow().save(capture) ? 0 : 6);
     });
   }
-  return app.exec();
+#if QT_CONFIG(sessionmanager)
+  // Arrêt ou déconnexion : pas d'installation lancée maintenant (cf.
+  // cpp/installeur.h).
+  QObject::connect(&app, &QGuiApplication::commitDataRequest, &app,
+                   [](QSessionManager&) { Installeur::sessionFinie(); });
+#endif
+  const int code = app.exec();
+  // Mise à jour retenue pour la fermeture : son installeur part maintenant, et
+  // attend la fin de ce processus pour remplacer les fichiers.
+  Installeur::executer();
+  return code;
 }

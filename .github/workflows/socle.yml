@@ -123,6 +123,46 @@ jobs:
           $env:QT_QPA_PLATFORM = "offscreen"
           $q = Start-Process -FilePath "$dir\MMail.exe" -ArgumentList "--smoke" -Wait -PassThru -NoNewWindow
           if ($q.ExitCode -ne 0) { throw "fumee de l'installe en echec : code $($q.ExitCode)" }
+      - name: Contrôle Windows — mise à jour assistée
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # L'installé se croit ancien (MMAIL_VERSION_ESSAI) : il propose la
+          # dernière publication, la télécharge, en contrôle l'empreinte et se
+          # ferme ; son installeur attend sa fin, installe sans question et le
+          # rouvre (cf. cpp/installeur.h, build/socle-mmail.iss). Le serveur de
+          # messagerie de l'essai n'existe pas : seule la mise à jour compte.
+          $dir = "$env:RUNNER_TEMP\MMailInstalle"
+          $publiee = (Invoke-RestMethod -Headers @{ Authorization = "Bearer $env:GITHUB_TOKEN" } `
+            https://api.github.com/repos/mmedia-fr/mmail/releases/latest).tag_name.TrimStart('v')
+          $env:QT_QPA_PLATFORM = "offscreen"
+          $env:QT_FORCE_STDERR_LOGGING = "1"
+          $env:MMAIL_VERSION_ESSAI = "0.0.1"
+          $env:MMAIL_SCENARIO = "mise-a-jour"
+          $env:MMAIL_HOTE = "essai.invalid"
+          $env:MMAIL_UTILISATEUR = "essai@essai.invalid"
+          $env:MMAIL_MOTDEPASSE = "-"
+          $env:MMAIL_PROFIL = "$env:RUNNER_TEMP\profil-maj\index.sqlite"
+          $env:MMAIL_SORTIE = "$env:RUNNER_TEMP\sortie-maj"
+          New-Item -ItemType Directory -Force $env:MMAIL_SORTIE | Out-Null
+          $p = Start-Process -FilePath "$dir\MMail.exe" -PassThru `
+            -RedirectStandardError "$env:RUNNER_TEMP\maj.err" -RedirectStandardOutput "$env:RUNNER_TEMP\maj.out"
+          $ferme = $p.WaitForExit(300000)
+          Get-Content "$env:RUNNER_TEMP\maj.err" | Select-String "scenario|rror|chec"
+          if (-not $ferme) { Stop-Process $p -Force; throw "MMail ne s'est pas fermé pour la mise à jour" }
+          $cle = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{2F1D7A94-6C83-4E51-9B0A-7D3E5C8F1A62}_is1'
+          $echeance = (Get-Date).AddMinutes(4)
+          do {
+            Start-Sleep -Seconds 3
+            $version = (Get-ItemProperty $cle -ErrorAction SilentlyContinue).DisplayVersion
+            $rouvert = Get-Process MMail -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$dir\*" }
+          } until (($version -eq $publiee -and $rouvert) -or (Get-Date) -gt $echeance)
+          Write-Host "publiée $publiee | installée $version | rouvert $([bool]$rouvert)"
+          $rouvert | Stop-Process -Force -ErrorAction SilentlyContinue
+          if ($version -ne $publiee) { throw "version installée : $version, attendue : $publiee" }
+          if (-not $rouvert) { throw "MMail n'a pas été rouvert après la mise à jour" }
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
       - name: Dépôt de l'installeur Windows
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@v4

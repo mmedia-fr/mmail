@@ -27,8 +27,9 @@ de projet interne.
   celles d'un message transféré reprises d'office ; une capture d'écran se
   colle dans le corps (Ctrl+V) et une image glissée sur le corps s'y insère,
   intégrée au message à l'envoi ; envoi par la soumission
-  SMTP du serveur (port 465), copie dans « Éléments envoyés », original marqué
-  « répondu » ou « transféré » ; brouillons enregistrés sur le serveur et
+  SMTP du serveur (port 465), dans un fil à part — le compte reste
+  utilisable pendant un gros envoi —, copie dans « Éléments envoyés », original
+  marqué « répondu » ou « transféré » ; brouillons enregistrés sur le serveur et
   repris d'un double clic ;
 - **mise en forme** à la rédaction — gras, italique, souligné, listes à
   puces ou numérotées, liens — envoyée en HTML avec sa version en texte brut ;
@@ -61,6 +62,9 @@ de projet interne.
   les comptes s'affiche en pastille sur l'icône de MMail dans la barre des
   tâches (Windows ; compteur du lanceur sous Linux) ; la boîte de réception
   d'un compte qu'on ne regarde pas est surveillée en continu (IDLE) ;
+- **gros dossiers** : la liste s'affiche dès sa première page (une vingtaine
+  de millisecondes pour 40 000 messages), le reste suit par paquets sans figer
+  la fenêtre ; de même en sortant d'une recherche ;
 - **« Toutes les BàL »** : les boîtes de réception de tous les comptes en une
   seule liste (les 1 000 messages les plus récents), chacun avec son compte ;
   un message s'y lit, s'y répond, s'y déplace comme ailleurs ;

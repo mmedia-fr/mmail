@@ -4854,6 +4854,8 @@ ApplicationWindow {
             fenetre.derniereSynchro = new Date()
             if (compte !== boite.compteCourant || chemin !== boite.dossierCourant)
                 return
+            if (fenetre.essai && fenetre.essai.scenario === "envoi-fond" && fenetre.essai.depart && chemin !== "INBOX")
+                console.log("scenario: « " + chemin + " » ouvert", Date.now() - fenetre.essai.depart, "ms après l'envoi")
             // Scénario « recherche » : le texte de MMAIL_DOSSIER est cherché dans
             // INBOX, une fois le dossier synchronisé.
             if (fenetre.essai && fenetre.essai.scenario === "recherche" && !fenetre.essai.cherche) {
@@ -4981,6 +4983,11 @@ ApplicationWindow {
         function onEnvoye(jeton, avertissement) {
             if (fenetre.essai && fenetre.essai.scenario)
                 console.log("scenario: envoyé", avertissement)
+            if (fenetre.essai && fenetre.essai.scenario === "envoi-fond") {
+                console.log("scenario: envoyé", Date.now() - fenetre.essai.depart, "ms après l'envoi | objet",
+                            fenetre.essai.sujet)
+                Qt.callLater(Qt.quit)
+            }
             var r = fenetre.redactions[jeton]
             if (r)
                 r.conteneur.fermerRedaction()
@@ -5594,6 +5601,7 @@ ApplicationWindow {
     }
 
     function viderListe() {
+        arreterSuite()
         pieces = []
         modeleMessages.clear()
         selection = ({})
@@ -5623,7 +5631,7 @@ ApplicationWindow {
         }
         var c = JSON.parse(boite.changementsListe(complet === true))
         if (c.complet !== undefined) {
-            poserListe(c.complet)
+            poserListe(c.complet, c.suite === true)
             return
         }
         var absents = {}
@@ -5654,18 +5662,44 @@ ApplicationWindow {
     }
 
     /// Pose une liste entière, en gardant la position et ce qui est choisi.
-    function poserListe(liste) {
+    /// `suite` : ce n'est que la première page d'un gros dossier, le reste
+    /// arrive par paquets (cf. `chargerSuite`).
+    function poserListe(liste, suite) {
+        arreterSuite()
         var messages = liste.filter(function(m) {
             return fenetre.enDeplacement[cleDeplacement(m.uid)] !== true
         })
         var position = vueMessages.contentY
+        var rangHaut = Math.max(0, vueMessages.indexAt(1, position + 1))
         modeleMessages.clear()
         modeleMessages.append(messages)
-        vueMessages.contentY = position
-        // La sélection ne garde que les messages encore là.
         var presents = {}
         for (var k = 0; k < messages.length; ++k)
             presents[messages[k].uid] = true
+        if (suite === true) {
+            minuteurSuite.start()
+            // Ce qui était à l'écran et ce qui est choisi doivent y être tout
+            // de suite : la suite se lit d'un trait jusqu'à les avoir.
+            var attendus = {}
+            for (var choisi in selection)
+                attendus[choisi] = true
+            if (uidCourant > 0)
+                attendus[uidCourant] = true
+            for (var p in presents)
+                delete attendus[p]
+            while (minuteurSuite.running
+                   && (modeleMessages.count <= rangHaut + 80 || Object.keys(attendus).length > 0)) {
+                var page = chargerSuite()
+                for (var q = 0; q < page.length; ++q) {
+                    presents[page[q].uid] = true
+                    delete attendus[page[q].uid]
+                }
+            }
+        }
+        vueMessages.contentY = position
+        // La sélection ne garde que les messages encore là — ceux qui manquent
+        // alors qu'une suite reste à lire n'y sont plus non plus : elle a été
+        // lue jusqu'à les trouver.
         var absents = {}
         for (var uid in selection)
             if (!presents[uid])
@@ -5674,6 +5708,50 @@ ApplicationWindow {
             absents[uidCourant] = true
         oublierAbsents(absents)
         majInfoDossier()
+    }
+
+    // Pagination (0.5.9) : ouvrir un dossier de 40 000 messages figeait la
+    // fenêtre 1,5 s — l'essentiel à analyser le JSON de la liste entière. La
+    // première page s'affiche aussitôt ; le reste suit par paquets, entre deux
+    // images, relus dans l'index au moment où ils arrivent.
+    // Un paquet coûte ~20 ms (index, JSON, modèle) : la fenêtre reste fluide.
+    readonly property int taillePaquet: 500
+    // Scénario « mesure-liste » : nombre et durée des paquets.
+    property var mesureSuite: null
+    Timer {
+        id: minuteurSuite
+        interval: 1
+        repeat: true
+        onTriggered: fenetre.chargerSuite()
+    }
+
+    /// Paquet suivant de la liste, ajouté à la fin ; rend ses lignes.
+    function chargerSuite() {
+        var debut = Date.now()
+        var r = JSON.parse(boite.suiteListe(taillePaquet))
+        if (!r.suite)
+            minuteurSuite.stop()
+        var lignes = r.lignes.filter(function(m) {
+            return fenetre.enDeplacement[cleDeplacement(m.uid)] !== true
+        })
+        if (lignes.length > 0)
+            modeleMessages.append(lignes)
+        if (mesureSuite) {
+            mesureSuite.paquets += 1
+            mesureSuite.plusLong = Math.max(mesureSuite.plusLong, Date.now() - debut)
+        }
+        return lignes
+    }
+
+    function arreterSuite() {
+        minuteurSuite.stop()
+    }
+
+    /// La liste entière, tout de suite : avant ce qui porte sur toutes ses
+    /// lignes (tout sélectionner).
+    function completerListe() {
+        while (minuteurSuite.running)
+            chargerSuite()
     }
 
     /// Retire de la sélection et de l'affichage les messages disparus.
@@ -5970,6 +6048,7 @@ ApplicationWindow {
     function toutChoisir() {
         if (listeMulti)
             return
+        completerListe()
         var nouvelle = {}
         for (var i = 0; i < modeleMessages.count; ++i)
             nouvelle[modeleMessages.get(i).uid] = true
@@ -6539,6 +6618,25 @@ ApplicationWindow {
                 reglagesMiseAJour.version = ""
                 reglagesMiseAJour.choix = ""
             }
+            // Scénario « envoi-fond » : un message à soi-même, la pièce jointe
+            // MMAIL_DOSSIER (un gros fichier) ; pendant l'envoi SMTP, un autre
+            // dossier s'ouvre — sans attendre la fin de l'envoi depuis la 0.5.9.
+            if (essai.scenario === "envoi-fond") {
+                var attenteEnvoi = Qt.createQmlObject('import QtQuick; Timer { interval: 8000 }', fenetre)
+                attenteEnvoi.triggered.connect(function() {
+                    var c = comptesConnus[0]
+                    var n = ouvrirRedaction(c.compte)
+                    n.pret()
+                    essai.sujet = "Essai envoi en fond " + Date.now()
+                    n.remplir({ a: identifiantsEssai.utilisateur, objet: essai.sujet, mode: "nouveau",
+                                texte: "Envoyé par le fil SMTP.", pieces: [identifiantsEssai.dossier] })
+                    essai.depart = Date.now()
+                    n.envoyer(false)
+                    console.log("scenario: envoi lancé, pièce", n.pieces.length > 0 ? n.pieces[0].taille : "absente")
+                    ouvrirDossier(c.compte, "Archive")
+                })
+                attenteEnvoi.start()
+            }
             if (essai.scenario === "coller-image") {
                 var attenteImage = Qt.createQmlObject('import QtQuick; Timer { interval: 6000 }', fenetre)
                 attenteImage.triggered.connect(etapeScenarioCollerImage)
@@ -6817,9 +6915,47 @@ ApplicationWindow {
     /// l'attente annoncée par « pret-insertion ».
     function etapeScenarioMesure() {
         var c = comptesConnus[0]
+        mesureSuite = { paquets: 0, plusLong: 0 }
         var t = Date.now()
         ouvrirDossier(c.compte, "INBOX")
-        console.log("mesure: ouverture,", modeleMessages.count, "messages,", Date.now() - t, "ms")
+        console.log("mesure: ouverture (première page),", modeleMessages.count, "messages,", Date.now() - t, "ms")
+        // La suite, par paquets : la fenêtre ne doit jamais rester figée
+        // longtemps entre deux.
+        var suivi = Qt.createQmlObject('import QtQuick; Timer { interval: 10; repeat: true }', fenetre)
+        suivi.triggered.connect(function() {
+            if (minuteurSuite.running)
+                return
+            suivi.stop()
+            console.log("mesure: liste complète,", modeleMessages.count, "messages en", Date.now() - t, "ms |",
+                        mesureSuite.paquets, "paquets, le plus long", mesureSuite.plusLong, "ms")
+            mesureSuite = null
+            var index = JSON.parse(boite.messages())
+            var conforme = index.length === modeleMessages.count
+            for (var i = 0; conforme && i < index.length; ++i)
+                conforme = index[i].uid === modeleMessages.get(i).uid
+            console.log("mesure: liste conforme à l'index :", conforme)
+            // Relecture complète pendant qu'un message lointain est choisi : la
+            // suite est lue d'un trait jusqu'à lui, il reste choisi.
+            var loin = modeleMessages.get(30000).uid
+            uidCourant = loin
+            selection = ({ [loin]: true })
+            var t3 = Date.now()
+            rafraichirListe(true)
+            console.log("mesure: relecture complète, message choisi au rang 30 000 :", Date.now() - t3, "ms |",
+                        modeleMessages.count, "lignes | toujours choisi", uidCourant === loin && selection[loin] === true,
+                        "| à son rang", indexDe(loin) === 30000)
+            arreterSuite()
+            uidCourant = 0
+            selection = ({})
+            rafraichirListe(true)
+            completerListe()
+            etapeScenarioMesureSuite()
+        })
+        suivi.start()
+    }
+
+    function etapeScenarioMesureSuite() {
+        var t
         for (var k = 0; k < 3; ++k) {
             t = Date.now()
             rafraichirListe()

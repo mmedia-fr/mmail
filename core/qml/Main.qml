@@ -144,6 +144,14 @@ ApplicationWindow {
     property bool rechercheGlobale: false
     property string cleChoisie: ""
     property var dossierAvantRecherche: null
+    // Boîte de réception unifiée (« toutes les BàL », demande de Manu du
+    // 08/10) : les réceptions de tous les comptes en une liste, sur le même
+    // modèle — chaque message avec son compte, le noyau sur le dossier du
+    // message choisi, sélection simple. Une recherche lancée depuis elle y
+    // ramène quand on la quitte.
+    property bool vueUnifiee: false
+    property bool unifieeAvantRecherche: false
+    readonly property bool listeMulti: rechercheGlobale || vueUnifiee
     // Version plus récente publiée, et sa page ; vide sinon.
     property string versionNouvelle: ""
     property string pageVersion: ""
@@ -330,6 +338,8 @@ ApplicationWindow {
         target: boite
         function onRevisionChanged() {
             fenetre.rafraichirArborescence()
+            if (fenetre.vueUnifiee && fenetre.recherche.length === 0)
+                fenetre.poserBoitesUnifiees()
             if (!boite.occupe)
                 fenetre.derniereSynchro = new Date()
         }
@@ -1564,6 +1574,19 @@ ApplicationWindow {
     /// Compte et dossier ouverts, leurs compteurs, et la sélection s'il y en a
     /// plusieurs.
     function majInfoDossier() {
+        if (vueUnifiee) {
+            var nonLusReception = 0
+            for (var r = 0; r < modeleArborescence.count; ++r) {
+                var d = modeleArborescence.get(r)
+                if (d.genre === "dossier" && d.chemin === "INBOX")
+                    nonLusReception += d.nonLus
+            }
+            infoDossier = qsTr("Toutes les boîtes de réception") + "  —  "
+                    + accord(modeleMessages.count, qsTr("message"), qsTr("messages"))
+                    + (modeleMessages.count >= 1000 ? qsTr(" (les plus récents)") : "")
+                    + (nonLusReception > 0 ? ", " + accord(nonLusReception, qsTr("non lu"), qsTr("non lus")) : "")
+            return
+        }
         if (rechercheGlobale) {
             infoDossier = qsTr("Toutes les boîtes") + "  —  " + (modeleMessages.count >= 500
                     ? qsTr("recherche « %1 » : les 500 plus récents, précisez la recherche").arg(recherche)
@@ -3019,7 +3042,7 @@ ApplicationWindow {
         ItemDelegate {
             id: ligne
             width: ListView.view.width
-            readonly property bool choisi: fenetre.rechercheGlobale
+            readonly property bool choisi: fenetre.listeMulti
                                            ? fenetre.cleChoisie === fenetre.cleResultat(model.compte, model.chemin, model.uid)
                                            : fenetre.selection[model.uid] === true
             highlighted: choisi
@@ -3129,7 +3152,7 @@ ApplicationWindow {
                 // sa ligne, coupé au milieu au besoin — le compte et le dossier
                 // restent lisibles (demande de Manu, 08/10).
                 Label {
-                    visible: fenetre.rechercheGlobale
+                    visible: fenetre.listeMulti
                     Layout.fillWidth: true
                     Layout.leftMargin: 10
                     Layout.rightMargin: 8
@@ -4611,7 +4634,7 @@ ApplicationWindow {
             fenetre.rafraichirListe()
             // En recherche dans toutes les boîtes, la liste est celle des
             // résultats : ne pas l'annoncer comme le contenu du dossier.
-            if (!veille && !fenetre.rechercheGlobale)
+            if (!veille && !fenetre.listeMulti)
                 messageEtat.texte = qsTr("%1 : %2.").arg(fenetre.libelleCourant())
                         .arg(fenetre.accord(modeleMessages.count, qsTr("message"), qsTr("messages")))
             if (fenetre.essai && fenetre.essai.afficherPremier && modeleMessages.count > 0) {
@@ -5293,9 +5316,11 @@ ApplicationWindow {
     function ouvrirDossier(compte, chemin) {
         // Un dossier choisi dans l'arborescence met fin à une recherche dans
         // toutes les boîtes, même s'il est celui du dernier résultat lu.
-        var sortieGlobale = rechercheGlobale
+        var sortieGlobale = rechercheGlobale || vueUnifiee
         if (sortieGlobale) {
             sortirRechercheGlobale()
+            vueUnifiee = false
+            unifieeAvantRecherche = false
             champRecherche.text = ""
         }
         if (sortieGlobale || compte !== boite.compteCourant || chemin !== boite.dossierCourant) {
@@ -5340,6 +5365,10 @@ ApplicationWindow {
         // nouveau, et l'index tient compte des changements.
         if (recherche.length > 0) {
             poserResultats()
+            return
+        }
+        if (vueUnifiee) {
+            poserBoitesUnifiees()
             return
         }
         var c = JSON.parse(boite.changementsListe(complet === true))
@@ -5431,6 +5460,12 @@ ApplicationWindow {
         }
         champRecherche.text = texte
         noterRecherche(texte)
+        if (vueUnifiee) {
+            vueUnifiee = false
+            unifieeAvantRecherche = true
+            cleChoisie = ""
+            viderListe()
+        }
         if (porteeRecherche.partout) {
             if (!rechercheGlobale)
                 dossierAvantRecherche = boite.dossierCourant.length > 0
@@ -5502,6 +5537,11 @@ ApplicationWindow {
         panneauHistorique.close()
         if (recherche.length === 0)
             return
+        if (unifieeAvantRecherche) {
+            sortirRechercheGlobale()
+            ouvrirBoitesUnifiees()
+            return
+        }
         if (rechercheGlobale) {
             var avant = dossierAvantRecherche
             sortirRechercheGlobale()
@@ -5527,6 +5567,30 @@ ApplicationWindow {
             noms[0] = qsTr("Boîte de réception")
         noms[dernier] = libelleLigne({ genre: "dossier", nom: noms[dernier], role: r.role || "", chemin: r.chemin })
         return (c ? c.adresse + " › " : "") + noms.join(" › ")
+    }
+
+    /// Boîte de réception unifiée : les réceptions de tous les comptes.
+    function ouvrirBoitesUnifiees() {
+        if (rechercheGlobale)
+            sortirRechercheGlobale()
+        recherche = ""
+        uidsServeur = []
+        champRecherche.text = ""
+        unifieeAvantRecherche = false
+        cleChoisie = ""
+        vueUnifiee = true
+        viderListe()
+        poserBoitesUnifiees()
+        if (compact)
+            vue = 1
+    }
+
+    function poserBoitesUnifiees() {
+        poserListe(JSON.parse(boite.boitesDeReception()).map(function(r) {
+            r.cheminAffiche = cheminResultat(r)
+            delete r.segments
+            return r
+        }))
     }
 
     function cleResultat(compte, chemin, uid) {
@@ -5599,7 +5663,7 @@ ApplicationWindow {
     function choisir(index, modificateurs) {
         if (index < 0 || index >= modeleMessages.count)
             return
-        if (rechercheGlobale) {
+        if (listeMulti) {
             choisirResultat(index)
             return
         }
@@ -5654,7 +5718,7 @@ ApplicationWindow {
     }
 
     function toutChoisir() {
-        if (rechercheGlobale)
+        if (listeMulti)
             return
         var nouvelle = {}
         for (var i = 0; i < modeleMessages.count; ++i)
@@ -6188,6 +6252,35 @@ ApplicationWindow {
                     }
                 })
                 suivi.start()
+            }
+            // Scénario « unifiee » : deux comptes ; la boîte de réception
+            // unifiée les réunit, un message du second compte s'y choisit — le
+            // noyau passe sur sa réception —, un dossier de l'arborescence en
+            // fait sortir.
+            if (essai.scenario === "unifiee") {
+                var attenteUnifiee = Qt.createQmlObject('import QtQuick; Timer { interval: 12000 }', fenetre)
+                attenteUnifiee.triggered.connect(function() {
+                    ouvrirBoitesUnifiees()
+                    var comptes = {}, autre = -1
+                    var c2 = comptesConnus.filter(function(x) { return x.adresse === identifiantsEssai.utilisateur2 })[0]
+                    for (var i = 0; i < modeleMessages.count; ++i) {
+                        var r = modeleMessages.get(i)
+                        comptes[r.compte] = (comptes[r.compte] || 0) + 1
+                        if (autre < 0 && c2 && r.compte === c2.compte)
+                            autre = i
+                    }
+                    console.log("scenario: unifiée", modeleMessages.count, "messages | par compte", JSON.stringify(comptes),
+                                "| barre", infoDossier)
+                    if (autre >= 0) {
+                        choisir(autre, 0)
+                        console.log("scenario: choisi", modeleMessages.get(autre).sujet, "| noyau sur compte",
+                                    boite.compteCourant, boite.dossierCourant, "| liste", modeleMessages.count, "| unifiée", vueUnifiee)
+                    }
+                    ouvrirDossier(comptesConnus[0].compte, "INBOX")
+                    console.log("scenario: après l'arborescence, unifiée", vueUnifiee, "| liste", modeleMessages.count)
+                    Qt.quit()
+                })
+                attenteUnifiee.start()
             }
             if (essai.scenario === "coller-image") {
                 var attenteImage = Qt.createQmlObject('import QtQuick; Timer { interval: 6000 }', fenetre)

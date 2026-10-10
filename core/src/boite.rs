@@ -359,6 +359,13 @@ pub mod qobject {
         #[cxx_name = "decrireFichier"]
         fn decrire_fichier(&self, url: &QString) -> QString;
 
+        /// Boîte de réception unifiée : les messages des boîtes de réception
+        /// de tous les comptes, les plus récents d'abord, en JSON — chacun avec
+        /// son compte et son dossier, comme une recherche dans toutes les boîtes.
+        #[qinvokable]
+        #[cxx_name = "boitesDeReception"]
+        fn boites_de_reception(&self) -> QString;
+
         /// Dossier où ranger une image collée dans le corps d'un message.
         #[qinvokable]
         #[cxx_name = "dossierImagesCollees"]
@@ -1925,6 +1932,13 @@ impl qobject::Boite {
         ))
     }
 
+    pub fn boites_de_reception(&self) -> QString {
+        let Some(magasin) = self.magasin.as_ref() else {
+            return QString::from("[]");
+        };
+        QString::from(&json_trouves(&magasin.boites_de_reception(UNIFIEE_MAX).unwrap_or_default()))
+    }
+
     pub fn dossier_images_collees(&self) -> QString {
         let dossier = dossier_images_collees(&self.profil);
         let _ = std::fs::create_dir_all(&dossier);
@@ -2746,9 +2760,11 @@ impl Travail {
         self.terminer(1);
         self.remettre(Issue::Connecte);
 
-        // La boîte de réception se lit hors connexion : elle se précharge dès
-        // la connexion ouverte.
-        let mut file: Vec<Commande> = vec![Commande::Precharger { chemin: "INBOX".into() }];
+        // La boîte de réception s'indexe dès la connexion ouverte — même celle
+        // d'un compte que l'on ne regarde pas : la boîte de réception unifiée
+        // et la pastille de la barre en ont besoin — puis se précharge, pour se
+        // lire hors connexion.
+        let mut file: Vec<Commande> = vec![Commande::Signale, Commande::Precharger { chemin: "INBOX".into() }];
         // Échéance fixe : les commandes reçues entre-temps ne la repoussent pas.
         // Mesurée en temps d'inactivité, la veille ne venait jamais — la
         // minuterie des envois différés écrit à chaque compte toutes les minutes.
@@ -3976,6 +3992,10 @@ fn json_pieces(pieces: &[crate::index::PieceJointe]) -> String {
 /// Résultats d'une recherche dans l'index ; au-delà, l'interface demande de
 /// préciser.
 const RECHERCHE_MAX: usize = 500;
+
+/// Boîte de réception unifiée : les messages les plus récents de toutes les
+/// boîtes de réception, au plus.
+const UNIFIEE_MAX: usize = 1000;
 
 /// Messages trouvés dans tous les comptes : la ligne d'une liste, plus son
 /// compte, son chemin et le nom de son dossier.

@@ -985,29 +985,25 @@ impl Magasin {
             conditions.push("m.folder_id = ?1".into());
         }
         let sql = format!(
-            "SELECT m.uid, m.message_id, m.expediteur, m.adresse, m.sujet, m.date, m.horodatage, m.taille,
-                    m.lu, m.repondu, m.pieces, m.suivi, m.importance, m.transfere, m.repondu_tous, f.account_id, f.chemin, f.nom,
-                    f.separateur, f.role
-             FROM messages m JOIN folders f ON f.id = m.folder_id
-             WHERE {}
-             ORDER BY m.horodatage DESC, m.uid DESC LIMIT {limite}",
+            "{SELECT_TROUVE} WHERE {} ORDER BY m.horodatage DESC, m.uid DESC LIMIT {limite}",
             conditions.join(" AND ")
         );
         let mut valeurs: Vec<rusqlite::types::Value> = vec![dossier.unwrap_or(0).into()];
         valeurs.extend(mots.into_iter().map(rusqlite::types::Value::from));
         let mut requete = self.base.prepare(&sql)?;
         let trouves = requete
-            .query_map(rusqlite::params_from_iter(valeurs), |l| {
-                Ok(Trouve {
-                    message: lire_message(l)?,
-                    compte: l.get(15)?,
-                    chemin: l.get(16)?,
-                    nom_dossier: l.get(17)?,
-                    separateur: l.get(18)?,
-                    role: l.get(19)?,
-                })
-            })?
+            .query_map(rusqlite::params_from_iter(valeurs), lire_trouve)?
             .collect::<Result<Vec<_>, _>>()?;
+        Ok(trouves)
+    }
+
+    /// Messages des boîtes de réception de tous les comptes, du plus récent au
+    /// plus ancien : la boîte de réception unifiée (« toutes les BàL »).
+    pub fn boites_de_reception(&self, limite: usize) -> Resultat<Vec<Trouve>> {
+        let mut requete = self.base.prepare(&format!(
+            "{SELECT_TROUVE} WHERE f.chemin = 'INBOX' ORDER BY m.horodatage DESC, m.uid DESC LIMIT {limite}"
+        ))?;
+        let trouves = requete.query_map([], lire_trouve)?.collect::<Result<Vec<_>, _>>()?;
         Ok(trouves)
     }
 
@@ -1425,6 +1421,24 @@ fn lire_dossier(l: &rusqlite::Row<'_>) -> rusqlite::Result<DossierLocal> {
         masque: l.get::<_, i32>(13)? != 0,
         favori: l.get(14)?,
         replie: l.get::<_, i32>(15)? != 0,
+    })
+}
+
+/// Un message avec son dossier : résultats d'une recherche dans toutes les
+/// boîtes, boîte de réception unifiée.
+const SELECT_TROUVE: &str = "SELECT m.uid, m.message_id, m.expediteur, m.adresse, m.sujet, m.date, m.horodatage,
+        m.taille, m.lu, m.repondu, m.pieces, m.suivi, m.importance, m.transfere, m.repondu_tous,
+        f.account_id, f.chemin, f.nom, f.separateur, f.role
+     FROM messages m JOIN folders f ON f.id = m.folder_id";
+
+fn lire_trouve(l: &rusqlite::Row<'_>) -> rusqlite::Result<Trouve> {
+    Ok(Trouve {
+        message: lire_message(l)?,
+        compte: l.get(15)?,
+        chemin: l.get(16)?,
+        nom_dossier: l.get(17)?,
+        separateur: l.get(18)?,
+        role: l.get(19)?,
     })
 }
 
@@ -1858,6 +1872,25 @@ mod tests {
         assert_eq!(m.dossier(id).unwrap().unwrap().highest_mod_seq, 99, "rien à relire");
         let m1 = m.message(id, 1).unwrap().unwrap();
         assert!(m1.transfere && !m1.repondu_tous);
+    }
+
+    #[test]
+    fn boites_de_reception_de_tous_les_comptes() {
+        let m = Magasin::en_memoire().unwrap();
+        let a = m.compte("a@b.fr", "h", 993, "a@b.fr").unwrap();
+        let b = m.compte("c@d.fr", "h", 993, "c@d.fr").unwrap();
+        m.poser_dossiers(a, &[dossier("INBOX", &[]), dossier("Archives", &[])]).unwrap();
+        m.poser_dossiers(b, &[dossier("INBOX", &[])]).unwrap();
+        let ligne = |uid: u32, h: i64| MessageLocal { uid, horodatage: h, sujet: format!("m{uid}"), ..Default::default() };
+        m.poser_messages(m.dossier_id(a, "INBOX").unwrap(), &[ligne(1, 10), ligne(2, 30)]).unwrap();
+        m.poser_messages(m.dossier_id(a, "Archives").unwrap(), &[ligne(3, 40)]).unwrap();
+        m.poser_messages(m.dossier_id(b, "INBOX").unwrap(), &[ligne(1, 20)]).unwrap();
+        let toutes = m.boites_de_reception(10).unwrap();
+        // Les deux réceptions, pas les archives ; du plus récent au plus ancien.
+        let vu: Vec<(i64, u32)> = toutes.iter().map(|t| (t.compte, t.message.uid)).collect();
+        assert_eq!(vu, vec![(a, 2), (b, 1), (a, 1)]);
+        assert!(toutes.iter().all(|t| t.chemin == "INBOX"));
+        assert_eq!(m.boites_de_reception(2).unwrap().len(), 2);
     }
 
     #[test]

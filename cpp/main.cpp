@@ -27,6 +27,7 @@
 #include "coffre.h"
 #include "fenetre.h"
 #include "lanceur.h"
+#include "pastille.h"
 #include "presse_papier.h"
 #include "mise_en_forme.h"
 
@@ -185,6 +186,8 @@ int main(int argc, char* argv[])
   qmlRegisterType<PressePapier>("fr.mmedia.mmail.natif", 1, 0, "PressePapier");
   // Lancement d'un logiciel choisi sur une pièce jointe (décision 9).
   qmlRegisterType<Lanceur>("fr.mmedia.mmail.natif", 1, 0, "Lanceur");
+  // Nombre de non-lus des boîtes de réception sur l'icône de la barre des tâches.
+  qmlRegisterType<Pastille>("fr.mmedia.mmail.natif", 1, 0, "Pastille");
   // Mise en forme du message en cours de rédaction (gras, listes, liens…).
   qmlRegisterType<MiseEnForme>("fr.mmedia.mmail.natif", 1, 0, "MiseEnForme");
 

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # MMail — noyau Rust (core/), interface Qt 6 / QML, coffre des mots de passe natif.
 cmake_minimum_required(VERSION 3.24)
-project(mmail VERSION 0.5.6 LANGUAGES CXX)
+project(mmail VERSION 0.5.7 LANGUAGES CXX)
 
 if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
   set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreadedDLL")
@@ -126,7 +126,8 @@ endif()
 # — sans quoi l'explorateur et les raccourcis affichent une icône générique.
 # Le .h figure dans les sources pour qu'AUTOMOC le traite : sans cela, la classe
 # QObject qu'il declare n'a pas de metaobjet et l'edition de liens echoue.
-set(MMAIL_SOURCES cpp/main.cpp cpp/coffre.h cpp/fenetre.h cpp/lanceur.h cpp/presse_papier.h cpp/mise_en_forme.h)
+set(MMAIL_SOURCES cpp/main.cpp cpp/coffre.h cpp/fenetre.h cpp/lanceur.h cpp/pastille.h cpp/presse_papier.h
+                  cpp/mise_en_forme.h)
 if(WIN32)
   list(APPEND MMAIL_SOURCES build/mmail.rc)
 endif()
@@ -149,6 +150,11 @@ target_compile_definitions(mmail PRIVATE MMAIL_VERSION="${PROJECT_VERSION}")
 # interfaces du shell.
 if(WIN32)
   target_link_libraries(mmail PRIVATE ole32 shell32 uuid)
+endif()
+
+# Compteur du lanceur sous Linux (cf. cpp/pastille.h) : un signal D-Bus.
+if(NOT WIN32 AND NOT APPLE AND NOT ANDROID)
+  target_link_libraries(mmail PRIVATE Qt6::DBus)
 endif()
 
 # Le vérificateur de certificats de la plateforme s'appuie sur le Security

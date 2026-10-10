@@ -57,6 +57,13 @@ de projet interne.
 - **confirmation de lecture** demandée par un expéditeur : proposée, jamais
   envoyée d'office ; la réponse — envoi ou refus — n'est demandée qu'une fois
   (`$MDNSent`) ;
+- **nouveau courrier** : le nombre de non-lus des boîtes de réception de tous
+  les comptes s'affiche en pastille sur l'icône de MMail dans la barre des
+  tâches (Windows ; compteur du lanceur sous Linux) ; la boîte de réception
+  d'un compte qu'on ne regarde pas est surveillée en continu (IDLE) ;
+- **« Toutes les BàL »** : les boîtes de réception de tous les comptes en une
+  seule liste (les 1 000 messages les plus récents), chacun avec son compte ;
+  un message s'y lit, s'y répond, s'y déplace comme ailleurs ;
 - **plusieurs comptes dans une seule arborescence**, repliables, avec la
   rubrique **Favoris** au-dessus : on l'alimente en y **glissant un dossier**,
   et l'on réordonne ses favoris de la même façon ; un blanc et un trait

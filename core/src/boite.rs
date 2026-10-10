@@ -359,6 +359,18 @@ pub mod qobject {
         #[cxx_name = "decrireFichier"]
         fn decrire_fichier(&self, url: &QString) -> QString;
 
+        /// Boîte de réception unifiée : les messages des boîtes de réception
+        /// de tous les comptes, les plus récents d'abord, en JSON — chacun avec
+        /// son compte et son dossier, comme une recherche dans toutes les boîtes.
+        #[qinvokable]
+        #[cxx_name = "boitesDeReception"]
+        fn boites_de_reception(&self) -> QString;
+
+        /// Messages non lus des boîtes de réception de tous les comptes.
+        #[qinvokable]
+        #[cxx_name = "nonLusReceptions"]
+        fn non_lus_receptions(&self) -> i32;
+
         /// Dossier où ranger une image collée dans le corps d'un message.
         #[qinvokable]
         #[cxx_name = "dossierImagesCollees"]
@@ -1925,6 +1937,17 @@ impl qobject::Boite {
         ))
     }
 
+    pub fn non_lus_receptions(&self) -> i32 {
+        self.magasin.as_ref().and_then(|m| m.non_lus_receptions().ok()).unwrap_or(0) as i32
+    }
+
+    pub fn boites_de_reception(&self) -> QString {
+        let Some(magasin) = self.magasin.as_ref() else {
+            return QString::from("[]");
+        };
+        QString::from(&json_trouves(&magasin.boites_de_reception(UNIFIEE_MAX).unwrap_or_default()))
+    }
+
     pub fn dossier_images_collees(&self) -> QString {
         let dossier = dossier_images_collees(&self.profil);
         let _ = std::fs::create_dir_all(&dossier);
@@ -2676,7 +2699,10 @@ impl Travail {
     /// apparaît ainsi en quelques secondes, au lieu d'attendre la veille.
     fn attendre(&self, e: &mut Etabli, reception: &Receiver<Commande>, veille: Instant) -> Reveil {
         let perdue = |err: Echec| Reveil::Perdue(echec("reseau", format!("attente des nouveaux messages : {err}"), &err));
-        let ouvert = e.ouvert.clone().filter(|_| e.client.sait("IDLE"));
+        // Le dossier ouvert ; à défaut, la boîte de réception : un compte que
+        // l'on ne regarde pas voit arriver son courrier sans attendre la veille
+        // (compteurs, pastille, boîte de réception unifiée).
+        let ouvert = Some(dossier_surveille(e)).filter(|_| e.client.sait("IDLE"));
         if let Some(chemin) = ouvert {
             let debut = assurer_selection(&mut e.client, &chemin).and_then(|()| Ok(e.client.idle_commencer()?));
             match debut {
@@ -2743,9 +2769,11 @@ impl Travail {
         self.terminer(1);
         self.remettre(Issue::Connecte);
 
-        // La boîte de réception se lit hors connexion : elle se précharge dès
-        // la connexion ouverte.
-        let mut file: Vec<Commande> = vec![Commande::Precharger { chemin: "INBOX".into() }];
+        // La boîte de réception s'indexe dès la connexion ouverte — même celle
+        // d'un compte que l'on ne regarde pas : la boîte de réception unifiée
+        // et la pastille de la barre en ont besoin — puis se précharge, pour se
+        // lire hors connexion.
+        let mut file: Vec<Commande> = vec![Commande::Signale, Commande::Precharger { chemin: "INBOX".into() }];
         // Échéance fixe : les commandes reçues entre-temps ne la repoussent pas.
         // Mesurée en temps d'inactivité, la veille ne venait jamais — la
         // minuterie des envois différés écrit à chaque compte toutes les minutes.
@@ -2791,7 +2819,8 @@ impl Travail {
             // Un dossier qu'on vient de lire se précharge ensuite.
             let a_precharger = match &commande {
                 Commande::OuvrirDossier(chemin) => Some(chemin.clone()),
-                Commande::Veille | Commande::Signale => etabli.ouvert.clone(),
+                Commande::Veille => etabli.ouvert.clone(),
+                Commande::Signale => Some(dossier_surveille(&etabli)),
                 _ => None,
             };
             let est_veille = matches!(commande, Commande::Veille);
@@ -3002,9 +3031,13 @@ impl Travail {
                 })
             }
             Commande::Signale => {
-                let chemin = e.ouvert.clone()?;
+                let chemin = dossier_surveille(e);
+                let ouvert = e.ouvert.as_deref() == Some(chemin.as_str());
                 match synchro::synchroniser(&mut e.client, &e.magasin, compte, &chemin) {
-                    Ok(bilan) if bilan.change_la_liste() => Some(Issue::Dossier { chemin, veille: true }),
+                    Ok(bilan) if bilan.change_la_liste() && ouvert => Some(Issue::Dossier { chemin, veille: true }),
+                    // Boîte de réception surveillée en fond : ses compteurs ont
+                    // changé, l'arborescence est à relire.
+                    Ok(bilan) if bilan.change_la_liste() => Some(Issue::Arborescence),
                     Ok(_) => None,
                     Err(err) => Some(echec("reseau", format!("nouveaux messages : {err}"), &err)),
                 }
@@ -3128,6 +3161,12 @@ enum Reveil {
     /// L'interface a lâché la session.
     Fermee,
     Perdue(Issue),
+}
+
+/// Dossier qu'un compte surveille en `IDLE` : celui qu'on y a ouvert, à défaut
+/// sa boîte de réception.
+fn dossier_surveille(e: &Etabli) -> String {
+    e.ouvert.clone().unwrap_or_else(|| "INBOX".into())
 }
 
 /// Vrai si une ligne reçue pendant `IDLE` annonce un changement du dossier :
@@ -3962,6 +4001,10 @@ fn json_pieces(pieces: &[crate::index::PieceJointe]) -> String {
 /// Résultats d'une recherche dans l'index ; au-delà, l'interface demande de
 /// préciser.
 const RECHERCHE_MAX: usize = 500;
+
+/// Boîte de réception unifiée : les messages les plus récents de toutes les
+/// boîtes de réception, au plus.
+const UNIFIEE_MAX: usize = 1000;
 
 /// Messages trouvés dans tous les comptes : la ligne d'une liste, plus son
 /// compte, son chemin et le nom de son dossier.

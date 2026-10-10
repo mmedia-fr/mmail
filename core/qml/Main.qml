@@ -70,6 +70,11 @@ ApplicationWindow {
     }
     PressePapier { id: pressePapier }
     Lanceur { id: lanceur }
+    Pastille { id: pastille }
+    // Non-lus des boîtes de réception de tous les comptes : la pastille de
+    // l'icône de la barre des tâches, le bouton « Toutes les BàL ».
+    property int nonLusReceptions: 0
+    onNonLusReceptionsChanged: pastille.poser(fenetre, nonLusReceptions)
 
     // Logiciel choisi pour ouvrir les pièces jointes, par extension (décision
     // 9) : { "pdf": "C:/…/Acrobat.exe" }, en JSON. Sur ce poste seulement.
@@ -338,6 +343,7 @@ ApplicationWindow {
         target: boite
         function onRevisionChanged() {
             fenetre.rafraichirArborescence()
+            fenetre.nonLusReceptions = boite.nonLusReceptions()
             if (fenetre.vueUnifiee && fenetre.recherche.length === 0)
                 fenetre.poserBoitesUnifiees()
             if (!boite.occupe)
@@ -396,6 +402,22 @@ ApplicationWindow {
                 text: qsTr("Nouveau message")
                 font.bold: true
                 onClicked: fenetre.rediger("nouveau")
+            }
+            // Boîte de réception unifiée : les réceptions de tous les comptes,
+            // avec leurs non-lus (emplacement choisi par Manu le 10/10).
+            ToolButton {
+                text: (fenetre.compact ? qsTr("BàL") : qsTr("Toutes les BàL"))
+                      + (fenetre.nonLusReceptions > 0 ? "  (" + fenetre.nonLusReceptions + ")" : "")
+                checkable: true
+                checked: fenetre.vueUnifiee
+                font.bold: fenetre.nonLusReceptions > 0
+                onClicked: {
+                    checked = Qt.binding(function() { return fenetre.vueUnifiee })
+                    fenetre.ouvrirBoitesUnifiees()
+                }
+                ToolTip.visible: hovered
+                ToolTip.delay: 500
+                ToolTip.text: qsTr("Les boîtes de réception de tous les comptes, en une liste")
             }
             ToolButton {
                 id: boutonComptes
@@ -1575,12 +1597,7 @@ ApplicationWindow {
     /// plusieurs.
     function majInfoDossier() {
         if (vueUnifiee) {
-            var nonLusReception = 0
-            for (var r = 0; r < modeleArborescence.count; ++r) {
-                var d = modeleArborescence.get(r)
-                if (d.genre === "dossier" && d.chemin === "INBOX")
-                    nonLusReception += d.nonLus
-            }
+            var nonLusReception = nonLusReceptions
             infoDossier = qsTr("Toutes les boîtes de réception") + "  —  "
                     + accord(modeleMessages.count, qsTr("message"), qsTr("messages"))
                     + (modeleMessages.count >= 1000 ? qsTr(" (les plus récents)") : "")
@@ -2818,7 +2835,9 @@ ApplicationWindow {
             id: ligne
             width: ListView.view.width
             readonly property bool estDossier: model.genre === "dossier" || model.genre === "favori"
-            readonly property bool estCourant: estDossier
+            // Pas en vue multi-dossiers : le noyau y suit le message choisi,
+            // ce n'est pas le dossier qu'on regarde.
+            readonly property bool estCourant: estDossier && !fenetre.listeMulti
                     && model.compte === boite.compteCourant
                     && model.chemin === boite.dossierCourant
             // Vrai pendant qu'un glisser-déposer accepté survole la ligne.
@@ -6271,6 +6290,9 @@ ApplicationWindow {
                     }
                     console.log("scenario: unifiée", modeleMessages.count, "messages | par compte", JSON.stringify(comptes),
                                 "| barre", infoDossier)
+                    console.log("scenario: pastille", nonLusReceptions, "| image",
+                                identifiantsEssai.sortie.length > 0
+                                && pastille.enregistrer(nonLusReceptions, lanceur.chemin(identifiantsEssai.sortie + "/pastille.png")))
                     if (autre >= 0) {
                         choisir(autre, 0)
                         console.log("scenario: choisi", modeleMessages.get(autre).sujet, "| noyau sur compte",

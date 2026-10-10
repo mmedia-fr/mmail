@@ -366,6 +366,11 @@ pub mod qobject {
         #[cxx_name = "boitesDeReception"]
         fn boites_de_reception(&self) -> QString;
 
+        /// Messages non lus des boîtes de réception de tous les comptes.
+        #[qinvokable]
+        #[cxx_name = "nonLusReceptions"]
+        fn non_lus_receptions(&self) -> i32;
+
         /// Dossier où ranger une image collée dans le corps d'un message.
         #[qinvokable]
         #[cxx_name = "dossierImagesCollees"]
@@ -1930,6 +1935,10 @@ impl qobject::Boite {
             texte_json(&nom),
             meta.len()
         ))
+    }
+
+    pub fn non_lus_receptions(&self) -> i32 {
+        self.magasin.as_ref().and_then(|m| m.non_lus_receptions().ok()).unwrap_or(0) as i32
     }
 
     pub fn boites_de_reception(&self) -> QString {

@@ -997,6 +997,17 @@ impl Magasin {
         Ok(trouves)
     }
 
+    /// Messages non lus des boîtes de réception de tous les comptes : la
+    /// pastille de la barre des tâches. Compteurs des dossiers — ceux du
+    /// serveur, puis de l'index une fois le dossier synchronisé.
+    pub fn non_lus_receptions(&self) -> Resultat<u32> {
+        Ok(self.base.query_row(
+            "SELECT COALESCE(SUM(nb_non_lus), 0) FROM folders WHERE chemin = 'INBOX'",
+            [],
+            |l| l.get(0),
+        )?)
+    }
+
     /// Messages des boîtes de réception de tous les comptes, du plus récent au
     /// plus ancien : la boîte de réception unifiée (« toutes les BàL »).
     pub fn boites_de_reception(&self, limite: usize) -> Resultat<Vec<Trouve>> {
@@ -1891,6 +1902,11 @@ mod tests {
         assert_eq!(vu, vec![(a, 2), (b, 1), (a, 1)]);
         assert!(toutes.iter().all(|t| t.chemin == "INBOX"));
         assert_eq!(m.boites_de_reception(2).unwrap().len(), 2);
+        // Non-lus des réceptions, tous comptes : pas ceux des archives.
+        m.recompter(m.dossier_id(a, "INBOX").unwrap()).unwrap();
+        m.recompter(m.dossier_id(a, "Archives").unwrap()).unwrap();
+        m.recompter(m.dossier_id(b, "INBOX").unwrap()).unwrap();
+        assert_eq!(m.non_lus_receptions().unwrap(), 3);
     }
 
     #[test]

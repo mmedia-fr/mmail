@@ -118,7 +118,12 @@ public:
                            QStringLiteral("/SUPPRESSMSGBOXES"), QStringLiteral("/NORESTART"),
                            QStringLiteral("/SP-"),
                            pourLaMachine() ? QStringLiteral("/ALLUSERS") : QStringLiteral("/CURRENTUSER"),
-                           QStringLiteral("/ATTENDRE=") + pid };
+                           QStringLiteral("/ATTENDRE=") + pid,
+                           // Journal de l'installation, à côté du paquet : de quoi
+                           // comprendre une mise à jour restée sans effet.
+                           QStringLiteral("/LOG=") +
+                             QDir::toNativeSeparators(QFileInfo(s_fichier).absolutePath() +
+                                                      QStringLiteral("/derniere-installation.log")) };
     if (s_relancer)
       arguments << QStringLiteral("/RELANCER=1");
     QProcess::startDetached(QDir::toNativeSeparators(s_fichier), arguments);

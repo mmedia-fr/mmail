@@ -105,9 +105,15 @@ begin
     Processus := OpenProcess(SYNCHRONIZE, 0, Pid);
     if Processus <> 0 then
     begin
-      WaitForSingleObject(Processus, 120000);
+      Log('Attente de la fin de MMail (processus ' + IntToStr(Pid) + ')');
+      if WaitForSingleObject(Processus, 120000) = 0 then
+        Log('MMail est fermé')
+      else
+        Log('MMail toujours ouvert après deux minutes');
       CloseHandle(Processus);
-    end;
+    end
+    else
+      Log('Processus ' + IntToStr(Pid) + ' déjà terminé');
   end;
   Result := True;
 end;

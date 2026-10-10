@@ -158,11 +158,51 @@ jobs:
             $rouvert = Get-Process MMail -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$dir\*" }
           } until (($version -eq $publiee -and $rouvert) -or (Get-Date) -gt $echeance)
           Write-Host "publiée $publiee | installée $version | rouvert $([bool]$rouvert)"
+          $journal = "$env:LOCALAPPDATA\M-Media\MMail\mises-a-jour\derniere-installation.log"
+          if (Test-Path $journal) { Get-Content $journal | Select-String "MMail|processus|Run|Filename" }
           $rouvert | Stop-Process -Force -ErrorAction SilentlyContinue
           if ($version -ne $publiee) { throw "version installée : $version, attendue : $publiee" }
-          if (-not $rouvert) { throw "MMail n'a pas été rouvert après la mise à jour" }
+          # C'est l'installeur publié qui s'exécute : la relance n'existe qu'à
+          # partir de celui de la 0.5.8 (l'étape suivante éprouve celui-ci).
+          if ([version]$publiee -ge [version]"0.5.8" -and -not $rouvert) {
+            throw "MMail n'a pas été rouvert après la mise à jour"
+          }
         env:
           GITHUB_TOKEN: ${{ github.token }}
+      - name: Contrôle Windows — installeur, attente et relance
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # L'installeur de cette fabrication, lancé comme MMail le lance : il
+          # doit attendre la fin du processus désigné avant d'installer, puis
+          # rouvrir MMail (cf. [Code] de build/socle-mmail.iss).
+          $setup = Get-ChildItem dist\MMail-*-setup.exe | Select-Object -First 1
+          $attendue = $setup.Name -replace '^MMail-(.*)-setup\.exe$', '$1'
+          $dir = "$env:RUNNER_TEMP\MMailInstalle"
+          $journal = "$env:RUNNER_TEMP\installation-relance.log"
+          # Un processus de vingt secondes tient le rôle de MMail.
+          $attente = Start-Process -FilePath "$env:SystemRoot\System32\ping.exe" -ArgumentList "-n", "21", "127.0.0.1" `
+            -PassThru -WindowStyle Hidden
+          $env:QT_QPA_PLATFORM = "offscreen"
+          # WaitForExit, et non -Wait, qui attendrait aussi le MMail rouvert.
+          $p = Start-Process -FilePath $setup.FullName -PassThru -ArgumentList "/SILENT", "/SUPPRESSMSGBOXES", `
+            "/NORESTART", "/SP-", "/CURRENTUSER", "/ATTENDRE=$($attente.Id)", "/RELANCER=1", "/LOG=`"$journal`""
+          if (-not $p.WaitForExit(300000)) { throw "installeur toujours en cours après cinq minutes" }
+          Get-Content $journal | Select-String "MMail|processus|Filename"
+          if ($p.ExitCode -ne 0) { throw "installation en echec : code $($p.ExitCode)" }
+          if (-not $attente.HasExited) { throw "l'installeur n'a pas attendu la fin du processus" }
+          if (-not (Select-String -Path $journal -Pattern "MMail est ferm" -Quiet)) { throw "attente absente du journal" }
+          $cle = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{2F1D7A94-6C83-4E51-9B0A-7D3E5C8F1A62}_is1'
+          $version = (Get-ItemProperty $cle).DisplayVersion
+          $echeance = (Get-Date).AddSeconds(60)
+          do {
+            Start-Sleep -Seconds 2
+            $rouvert = Get-Process MMail -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$dir\*" }
+          } until ($rouvert -or (Get-Date) -gt $echeance)
+          Write-Host "installée $version (attendue $attendue) | rouvert $([bool]$rouvert)"
+          $rouvert | Stop-Process -Force -ErrorAction SilentlyContinue
+          if ($version -ne $attendue) { throw "version installée : $version, attendue : $attendue" }
+          if (-not $rouvert) { throw "MMail n'a pas été rouvert après l'installation" }
       - name: Dépôt de l'installeur Windows
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@v4

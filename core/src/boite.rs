@@ -2676,7 +2676,10 @@ impl Travail {
     /// apparaît ainsi en quelques secondes, au lieu d'attendre la veille.
     fn attendre(&self, e: &mut Etabli, reception: &Receiver<Commande>, veille: Instant) -> Reveil {
         let perdue = |err: Echec| Reveil::Perdue(echec("reseau", format!("attente des nouveaux messages : {err}"), &err));
-        let ouvert = e.ouvert.clone().filter(|_| e.client.sait("IDLE"));
+        // Le dossier ouvert ; à défaut, la boîte de réception : un compte que
+        // l'on ne regarde pas voit arriver son courrier sans attendre la veille
+        // (compteurs, pastille, boîte de réception unifiée).
+        let ouvert = Some(dossier_surveille(e)).filter(|_| e.client.sait("IDLE"));
         if let Some(chemin) = ouvert {
             let debut = assurer_selection(&mut e.client, &chemin).and_then(|()| Ok(e.client.idle_commencer()?));
             match debut {
@@ -2791,7 +2794,8 @@ impl Travail {
             // Un dossier qu'on vient de lire se précharge ensuite.
             let a_precharger = match &commande {
                 Commande::OuvrirDossier(chemin) => Some(chemin.clone()),
-                Commande::Veille | Commande::Signale => etabli.ouvert.clone(),
+                Commande::Veille => etabli.ouvert.clone(),
+                Commande::Signale => Some(dossier_surveille(&etabli)),
                 _ => None,
             };
             let est_veille = matches!(commande, Commande::Veille);
@@ -3002,9 +3006,13 @@ impl Travail {
                 })
             }
             Commande::Signale => {
-                let chemin = e.ouvert.clone()?;
+                let chemin = dossier_surveille(e);
+                let ouvert = e.ouvert.as_deref() == Some(chemin.as_str());
                 match synchro::synchroniser(&mut e.client, &e.magasin, compte, &chemin) {
-                    Ok(bilan) if bilan.change_la_liste() => Some(Issue::Dossier { chemin, veille: true }),
+                    Ok(bilan) if bilan.change_la_liste() && ouvert => Some(Issue::Dossier { chemin, veille: true }),
+                    // Boîte de réception surveillée en fond : ses compteurs ont
+                    // changé, l'arborescence est à relire.
+                    Ok(bilan) if bilan.change_la_liste() => Some(Issue::Arborescence),
                     Ok(_) => None,
                     Err(err) => Some(echec("reseau", format!("nouveaux messages : {err}"), &err)),
                 }
@@ -3128,6 +3136,12 @@ enum Reveil {
     /// L'interface a lâché la session.
     Fermee,
     Perdue(Issue),
+}
+
+/// Dossier qu'un compte surveille en `IDLE` : celui qu'on y a ouvert, à défaut
+/// sa boîte de réception.
+fn dossier_surveille(e: &Etabli) -> String {
+    e.ouvert.clone().unwrap_or_else(|| "INBOX".into())
 }
 
 /// Vrai si une ligne reçue pendant `IDLE` annonce un changement du dossier :

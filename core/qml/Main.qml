@@ -6170,6 +6170,25 @@ ApplicationWindow {
                 delai.triggered.connect(etapeScenarioGardeServeur)
                 delai.start()
             }
+            // Scénario « veille-fond » : le second compte n'est jamais ouvert ;
+            // ses non-lus en boîte de réception sont relevés chaque demi-
+            // seconde — un message qu'on y dépose doit paraître en quelques
+            // secondes (IDLE), non à la veille de deux minutes.
+            if (essai.scenario === "veille-fond") {
+                var suivi = Qt.createQmlObject('import QtQuick; Timer { interval: 500; repeat: true }', fenetre)
+                var dernier = -1
+                suivi.triggered.connect(function() {
+                    var c = comptesConnus.filter(function(x) { return x.adresse === identifiantsEssai.utilisateur2 })[0]
+                    for (var i = 0; c && i < modeleArborescence.count; ++i) {
+                        var l = modeleArborescence.get(i)
+                        if (l.genre === "dossier" && l.compte === c.compte && l.chemin === "INBOX" && l.nonLus !== dernier) {
+                            dernier = l.nonLus
+                            console.log("scenario: non lus en réception du second compte :", l.nonLus, "à", new Date().toISOString())
+                        }
+                    }
+                })
+                suivi.start()
+            }
             if (essai.scenario === "coller-image") {
                 var attenteImage = Qt.createQmlObject('import QtQuick; Timer { interval: 6000 }', fenetre)
                 attenteImage.triggered.connect(etapeScenarioCollerImage)

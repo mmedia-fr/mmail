@@ -93,6 +93,16 @@ ApplicationWindow {
             miseAJour.verifier()
         }
     }
+    // Sauvegarde automatique : chaque minute, ce qui a changé part ; rien ne
+    // part si rien n'a changé. Pas pendant une épreuve, sauf la sienne.
+    Timer {
+        interval: 60000
+        repeat: true
+        running: reglagesSauvegarde.automatique
+                 && !(typeof modeControle !== "undefined" && modeControle)
+                 && (!fenetre.essai || fenetre.essai.scenario === "sauvegarde")
+        onTriggered: fenetre.sauvegarderConfiguration(false)
+    }
     PressePapier { id: pressePapier }
     Lanceur { id: lanceur }
     Pastille { id: pastille }
@@ -237,6 +247,28 @@ ApplicationWindow {
         property bool miseEnForme: true
     }
 
+    // Sauvegarde de la configuration (0.5.10) : elle part chiffrée chez le
+    // service de M-Media (cf. le module `sauvegarde` du noyau) ; sur un poste
+    // neuf, le premier compte ajouté la retrouve.
+    Settings {
+        id: reglagesSauvegarde
+        category: "sauvegarde"
+        // Numéro de ce poste chez le service, tiré à la première sauvegarde.
+        property string poste: ""
+        // Empreinte et date (ms) de la dernière sauvegarde faite.
+        property string empreinte: ""
+        property real date: 0
+        // Profil parti de zéro : le premier compte connecté cherche une
+        // sauvegarde à reprendre, et rien ne se sauvegarde avant.
+        property bool aChercher: false
+        property bool automatique: true
+    }
+    property bool rechercheSauvegarde: false
+    property bool rechercheManuelle: false
+    property bool sauvegardeDemandee: false
+    // Sauvegardes proposées à la restauration : cf. `sauvegardesTrouvees`.
+    property var sauvegardesProposees: []
+
     Settings {
         id: reglages
         category: "interface"
@@ -261,6 +293,7 @@ ApplicationWindow {
     property string apparence: "moderne"
 
     Settings {
+        id: reglagesApparence
         category: "apparence"
         property alias theme: fenetre.apparence
     }
@@ -3537,6 +3570,19 @@ ApplicationWindow {
             enabled: fenetre.comptesConnus.length > 0
             onTriggered: dlgViderCorbeilles.open()
         }
+        MenuSeparator {}
+        MenuItem {
+            text: reglagesSauvegarde.date > 0
+                  ? qsTr("Sauvegarder la configuration (dernière : %1)").arg(fenetre.dateLongue(reglagesSauvegarde.date))
+                  : qsTr("Sauvegarder la configuration")
+            enabled: fenetre.comptesConnus.length > 0
+            onTriggered: fenetre.sauvegarderConfiguration(true)
+        }
+        MenuItem {
+            text: qsTr("Restaurer une configuration sauvegardée…")
+            enabled: fenetre.comptesConnus.length > 0 && !fenetre.rechercheSauvegarde
+            onTriggered: fenetre.chercherSauvegardes(true)
+        }
     }
 
     Menu {
@@ -4366,6 +4412,67 @@ ApplicationWindow {
     }
 
     Dialog {
+        id: dlgRestauration
+        title: qsTr("Configuration sauvegardée")
+        modal: true
+        anchors.centerIn: Overlay.overlay
+        width: Math.min(560, fenetre.width - 24)
+        property int choix: 0
+        readonly property var choisie: fenetre.sauvegardesProposees[choix] || null
+
+        ColumnLayout {
+            anchors.fill: parent
+            spacing: 6
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                text: fenetre.sauvegardesProposees.length > 1
+                      ? qsTr("Plusieurs sauvegardes de votre configuration existent. Laquelle restaurer ?")
+                      : qsTr("Une sauvegarde de votre configuration existe. La restaurer ?")
+            }
+            Repeater {
+                model: fenetre.sauvegardesProposees
+                delegate: RadioButton {
+                    required property var modelData
+                    required property int index
+                    Layout.fillWidth: true
+                    checked: index === dlgRestauration.choix
+                    onClicked: dlgRestauration.choix = index
+                    text: qsTr("%1, du %2").arg(modelData.nom).arg(fenetre.dateLongue(modelData.date * 1000))
+                          + (modelData.poste === reglagesSauvegarde.poste ? qsTr(" (ce poste)") : "")
+                }
+            }
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                visible: dlgRestauration.choisie !== null
+                text: dlgRestauration.choisie
+                      ? qsTr("Comptes : %1.").arg(dlgRestauration.choisie.comptes.join(", ")) : ""
+            }
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                opacity: 0.7
+                text: qsTr("Reviennent les comptes et leurs mots de passe, les noms et signatures, les dossiers favoris et masqués, l'apparence et les réglages. Les comptes déjà présents sur ce poste restent tels quels.")
+            }
+        }
+        footer: DialogButtonBox {
+            Button {
+                text: qsTr("Restaurer")
+                DialogButtonBox.buttonRole: DialogButtonBox.AcceptRole
+            }
+            Button {
+                text: qsTr("Ne pas restaurer")
+                DialogButtonBox.buttonRole: DialogButtonBox.RejectRole
+            }
+        }
+        onAccepted: {
+            if (choisie)
+                fenetre.restaurerConfiguration(choisie)
+        }
+    }
+
+    Dialog {
         id: dlgLien
         title: qsTr("Ajouter avec un lien de configuration")
         modal: true
@@ -4817,7 +4924,40 @@ ApplicationWindow {
     Connections {
         target: boite
 
+        function onConfigurationSauvegardee(empreinte, copies) {
+            reglagesSauvegarde.empreinte = empreinte
+            reglagesSauvegarde.date = Date.now()
+            if (fenetre.sauvegardeDemandee)
+                messageEtat.texte = qsTr("Configuration sauvegardée.")
+            fenetre.sauvegardeDemandee = false
+            if (fenetre.essai && fenetre.essai.scenario === "sauvegarde")
+                console.log("scenario: sauvegardée,", copies, "copie(s)")
+        }
+
+        function onSauvegardeEchouee(message) {
+            // Une sauvegarde automatique qui échoue se refera à la suivante :
+            // elle ne se signale que si elle a été demandée.
+            console.log("sauvegarde : " + message)
+            if (fenetre.sauvegardeDemandee)
+                messageEtat.texte = qsTr("Sauvegarde de la configuration impossible : %1").arg(message)
+            fenetre.sauvegardeDemandee = false
+        }
+
+        function onSauvegardesTrouvees(compte, sauvegardes, erreur) {
+            fenetre.sauvegardesTrouvees(sauvegardes, erreur)
+        }
+
         function onConnecte(compte, adresse) {
+            if (reglagesSauvegarde.aChercher && !fenetre.rechercheSauvegarde) {
+                fenetre.rechercheSauvegarde = true
+                boite.chercherSauvegardes(compte)
+            }
+            if (fenetre.essai && fenetre.essai.scenario === "sauvegarde" && fenetre.essai.etape === 0) {
+                fenetre.essai.etape = 1
+                var pauseSauvegarde = Qt.createQmlObject('import QtQuick; Timer { interval: 4000 }', fenetre)
+                pauseSauvegarde.triggered.connect(function() { fenetre.etapeScenarioSauvegarde(compte, adresse) })
+                pauseSauvegarde.start()
+            }
             // Les agendas suivent, une fois les connexions du démarrage faites.
             minuteurAgendas.interval = 5000
             minuteurAgendas.restart()
@@ -5467,6 +5607,176 @@ ApplicationWindow {
         messageEtat.texte = qsTr("Connexion de %1…").arg(adresse)
         boite.connecter(hote, adresse, motDePasse)
         demandeSuivante()
+    }
+
+    // ---- sauvegarde de la configuration
+
+    /// Les réglages qui suivent la personne d'un poste à l'autre, par
+    /// catégorie. Restent sur le poste : la fenêtre, les logiciels choisis
+    /// pour les pièces jointes, la mise à jour et la sauvegarde elle-même.
+    function reglagesSauvegardes() {
+        return { interface: reglages, redaction: reglagesRedaction, edition: reglagesEdition,
+                 apparence: reglagesApparence, agenda: vueAgenda.reglagesAgenda }
+    }
+
+    /// Valeurs des réglages, lues propriété par propriété : un réglage ajouté
+    /// plus tard part de lui-même.
+    function lireReglages() {
+        var objets = reglagesSauvegardes()
+        var tout = {}
+        for (var categorie in objets) {
+            var o = objets[categorie]
+            var valeurs = {}
+            for (var cle in o) {
+                if (cle === "objectName" || cle === "category" || cle === "fileName")
+                    continue
+                var v = o[cle]
+                if (typeof v === "boolean" || typeof v === "number" || typeof v === "string")
+                    valeurs[cle] = v
+            }
+            tout[categorie] = valeurs
+        }
+        return tout
+    }
+
+    /// Pose des réglages restaurés, chacun converti au type du réglage : ce
+    /// qui n'existe plus est ignoré.
+    function poserReglages(tout) {
+        var objets = reglagesSauvegardes()
+        for (var categorie in tout) {
+            var o = objets[categorie]
+            var valeurs = tout[categorie]
+            if (!o || !valeurs || typeof valeurs !== "object")
+                continue
+            for (var cle in valeurs) {
+                // Numéro d'agenda propre à l'index de l'autre poste.
+                if (cle === "objectName" || cle === "category" || cle === "fileName"
+                        || cle === "agendaParDefaut" || !(cle in o))
+                    continue
+                var actuel = o[cle], v = valeurs[cle]
+                if (typeof actuel === "boolean")
+                    o[cle] = v === true || v === "true"
+                else if (typeof actuel === "number" && isFinite(Number(v)))
+                    o[cle] = Number(v)
+                else if (typeof actuel === "string")
+                    o[cle] = String(v)
+            }
+        }
+    }
+
+    /// Sauvegarde la configuration si elle a changé depuis la dernière ;
+    /// `demandee` : par le menu — elle part alors même sans changement.
+    function sauvegarderConfiguration(demandee) {
+        if (reglagesSauvegarde.aChercher && !demandee)
+            return
+        if (reglagesSauvegarde.poste.length === 0)
+            reglagesSauvegarde.poste = boite.nouveauPoste()
+        var lance = boite.sauvegarderConfiguration(JSON.stringify(lireReglages()), reglagesSauvegarde.poste,
+                                                    demandee ? "" : reglagesSauvegarde.empreinte,
+                                                    reglages.memoriser)
+        if (demandee) {
+            sauvegardeDemandee = lance
+            messageEtat.texte = lance ? qsTr("Sauvegarde de la configuration…")
+                                      : qsTr("Sauvegarde impossible pour l'instant : aucun compte connecté, ou une sauvegarde en cours.")
+        }
+    }
+
+    /// Cherche les sauvegardes que la clé du compte courant — à défaut, du
+    /// premier compte connecté — ouvre.
+    function chercherSauvegardes(demandee) {
+        var comptes = JSON.parse(boite.comptes())
+        var connectes = comptes.filter(function(c) { return c.etat === "pret" })
+        var choisi = connectes.filter(function(c) { return c.id === boite.compteCourant })[0] || connectes[0]
+        if (!choisi) {
+            messageEtat.texte = qsTr("Aucun compte connecté : la sauvegarde se retrouve par le mot de passe d'un compte.")
+            return
+        }
+        rechercheSauvegarde = true
+        rechercheManuelle = demandee
+        messageEtat.texte = qsTr("Recherche des sauvegardes de %1…").arg(choisi.adresse)
+        boite.chercherSauvegardes(choisi.id)
+    }
+
+    function sauvegardesTrouvees(texte, erreur) {
+        rechercheSauvegarde = false
+        var manuelle = rechercheManuelle
+        rechercheManuelle = false
+        if (erreur.length > 0) {
+            // Recherche du premier compte : elle se refera à la prochaine
+            // connexion.
+            messageEtat.texte = qsTr("Sauvegardes inaccessibles : %1").arg(erreur)
+            return
+        }
+        var liste = []
+        try {
+            liste = JSON.parse(texte)
+        } catch (e) {
+            liste = []
+        }
+        if (!manuelle) {
+            reglagesSauvegarde.aChercher = false
+            // Ce poste-ci n'a rien à se proposer.
+            liste = liste.filter(function(s) { return s.poste !== reglagesSauvegarde.poste })
+        }
+        if (fenetre.essai && fenetre.essai.scenario === "restauration") {
+            console.log("scenario: sauvegardes trouvées :", liste.length)
+            if (liste.length > 0)
+                restaurerConfiguration(liste[0])
+            return
+        }
+        if (liste.length === 0) {
+            if (manuelle)
+                messageEtat.texte = qsTr("Aucune sauvegarde de configuration pour ce compte.")
+            return
+        }
+        sauvegardesProposees = liste
+        dlgRestauration.choix = 0
+        dlgRestauration.open()
+    }
+
+    /// Restaure la sauvegarde choisie : comptes et réglages ; les comptes
+    /// qui ne sont pas connectés se connectent — avec le mot de passe
+    /// sauvegardé, ou en le demandant.
+    function restaurerConfiguration(s) {
+        var texte = boite.restaurerConfiguration(s.poste)
+        if (texte.length === 0) {
+            messageEtat.texte = qsTr("Restauration impossible : %1").arg(boite.erreur)
+            return
+        }
+        var r = JSON.parse(texte)
+        poserReglages(r.reglages || {})
+        // Le même ordinateur, réinstallé : il reprend sa place chez le
+        // service plutôt que d'y paraître deux fois.
+        if (s.memeNom)
+            reglagesSauvegarde.poste = s.poste
+        reglagesSauvegarde.empreinte = ""
+        reglagesSauvegarde.aChercher = false
+        var presents = JSON.parse(boite.comptes())
+        var connectes = 0
+        for (var i = 0; i < (r.comptes || []).length; ++i) {
+            var c = r.comptes[i]
+            var p = presents.filter(function(x) { return x.adresse === c.adresse })[0]
+            if (p && (p.etat === "pret" || p.etat === "connexion"))
+                continue
+            var hote = p ? p.hote : c.hote
+            if (typeof c.motDePasse === "string" && c.motDePasse.length > 0) {
+                if (reglages.memoriser)
+                    secretsAConserver[c.adresse] = { cle: cle(c.adresse, hote), motDePasse: c.motDePasse }
+                boite.connecter(hote, c.adresse, c.motDePasse)
+                ++connectes
+            } else {
+                demanderCompte({ id: p ? p.id : 0, adresse: c.adresse, hote: hote },
+                               qsTr("Le mot de passe de ce compte n'était pas sauvegardé."))
+            }
+        }
+        rafraichirArborescence()
+        messageEtat.texte = qsTr("Configuration du %1 restaurée.").arg(dateLongue(s.date * 1000))
+        if (fenetre.essai && fenetre.essai.scenario === "restauration") {
+            console.log("scenario: restaurée,", (r.comptes || []).length, "compte(s),", r.images, "image(s),", connectes, "connexion(s)")
+            var bilan = Qt.createQmlObject('import QtQuick; Timer { interval: 3000 }', fenetre)
+            bilan.triggered.connect(bilanScenarioRestauration)
+            bilan.start()
+        }
     }
 
     function connecterCompte(compte) {
@@ -6558,6 +6868,10 @@ ApplicationWindow {
             }
             if (essai.scenario === "reprise")
                 return
+            // Scénario « restauration » : un profil neuf, dont le compte
+            // retrouve la sauvegarde du scénario « sauvegarde ».
+            if (essai.scenario === "restauration")
+                reglagesSauvegarde.aChercher = true
             if (essai.scenario === "garde-serveur") {
                 var delai = Qt.createQmlObject('import QtQuick; Timer { interval: 6000 }', fenetre)
                 delai.triggered.connect(etapeScenarioGardeServeur)
@@ -6681,11 +6995,43 @@ ApplicationWindow {
         // connexion suit dès que le coffre a répondu.
         var comptes = listeComptes()
         if (comptes.length === 0) {
+            reglagesSauvegarde.aChercher = true
             demanderCompte(null, "")
             return
         }
         for (var i = 0; i < comptes.length; ++i)
             connecterCompte(comptes[i])
+    }
+
+    /// Scénario « sauvegarde » : des réglages, une signature avec son image
+    /// (MMAIL_DOSSIER : adresse d'une image) et un favori, puis la sauvegarde.
+    /// Le scénario « restauration », sur un profil neuf, les retrouve.
+    function etapeScenarioSauvegarde(compte, adresse) {
+        reglages.zoomListe = 1.25
+        reglagesApparence.theme = "classique"
+        var image = boite.imageSignature(adresse, identifiantsEssai.dossier)
+        var identites = {}
+        identites[adresse] = { nom: "Essai Sauvegarde", signature: "<p>Cordialement</p><img src=\"" + image + "\">" }
+        reglagesRedaction.identites = JSON.stringify(identites)
+        boite.epinglerDossier(compte, "INBOX", true)
+        console.log("scenario: image de signature", image)
+        console.log("scenario: réglages", JSON.stringify(lireReglages()).length, "caractères")
+        sauvegarderConfiguration(true)
+    }
+
+    /// Scénario « restauration » : ce que la sauvegarde a rapporté.
+    function bilanScenarioRestauration() {
+        var identites = JSON.parse(reglagesRedaction.identites)
+        var adresses = Object.keys(identites)
+        var signature = adresses.length > 0 ? identites[adresses[0]].signature : ""
+        var image = (signature.match(/src="([^"]+)"/) || [])[1] || ""
+        var favoris = 0
+        for (var i = 0; i < modeleFavoris.count; ++i)
+            if (modeleFavoris.get(i).genre === "favori")
+                ++favoris
+        console.log("scenario: bilan zoomListe", reglages.zoomListe, "apparence", fenetre.apparence,
+                    "identités", adresses.join(","), "favoris", favoris)
+        console.log("scenario: image", image)
     }
 
     function etapeScenarioGarde() {

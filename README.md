@@ -226,6 +226,43 @@ Ce que MMail attend du serveur qui sert le lien :
 signalé ; les autres sont ajoutés. Comme pour une saisie à la main, un mot de
 passe n'est confié au coffre qu'une fois accepté par le serveur.
 
+### Sauvegarde de la configuration
+
+MMail sauvegarde sa configuration hors du poste : les comptes et leurs mots de
+passe, les noms et signatures avec leurs images, les dossiers favoris, masqués
+ou repliés, les agendas affichés, l'apparence et les réglages. Restent sur le
+poste la position de la fenêtre et les logiciels choisis pour les pièces
+jointes. La sauvegarde se refait d'elle-même, chaque minute où la
+configuration a changé ; « Comptes › Sauvegarder la configuration » la fait
+sur-le-champ.
+
+Elle est **chiffrée sur le poste**, par une clé tirée de l'adresse et du mot de
+passe de chaque compte (PBKDF2-HMAC-SHA256, 600 000 tours) : chaque compte en
+porte une copie (AES-256-GCM), que le service qui la range ne peut pas lire.
+D'où la restauration sans code à garder : sur un poste neuf, dès que le premier
+compte est ajouté — à la main ou par un lien de configuration —, MMail propose
+de reprendre la configuration sauvegardée. « Comptes › Restaurer une
+configuration sauvegardée… » le fait à tout moment. Un changement de mot de
+passe rend illisibles les copies antérieures ; la suivante se fait avec le
+nouveau. Si les mots de passe ne sont pas gardés sur le poste, ils ne sont pas
+sauvegardés non plus.
+
+Chaque poste range sa copie sous son propre numéro : deux postes ne
+s'écrasent pas, et la restauration propose le poste à reprendre.
+
+Ce que MMail attend du service (`https://agent.mmedia.fr/mmail/sauvegardes`,
+celui de M-Media) — `<identifiant>` : 64 chiffres hexadécimaux tirés de la
+clé, qui n'en livrent rien ; `<poste>` : 32 chiffres hexadécimaux :
+
+- `PUT <service>/<identifiant>/<poste>` : dépose une copie (16 Mo au plus) ;
+- `GET <service>/<identifiant>` : `[{"poste", "date", "taille"}]`, la dernière
+  copie de chaque poste, `date` en secondes depuis 1970 ;
+- `GET <service>/<identifiant>/<poste>` : la dernière copie du poste.
+
+Une copie : `MMS1`, 12 octets d'aléa, le document JSON chiffré et son sceau ;
+l'identifiant est authentifié avec. Le module `sauvegarde` du noyau décrit le
+document.
+
 ## Données sur le poste
 
 Le serveur reste la référence : MMail garde sur le poste un **index** (dossiers,

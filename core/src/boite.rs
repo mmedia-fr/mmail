@@ -359,6 +359,18 @@ pub mod qobject {
         #[cxx_name = "decrireFichier"]
         fn decrire_fichier(&self, url: &QString) -> QString;
 
+        /// Dossier où ranger une image collée dans le corps d'un message.
+        #[qinvokable]
+        #[cxx_name = "dossierImagesCollees"]
+        fn dossier_images_collees(&self) -> QString;
+
+        /// Copie une image du poste, glissée ou collée dans le corps d'un
+        /// message, parmi les images collées ; rend son adresse `file:`, vide
+        /// si ce n'est pas une image de 10 Mo au plus.
+        #[qinvokable]
+        #[cxx_name = "importerImage"]
+        fn importer_image(&self, url: &QString) -> QString;
+
         /// Adresses proposées à la saisie d'un destinataire, en JSON
         /// `[{nom, adresse}]` : celles à qui l'on a écrit, puis les expéditeurs.
         #[qinvokable]
@@ -1913,6 +1925,16 @@ impl qobject::Boite {
         ))
     }
 
+    pub fn dossier_images_collees(&self) -> QString {
+        let dossier = dossier_images_collees(&self.profil);
+        let _ = std::fs::create_dir_all(&dossier);
+        QString::from(&dossier.to_string_lossy().into_owned())
+    }
+
+    pub fn importer_image(&self, url: &QString) -> QString {
+        QString::from(&importer_image(&self.profil, &url.to_string()).unwrap_or_default())
+    }
+
     pub fn adresses_connues(&self, filtre: &QString) -> QString {
         let contacts = self.magasin.as_ref().and_then(|m| m.contacts(&filtre.to_string(), 8).ok()).unwrap_or_default();
         let lignes: Vec<String> = contacts
@@ -2430,6 +2452,29 @@ fn dossier_images_redaction(profil: &str) -> PathBuf {
 
 /// Préfixe unique des fichiers d'une signature : une image remplacée ne
 /// réutilise jamais le nom d'une autre, que le moteur de Qt garde en cache.
+/// Images collées ou glissées dans le corps d'une rédaction : sous le dossier
+/// des images de rédaction, l'un des deux dont l'envoi intègre les images.
+fn dossier_images_collees(profil: &str) -> PathBuf {
+    dossier_images_redaction(profil).join("collees")
+}
+
+/// Copie une image locale parmi les images collées et rend son adresse
+/// `file:`. Ce qui n'est pas une image, ou dépasse 10 Mo — la limite de
+/// l'envoi —, n'est pas copié.
+fn importer_image(profil: &str, adresse: &str) -> Option<String> {
+    let source = crate::rendu::chemin_de_url(adresse)?;
+    let type_mime = crate::rendu::type_image(&source.to_string_lossy())?;
+    let meta = std::fs::metadata(&source).ok()?;
+    if !meta.is_file() || meta.len() > 10 * 1024 * 1024 {
+        return None;
+    }
+    let dossier = dossier_images_collees(profil);
+    std::fs::create_dir_all(&dossier).ok()?;
+    let cible = dossier.join(format!("glissee-{}.{}", serie_signature(), crate::rendu::extension_image(type_mime)));
+    std::fs::copy(&source, &cible).ok()?;
+    Some(crate::rendu::url_fichier(&cible))
+}
+
 fn serie_signature() -> String {
     format!("{}-{}", maintenant(), SERIE_AFFICHAGE.fetch_add(1, Ordering::Relaxed))
 }
@@ -4469,6 +4514,29 @@ mod tests {
         // Et la purge reste aux seuls rôles annoncés, ou aux noms exacts
         // quand aucun ne l'est : la reconnaissance par le nom n'y change rien.
         assert_eq!(dossiers_a_vider(&ovh), vec!["INBOX.Éléments supprimés", "INBOX.INBOX.Junk", "INBOX.INBOX.Trash", "INBOX.Courrier indésirable", "INBOX.Trash"]);
+    }
+
+    #[test]
+    fn image_glissee_copiee_puis_integree_a_l_envoi() {
+        let racine = std::env::temp_dir().join(format!("mmail-essai-images-{}", serie_signature()));
+        std::fs::create_dir_all(&racine).unwrap();
+        let profil = racine.join("index.sqlite").to_string_lossy().into_owned();
+        let source = racine.join("capture d'écran.png");
+        std::fs::write(&source, b"\x89PNG\r\n\x1a\nessai").unwrap();
+        let texte = racine.join("note.txt");
+        std::fs::write(&texte, b"pas une image").unwrap();
+
+        let url = importer_image(&profil, &crate::rendu::url_fichier(&source)).expect("image copiée");
+        let copie = crate::rendu::chemin_de_url(&url).unwrap();
+        assert!(copie.starts_with(dossier_images_collees(&profil)), "{copie:?}");
+        // L'envoi l'intègre : elle est dans un dossier autorisé.
+        let (type_mime, octets) = image_autorisee(&profil, &url).expect("image autorisée");
+        assert_eq!((type_mime.as_str(), octets.len()), ("image/png", 13));
+        // L'original, hors du profil, ne partirait pas.
+        assert!(image_autorisee(&profil, &crate::rendu::url_fichier(&source)).is_none());
+        assert!(importer_image(&profil, &crate::rendu::url_fichier(&texte)).is_none());
+        assert!(importer_image(&profil, "https://exemple.fr/image.png").is_none());
+        let _ = std::fs::remove_dir_all(&racine);
     }
 
     #[test]

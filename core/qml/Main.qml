@@ -51,10 +51,33 @@ ApplicationWindow {
             fenetre.lienEnCours = ""
             dlgLien.ouvrir(lien, qsTr("Ce lien n'a pas pu être lu — %1").arg(message))
         }
-        onVersionDisponible: function(version, adresse) {
-            fenetre.versionNouvelle = version
-            fenetre.pageVersion = adresse
+    }
+    // Mise à jour assistée (demande de Manu du 10/10) : une version plus
+    // récente se propose — l'installer maintenant, à la fermeture de MMail, ou
+    // jamais. Le paquet est téléchargé et contrôlé par le noyau, installé par le
+    // programme une fois MMail fermé (cf. cpp/installeur.h).
+    MiseAJour {
+        id: miseAJour
+        onDisponible: function(version, page) { fenetre.versionDisponible(version, page) }
+        onProgression: function(version, pourcent) {
+            fenetre.progressionMiseAJour = pourcent
+            if (fenetre.essai && fenetre.essai.scenario.indexOf("mise-a-jour") === 0 && pourcent >= 30
+                    && !fenetre.essai.bandeauTelechargement) {
+                fenetre.essai.bandeauTelechargement = true
+                fenetre.capturerBandeauVersion("telechargement")
+            }
         }
+        onPrete: function(version, fichier) { fenetre.miseAJourPrete(version, fichier) }
+        onEchec: function(version, message) { fenetre.miseAJourEchouee(version, message) }
+    }
+    Installeur { id: installeur }
+    // Choix fait pour une version : « maintenant », « fermeture » ou « jamais ».
+    // Une version plus récente se propose de nouveau.
+    Settings {
+        id: reglagesMiseAJour
+        category: "miseAJour"
+        property string version: ""
+        property string choix: ""
     }
     // Avis de nouvelle version : un quart de minute après le démarrage, puis une
     // fois par jour. Coupé pour la machine par « AvisVersion » à 0.
@@ -64,8 +87,10 @@ ApplicationWindow {
                  && !(typeof modeControle !== "undefined" && modeControle)
         repeat: true
         onTriggered: {
+            if (interval === 15000)
+                fenetre.nettoyerMisesAJour()
             interval = 24 * 3600 * 1000
-            configuration.verifierVersion()
+            miseAJour.verifier()
         }
     }
     PressePapier { id: pressePapier }
@@ -160,6 +185,15 @@ ApplicationWindow {
     // Version plus récente publiée, et sa page ; vide sinon.
     property string versionNouvelle: ""
     property string pageVersion: ""
+    // Bandeau de mise à jour : "" (caché), "proposee", "telechargement",
+    // "prete" ou "echec".
+    property string etatMiseAJour: ""
+    property int progressionMiseAJour: 0
+    property string fichierMiseAJour: ""
+    property string erreurMiseAJour: ""
+    // Paquet que cette copie sait installer seule (« setup », « appimage ») ;
+    // vide : la page de la version s'ouvre, comme avant la 0.5.8.
+    readonly property string genreMiseAJour: installeur.genre()
     property int deplacementsEnVol: 0
     // Cumul des messages effacés par « Vider les corbeilles » (un compte par
     // signal), remis à zéro à chaque lancement.
@@ -465,36 +499,105 @@ ApplicationWindow {
         }
     }
 
-    // Nouvelle version publiée : jusqu'à « Plus tard », qui le tait jusqu'au
-    // prochain démarrage.
+    // Nouvelle version publiée : proposée jusqu'à un choix ; puis son
+    // téléchargement, et l'invitation à redémarrer pour « maintenant ».
     Rectangle {
         id: bandeauVersion
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.top: parent.top
-        height: visible ? ligneVersion.implicitHeight + 12 : 0
-        visible: fenetre.versionNouvelle.length > 0
-        color: Qt.tint(fenetre.palette.base, "#3388c86a")
-        RowLayout {
-            id: ligneVersion
+        height: visible ? grilleVersion.implicitHeight + 12 : 0
+        visible: fenetre.etatMiseAJour.length > 0
+        color: Qt.tint(fenetre.palette.base, fenetre.etatMiseAJour === "echec" ? "#33c42b1c" : "#3388c86a")
+        readonly property string etat: fenetre.etatMiseAJour
+        readonly property bool installable: fenetre.genreMiseAJour.length > 0
+        GridLayout {
+            id: grilleVersion
             anchors.fill: parent
             anchors.leftMargin: 10
             anchors.rightMargin: 6
-            spacing: 8
+            anchors.topMargin: 6
+            anchors.bottomMargin: 6
+            columns: fenetre.compact ? 1 : 2
+            columnSpacing: 8
+            rowSpacing: 4
             Label {
                 Layout.fillWidth: true
                 wrapMode: Text.Wrap
-                text: qsTr("Une nouvelle version de MMail est disponible : %1 (vous utilisez la %2).")
-                      .arg(fenetre.versionNouvelle).arg(Qt.application.version)
+                textFormat: Text.StyledText
+                text: fenetre.texteMiseAJour()
+                onLinkActivated: function(lien) { Qt.openUrlExternally(lien) }
             }
-            Button {
-                text: qsTr("Télécharger")
-                onClicked: Qt.openUrlExternally(fenetre.pageVersion)
-            }
-            Button {
-                text: qsTr("Plus tard")
-                flat: true
-                onClicked: fenetre.versionNouvelle = ""
+            RowLayout {
+                spacing: 6
+                Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
+                ProgressBar {
+                    visible: bandeauVersion.etat === "telechargement"
+                    from: 0
+                    to: 100
+                    value: fenetre.progressionMiseAJour
+                    Layout.preferredWidth: 160
+                }
+                Button {
+                    visible: bandeauVersion.etat === "proposee" && bandeauVersion.installable
+                    text: qsTr("Maintenant")
+                    highlighted: true
+                    onClicked: fenetre.choisirMiseAJour("maintenant")
+                }
+                Button {
+                    visible: bandeauVersion.etat === "proposee" && bandeauVersion.installable
+                    text: qsTr("À la fermeture")
+                    onClicked: fenetre.choisirMiseAJour("fermeture")
+                }
+                Button {
+                    visible: bandeauVersion.etat === "proposee" && !bandeauVersion.installable
+                    text: qsTr("Télécharger")
+                    onClicked: Qt.openUrlExternally(fenetre.pageVersion)
+                }
+                Button {
+                    visible: bandeauVersion.etat === "proposee" && !bandeauVersion.installable
+                    text: qsTr("Plus tard")
+                    flat: true
+                    onClicked: fenetre.etatMiseAJour = ""
+                }
+                Button {
+                    visible: bandeauVersion.etat === "proposee"
+                    text: qsTr("Jamais")
+                    flat: true
+                    onClicked: fenetre.choisirMiseAJour("jamais")
+                }
+                Button {
+                    visible: bandeauVersion.etat === "prete"
+                    text: qsTr("Redémarrer MMail")
+                    highlighted: true
+                    onClicked: fenetre.redemarrerPourMettreAJour()
+                }
+                Button {
+                    visible: bandeauVersion.etat === "prete"
+                    text: qsTr("À la fermeture")
+                    flat: true
+                    onClicked: {
+                        reglagesMiseAJour.choix = "fermeture"
+                        fenetre.etatMiseAJour = ""
+                    }
+                }
+                Button {
+                    visible: bandeauVersion.etat === "echec" && bandeauVersion.installable
+                    text: qsTr("Réessayer")
+                    onClicked: fenetre.telechargerMiseAJour()
+                }
+                Button {
+                    visible: bandeauVersion.etat === "echec"
+                    text: qsTr("Page de téléchargement")
+                    flat: true
+                    onClicked: Qt.openUrlExternally(fenetre.pageVersion)
+                }
+                Button {
+                    visible: bandeauVersion.etat === "echec"
+                    text: qsTr("Fermer")
+                    flat: true
+                    onClicked: fenetre.etatMiseAJour = ""
+                }
             }
         }
     }
@@ -1559,6 +1662,105 @@ ApplicationWindow {
     Timer {
         id: minuteurPassager
         onTriggered: fenetre.passager = ""
+    }
+
+    // ---------------------------------------------------------- mise à jour
+    function texteMiseAJour() {
+        var v = versionNouvelle
+        var autorisation = installeur.pourTousLesUtilisateurs()
+                ? " " + qsTr("Windows demandera l'autorisation d'un administrateur.") : ""
+        switch (etatMiseAJour) {
+        case "proposee":
+            if (genreMiseAJour.length === 0)
+                return qsTr("Une nouvelle version de MMail est disponible : %1 (vous utilisez la %2).")
+                       .arg(v).arg(miseAJour.versionActuelle())
+            return qsTr("MMail %1 est disponible — vous utilisez la %2 (<a href=\"%3\">nouveautés</a>). L'installer :")
+                   .arg(v).arg(miseAJour.versionActuelle()).arg(pageVersion) + autorisation
+        case "telechargement":
+            return qsTr("Téléchargement de MMail %1… %2 %").arg(v).arg(progressionMiseAJour)
+        case "prete":
+            if (genreMiseAJour === "appimage")
+                return qsTr("MMail %1 est installé : redémarrez MMail pour l'utiliser.").arg(v)
+            return qsTr("MMail %1 est prêt : redémarrez MMail pour l'installer. Les rédactions en cours sont gardées.")
+                   .arg(v) + autorisation
+        case "echec":
+            return qsTr("La mise à jour vers MMail %1 n'a pas abouti — %2").arg(v).arg(erreurMiseAJour)
+        }
+        return ""
+    }
+
+    function versionDisponible(version, page) {
+        versionNouvelle = version
+        pageVersion = page
+        var choix = reglagesMiseAJour.version === version ? reglagesMiseAJour.choix : ""
+        if (choix === "jamais") {
+            etatMiseAJour = ""
+        } else if (genreMiseAJour.length > 0 && (choix === "maintenant" || choix === "fermeture")) {
+            // Choix déjà fait : le paquet est repris, ou retrouvé intact.
+            if (etatMiseAJour !== "prete")
+                telechargerMiseAJour()
+        } else {
+            etatMiseAJour = "proposee"
+        }
+        if (essai && essai.scenario.indexOf("mise-a-jour") === 0)
+            etapeScenarioMiseAJour("proposee")
+    }
+
+    function choisirMiseAJour(choix) {
+        reglagesMiseAJour.version = versionNouvelle
+        reglagesMiseAJour.choix = choix
+        if (choix === "jamais") {
+            etatMiseAJour = ""
+            annoncer(qsTr("La version %1 ne sera plus proposée ; son lien reste dans « À propos de MMail ».")
+                     .arg(versionNouvelle), false)
+            return
+        }
+        if (choix === "fermeture")
+            annoncer(qsTr("MMail %1 sera installé à la fermeture de MMail.").arg(versionNouvelle), false)
+        telechargerMiseAJour()
+    }
+
+    function telechargerMiseAJour() {
+        erreurMiseAJour = ""
+        progressionMiseAJour = 0
+        // « À la fermeture » : en silence, sauf échec.
+        etatMiseAJour = reglagesMiseAJour.choix === "maintenant" ? "telechargement" : ""
+        miseAJour.telecharger(versionNouvelle, genreMiseAJour, installeur.destination(versionNouvelle))
+    }
+
+    function miseAJourPrete(version, fichier) {
+        if (version !== versionNouvelle)
+            return
+        fichierMiseAJour = fichier
+        // Installé à la fermeture, quoi qu'il arrive ; « Redémarrer » rouvre MMail.
+        installeur.programmer(fichier, false)
+        etatMiseAJour = reglagesMiseAJour.choix === "maintenant" ? "prete" : ""
+        if (essai && essai.scenario.indexOf("mise-a-jour") === 0)
+            etapeScenarioMiseAJour("prete")
+    }
+
+    function miseAJourEchouee(version, message) {
+        erreurMiseAJour = message
+        etatMiseAJour = "echec"
+        if (essai && essai.scenario.indexOf("mise-a-jour") === 0)
+            etapeScenarioMiseAJour("echec")
+    }
+
+    // Les rédactions ouvertes sont gardées sur le poste à la fermeture, et
+    // reproposées au démarrage suivant.
+    function redemarrerPourMettreAJour() {
+        installeur.programmer(fichierMiseAJour, true)
+        Qt.quit()
+    }
+
+    // Paquets d'une version installée ou abandonnée, téléchargements
+    // interrompus : effacés au démarrage.
+    function nettoyerMisesAJour() {
+        if (genreMiseAJour.length === 0)
+            return
+        var garder = reglagesMiseAJour.choix !== "jamais" && reglagesMiseAJour.version.length > 0
+                ? installeur.destination(reglagesMiseAJour.version) : ""
+        miseAJour.nettoyer(genreMiseAJour, installeur.dossier(), garder)
     }
 
     function annoncer(texte, erreur) {
@@ -3134,6 +3336,25 @@ ApplicationWindow {
                         color: ligne.highlighted ? fenetre.palette.highlightedText
                              : model.importance > 0 ? "#c42b1c" : "#1a4480"
                     }
+                    // Répondu, répondu à tous, transféré — par MMail ou par un
+                    // autre logiciel, le serveur porte les drapeaux : des
+                    // pastilles devant l'objet, aux préfixes d'Outlook (forme A,
+                    // choisie par Manu le 10/10 ; les flèches de la 0.5.4 et les
+                    // mots en bout de ligne de la 0.5.5 ne lui convenaient pas).
+                    MarqueSuite {
+                        visible: model.repondu === true
+                        texte: model.reponduTous === true ? qsTr("RE TOUS") : qsTr("RE")
+                        infobulle: model.reponduTous === true ? qsTr("Répondu à tous") : qsTr("Répondu")
+                        color: "#6b3fa0"
+                        border.width: ligne.highlighted ? 1 : 0
+                    }
+                    MarqueSuite {
+                        visible: model.transfere === true
+                        texte: qsTr("TR")
+                        infobulle: qsTr("Transféré")
+                        color: "#1a4480"
+                        border.width: ligne.highlighted ? 1 : 0
+                    }
                     Label {
                         text: model.sujet
                         font.bold: !model.lu
@@ -3141,30 +3362,6 @@ ApplicationWindow {
                              : model.lu ? fenetre.palette.windowText : fenetre.palette.highlight
                         elide: Text.ElideRight
                         Layout.fillWidth: true
-                        // Répondu, répondu à tous, transféré — par MMail ou par un
-                        // autre logiciel, le serveur porte les drapeaux : en toutes
-                        // lettres au bout de la ligne (choix de Manu le 09/10, les
-                        // flèches de la 0.5.4 se lisaient mal). Posé dans la marge du
-                        // libellé, hors de la mise en page de la rangée : celle-ci
-                        // laissait une image visible à taille nulle, sans la placer
-                        // (constaté le 09/10/2026, Qt 6.4) ; l'objet se coupe avant.
-                        rightPadding: suiteDonnee.visible ? suiteDonnee.implicitWidth + 8 : 0
-                        Label {
-                            id: suiteDonnee
-                            readonly property bool repondu: model.repondu === true
-                            readonly property bool transfere: model.transfere === true
-                            visible: repondu || transfere
-                            anchors.right: parent.right
-                            anchors.verticalCenter: parent.verticalCenter
-                            text: [repondu ? (model.reponduTous === true ? qsTr("Répondu à tous") : qsTr("Répondu")) : "",
-                                   transfere ? qsTr("Transféré") : ""]
-                                  .filter(function(t) { return t.length > 0 }).join(" · ")
-                            font.pointSize: fenetre.tailleListe * 0.8
-                            font.italic: true
-                            font.bold: false
-                            color: ligne.highlighted ? fenetre.palette.highlightedText
-                                 : transfere && !repondu ? "#1a4480" : "#6b3fa0"
-                        }
                     }
                 }
                 // Recherche dans toutes les boîtes : le dossier du message, sur
@@ -4357,9 +4554,9 @@ ApplicationWindow {
                     + "Un clic au bout de la seconde ligne d'un message, ou la touche Insertion, pose "
                     + "ou retire un drapeau de suivi, que les autres logiciels de messagerie voient "
                     + "aussi. « ! » signale un message d'importance haute, « ↓ » d'importance basse ; "
-                    + "« Répondu », « Transféré » en bout de ligne signalent ce qui a été fait du message, "
-                    + "ici ou depuis un autre logiciel ; « Répondu à tous » une réponse à tous faite depuis "
-                    + "MMail (ailleurs, elle reste « Répondu »). "
+                    + "les pastilles « RE » (répondu) et « TR » (transféré) devant l'objet signalent ce "
+                    + "qui a été fait du message, ici ou depuis un autre logiciel ; « RE TOUS » une réponse "
+                    + "à tous faite depuis MMail (ailleurs, elle reste « RE »). "
                     + "Quand un expéditeur demande une confirmation de lecture, MMail propose de "
                     + "l'envoyer ou de l'ignorer.<br><br>"
                     + "<b>Favoris</b><br>"
@@ -4441,6 +4638,19 @@ ApplicationWindow {
                 text: qsTr("Sources : %1").arg("<a href=\"https://github.com/mmedia-fr/mmail\">github.com/mmedia-fr/mmail</a>")
                 onLinkActivated: function(lien) { Qt.openUrlExternally(lien) }
             }
+            // Version plus récente : son lien reste ici, même après « Jamais ».
+            Label {
+                visible: fenetre.versionNouvelle.length > 0
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                textFormat: Text.StyledText
+                text: qsTr("Version %1 disponible : <a href=\"%2\">page de téléchargement</a>.")
+                      .arg(fenetre.versionNouvelle).arg(fenetre.pageVersion)
+                      + (installeur.programme() && fenetre.fichierMiseAJour.length > 0
+                         && fenetre.genreMiseAJour === "setup"
+                         ? " " + qsTr("Elle s'installera à la fermeture de MMail.") : "")
+                onLinkActivated: function(lien) { Qt.openUrlExternally(lien) }
+            }
             Label {
                 Layout.fillWidth: true
                 wrapMode: Text.Wrap
@@ -4477,6 +4687,27 @@ ApplicationWindow {
 
     // Pictogramme d'avertissement (triangle ambre « ! »), dessiné pour ne
     // dépendre d'aucune police d'émojis. Réutilisé par les dialogues de vidage.
+    /// Pastille de la liste des messages : « RE », « RE TOUS », « TR ».
+    component MarqueSuite: Rectangle {
+        property alias texte: libelleMarque.text
+        property string infobulle: ""
+        implicitWidth: libelleMarque.implicitWidth + 10
+        implicitHeight: libelleMarque.implicitHeight + 2
+        radius: 3
+        border.color: "white"
+        Label {
+            id: libelleMarque
+            anchors.centerIn: parent
+            font.bold: true
+            font.pointSize: fenetre.tailleListe * 0.75
+            color: "white"
+        }
+        HoverHandler { id: survolMarque }
+        ToolTip.visible: survolMarque.hovered && infobulle.length > 0
+        ToolTip.text: infobulle
+        ToolTip.delay: 500
+    }
+
     component Avertissement: Canvas {
         implicitWidth: 30
         implicitHeight: 30
@@ -6304,6 +6535,10 @@ ApplicationWindow {
                 })
                 attenteUnifiee.start()
             }
+            if (essai.scenario.indexOf("mise-a-jour") === 0) {
+                reglagesMiseAJour.version = ""
+                reglagesMiseAJour.choix = ""
+            }
             if (essai.scenario === "coller-image") {
                 var attenteImage = Qt.createQmlObject('import QtQuick; Timer { interval: 6000 }', fenetre)
                 attenteImage.triggered.connect(etapeScenarioCollerImage)
@@ -6379,6 +6614,43 @@ ApplicationWindow {
     /// Scénario « coller-image » : l'image de MMAIL_DOSSIER (un fichier) passe
     /// par le presse-papier, se colle dans un message neuf, et le brouillon
     /// part sur le serveur — l'image y doit être intégrée.
+    // Scénarios « mise-a-jour » et « mise-a-jour-fermeture » : MMail se croit
+    // ancien (MMAIL_VERSION_ESSAI), installé par l'installeur ou lancé en
+    // AppImage. La dernière publication est proposée, choisie « Maintenant »
+    // (ou « À la fermeture »), téléchargée et contrôlée ; puis MMail redémarre
+    // (ou se ferme), et le programme l'installe.
+    function etapeScenarioMiseAJour(etape) {
+        var fermeture = essai.scenario === "mise-a-jour-fermeture"
+        console.log("scenario: mise à jour", etape, "| publiée", versionNouvelle, "| actuelle", miseAJour.versionActuelle(),
+                    "| genre", genreMiseAJour, "| état", etatMiseAJour, "| fichier", fichierMiseAJour,
+                    "| programmée", installeur.programme(), erreurMiseAJour)
+        capturerBandeauVersion(etape)
+        if (etape === "proposee" && etatMiseAJour === "proposee") {
+            var choix = Qt.createQmlObject('import QtQuick; Timer { interval: 4000 }', fenetre)
+            choix.triggered.connect(function() { choisirMiseAJour(fermeture ? "fermeture" : "maintenant") })
+            choix.start()
+        } else if (etape === "prete") {
+            var pause = Qt.createQmlObject('import QtQuick; Timer { interval: 1500 }', fenetre)
+            pause.triggered.connect(function() {
+                console.log("scenario: mise à jour —", fermeture ? "fermeture" : "redémarrage", "| pid", Qt.application.arguments)
+                if (fermeture)
+                    Qt.quit()
+                else
+                    redemarrerPourMettreAJour()
+            })
+            pause.start()
+        } else if (etape === "echec") {
+            Qt.quit()
+        }
+    }
+
+    function capturerBandeauVersion(nom) {
+        if (!identifiantsEssai.sortie)
+            return
+        var chemin = lanceur.chemin(identifiantsEssai.sortie + "/bandeau-" + nom + ".png")
+        bandeauVersion.grabToImage(function(r) { r.saveToFile(chemin) })
+    }
+
     function etapeScenarioCollerImage() {
         var r = ouvrirRedaction(comptesConnus[0].compte)
         r.pret()

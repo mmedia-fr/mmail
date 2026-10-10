@@ -48,12 +48,12 @@ de projet interne.
 - **drapeau de suivi** (`\Flagged`) posé ou retiré d'un clic en bout de ligne,
   par le menu ou la touche Insertion ; importance des messages reçus signalée
   dans la liste (« ! », « ↓ ») et dans l'en-tête ;
-- **répondu et transféré** écrits en toutes lettres au bout de la ligne de
-  l'objet (« Répondu », « Transféré »), que la réponse ou le transfert vienne
+- **répondu et transféré** signalés par une pastille devant l'objet, aux
+  préfixes d'Outlook (« RE », « TR »), que la réponse ou le transfert vienne
   de MMail ou d'un autre logiciel — téléphone, webmail (`\Answered`,
-  `$Forwarded`) ; « Répondu à tous » pour une réponse à tous faite depuis MMail,
-  qui pose en plus le mot-clé `$ReplyAll` (aucun drapeau standard ne distingue
-  une réponse à tous : faite ailleurs, elle reste « Répondu ») ;
+  `$Forwarded`) ; « RE TOUS » pour une réponse à tous faite depuis MMail, qui
+  pose en plus le mot-clé `$ReplyAll` (aucun drapeau standard ne distingue une
+  réponse à tous : faite ailleurs, elle reste « RE ») ;
 - **confirmation de lecture** demandée par un expéditeur : proposée, jamais
   envoyée d'office ; la réponse — envoi ou refus — n'est demandée qu'une fois
   (`$MDNSent`) ;
@@ -64,6 +64,9 @@ de projet interne.
 - **« Toutes les BàL »** : les boîtes de réception de tous les comptes en une
   seule liste (les 1 000 messages les plus récents), chacun avec son compte ;
   un message s'y lit, s'y répond, s'y déplace comme ailleurs ;
+- **mise à jour assistée** : une nouvelle version s'installe maintenant (un
+  redémarrage de MMail), à la fermeture, ou jamais — téléchargée et contrôlée
+  par MMail, installée sans question (cf. « Données sur le poste ») ;
 - **plusieurs comptes dans une seule arborescence**, repliables, avec la
   rubrique **Favoris** au-dessus : on l'alimente en y **glissant un dossier**,
   et l'on réordonne ses favoris de la même façon ; un blanc et un trait
@@ -262,6 +265,30 @@ MMail dans la barre des tâches propose **« Ramener la fenêtre »** (`mmail
 MMail signale une nouvelle version par un bandeau, après avoir demandé à
 l'API de GitHub la dernière publication du dépôt — au démarrage, puis une fois
 par jour. Rien d'autre n'est envoyé ; `AvisVersion` à 0 le coupe.
+
+**Mise à jour assistée.** Le bandeau propose de l'installer **maintenant**, **à
+la fermeture** de MMail, ou **jamais** :
+
+- *Maintenant* : le paquet se télécharge, son empreinte est contrôlée contre le
+  fichier `SHA256SUMS` de la publication, puis le bandeau invite à
+  **redémarrer MMail** — un clic : MMail se ferme, la mise à jour s'installe
+  sans question et MMail se rouvre. Sans ce clic, elle s'installe à la
+  fermeture.
+- *À la fermeture* : même téléchargement, en silence ; l'installation suit la
+  fermeture de MMail. Pas pendant un arrêt ou une déconnexion de la session :
+  elle attend alors la fermeture suivante.
+- *Jamais* : cette version n'est plus proposée ; son lien reste dans « À propos
+  de MMail ». Une version plus récente se propose de nouveau.
+
+Sous Windows, l'installeur est lancé sans question (`/VERYSILENT`, ou
+`/SILENT` avec sa barre d'avancement quand MMail doit se rouvrir) et attend la
+fin de MMail avant de remplacer ses fichiers. Une installation pour tous les
+utilisateurs (dans Program Files) demande l'autorisation d'un administrateur :
+elle n'est proposée qu'à un compte qui peut la donner — sinon, comme sous
+Android ou pour un programme compilé sur place, le bandeau ouvre la page de la
+version. En AppImage, le fichier est remplacé sur place, sous son nom : ses
+raccourcis restent bons. Les rédactions ouvertes au redémarrage sont gardées et
+reproposées.
 
 ## Limites connues
 

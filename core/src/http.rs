@@ -168,8 +168,13 @@ pub fn envoyer(demande: &Demande) -> Resultat<Reponse> {
     Err(Erreur::Protocole("trop de redirections".into()))
 }
 
-fn une_requete(demande: &Demande, url: &str, entetes: &[&(&str, String)]) -> Resultat<Reponse> {
-    let (methode, accepte, taille_max) = (demande.methode, demande.accepte, demande.taille_max);
+/// Connexion TLS ouverte sur le serveur d'une adresse.
+type Flux = rustls::StreamOwned<rustls::ClientConnection, std::net::TcpStream>;
+
+/// Se connecte au serveur de `url` et lui envoie la demande ; la réponse reste
+/// à lire sur le flux rendu.
+fn demander(demande: &Demande, url: &str, entetes: &[&(&str, String)]) -> Resultat<Flux> {
+    let (methode, accepte) = (demande.methode, demande.accepte);
     let cible = analyser_url(url)?;
     let config = configuration_tls()?;
     let nom = rustls::pki_types::ServerName::try_from(cible.hote.clone())
@@ -205,7 +210,12 @@ fn une_requete(demande: &Demande, url: &str, entetes: &[&(&str, String)]) -> Res
     flux.write_all(tete.as_bytes())?;
     flux.write_all(demande.corps)?;
     flux.flush()?;
+    Ok(flux)
+}
 
+fn une_requete(demande: &Demande, url: &str, entetes: &[&(&str, String)]) -> Resultat<Reponse> {
+    let taille_max = demande.taille_max;
+    let mut flux = demander(demande, url, entetes)?;
     let mut brut = Vec::new();
     let mut tampon = [0u8; 8192];
     let echeance = Instant::now() + DUREE_MAX;
@@ -240,6 +250,86 @@ fn une_requete(demande: &Demande, url: &str, entetes: &[&(&str, String)]) -> Res
     analyser_reponse_bornee(&brut, taille_max)
 }
 
+/// Taille de la tête d'une réponse au-delà de laquelle on renonce.
+const TETE_MAX: usize = 64 * 1024;
+
+/// Télécharge un fichier (GET, redirections vers HTTPS suivies) en le passant
+/// morceau par morceau à `ecrire`, sans le garder en mémoire : une mise à jour
+/// de MMail pèse des dizaines de mégaoctets. La longueur doit être annoncée —
+/// c'est elle qui dit le fichier complet, et qui mesure la progression,
+/// `progression(reçus, total)`. Chaque lecture est bornée par `DELAI`, non le
+/// téléchargement entier : une connexion lente mais vivante va au bout. Rend
+/// la taille reçue.
+pub fn telecharger(
+    url: &str,
+    taille_max: u64,
+    ecrire: &mut dyn FnMut(&[u8]) -> Resultat<()>,
+    progression: &mut dyn FnMut(u64, u64),
+) -> Resultat<u64> {
+    let mut url = url.trim().to_string();
+    for _ in 0..=REDIRECTIONS_MAX {
+        let demande = Demande::simple("GET", &url, "application/octet-stream");
+        let mut flux = demander(&demande, &url, &[])?;
+        let mut brut = Vec::new();
+        let mut tampon = [0u8; 64 * 1024];
+        while !brut.windows(4).any(|w| w == b"\r\n\r\n") {
+            if brut.len() > TETE_MAX {
+                return Err(Erreur::Protocole("en-têtes HTTP démesurés".into()));
+            }
+            match flux.read(&mut tampon) {
+                Ok(0) => return Err(Erreur::Reseau("réponse HTTP incomplète".into())),
+                Ok(n) => brut.extend_from_slice(&tampon[..n]),
+                Err(e) if e.kind() == ErrorKind::UnexpectedEof => {
+                    return Err(Erreur::Reseau("réponse HTTP incomplète".into()))
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
+        let (statut, entetes, debut) = analyser_tete(&brut)?;
+        let entete = |nom: &str| entetes.iter().find(|(n, _)| n == nom).map(|(_, v)| v.as_str());
+        if matches!(statut, 301 | 302 | 303 | 307 | 308) {
+            let location = entete("location").ok_or_else(|| Erreur::Protocole("redirection sans adresse".into()))?;
+            url = resoudre(&url, location)?;
+            continue;
+        }
+        if statut != 200 {
+            return Err(Erreur::Refuse(format!("le serveur a répondu {statut}")));
+        }
+        if entete("transfer-encoding").is_some_and(|v| !v.eq_ignore_ascii_case("identity")) {
+            return Err(Erreur::Protocole("longueur du fichier non annoncée".into()));
+        }
+        let total: u64 = entete("content-length")
+            .and_then(|v| v.parse().ok())
+            .ok_or_else(|| Erreur::Protocole("longueur du fichier non annoncée".into()))?;
+        if total > taille_max {
+            return Err(Erreur::Refuse(TROP_VOLUMINEUSE.into()));
+        }
+        let mut recus = 0u64;
+        let mut morceau = &brut[debut..];
+        loop {
+            let utile = morceau.len().min((total - recus) as usize);
+            if utile > 0 {
+                ecrire(&morceau[..utile])?;
+                recus += utile as u64;
+                progression(recus, total);
+            }
+            if recus == total {
+                return Ok(total);
+            }
+            let n = match flux.read(&mut tampon) {
+                Ok(n) => n,
+                Err(e) if e.kind() == ErrorKind::UnexpectedEof => 0,
+                Err(e) => return Err(e.into()),
+            };
+            if n == 0 {
+                return Err(Erreur::Reseau(format!("téléchargement interrompu : {recus} octets sur {total}")));
+            }
+            morceau = &tampon[..n];
+        }
+    }
+    Err(Erreur::Protocole("trop de redirections".into()))
+}
+
 /// Vrai si la réponse reçue est entière : corps de la longueur annoncée, ou
 /// dernier bloc reçu. Sans l'une ni l'autre, seule la fermeture le dira.
 fn reponse_complete(brut: &[u8]) -> bool {
@@ -265,7 +355,9 @@ pub fn analyser_reponse(brut: &[u8]) -> Resultat<Reponse> {
     analyser_reponse_bornee(brut, TAILLE_MAX)
 }
 
-fn analyser_reponse_bornee(brut: &[u8], taille_max: usize) -> Resultat<Reponse> {
+/// Statut et en-têtes (noms en minuscules) d'une réponse, dont `brut` contient
+/// au moins la tête ; et la position où commence le corps.
+fn analyser_tete(brut: &[u8]) -> Resultat<(u16, Vec<(String, String)>, usize)> {
     let fin = brut
         .windows(4)
         .position(|w| w == b"\r\n\r\n")
@@ -286,9 +378,14 @@ fn analyser_reponse_bornee(brut: &[u8], taille_max: usize) -> Resultat<Reponse> 
         .filter_map(|l| l.split_once(':'))
         .map(|(n, v)| (n.trim().to_ascii_lowercase(), v.trim().to_string()))
         .collect();
+    Ok((statut, entetes, fin + 4))
+}
+
+fn analyser_reponse_bornee(brut: &[u8], taille_max: usize) -> Resultat<Reponse> {
+    let (statut, entetes, debut) = analyser_tete(brut)?;
     let entete = |nom: &str| entetes.iter().find(|(n, _)| n == nom).map(|(_, v)| v.as_str());
 
-    let reste = &brut[fin + 4..];
+    let reste = &brut[debut..];
     let morcele = entete("transfer-encoding")
         .map(|v| v.to_ascii_lowercase().contains("chunked"))
         .unwrap_or(false);

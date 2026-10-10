@@ -71,6 +71,55 @@ Name: "{autodesktop}\{#AppName}";  Filename: "{app}\{#AppExe}"; Tasks: desktopic
 [Run]
 Filename: "{app}\{#AppExe}"; Description: "Lancer {#AppName}"; \
     Flags: nowait postinstall skipifsilent
+; Mise à jour lancée par MMail pour se rouvrir ensuite (« Redémarrer MMail ») :
+; relancé sous le compte de la personne, même si l'installation a été élevée.
+Filename: "{app}\{#AppExe}"; Flags: nowait runasoriginaluser; Check: RelancerDemande
 
 [UninstallDelete]
 Type: dirifempty; Name: "{app}"
+
+[Code]
+// Mise à jour assistée (cf. cpp/installeur.h) : MMail lance cet installeur en
+// se fermant, avec /ATTENDRE=<son numéro de processus>. Ses fichiers ne se
+// remplacent qu'une fois le programme arrêté : on attend sa fin, deux minutes
+// au plus — au-delà, l'installation se poursuit et Windows dira ce qui reste
+// ouvert.
+const
+  SYNCHRONIZE = $00100000;
+
+function OpenProcess(Acces: Cardinal; Heritage: Longint; Processus: Longint): THandle;
+  external 'OpenProcess@kernel32.dll stdcall';
+function WaitForSingleObject(Objet: THandle; Delai: Cardinal): Cardinal;
+  external 'WaitForSingleObject@kernel32.dll stdcall';
+function CloseHandle(Objet: THandle): Longint;
+  external 'CloseHandle@kernel32.dll stdcall';
+
+function InitializeSetup(): Boolean;
+var
+  Pid: Longint;
+  Processus: THandle;
+begin
+  Pid := StrToIntDef(ExpandConstant('{param:ATTENDRE|0}'), 0);
+  if Pid > 0 then
+  begin
+    Processus := OpenProcess(SYNCHRONIZE, 0, Pid);
+    if Processus <> 0 then
+    begin
+      Log('Attente de la fin de MMail (processus ' + IntToStr(Pid) + ')');
+      if WaitForSingleObject(Processus, 120000) = 0 then
+        Log('MMail est fermé')
+      else
+        Log('MMail toujours ouvert après deux minutes');
+      CloseHandle(Processus);
+    end
+    else
+      Log('Processus ' + IntToStr(Pid) + ' déjà terminé');
+  end;
+  Result := True;
+end;
+
+// /RELANCER=1 : MMail se rouvre une fois installé.
+function RelancerDemande(): Boolean;
+begin
+  Result := ExpandConstant('{param:RELANCER|0}') = '1';
+end;

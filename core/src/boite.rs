@@ -306,6 +306,15 @@ pub mod qobject {
         #[cxx_name = "viderDossier"]
         fn vider_dossier(self: Pin<&mut Boite>, compte: i32, chemin: &QString);
 
+        /// Crée, sur le serveur, le sous-dossier `nom` du dossier `parent`
+        /// (clic droit « Nouveau sous-dossier… »). Rend le motif d'un refus
+        /// immédiat — nom vide ou interdit, dossier existant, compte hors
+        /// ligne —, vide si la demande est partie. Issue : `dossierCree`, ou
+        /// `echec`.
+        #[qinvokable]
+        #[cxx_name = "creerSousDossier"]
+        fn creer_sous_dossier(self: Pin<&mut Boite>, compte: i32, parent: &QString, nom: &QString) -> QString;
+
         /// Relit compteurs et dossier ouvert de chaque compte ; reconnecte les
         /// comptes dont la session est tombée.
         #[qinvokable]
@@ -552,6 +561,12 @@ pub mod qobject {
         #[cxx_name = "corbeillesVidees"]
         fn corbeilles_videes(self: Pin<&mut Boite>, nombre: i32);
 
+        /// Sous-dossier créé : il figure dans l'arborescence, son parent
+        /// déplié.
+        #[qsignal]
+        #[cxx_name = "dossierCree"]
+        fn dossier_cree(self: Pin<&mut Boite>, compte: i32, chemin: &QString, nom: &QString);
+
         /// Une opération a échoué. `etape` : « connexion », « identifiants »,
         /// « dossier », « message », « tri » ou « reseau » (la session du
         /// compte est alors perdue).
@@ -735,6 +750,8 @@ enum Commande {
     /// Vider entièrement les dossiers désignés (corbeille, indésirables) de ce
     /// compte : purge définitive côté serveur.
     ViderDossiers { chemins: Vec<String> },
+    /// Créer un dossier — le sous-dossier `nom` de `parent` —, et s'y abonner.
+    CreerDossier { parent: String, chemin: String, nom: String },
     /// Reprendre les déplacements interrompus dont ce compte est la source.
     Reprendre(HashMap<i64, Identifiants>),
     /// Préparer une réponse, un transfert ou la reprise d'un brouillon.
@@ -830,6 +847,7 @@ enum Issue {
     MarquageAbandonne { chemin: String },
     /// Corbeille et indésirables de ce compte vidés : `nombre` messages effacés.
     Vide { nombre: u32 },
+    DossierCree { parent: String, chemin: String, nom: String },
     /// Des déplacements interrompus ont été repris : ni demandés à l'instant,
     /// ni attendus par l'interface, qui n'a qu'à relire ses compteurs.
     Repris { rapport: Rapport },
@@ -2074,6 +2092,31 @@ impl qobject::Boite {
         self.as_mut().envoyer(compte as i64, Commande::ViderDossiers { chemins: vec![chemin] });
     }
 
+    pub fn creer_sous_dossier(mut self: Pin<&mut Self>, compte: i32, parent: &QString, nom: &QString) -> QString {
+        let compte = compte as i64;
+        let parent = parent.to_string();
+        let nom = nom.to_string().trim().to_string();
+        let Some(magasin) = self.magasin.as_ref() else {
+            return QString::from("index indisponible");
+        };
+        let dossiers = magasin.dossiers(compte).unwrap_or_default();
+        let Some(separateur) = dossiers.iter().find(|d| d.chemin == parent).map(|d| d.separateur.clone()) else {
+            return QString::from(&format!("dossier inconnu : {parent}"));
+        };
+        let chemin = match crate::protocole::chemin_de_sous_dossier(&parent, &separateur, &nom) {
+            Ok(c) => c,
+            Err(motif) => return QString::from(&motif),
+        };
+        if dossiers.iter().any(|d| d.chemin == chemin) {
+            return QString::from(&format!("« {nom} » existe déjà dans ce dossier"));
+        }
+        if !self.sessions.contains_key(&compte) && !self.identites.contains_key(&compte) {
+            return QString::from("ce compte n'est pas connecté");
+        }
+        self.as_mut().envoyer(compte, Commande::CreerDossier { parent, chemin, nom });
+        QString::from("")
+    }
+
     pub fn actualiser(mut self: Pin<&mut Self>) {
         let comptes: Vec<i64> = self
             .magasin
@@ -2670,6 +2713,17 @@ impl qobject::Boite {
                 self.as_mut().rafraichir_attente();
                 self.as_mut().reviser();
                 self.as_mut().corbeilles_videes(nombre as i32);
+            }
+            Issue::DossierCree { parent, chemin, nom } => {
+                // Déplié, le parent montre le dossier qu'on vient de créer.
+                if let Some(magasin) = self.magasin.as_ref() {
+                    if let Ok(id) = magasin.dossier_id(compte, &parent) {
+                        let _ = magasin.replier_dossier(id, false);
+                    }
+                }
+                self.as_mut().rafraichir_attente();
+                self.as_mut().reviser();
+                self.as_mut().dossier_cree(compte_qt, &QString::from(&chemin), &QString::from(&nom));
             }
             Issue::Repris { rapport } => {
                 // Les cibles ont reçu des messages : leurs compteurs aussi.
@@ -3310,6 +3364,21 @@ impl Travail {
                     Some((chemin, err)) => {
                         let echec_imap = Echec::Imap(err);
                         echec("tri", format!("vidage de {chemin} : {echec_imap}"), &echec_imap)
+                    }
+                })
+            }
+            Commande::CreerDossier { parent, chemin, nom } => {
+                Some(match e.client.creer(&chemin) {
+                    Ok(()) => {
+                        // L'abonnement n'est qu'une commodité pour les autres
+                        // logiciels : son refus n'annule pas la création.
+                        let _ = e.client.abonner(&chemin);
+                        let _ = synchro::arborescence(&mut e.client, &e.magasin, compte);
+                        Issue::DossierCree { parent, chemin, nom }
+                    }
+                    Err(err) => {
+                        let echec_imap = Echec::Imap(err);
+                        echec("dossier", format!("création de « {nom} » : {echec_imap}"), &echec_imap)
                     }
                 })
             }
@@ -4529,6 +4598,7 @@ mod tests {
                 Commande::EnvoyerDifferes { .. } => "differes".into(),
                 Commande::Deplacer { .. } => "deplacer".into(),
                 Commande::ViderDossiers { .. } => "vider".into(),
+                Commande::CreerDossier { .. } => "creer".into(),
                 Commande::Arborescence => "arborescence".into(),
                 Commande::Reprendre(_) => "reprendre".into(),
                 Commande::Veille => "veille".into(),

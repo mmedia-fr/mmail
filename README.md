@@ -75,6 +75,10 @@ de projet interne.
   rubrique **Favoris** au-dessus : on l'alimente en y **glissant un dossier**,
   et l'on réordonne ses favoris de la même façon ; un blanc et un trait
   séparent chaque compte de ce qui le précède ;
+- **nouveau sous-dossier** par clic droit sur un dossier : créé sur le
+  serveur et abonné, pour que le webmail et Outlook le montrent aussi ; un nom
+  vide, déjà pris ou portant le séparateur du serveur est refusé dans le
+  dialogue même ;
 - **menu « Comptes »** : ajouter un compte — le serveur est trouvé d'après
   l'adresse quand le domaine publie sa configuration —, en ajouter un ou
   plusieurs par un **lien de configuration**, ou en retirer un (voir
@@ -97,7 +101,10 @@ de projet interne.
   actif, objet et expéditeur d'après l'index puis le texte entier des messages
   par le serveur ; dans toutes les boîtes (index du poste), chaque résultat avec
   son dossier, un seul choisi à la fois, et l'on revient au dossier de départ
-  en sortant de la recherche (Échap) ;
+  en sortant de la recherche (Échap). Les résultats se **trient** — plus
+  récents, plus anciens, expéditeur, objet (sans ses « RE : »), plus gros,
+  dossier dans toutes les boîtes — sur le poste : le tri n'est jamais demandé
+  au serveur, pour qui il coûte cher sur un gros dossier ;
 - **Supprimer** envoie à la corbeille de la boîte (touche Suppr) ;
 - **dossiers de rôle** — brouillons, éléments envoyés, corbeille — désignés
   par le serveur (SPECIAL-USE) ; à défaut (OVH), reconnus à leur nom usuel,

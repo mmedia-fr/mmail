@@ -182,6 +182,17 @@ ApplicationWindow {
     // simple : deux boîtes peuvent donner le même UID. On revient au dossier
     // d'avant en sortant de la recherche.
     property bool rechercheGlobale: false
+    // Tri des résultats d'une recherche (demande de Manu, 11/10) : fait sur le
+    // poste, jamais demandé au serveur — un tri IMAP sur un gros dossier
+    // continue de tourner après qu'on l'a abandonné (constaté le 05/10).
+    property string triRecherche: "recents"
+    readonly property var trisRecherche: [
+        { cle: "recents", libelle: qsTr("Plus récents") },
+        { cle: "anciens", libelle: qsTr("Plus anciens") },
+        { cle: "expediteur", libelle: qsTr("Expéditeur") },
+        { cle: "objet", libelle: qsTr("Objet") },
+        { cle: "taille", libelle: qsTr("Plus gros") }
+    ].concat(rechercheGlobale ? [{ cle: "dossier", libelle: qsTr("Dossier") }] : [])
     property string cleChoisie: ""
     property var dossierAvantRecherche: null
     // Boîte de réception unifiée (« toutes les BàL », demande de Manu du
@@ -1155,6 +1166,35 @@ ApplicationWindow {
                     ToolTip.visible: hovered
                     ToolTip.text: qsTr("Effacer la recherche (Échap)")
                 }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.leftMargin: 8
+                Layout.rightMargin: 4
+                Layout.bottomMargin: 4
+                spacing: 6
+                visible: fenetre.recherche.length > 0
+                Label { text: qsTr("Trier par") }
+                ComboBox {
+                    id: choixTri
+                    model: fenetre.trisRecherche
+                    textRole: "libelle"
+                    implicitContentWidthPolicy: ComboBox.WidestText
+                    function suivre() {
+                        var i = fenetre.trisRecherche.findIndex(function(t) { return t.cle === fenetre.triRecherche })
+                        if (i < 0) {
+                            // « Dossier » n'a plus cours hors de toutes les boîtes.
+                            fenetre.triRecherche = "recents"
+                            i = 0
+                        }
+                        currentIndex = i
+                    }
+                    onModelChanged: suivre()
+                    Component.onCompleted: suivre()
+                    onActivated: fenetre.trierRecherche(fenetre.trisRecherche[currentIndex].cle)
+                }
+                Item { Layout.fillWidth: true }
             }
 
             ScrollView {
@@ -3925,6 +3965,10 @@ ApplicationWindow {
         }
         MenuSeparator {}
         MenuItem {
+            text: qsTr("Nouveau sous-dossier…")
+            onTriggered: dlgNouveauDossier.ouvrir(menuDossier.compte, menuDossier.chemin, menuDossier.nom)
+        }
+        MenuItem {
             text: qsTr("Vider ce dossier…")
             enabled: menuDossier.selectionnable
             onTriggered: dlgViderDossier.ouvrir(menuDossier.compte, menuDossier.chemin, menuDossier.nom)
@@ -4669,11 +4713,15 @@ ApplicationWindow {
                     + "<b>Favoris</b><br>"
                     + "Glissez un dossier sur la rubrique Favoris pour l'y épingler ; glissez un favori "
                     + "sur un autre pour le placer avant lui. Clic droit sur un dossier : ajouter aux "
-                    + "favoris ou les retirer, masquer le dossier. Le bouton « Dossiers masqués » les "
+                    + "favoris ou les retirer, masquer le dossier, créer un sous-dossier. Le bouton « Dossiers masqués » les "
                     + "réaffiche. Le chevron d'un dossier replie ou déplie ses sous-dossiers.<br><br>"
                     + "<b>Comptes</b><br>"
                     + "Glissez l'en-tête d'un compte sur un autre pour changer leur ordre, ou clic droit "
                     + "sur le compte : « Monter », « Descendre ».<br><br>"
+                    + "<b>Recherche</b><br>"
+                    + "Ctrl+E, puis Entrée : dans le dossier actif ou dans toutes les boîtes. Pendant une "
+                    + "recherche, « Trier par » range les résultats : plus récents, plus anciens, "
+                    + "expéditeur, objet, plus gros ; dossier, dans toutes les boîtes. Échap en sort.<br><br>"
                     + "<b>Trier</b><br>"
                     + "Glissez un ou plusieurs messages sur un dossier, de n'importe quel compte. Clic "
                     + "droit sur un message, ou Ctrl+Maj+V : « Déplacer vers… », avec un filtre sur le "
@@ -4887,6 +4935,71 @@ ApplicationWindow {
         }
     }
 
+    // Sous-dossier créé sur le serveur, puis montré dans l'arborescence, son
+    // parent déplié (signal `dossierCree`). Un refus immédiat — nom vide ou
+    // interdit, dossier existant, compte hors ligne — reste dans le dialogue.
+    Dialog {
+        id: dlgNouveauDossier
+        property int compte: 0
+        property string cheminParent: ""
+        property string nomParent: ""
+        property string motif: ""
+        function ouvrir(c, ch, n) {
+            compte = c; cheminParent = ch; nomParent = n; motif = ""
+            champNouveauDossier.text = ""
+            open()
+            champNouveauDossier.forceActiveFocus()
+        }
+        function creer() {
+            motif = boite.creerSousDossier(compte, cheminParent, champNouveauDossier.text)
+            if (motif.length > 0)
+                return
+            messageEtat.texte = qsTr("Création de « %1 » en cours…").arg(champNouveauDossier.text.trim())
+            close()
+        }
+        title: qsTr("Nouveau sous-dossier")
+        modal: true
+        anchors.centerIn: Overlay.overlay
+        width: Math.min(420, fenetre.width - 24)
+        closePolicy: Popup.CloseOnEscape
+        // « Créer » ne ferme pas d'office : un refus laisse corriger le nom.
+        footer: DialogButtonBox {
+            Button {
+                text: qsTr("Créer")
+                DialogButtonBox.buttonRole: DialogButtonBox.ActionRole
+                onClicked: dlgNouveauDossier.creer()
+            }
+            Button {
+                text: qsTr("Annuler")
+                DialogButtonBox.buttonRole: DialogButtonBox.RejectRole
+            }
+        }
+        ColumnLayout {
+            width: dlgNouveauDossier.availableWidth
+            spacing: 6
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                text: qsTr("Dans « %1 » :").arg(dlgNouveauDossier.nomParent)
+            }
+            TextField {
+                id: champNouveauDossier
+                Layout.fillWidth: true
+                placeholderText: qsTr("Nom du dossier")
+                onTextEdited: dlgNouveauDossier.motif = ""
+                Keys.onReturnPressed: dlgNouveauDossier.creer()
+                Keys.onEnterPressed: dlgNouveauDossier.creer()
+            }
+            Label {
+                Layout.fillWidth: true
+                visible: dlgNouveauDossier.motif.length > 0
+                wrapMode: Text.Wrap
+                color: "#b00020"
+                text: dlgNouveauDossier.motif
+            }
+        }
+    }
+
     // ------------------------------------------------------ coffre et session
     Coffre {
         id: coffre
@@ -5003,6 +5116,20 @@ ApplicationWindow {
                 champRecherche.text = identifiantsEssai.dossier
                 fenetre.lancerRecherche()
                 console.log("scenario: l'index trouve", modeleMessages.count, "message(s)")
+                return
+            }
+            // Scénario « sous-dossier » : le sous-dossier MMAIL_DOSSIER de la
+            // boîte de réception, créé par le dialogue du clic droit. Un nom
+            // déjà pris ou interdit est refusé dans le dialogue même.
+            if (fenetre.essai && fenetre.essai.scenario === "sous-dossier" && !fenetre.essai.cree) {
+                fenetre.essai.cree = true
+                dlgNouveauDossier.ouvrir(compte, "INBOX", qsTr("Boîte de réception"))
+                champNouveauDossier.text = "a/b"
+                dlgNouveauDossier.creer()
+                console.log("scenario: refus de « a/b » :", dlgNouveauDossier.motif, "| dialogue ouvert :", dlgNouveauDossier.visible)
+                champNouveauDossier.text = identifiantsEssai.dossier
+                dlgNouveauDossier.creer()
+                console.log("scenario: demande partie :", dlgNouveauDossier.motif === "", "| dialogue ouvert :", dlgNouveauDossier.visible)
                 return
             }
             // Scénario « historique » : douze recherches passées, proposées
@@ -5305,6 +5432,19 @@ ApplicationWindow {
             if (fenetre.essai && fenetre.essai.scenario === "recherche") {
                 console.log("scenario: liste après le serveur :", modeleMessages.count, "| premier :",
                             modeleMessages.count > 0 ? modeleMessages.get(0).sujet : "—")
+                // Chaque tri, ses trois premières lignes.
+                for (var t = 0; t < fenetre.trisRecherche.length; ++t) {
+                    var cle = fenetre.trisRecherche[t].cle
+                    fenetre.trierRecherche(cle)
+                    var tete = []
+                    for (var r = 0; r < Math.min(3, modeleMessages.count); ++r) {
+                        var m = modeleMessages.get(r)
+                        tete.push(new Date(m.h * 1000).toISOString().slice(0, 10) + " " + m.taille + " o "
+                                  + (m.expediteur || m.adresse) + " — " + m.sujet)
+                    }
+                    console.log("scenario: tri", cle, "(" + modeleMessages.count + ") :", tete.join(" | "))
+                }
+                fenetre.trierRecherche("recents")
                 Qt.quit()
             }
         }
@@ -5323,6 +5463,28 @@ ApplicationWindow {
                 fenetre.etapeScenario()
                 if (fenetre.essai.scenario === "glisser")
                     fenetre.etapeScenarioGlisser()
+            }
+        }
+
+        function onDossierCree(compte, chemin, nom) {
+            messageEtat.texte = qsTr("Dossier « %1 » créé.").arg(nom)
+            if (fenetre.essai && fenetre.essai.scenario === "sous-dossier") {
+                // Laisser le temps à l'arborescence de se redessiner.
+                Qt.callLater(function() {
+                    var ligne = null
+                    for (var i = 0; i < modeleArborescence.count; ++i) {
+                        var l = modeleArborescence.get(i)
+                        if (l.genre === "dossier" && l.compte === compte && l.chemin === chemin)
+                            ligne = l
+                    }
+                    console.log("scenario: créé", chemin, "| dans l'arborescence :", ligne !== null,
+                                ligne ? "| nom : " + ligne.nom + " | profondeur : " + ligne.profondeur : "")
+                    dlgNouveauDossier.ouvrir(compte, "INBOX", qsTr("Boîte de réception"))
+                    champNouveauDossier.text = nom
+                    dlgNouveauDossier.creer()
+                    console.log("scenario: second essai du même nom :", dlgNouveauDossier.motif)
+                    Qt.quit()
+                })
             }
         }
 
@@ -5483,6 +5645,7 @@ ApplicationWindow {
     function dialogueOuvert() {
         return dlgCompte.visible || dlgDeplacer.visible || dlgRetrait.visible
             || dlgAide.visible || dlgAPropos.visible || dlgLien.visible || dlgIdentite.visible
+            || dlgNouveauDossier.visible
             // Sur téléphone, la rédaction couvre la fenêtre principale.
             || (compact && Object.keys(redactions).length > 0)
     }
@@ -6139,12 +6302,12 @@ ApplicationWindow {
     /// trouvés dans le texte des messages —, du plus récent au plus ancien.
     function poserResultats() {
         if (rechercheGlobale) {
-            poserListe(JSON.parse(boite.chercher(recherche, true)).map(function(r) {
+            poserListe(trierResultats(JSON.parse(boite.chercher(recherche, true)).map(function(r) {
                 // Une liste JS deviendrait un sous-modèle dans la ListModel.
                 r.cheminAffiche = cheminResultat(r)
                 delete r.segments
                 return r
-            }))
+            })))
             return
         }
         var lignes = JSON.parse(boite.chercher(recherche, false))
@@ -6152,11 +6315,38 @@ ApplicationWindow {
         for (var i = 0; i < lignes.length; ++i)
             vus[lignes[i].uid] = true
         var manquants = uidsServeur.filter(function(u) { return !vus[u] })
-        if (manquants.length > 0) {
+        if (manquants.length > 0)
             lignes = lignes.concat(JSON.parse(boite.messagesParUid(manquants.join(","))))
-            lignes.sort(function(a, b) { return b.h - a.h || b.uid - a.uid })
+        poserListe(trierResultats(lignes))
+    }
+
+    /// Résultats rangés selon `triRecherche` ; à égalité, les plus récents
+    /// d'abord. L'objet se compare sans ses « RE : », « TR : » : une
+    /// conversation reste groupée.
+    function trierResultats(lignes) {
+        var recents = function(a, b) { return b.h - a.h || b.uid - a.uid }
+        var parTexte = function(valeur) {
+            return function(a, b) { return valeur(a).localeCompare(valeur(b)) || recents(a, b) }
         }
-        poserListe(lignes)
+        var comparer = {
+            anciens: function(a, b) { return a.h - b.h || a.uid - b.uid },
+            expediteur: parTexte(function(m) { return (m.expediteur || m.adresse || "").toLowerCase() }),
+            objet: parTexte(function(m) {
+                return (m.sujet || "").replace(/^\s*((re|tr|fw|fwd|aw|wg)\s*(\[\d+\])?\s*:\s*)+/i, "")
+                        .toLowerCase()
+            }),
+            taille: function(a, b) { return b.taille - a.taille || recents(a, b) },
+            dossier: parTexte(function(m) { return (m.cheminAffiche || "").toLowerCase() })
+        }[triRecherche] || recents
+        return lignes.slice().sort(comparer)
+    }
+
+    function trierRecherche(cle) {
+        triRecherche = cle
+        if (recherche.length === 0)
+            return
+        poserResultats()
+        vueMessages.positionViewAtBeginning()
     }
 
     function sortirRechercheGlobale() {

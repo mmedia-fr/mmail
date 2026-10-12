@@ -671,7 +671,10 @@ mod tests {
         let apres = neuf.dossiers(comptes[0].id).unwrap();
         assert!(apres.iter().find(|d| d.chemin == "Archives").unwrap().favori.is_some());
         assert!(!apres.iter().any(|d| d.chemin == "Spam"));
-        std::fs::remove_dir_all(&racine).unwrap();
+        // Les index fermés d'abord : Windows refuse d'effacer un fichier ouvert.
+        drop(neuf);
+        drop(magasin);
+        let _ = std::fs::remove_dir_all(&racine);
     }
 
     #[test]

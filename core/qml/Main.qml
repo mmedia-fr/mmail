@@ -5132,6 +5132,23 @@ ApplicationWindow {
                 console.log("scenario: demande partie :", dlgNouveauDossier.motif === "", "| dialogue ouvert :", dlgNouveauDossier.visible)
                 return
             }
+            // Scénario « vidage » : « Vider les corbeilles et indésirables… »,
+            // confirmé dans son dialogue, comme au clic. MMAIL_DOSSIER donne
+            // l'attente en secondes après l'ouverture de la boîte de réception
+            // (10 par défaut) : la session est alors en veille, comme chez
+            // l'utilisateur.
+            if (fenetre.essai && fenetre.essai.scenario === "vidage" && !fenetre.essai.vide) {
+                fenetre.essai.vide = true
+                var attenteVidage = Qt.createQmlObject('import QtQuick; Timer {}', fenetre)
+                attenteVidage.interval = (parseInt(identifiantsEssai.dossier) || 10) * 1000
+                attenteVidage.triggered.connect(function() {
+                    dlgViderCorbeilles.open()
+                    dlgViderCorbeilles.accept()
+                    console.log("scenario: vidage demandé |", messageEtat.texte)
+                })
+                attenteVidage.start()
+                return
+            }
             // Scénario « historique » : douze recherches passées, proposées
             // sous le champ (dix visibles, un ascenseur).
             if (fenetre.essai && fenetre.essai.scenario === "historique" && !fenetre.essai.cherche) {
@@ -5494,9 +5511,13 @@ ApplicationWindow {
             messageEtat.texte = fenetre.accord(fenetre.messagesVides,
                 qsTr("message effacé des corbeilles et indésirables."),
                 qsTr("messages effacés des corbeilles et indésirables."))
+            if (fenetre.essai && fenetre.essai.scenario === "vidage")
+                fenetre.bilanScenarioVidage("vidées, " + nombre + " message(s) | " + messageEtat.texte)
         }
 
         function onEchec(compte, etape, message) {
+            if (fenetre.essai && fenetre.essai.scenario === "vidage")
+                fenetre.bilanScenarioVidage("échec du compte " + compte + " | étape " + etape + " | " + message)
             if (etape === "tri") {
                 // Le compte des déplacements en cours n'est pas touché ici : un
                 // déplacement rend toujours « deplacementTermine », réussi ou
@@ -7191,6 +7212,25 @@ ApplicationWindow {
         }
         for (var i = 0; i < comptes.length; ++i)
             connecterCompte(comptes[i])
+    }
+
+    /// Scénario « vidage » : chaque issue, puis l'état des comptes cinq
+    /// secondes après la dernière — le 01/10, ils étaient tous passés en
+    /// « erreur » après un vidage.
+    function bilanScenarioVidage(issue) {
+        console.log("scenario: " + issue)
+        if (!essai.bilanVidage) {
+            essai.bilanVidage = Qt.createQmlObject('import QtQuick; Timer { interval: 5000 }', fenetre)
+            essai.bilanVidage.triggered.connect(function() {
+                JSON.parse(boite.arborescence(false))
+                    .filter(function(l) { return l.genre === "compte" })
+                    .forEach(function(l) {
+                        console.log("scenario: compte", l.adresse, "| état :", l.etat, "| motif :", l.motif || "—")
+                    })
+                Qt.quit()
+            })
+        }
+        essai.bilanVidage.restart()
     }
 
     /// Scénario « sauvegarde » : des réglages, une signature avec son image

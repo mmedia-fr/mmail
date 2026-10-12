@@ -130,6 +130,22 @@ ApplicationWindow {
         // presse-papier, sauf ce qu'un autre logiciel vient d'y déposer.
         property bool copieAuto: true
     }
+
+    // Android : Qt montre la barre d'Android (Copier, Tout sélectionner) tant
+    // qu'un texte en lecture seule garde le focus et une sélection, et ne la
+    // retire sur aucune autre demande (qandroidinputcontext.cpp, Qt 6.8). Un
+    // toucher n'importe où dans la fenêtre — le corps du message comme la
+    // liste, dont les lignes ne prennent pas le focus — retire donc la
+    // sélection, et la barre avec. Gestionnaire passif : il voit le toucher
+    // sans le prendre à l'élément touché. L'appui long n'est pas un toucher.
+    TapHandler {
+        id: androidSansSelection
+        parent: fenetre.contentItem
+        enabled: Qt.platform.os === "android" && vueCorps.selectedText.length > 0
+        acceptedDevices: PointerDevice.TouchScreen
+        gesturePolicy: TapHandler.DragThreshold
+        onTapped: vueCorps.deselect()
+    }
     readonly property string noyau: socle.noyau
     // Comptes du profil, pour le menu « Comptes » : { compte, adresse, hote }.
     property var comptesConnus: []
@@ -1628,6 +1644,15 @@ ApplicationWindow {
                 clip: true
                 contentWidth: fenetre.sourceVisible ? -1 : availableWidth
 
+                // Android : faire défiler le message retire la sélection, et
+                // avec elle la barre d'Android (cf. fenetre.androidSansSelection).
+                Connections {
+                    target: cadreCorps.contentItem
+                    ignoreUnknownSignals: true
+                    enabled: Qt.platform.os === "android"
+                    function onMovementStarted() { vueCorps.deselect() }
+                }
+
                 TextArea {
                     id: vueCorps
                     readOnly: true
@@ -1674,13 +1699,21 @@ ApplicationWindow {
                         if (touche.matches(StandardKey.Copy) && selectedText.length > 0) {
                             fenetre.copierTexte(selectedText, fenetre.sourceVisible ? "source" : "message")
                             touche.accepted = true
+                            // « Copier » de la barre d'Android passe par ici :
+                            // la copie faite, la sélection et la barre s'en vont.
+                            if (Qt.platform.os === "android")
+                                deselect()
                         }
                     }
                     TapHandler {
                         acceptedButtons: Qt.RightButton
                         onTapped: menuCorps.popup()
                     }
-                    onPressAndHold: if (fenetre.compact) menuCorps.popup()
+                    // Sous Android, l'appui long est à Android : il choisit le mot
+                    // et ouvre sa barre (Copier, Tout sélectionner). Le menu de
+                    // MMail, ouvert par-dessus, lui prenait le focus et le
+                    // rendait au texte, ce qui rouvrait la barre.
+                    onPressAndHold: if (fenetre.compact && Qt.platform.os !== "android") menuCorps.popup()
 
                     WheelHandler {
                         acceptedModifiers: Qt.ControlModifier
@@ -1961,8 +1994,10 @@ ApplicationWindow {
         return Date.now() / 1000
     }
 
+    /// Pas de copie automatique sous Android : la barre d'Android a « Copier »,
+    /// et chaque dépôt au presse-papier y fait paraître un aperçu (Android 13).
     function selectionChangee() {
-        if (reglagesEdition.copieAuto)
+        if (reglagesEdition.copieAuto && Qt.platform.os !== "android")
             minuteurSelection.restart()
     }
 
@@ -4766,7 +4801,8 @@ ApplicationWindow {
                     + "s'affiche dans la barre du bas. "
                     + "Le bouton « Source » affiche le message brut, en-têtes compris. Un texte "
                     + "sélectionné part au presse-papier, sauf ce qu'un autre logiciel vient d'y "
-                    + "déposer, protégé une minute.<br><br>"
+                    + "déposer, protégé une minute. Sous Android, l'appui long choisit un mot et ouvre "
+                    + "la barre d'Android (Copier, Tout sélectionner) ; un toucher la referme.<br><br>"
                     + "<b>Pièces jointes</b><br>"
                     + "Une ligne par pièce sous l'en-tête du message : son type, son nom, sa taille, "
                     + "« Ouvrir » et « Enregistrer sous… ». Clic droit sur une pièce : « Ouvrir avec… » un "

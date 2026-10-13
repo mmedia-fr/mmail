@@ -1542,8 +1542,11 @@ ApplicationWindow {
                                                                : fenetre.logicielPour(modelData.nom)
                             Layout.fillWidth: true
                             spacing: 8
+                            // Au doigt, c'est l'appui long ci-dessous : le
+                            // toucher ne doit pas passer pour un clic droit.
                             TapHandler {
                                 acceptedButtons: Qt.RightButton
+                                acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad | PointerDevice.Stylus
                                 onTapped: menuPiece.ouvrir(lignePiece.modelData, lignePiece)
                             }
                             TapHandler {
@@ -1705,8 +1708,12 @@ ApplicationWindow {
                                 deselect()
                         }
                     }
+                    // Clic droit de la souris seulement : un TapHandler ne trie
+                    // les boutons que pour la souris, et le simple toucher d'un
+                    // doigt ouvrait ce menu (constaté le 13/10 sous Android).
                     TapHandler {
                         acceptedButtons: Qt.RightButton
+                        acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad | PointerDevice.Stylus
                         onTapped: menuCorps.popup()
                     }
                     // Sous Android, l'appui long est à Android : il choisit le mot

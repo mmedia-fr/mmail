@@ -61,9 +61,9 @@ const PORTEE_AUTORISATION: &str = "offline_access openid email \
 const PORTEE_CODE: &str = "offline_access openid email https://outlook.office.com/IMAP.AccessAsUser.All";
 
 /// Identifiant de l'application « MMail » dans l'annuaire Entra où elle est
-/// inscrite. Public par nature (application sans secret) ; vide tant qu'elle
-/// ne l'est pas.
-const MICROSOFT_CLIENT_ID: &str = "";
+/// inscrite (éditeur `mmedia.fr`). Public par nature : application sans
+/// secret, que toute page de connexion affiche.
+const MICROSOFT_CLIENT_ID: &str = "7b6c8863-79ca-42b3-8149-313df37a3993";
 
 /// Graph, pour le compte de la personne connectée.
 const GRAPH: &str = "https://graph.microsoft.com/v1.0/me";

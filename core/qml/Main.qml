@@ -3971,10 +3971,7 @@ ApplicationWindow {
             visible: Qt.platform.os !== "android"
             height: visible ? implicitHeight : 0
             enabled: menuPiece.piece !== null && !menuPiece.piece.risquee
-            onTriggered: {
-                dlgChoisirLogiciel.piece = menuPiece.piece
-                dlgChoisirLogiciel.open()
-            }
+            onTriggered: dlgChoisirLogiciel.choisir(menuPiece.piece, false)
         }
         MenuItem {
             text: qsTr("Enregistrer sous…")
@@ -4012,14 +4009,22 @@ ApplicationWindow {
     }
 
     // « Ouvrir avec… » : un logiciel du poste, pour cette fois ou pour toutes
-    // les pièces de la même extension (décision 9).
+    // les pièces de la même extension (décision 9). `sansLogiciel` : le
+    // système n'en connaît aucun pour ce type, le choix est alors retenu
+    // d'avance (cf. ouvrirPiece).
     FileDialog {
         id: dlgChoisirLogiciel
         property var piece: null
+        property bool sansLogiciel: false
+        function choisir(p, sans) {
+            piece = p
+            sansLogiciel = sans
+            open()
+        }
         title: qsTr("Ouvrir « %1 » avec…").arg(piece ? piece.nom : "")
         fileMode: FileDialog.OpenFile
         nameFilters: Qt.platform.os === "windows" ? [qsTr("Programmes (*.exe)"), qsTr("Tous les fichiers (*)")] : []
-        onAccepted: dlgOuvrirAvec.ouvrir(piece, selectedFile.toString())
+        onAccepted: dlgOuvrirAvec.ouvrir(piece, selectedFile.toString(), sansLogiciel)
     }
 
     Dialog {
@@ -4027,10 +4032,10 @@ ApplicationWindow {
         property var piece: null
         property string programme: ""
         readonly property string extension: piece ? fenetre.extensionDe(piece.nom) : ""
-        function ouvrir(p, prog) {
+        function ouvrir(p, prog, toujours) {
             piece = p
             programme = prog
-            toujoursAvec.checked = false
+            toujoursAvec.checked = toujours === true
             open()
         }
         title: qsTr("Ouvrir avec %1").arg(lanceur.nom(programme))
@@ -5044,7 +5049,8 @@ ApplicationWindow {
                     + "Une ligne par pièce sous l'en-tête du message : son type, son nom, sa taille, "
                     + "« Ouvrir » et « Enregistrer sous… ». Clic droit sur une pièce : « Ouvrir avec… » un "
                     + "autre logiciel, pour cette fois ou pour tous les fichiers du même type (menu "
-                    + "Affichage, « Logiciels d'ouverture… », pour les revoir) ; « Joindre au message en "
+                    + "Affichage, « Logiciels d'ouverture… », pour les revoir) ; un type que le système ne "
+                    + "sait pas ouvrir fait choisir le logiciel, retenu d'emblée ; « Joindre au message en "
                     + "cours » ou « Joindre à un nouveau message ». Un programme ou un script ne s'ouvre "
                     + "pas depuis MMail, il s'enregistre.")
             }
@@ -6780,12 +6786,70 @@ ApplicationWindow {
             vue = 1
     }
 
+    /// Pose ou met à jour la boîte unifiée, ligne à ligne : elle se relit à
+    /// chaque changement d'un compte — un message marqué lu au clic suffit —,
+    /// et la vider pour la remplir ramenait la liste en haut quand on était
+    /// descendu (constaté le 14/10). Les lignes restées en place gardent la
+    /// leur, et la vue sa position.
     function poserBoitesUnifiees() {
-        poserListe(JSON.parse(boite.boitesDeReception()).map(function(r) {
+        arreterSuite()
+        var lignes = JSON.parse(boite.boitesDeReception()).map(function(r) {
             r.cheminAffiche = cheminResultat(r)
             delete r.segments
             return r
-        }))
+        }).filter(function(r) {
+            return fenetre.enDeplacement[r.compte + "|" + r.chemin + "|" + r.uid] !== true
+        })
+        var cle = function(m) { return fenetre.cleResultat(m.compte, m.chemin, m.uid) }
+        var voulues = {}
+        for (var i = 0; i < lignes.length; ++i)
+            voulues[cle(lignes[i])] = true
+        if (modeleMessages.count === 0) {
+            modeleMessages.append(lignes)
+        } else {
+            var dansLaListe = {}
+            for (var k = modeleMessages.count - 1; k >= 0; --k) {
+                var c = cle(modeleMessages.get(k))
+                if (voulues[c])
+                    dansLaListe[c] = true
+                else
+                    modeleMessages.remove(k)
+            }
+            // Le noyau rend les lignes dans l'ordre de la liste : chacune est
+            // à son rang, à mettre à jour, à insérer, ou plus bas — deux
+            // messages de même date peuvent changer d'ordre d'une lecture à
+            // l'autre.
+            for (var j = 0; j < lignes.length; ++j) {
+                var l = lignes[j]
+                var cl = cle(l)
+                if (j < modeleMessages.count && cle(modeleMessages.get(j)) === cl) {
+                    modeleMessages.set(j, l)
+                } else if (!dansLaListe[cl]) {
+                    modeleMessages.insert(j, l)
+                } else {
+                    for (var a = j + 1; a < modeleMessages.count; ++a) {
+                        if (cle(modeleMessages.get(a)) === cl) {
+                            modeleMessages.move(a, j, 1)
+                            break
+                        }
+                    }
+                    modeleMessages.set(j, l)
+                }
+            }
+        }
+        // Même règle que poserListe : la sélection ne garde que les messages
+        // encore là.
+        var presents = {}
+        for (var p = 0; p < lignes.length; ++p)
+            presents[lignes[p].uid] = true
+        var absents = {}
+        for (var uid in selection)
+            if (!presents[uid])
+                absents[uid] = true
+        if (uidCourant > 0 && !presents[uidCourant])
+            absents[uidCourant] = true
+        oublierAbsents(absents)
+        majInfoDossier()
     }
 
     function cleResultat(compte, chemin, uid) {
@@ -7272,6 +7336,16 @@ ApplicationWindow {
     function ouvrirPiece(piece, programme) {
         if (!piece || piece.risquee)
             return
+        // Un type que Windows ne sait pas ouvrir : il demanderait lui-même
+        // quel logiciel prendre, et ce choix échappait à MMail (constaté le
+        // 14/10). MMail le fait donc choisir, « Toujours… » coché d'avance.
+        if (!programme && !essai && Qt.platform.os === "windows"
+                && logicielPour(piece.nom).length === 0 && !lanceur.associe(extensionDe(piece.nom))) {
+            messageEtat.texte = qsTr("Aucun logiciel n'ouvre les fichiers « %1 » sur ce poste : choisissez-en un.")
+                                .arg(piece.nom)
+            dlgChoisirLogiciel.choisir(piece, true)
+            return
+        }
         ouvertureAvec = programme ? { extension: extensionDe(piece.nom), programme: programme } : null
         if (boite.ouvrirPiece(uidCourant, piece.indice))
             messageEtat.texte = qsTr("Préparation de %1…").arg(piece.nom)
@@ -7484,6 +7558,42 @@ ApplicationWindow {
                     Qt.quit()
                 })
                 attenteUnifiee.start()
+            }
+            // Scénario « unifiee-position » : la boîte unifiée descendue en bas,
+            // le dernier message choisi — au téléphone, la liste cède la place
+            // au message —, marqué lu par le serveur, puis non lu et lu : autant
+            // de relectures de la liste. Revenue à l'écran, elle doit être où
+            // elle était.
+            if (essai.scenario === "unifiee-position") {
+                var pas = Qt.createQmlObject('import QtQuick; Timer { interval: 1000; repeat: true }', fenetre)
+                var etat = { n: 0, avant: 0, bas: 0, uid: "" }
+                pas.triggered.connect(function() {
+                    etat.n += 1
+                    if (etat.n === 12) {
+                        ouvrirBoitesUnifiees()
+                    } else if (etat.n === 13) {
+                        vueMessages.positionViewAtEnd()
+                    } else if (etat.n === 14) {
+                        etat.avant = vueMessages.contentY
+                        etat.bas = modeleMessages.count - 1
+                        etat.uid = String(modeleMessages.get(etat.bas).uid)
+                        choisir(etat.bas, 0)
+                    } else if (etat.n === 19) {
+                        boite.marquerLu(etat.uid, false)
+                    } else if (etat.n === 20) {
+                        boite.marquerLu(etat.uid, true)
+                    } else if (etat.n === 22) {
+                        if (compact)
+                            vue = 1
+                    } else if (etat.n === 23) {
+                        pas.stop()
+                        console.log("scenario: unifiée", modeleMessages.count, "messages | compacte", compact,
+                                    "| position avant", Math.round(etat.avant), "après", Math.round(vueMessages.contentY),
+                                    "| ligne choisie", vueMessages.currentIndex, "sur", etat.bas)
+                        Qt.quit()
+                    }
+                })
+                pas.start()
             }
             if (essai.scenario.indexOf("mise-a-jour") === 0) {
                 reglagesMiseAJour.version = ""
@@ -8245,6 +8355,12 @@ ApplicationWindow {
             return "règle du presse-papier : protection contre sa propre copie"
         if (premierePolice(["police-inexistante", "autre-inexistante"]) !== "autre-inexistante")
             return "repli de police"
+        // Associations des types de fichiers : un texte s'ouvre, une
+        // extension inventée non (MMail fait alors choisir le logiciel).
+        if (!lanceur.associe("txt"))
+            return "aucun logiciel associé aux fichiers .txt"
+        if (Qt.platform.os === "windows" && lanceur.associe("mmailessai"))
+            return "un logiciel associé à une extension inexistante"
         // La rubrique Favoris est toujours là, même vide.
         if (arborescence.length === 0 || arborescence[0].genre !== "rubrique")
             return "rubrique Favoris absente"

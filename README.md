@@ -131,8 +131,10 @@ de projet interne.
   « Enregistrer sous… » ; clic droit, « Ouvrir avec… » un logiciel choisi, pour
   cette fois ou pour tous les fichiers du même type — retenu sur ce poste
   seulement, revu par « Logiciels d'ouverture… » (menu « Affichage ») ; sans
-  choix, le logiciel du système. Un programme ou un script (`.exe`, `.js`,
-  `.bat`…) ne s'ouvre pas depuis MMail, il s'enregistre ;
+  choix, le logiciel du système. Sous Windows, un type que le système ne sait
+  pas ouvrir fait choisir le logiciel par MMail, qui le retient d'emblée :
+  choisi dans la fenêtre de Windows, il lui échappait. Un programme ou un
+  script (`.exe`, `.js`, `.bat`…) ne s'ouvre pas depuis MMail, il s'enregistre ;
 - **zoom propre à chaque colonne** : Ctrl + molette sur la colonne, ou Ctrl +,
   Ctrl − et Ctrl 0 sur la dernière colonne survolée ; pincement au doigt ;
 - **quatre apparences**, celles de MMdedit : classique (Windows 9x), moderne

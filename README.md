@@ -216,11 +216,21 @@ serveur. Un serveur saisi à la main n'est jamais remplacé.
 L'envoi passe par défaut par le serveur de lecture, sur le port 465. Quand le
 fournisseur reçoit l'envoi ailleurs — Orange lit sur `imap.orange.fr` et
 reçoit sur `smtp.orange.fr` —, le compte porte un **serveur d'envoi** : champ
-« Serveur d'envoi » à l'ajout d'un compte, ou « Serveur d'envoi… » au clic
-droit sur un compte déjà présent. Même port (465, TLS d'emblée), mêmes
+« Serveur d'envoi » à l'ajout d'un compte, ou « Modifier le compte… » pour un
+compte déjà présent. Même port (465, TLS d'emblée), mêmes
 identifiants que la lecture ; laissé vide, c'est de nouveau le serveur de
 lecture. Il vaut dès l'envoi suivant, sans reconnexion, et suit la sauvegarde
 de la configuration.
+
+### Modifier un compte
+
+« Comptes › Modifier un compte », ou « Modifier ce compte… » au clic droit sur
+le compte, rouvre la fenêtre de l'ajout pour un compte présent : serveur de
+lecture, serveur d'envoi, mot de passe (laissé vide, il ne change pas), et de
+là « Nom et signature… ». L'adresse ne change pas : c'est elle qui désigne le
+compte, son index et ses réglages. Un nouveau serveur de lecture reprend le
+mot de passe mémorisé, qui change de clé dans le coffre avec lui ; s'il est
+injoignable, la fenêtre revient avec le motif.
 
 ### Lien de configuration
 

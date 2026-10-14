@@ -255,13 +255,17 @@ ne vivent qu'en mémoire.
 - **Lecture** en IMAPS sur `outlook.office365.com` (`AUTHENTICATE XOAUTH2`) ;
   **envoi par Microsoft Graph** (`Mail.Send`) et non par SMTP, coupé par
   défaut dans Office 365. Microsoft range lui-même la copie dans « Éléments
-  envoyés ».
+  envoyés ». Un message trop lourd pour une seule requête Graph (4 Mo) passe
+  par un brouillon (`Mail.ReadWrite`) : MMail le crée sans ses plus grosses
+  pièces jointes, les y ajoute une à une — par morceaux au-delà de 3 Mo —,
+  puis l'envoie. La limite est alors celle de la boîte : 35 Mo par message
+  par défaut dans Office 365, 150 Mo par pièce jointe au plus.
 - « Modifier le compte… » n'y propose ni serveur ni mot de passe, mais « Se
   reconnecter à Microsoft… ».
 
 Limites : IMAP doit être permis pour la boîte (c'est le réglage par défaut
-d'Office 365) ; un message envoyé par Graph pèse 3 Mo au plus, pièces jointes
-comprises ; pas d'accusé de remise ; pas d'agenda (Office 365 ne parle pas
+d'Office 365) ; le texte et les images du corps d'un message tiennent en
+3 Mo — les pièces jointes, à part, n'y comptent pas ; pas d'accusé de remise ; pas d'agenda (Office 365 ne parle pas
 CalDAV) ; la sauvegarde de la configuration garde le compte, mais pas son
 jeton — il se reconnecte à Microsoft sur le poste où elle est remise — et ne
 se chiffre que par les comptes à mot de passe.

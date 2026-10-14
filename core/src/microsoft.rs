@@ -21,7 +21,9 @@
 //! L'envoi passe par Graph et non par SMTP : le SMTP authentifié est coupé par
 //! défaut dans Office 365, et le rétablir est l'affaire de l'administrateur de
 //! chaque organisation. Graph range lui-même la copie dans « Éléments
-//! envoyés ».
+//! envoyés ». Une requête Graph pèse 4 Mo au plus : un message plus lourd
+//! passe par un brouillon, auquel les pièces jointes s'ajoutent à part
+//! (`Mail.ReadWrite`), avant d'être envoyé.
 
 use std::io::{ErrorKind, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -44,14 +46,18 @@ pub const HOTE_IMAP: &str = "outlook.office365.com";
 /// Lecture : IMAP pour le compte de la personne connectée.
 pub const PORTEE_IMAP: &str = "offline_access https://outlook.office.com/IMAP.AccessAsUser.All";
 
-/// Envoi : Graph, `Mail.Send`.
-pub const PORTEE_ENVOI: &str = "offline_access https://graph.microsoft.com/Mail.Send";
+/// Envoi : Graph, `Mail.Send`, et `Mail.ReadWrite` pour le brouillon d'un
+/// message trop lourd pour une seule requête. IMAP donne déjà accès à toute
+/// la boîte : ce droit n'ouvre rien de plus sur les messages.
+pub const PORTEE_ENVOI: &str =
+    "offline_access https://graph.microsoft.com/Mail.Send https://graph.microsoft.com/Mail.ReadWrite";
 
 /// Ce que la connexion demande : les deux ressources d'un coup, pour un seul
 /// consentement ; `openid email` donnent l'adresse du compte. Le code, lui,
 /// ne s'échange que contre un jeton d'une seule ressource (`PORTEE_CODE`).
 const PORTEE_AUTORISATION: &str = "offline_access openid email \
-     https://outlook.office.com/IMAP.AccessAsUser.All https://graph.microsoft.com/Mail.Send";
+     https://outlook.office.com/IMAP.AccessAsUser.All https://graph.microsoft.com/Mail.Send \
+     https://graph.microsoft.com/Mail.ReadWrite";
 const PORTEE_CODE: &str = "offline_access openid email https://outlook.office.com/IMAP.AccessAsUser.All";
 
 /// Identifiant de l'application « MMail » dans l'annuaire Entra où elle est
@@ -59,8 +65,24 @@ const PORTEE_CODE: &str = "offline_access openid email https://outlook.office.co
 /// ne l'est pas.
 const MICROSOFT_CLIENT_ID: &str = "";
 
-/// Envoi par Graph : une requête de 4 Mo au plus, message en base64 compris.
-const ENVOI_MAX: usize = 4 * 1024 * 1024;
+/// Graph, pour le compte de la personne connectée.
+const GRAPH: &str = "https://graph.microsoft.com/v1.0/me";
+
+/// Corps d'une requête Graph, message en base64 compris : 4 Mo annoncés, sans
+/// dire s'il s'agit de millions d'octets ou de Mio — d'où la marge.
+const ENVOI_MAX: usize = 3_900_000;
+
+/// Morceau d'une pièce jointe déposée par une session de dépôt : un multiple
+/// de 320 Kio, sous la limite d'une requête.
+const MORCEAU: usize = 10 * 320 * 1024;
+
+/// Pièce jointe la plus lourde que Graph accepte.
+const PIECE_MAX: usize = 150 * 1024 * 1024;
+
+/// Réponse attendue de Graph : un accusé, ou la description d'un message —
+/// son corps compris, pour un brouillon.
+const REPONSE_MAX: usize = 256 * 1024;
+const BROUILLON_MAX: usize = 8 * 1024 * 1024;
 
 /// Délai laissé à la personne pour se connecter dans son navigateur.
 pub const DELAI_CONNEXION: Duration = Duration::from_secs(300);
@@ -473,39 +495,289 @@ fn echeance(duree: u64) -> Instant {
 
 // -------------------------------------------------------------------- envoi
 
+/// Ce qui porte les requêtes : `http::envoyer`, ou un faux Graph dans les
+/// essais.
+type Transport<'a> = dyn FnMut(&Demande) -> crate::imap::Resultat<http::Reponse> + 'a;
+
 /// Envoie un message par Graph : le MIME complet, en base64 (forme documentée
 /// de `sendMail`). Graph lit les destinataires dans les en-têtes : ceux de
 /// l'enveloppe qui n'y figurent pas — les Cci — y sont ajoutés en `Bcc`, que
 /// Microsoft retire à la remise.
+///
+/// Trop lourd pour une requête, le message passe par un brouillon : créé sans
+/// ses plus grosses pièces jointes, complété de celles-ci une à une — par
+/// morceaux au-delà de la limite d'une requête —, puis envoyé. Le brouillon
+/// d'un envoi qui échoue en route est supprimé.
 pub fn envoyer(jeton: &str, octets: &[u8], destinataires: &[String]) -> Result<(), ErreurOAuth> {
+    envoyer_par(&mut |d: &Demande| http::envoyer(d), jeton, octets, destinataires)
+}
+
+fn envoyer_par(t: &mut Transport, jeton: &str, octets: &[u8], destinataires: &[String]) -> Result<(), ErreurOAuth> {
     let message = avec_cci(octets, destinataires);
-    let corps = crate::smtp::base64(&message);
-    if corps.len() > ENVOI_MAX {
-        return Err(ErreurOAuth::refus(
-            "taille",
-            &format!(
-                "message trop volumineux pour l'envoi par Microsoft : {} Mo, 3 Mo au plus",
-                message.len().div_ceil(1_048_576)
-            ),
-        ));
+    if longueur_base64(message.len()) <= ENVOI_MAX {
+        let corps = crate::smtp::base64(&message);
+        let r = appeler(t, jeton, "POST", &format!("{GRAPH}/sendMail"), "text/plain", corps.as_bytes(), REPONSE_MAX)?;
+        return succes(&r);
     }
-    let entetes = [
-        ("Authorization", format!("Bearer {jeton}")),
-        ("Content-Type", "text/plain".to_string()),
-    ];
-    let reponse = http::envoyer(&Demande {
-        methode: "POST",
-        url: "https://graph.microsoft.com/v1.0/me/sendMail",
-        accepte: "application/json",
-        entetes: &entetes,
-        corps: corps.as_bytes(),
-        taille_max: 256 * 1024,
+    let (reduit, pieces) = alleger(&message)?;
+    let corps = crate::smtp::base64(&reduit);
+    let r = appeler(t, jeton, "POST", &format!("{GRAPH}/messages"), "text/plain", corps.as_bytes(), BROUILLON_MAX)?;
+    let brouillon = reponse_json(&r)?;
+    let id = brouillon
+        .get("id")
+        .and_then(|v| v.as_str())
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| ErreurOAuth::Reseau("brouillon créé sans identifiant".into()))?
+        .to_string();
+    let adresse = format!("{GRAPH}/messages/{}", encoder(&id));
+    let issue = completer(t, jeton, &adresse, &brouillon, destinataires, &pieces);
+    if issue.is_err() {
+        // Un brouillon à moitié fait n'a rien à faire dans la boîte : le
+        // message reste à envoyer dans MMail.
+        let _ = appeler(t, jeton, "DELETE", &adresse, "", b"", REPONSE_MAX);
+    }
+    issue
+}
+
+/// Complète le brouillon — Cci manquants, pièces jointes — et l'envoie.
+fn completer(
+    t: &mut Transport,
+    jeton: &str,
+    adresse: &str,
+    brouillon: &serde_json::Value,
+    destinataires: &[String],
+    pieces: &[Piece],
+) -> Result<(), ErreurOAuth> {
+    // Que Graph tire les Cci de l'en-tête `Bcc` d'un brouillon n'est pas
+    // documenté : ce que porte le brouillon fait foi, et les manquants sont
+    // ajoutés.
+    let liste = |cle: &str| -> Vec<String> {
+        brouillon
+            .get(cle)
+            .and_then(|v| v.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|d| d.pointer("/emailAddress/address").and_then(|a| a.as_str()))
+            .map(|a| a.trim().to_lowercase())
+            .collect()
+    };
+    let presents: Vec<String> = ["toRecipients", "ccRecipients", "bccRecipients"].iter().flat_map(|c| liste(c)).collect();
+    let manquants: Vec<String> = destinataires
+        .iter()
+        .map(|d| d.trim().to_lowercase())
+        .filter(|d| !presents.contains(d))
+        .collect();
+    if !manquants.is_empty() {
+        let cci: Vec<serde_json::Value> = liste("bccRecipients")
+            .into_iter()
+            .chain(manquants)
+            .map(|a| serde_json::json!({ "emailAddress": { "address": a } }))
+            .collect();
+        let corps = serde_json::json!({ "bccRecipients": cci }).to_string();
+        succes(&appeler(t, jeton, "PATCH", adresse, "application/json", corps.as_bytes(), BROUILLON_MAX)?)?;
+    }
+    for p in pieces {
+        joindre(t, jeton, adresse, p)?;
+    }
+    succes(&appeler(t, jeton, "POST", &format!("{adresse}/send"), "", b"", REPONSE_MAX)?)
+}
+
+/// Ajoute une pièce jointe au brouillon : en une requête si elle y tient,
+/// sinon par une session de dépôt, morceau par morceau.
+fn joindre(t: &mut Transport, jeton: &str, brouillon: &str, p: &Piece) -> Result<(), ErreurOAuth> {
+    let pieces = format!("{brouillon}/attachments");
+    if longueur_base64(p.contenu.len()) + p.nom.len() + 1024 <= ENVOI_MAX {
+        let corps = serde_json::json!({
+            "@odata.type": "#microsoft.graph.fileAttachment",
+            "name": p.nom,
+            "contentType": p.type_mime,
+            "contentBytes": crate::smtp::base64(&p.contenu),
+        })
+        .to_string();
+        return succes(&appeler(t, jeton, "POST", &pieces, "application/json", corps.as_bytes(), REPONSE_MAX)?);
+    }
+    let corps = serde_json::json!({
+        "AttachmentItem": {
+            "attachmentType": "file",
+            "name": p.nom,
+            "size": p.contenu.len(),
+            "contentType": p.type_mime,
+        }
     })
-    .map_err(|e| ErreurOAuth::Reseau(e.to_string()))?;
-    if (200..300).contains(&reponse.statut) {
-        return Ok(());
+    .to_string();
+    let r = appeler(t, jeton, "POST", &format!("{pieces}/createUploadSession"), "application/json", corps.as_bytes(), REPONSE_MAX)?;
+    let session = reponse_json(&r)?;
+    let depot = session
+        .get("uploadUrl")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| ErreurOAuth::Reseau("session de dépôt sans adresse".into()))?;
+    let total = p.contenu.len();
+    for (i, morceau) in p.contenu.chunks(MORCEAU).enumerate() {
+        let debut = i * MORCEAU;
+        let entetes = [
+            ("Content-Type", "application/octet-stream".to_string()),
+            ("Content-Range", format!("bytes {debut}-{}/{total}", debut + morceau.len() - 1)),
+        ];
+        // L'adresse de dépôt porte sa propre autorisation : Graph refuse
+        // qu'on y joigne le jeton.
+        let r = t(&Demande {
+            methode: "PUT",
+            url: depot,
+            accepte: "application/json",
+            entetes: &entetes,
+            corps: morceau,
+            taille_max: REPONSE_MAX,
+        })
+        .map_err(|e| ErreurOAuth::Reseau(e.to_string()))?;
+        succes(&r)?;
     }
-    Err(erreur_graph(reponse.statut, &reponse.corps))
+    Ok(())
+}
+
+/// Une requête à Graph, avec le jeton.
+fn appeler(
+    t: &mut Transport,
+    jeton: &str,
+    methode: &str,
+    url: &str,
+    type_contenu: &str,
+    corps: &[u8],
+    taille_max: usize,
+) -> Result<http::Reponse, ErreurOAuth> {
+    let mut entetes = vec![("Authorization", format!("Bearer {jeton}"))];
+    if !type_contenu.is_empty() {
+        entetes.push(("Content-Type", type_contenu.to_string()));
+    }
+    t(&Demande { methode, url, accepte: "application/json", entetes: &entetes, corps, taille_max })
+        .map_err(|e| ErreurOAuth::Reseau(e.to_string()))
+}
+
+fn succes(r: &http::Reponse) -> Result<(), ErreurOAuth> {
+    if (200..300).contains(&r.statut) {
+        Ok(())
+    } else {
+        Err(erreur_graph(r.statut, &r.corps))
+    }
+}
+
+fn reponse_json(r: &http::Reponse) -> Result<serde_json::Value, ErreurOAuth> {
+    succes(r)?;
+    serde_json::from_slice(&r.corps)
+        .map_err(|_| ErreurOAuth::Reseau(format!("réponse illisible de Graph (HTTP {})", r.statut)))
+}
+
+fn longueur_base64(n: usize) -> usize {
+    n.div_ceil(3) * 4
+}
+
+/// Pièce jointe retirée du message, à joindre au brouillon.
+#[derive(Debug, Clone, PartialEq)]
+struct Piece {
+    nom: String,
+    type_mime: String,
+    contenu: Vec<u8>,
+}
+
+/// Retire du message ses plus grosses pièces jointes, jusqu'à ce qu'il tienne
+/// dans une requête. Seules les pièces jointes en partent : les images du
+/// corps y restent, à leur place.
+fn alleger(message: &[u8]) -> Result<(Vec<u8>, Vec<Piece>), ErreurOAuth> {
+    use mail_parser::MimeHeaders;
+    let trop = |texte: String| ErreurOAuth::refus("taille", &texte);
+    let analyse = mail_parser::MessageParser::default()
+        .parse(message)
+        .ok_or_else(|| ErreurOAuth::refus("message", "message illisible"))?;
+    let mut candidats: Vec<(std::ops::Range<usize>, &mail_parser::MessagePart)> = analyse
+        .parts
+        .iter()
+        .skip(1)
+        .filter(|p| !p.is_multipart() && p.content_disposition().is_some_and(|d| d.is_attachment()))
+        .filter_map(|p| Some((plage(message, p)?, p)))
+        .collect();
+    candidats.sort_by_key(|(r, _)| std::cmp::Reverse(r.len()));
+    let mut reste = message.len();
+    let mut retires = Vec::new();
+    for (r, p) in candidats {
+        if longueur_base64(reste) <= ENVOI_MAX {
+            break;
+        }
+        reste -= r.len();
+        let piece = piece(message, p).ok_or_else(|| ErreurOAuth::refus("message", "pièce jointe illisible"))?;
+        if piece.contenu.len() > PIECE_MAX {
+            return Err(trop(format!(
+                "pièce jointe « {} » trop volumineuse pour Microsoft : {} Mo, 150 Mo au plus",
+                piece.nom,
+                piece.contenu.len().div_ceil(1_048_576)
+            )));
+        }
+        retires.push((r, piece));
+    }
+    if longueur_base64(reste) > ENVOI_MAX {
+        return Err(trop(format!(
+            "message trop volumineux pour l'envoi par Microsoft : le texte et les images du corps pèsent {} Mo, 3 Mo au plus",
+            reste.div_ceil(1_048_576)
+        )));
+    }
+    retires.sort_by_key(|(r, _)| r.start);
+    let mut reduit = Vec::with_capacity(reste);
+    let mut position = 0;
+    for (r, _) in &retires {
+        reduit.extend_from_slice(&message[position..r.start]);
+        position = r.end;
+    }
+    reduit.extend_from_slice(&message[position..]);
+    Ok((reduit, retires.into_iter().map(|(_, p)| p).collect()))
+}
+
+/// Ce qu'occupe une partie dans le message : du saut de ligne qui précède sa
+/// ligne de séparation (`--frontière`) jusqu'à celui qui précède la suivante.
+/// La retirer laisse un multipart bien formé.
+fn plage(message: &[u8], p: &mail_parser::MessagePart) -> Option<std::ops::Range<usize>> {
+    let (tete, corps) = (p.offset_header as usize, p.offset_body as usize);
+    let avant = message.get(..tete)?.strip_suffix(b"\n")?;
+    let avant = avant.strip_suffix(b"\r").unwrap_or(avant);
+    let ligne = avant.iter().rposition(|&c| c == b'\n')? + 1;
+    let separation = message[ligne..avant.len()].trim_ascii_end();
+    if separation.len() < 3 || !separation.starts_with(b"--") {
+        return None;
+    }
+    let debut = if ligne >= 2 && message[ligne - 2] == b'\r' { ligne - 2 } else { ligne - 1 };
+    let mut motif = b"\n".to_vec();
+    motif.extend_from_slice(separation);
+    let mut depuis = corps;
+    let suivante = loop {
+        let i = depuis + message.get(depuis..)?.windows(motif.len()).position(|f| f == motif.as_slice())?;
+        // La frontière entière, pas le début d'une autre plus longue.
+        match message.get(i + motif.len()) {
+            None | Some(b'\r' | b'\n' | b'-' | b' ' | b'\t') => break i,
+            _ => depuis = i + 1,
+        }
+    };
+    let fin = if suivante > 0 && message[suivante - 1] == b'\r' { suivante - 1 } else { suivante };
+    (debut < fin).then_some(debut..fin)
+}
+
+/// Nom, type et contenu décodé d'une pièce jointe. Décodée depuis le message
+/// brut, et non lue chez l'analyseur : il convertit en UTF-8 le texte d'un
+/// fichier, que Microsoft doit recevoir tel quel.
+fn piece(message: &[u8], p: &mail_parser::MessagePart) -> Option<Piece> {
+    use mail_parser::decoders::{base64::base64_decode, quoted_printable::quoted_printable_decode};
+    use mail_parser::{Encoding, MimeHeaders};
+    let brut = message.get(p.offset_body as usize..p.offset_end as usize)?;
+    let contenu = match p.encoding {
+        Encoding::Base64 => base64_decode(brut)?,
+        Encoding::QuotedPrintable => quoted_printable_decode(brut)?,
+        Encoding::None => brut.to_vec(),
+    };
+    let nom = p.attachment_name().filter(|n| !n.trim().is_empty()).unwrap_or("piece-jointe").to_string();
+    let type_mime = p
+        .content_type()
+        .map(|t| match t.subtype() {
+            Some(s) => format!("{}/{}", t.ctype(), s),
+            None => t.ctype().to_string(),
+        })
+        .unwrap_or_else(|| "application/octet-stream".into());
+    Some(Piece { nom, type_mime, contenu })
 }
 
 /// Refus de Graph : `{"error": {"code", "message"}}`.
@@ -588,7 +860,7 @@ mod tests {
         assert!(url.contains("&state=ETAT&code_challenge=DEFI&code_challenge_method=S256&prompt=select_account"));
         assert!(url.contains(
             "&scope=offline_access%20openid%20email%20https%3A%2F%2Foutlook.office.com%2FIMAP.AccessAsUser.All%20\
-             https%3A%2F%2Fgraph.microsoft.com%2FMail.Send&"
+             https%3A%2F%2Fgraph.microsoft.com%2FMail.Send%20https%3A%2F%2Fgraph.microsoft.com%2FMail.ReadWrite&"
         ));
         assert!(!url.contains("login_hint"));
         let url = url_autorisation("abc", "http://localhost:1", "d", "e", " jean@exemple.fr ");
@@ -722,6 +994,216 @@ mod tests {
         let avec = ["b@x.fr".to_string(), "c@x.fr".to_string(), "d@x.fr".to_string(), "e@x.fr".to_string()];
         let sortie = String::from_utf8(avec_cci(message, &avec)).unwrap();
         assert!(sortie.starts_with("Bcc: d@x.fr, e@x.fr\r\nFrom: a@x.fr\r\n"));
+    }
+
+    /// Contenu sans motif, que la compression ni le hasard n'arrangent.
+    fn octets(n: usize, graine: u32) -> Vec<u8> {
+        let mut x = graine;
+        (0..n)
+            .map(|_| {
+                x = x.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+                (x >> 16) as u8
+            })
+            .collect()
+    }
+
+    fn message_avec_pieces(pieces: &[(&str, &str, Vec<u8>)]) -> Vec<u8> {
+        let mut m = mail_builder::MessageBuilder::new()
+            .from(("Jean", "jean@exemple.fr"))
+            .to(vec![("Paul", "paul@exemple.fr")])
+            .subject("Essai")
+            .text_body("Bonjour")
+            .html_body("<p>Bonjour</p>");
+        for (nom, type_mime, contenu) in pieces {
+            m = m.attachment(type_mime.to_string(), nom.to_string(), contenu.clone());
+        }
+        m.write_to_vec().unwrap()
+    }
+
+    fn noms_des_pieces(message: &[u8]) -> Vec<String> {
+        use mail_parser::MimeHeaders;
+        let m = mail_parser::MessageParser::default().parse(message).expect("message lisible");
+        m.attachments().map(|p| p.attachment_name().unwrap_or_default().to_string()).collect()
+    }
+
+    #[test]
+    fn pieces_jointes_retirees_du_message() {
+        // Encodées en base64 dans le message, puis encodées de nouveau pour
+        // Graph : 2,5 et 1,5 Mo de fichiers n'y tiennent pas ensemble.
+        let a = octets(2_500_000, 1);
+        let b = octets(1_500_000, 2);
+        let message = message_avec_pieces(&[
+            ("a.bin", "application/octet-stream", a.clone()),
+            ("b.pdf", "application/pdf", b.clone()),
+            ("c.txt", "text/plain", b"petit".to_vec()),
+        ]);
+        let (reduit, pieces) = alleger(&message).unwrap();
+        // La plus grosse part, et elle seule : le reste tient.
+        assert_eq!(pieces, vec![Piece { nom: "a.bin".into(), type_mime: "application/octet-stream".into(), contenu: a }]);
+        assert!(longueur_base64(reduit.len()) <= ENVOI_MAX);
+        assert_eq!(noms_des_pieces(&reduit), ["b.pdf", "c.txt"]);
+        let lu = mail_parser::MessageParser::default().parse(&reduit).unwrap();
+        assert_eq!(lu.body_text(0).as_deref(), Some("Bonjour"));
+        assert_eq!(lu.attachment(0).unwrap().contents(), b.as_slice());
+
+        // Les images du corps ne partent pas : trop lourd sans pièce jointe,
+        // le message est refusé.
+        let image = octets(4_000_000, 3);
+        let lourd = mail_builder::MessageBuilder::new()
+            .from("jean@exemple.fr")
+            .to("paul@exemple.fr")
+            .html_body("<img src=\"cid:i1\">")
+            .inline("image/png", "i1", image)
+            .write_to_vec()
+            .unwrap();
+        let e = alleger(&lourd).unwrap_err();
+        assert!(matches!(e, ErreurOAuth::Refus { ref code, .. } if code == "taille"), "{e}");
+    }
+
+    #[test]
+    fn piece_jointe_rendue_telle_quelle() {
+        // Du Latin-1 en quoted-printable, du texte brut : les octets du
+        // fichier, sans conversion en UTF-8.
+        let message = b"From: a@x.fr\r\nTo: b@x.fr\r\nSubject: s\r\nMIME-Version: 1.0\r\n\
+            Content-Type: multipart/mixed; boundary=\"B\"\r\n\r\n\
+            --B\r\nContent-Type: text/plain; charset=utf-8\r\n\r\ncorps\r\n\
+            --B\r\nContent-Type: text/plain; charset=iso-8859-1\r\n\
+            Content-Disposition: attachment; filename=\"a.txt\"\r\n\
+            Content-Transfer-Encoding: quoted-printable\r\n\r\nd=E9j=E0\r\n\
+            --B\r\nContent-Type: text/csv\r\nContent-Disposition: attachment; filename=\"b.csv\"\r\n\r\nx;y\r\n1;2\r\n\
+            --B--\r\n";
+        let lu = mail_parser::MessageParser::default().parse(message).unwrap();
+        let a = piece(message, lu.attachment(0).unwrap()).unwrap();
+        assert_eq!((a.nom.as_str(), a.type_mime.as_str(), a.contenu.as_slice()), ("a.txt", "text/plain", b"d\xe9j\xe0".as_slice()));
+        let b = piece(message, lu.attachment(1).unwrap()).unwrap();
+        assert_eq!((b.nom.as_str(), b.contenu.as_slice()), ("b.csv", b"x;y\r\n1;2".as_slice()));
+
+        // Retirer les deux laisse un multipart bien formé.
+        let (r1, r2) = (plage(message, lu.attachment(0).unwrap()).unwrap(), plage(message, lu.attachment(1).unwrap()).unwrap());
+        let mut reste = message[..r1.start].to_vec();
+        reste.extend_from_slice(&message[r1.end..r2.start]);
+        reste.extend_from_slice(&message[r2.end..]);
+        assert!(String::from_utf8_lossy(&reste).ends_with("\r\n\r\n--B\r\nContent-Type: text/plain; charset=utf-8\r\n\r\ncorps\r\n--B--\r\n"));
+        assert!(noms_des_pieces(&reste).is_empty());
+    }
+
+    struct Requete {
+        methode: String,
+        url: String,
+        entetes: Vec<(String, String)>,
+        corps: Vec<u8>,
+    }
+
+    impl Requete {
+        fn entete(&self, nom: &str) -> Option<&str> {
+            self.entetes.iter().find(|(n, _)| n == nom).map(|(_, v)| v.as_str())
+        }
+    }
+
+    fn reponse(statut: u16, corps: &str) -> http::Reponse {
+        http::Reponse {
+            statut,
+            type_contenu: "application/json".into(),
+            redirection: None,
+            corps: corps.as_bytes().to_vec(),
+            adresse: String::new(),
+            entetes: Vec::new(),
+        }
+    }
+
+    /// Un faux Graph : il note les requêtes et répond comme le vrai — sauf
+    /// au dépôt des morceaux, s'il doit échouer.
+    fn graph(journal: &mut Vec<Requete>, depot_refuse: bool) -> impl FnMut(&Demande) -> crate::imap::Resultat<http::Reponse> + '_ {
+        move |d: &Demande| {
+            journal.push(Requete {
+                methode: d.methode.into(),
+                url: d.url.into(),
+                entetes: d.entetes.iter().map(|(n, v)| (n.to_string(), v.clone())).collect(),
+                corps: d.corps.to_vec(),
+            });
+            Ok(match d.methode {
+                "POST" if d.url == format!("{GRAPH}/sendMail") => reponse(202, ""),
+                "POST" if d.url == format!("{GRAPH}/messages") => reponse(
+                    201,
+                    r#"{"id":"AAMk/x=","toRecipients":[{"emailAddress":{"name":"Paul","address":"Paul@exemple.fr"}}],"bccRecipients":[]}"#,
+                ),
+                "POST" if d.url.ends_with("/createUploadSession") => {
+                    reponse(201, r#"{"uploadUrl":"https://outlook.office.com/api/v2.0/Users('u')/Messages('m')/AttachmentSessions('s')?authtoken=abc"}"#)
+                }
+                "PUT" if depot_refuse => reponse(500, r#"{"error":{"code":"ErrorInternalServerError","message":"panne"}}"#),
+                "PUT" => reponse(200, r#"{"nextExpectedRanges":[]}"#),
+                "POST" if d.url.ends_with("/send") => reponse(202, ""),
+                "PATCH" | "DELETE" => reponse(200, "{}"),
+                _ => reponse(400, r#"{"error":{"code":"Inattendu","message":"requête inattendue"}}"#),
+            })
+        }
+    }
+
+    #[test]
+    fn petit_message_en_une_requete() {
+        let message = message_avec_pieces(&[("c.txt", "text/plain", b"petit".to_vec())]);
+        let mut journal = Vec::new();
+        envoyer_par(&mut graph(&mut journal, false), "JETON", &message, &["paul@exemple.fr".into()]).unwrap();
+        assert_eq!(journal.len(), 1);
+        assert_eq!((journal[0].methode.as_str(), journal[0].url.as_str()), ("POST", "https://graph.microsoft.com/v1.0/me/sendMail"));
+        assert_eq!(journal[0].entete("Authorization"), Some("Bearer JETON"));
+        assert_eq!(crate::rendu::base64(std::str::from_utf8(&journal[0].corps).unwrap()).unwrap(), message);
+    }
+
+    #[test]
+    fn gros_message_par_un_brouillon() {
+        let gros = octets(5_000_000, 7);
+        let message = message_avec_pieces(&[
+            ("photo.jpg", "image/jpeg", gros.clone()),
+            ("devis.pdf", "application/pdf", b"%PDF-1.4".to_vec()),
+        ]);
+        let destinataires = ["paul@exemple.fr".to_string(), "cache@exemple.fr".to_string()];
+        let mut journal = Vec::new();
+        envoyer_par(&mut graph(&mut journal, false), "JETON", &message, &destinataires).unwrap();
+
+        let brouillon = format!("{GRAPH}/messages/AAMk%2Fx%3D");
+        let etapes: Vec<(&str, &str)> = journal.iter().map(|r| (r.methode.as_str(), r.url.as_str())).collect();
+        let depot = "https://outlook.office.com/api/v2.0/Users('u')/Messages('m')/AttachmentSessions('s')?authtoken=abc";
+        assert_eq!(
+            etapes,
+            [
+                ("POST", format!("{GRAPH}/messages").as_str()),
+                ("PATCH", brouillon.as_str()),
+                ("POST", format!("{brouillon}/attachments/createUploadSession").as_str()),
+                ("PUT", depot),
+                ("PUT", depot),
+                ("POST", format!("{brouillon}/send").as_str()),
+            ]
+        );
+        // Le brouillon : le message sans la photo, avec la Cci en en-tête.
+        let cree = crate::rendu::base64(std::str::from_utf8(&journal[0].corps).unwrap()).unwrap();
+        assert_eq!(noms_des_pieces(&cree), ["devis.pdf"]);
+        assert!(String::from_utf8_lossy(&cree).starts_with("Bcc: cache@exemple.fr\r\n"));
+        // Graph ne l'a pas reprise : elle est ajoutée.
+        let cci: serde_json::Value = serde_json::from_slice(&journal[1].corps).unwrap();
+        assert_eq!(cci, serde_json::json!({ "bccRecipients": [{ "emailAddress": { "address": "cache@exemple.fr" } }] }));
+        let session: serde_json::Value = serde_json::from_slice(&journal[2].corps).unwrap();
+        assert_eq!(
+            session,
+            serde_json::json!({ "AttachmentItem": { "attachmentType": "file", "name": "photo.jpg", "size": 5_000_000, "contentType": "image/jpeg" } })
+        );
+        // Les morceaux : sans le jeton, bornés, la photo entière.
+        assert_eq!(journal[3].entete("Content-Range"), Some("bytes 0-3276799/5000000"));
+        assert_eq!(journal[4].entete("Content-Range"), Some("bytes 3276800-4999999/5000000"));
+        assert!(journal[3..5].iter().all(|r| r.entete("Authorization").is_none()));
+        assert_eq!([journal[3].corps.as_slice(), journal[4].corps.as_slice()].concat(), gros);
+        assert!(journal.iter().filter(|r| r.methode != "PUT").all(|r| r.entete("Authorization") == Some("Bearer JETON")));
+    }
+
+    #[test]
+    fn brouillon_supprime_quand_l_envoi_echoue() {
+        let message = message_avec_pieces(&[("photo.jpg", "image/jpeg", octets(5_000_000, 9))]);
+        let mut journal = Vec::new();
+        let e = envoyer_par(&mut graph(&mut journal, true), "JETON", &message, &["paul@exemple.fr".into()]).unwrap_err();
+        assert_eq!(e, ErreurOAuth::Refus { code: "ErrorInternalServerError".into(), description: "panne".into() });
+        let derniere = journal.last().unwrap();
+        assert_eq!((derniere.methode.as_str(), derniere.url.as_str()), ("DELETE", format!("{GRAPH}/messages/AAMk%2Fx%3D").as_str()));
+        assert!(!journal.iter().any(|r| r.url.ends_with("/send")));
     }
 
     #[test]

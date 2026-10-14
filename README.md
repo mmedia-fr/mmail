@@ -232,6 +232,40 @@ compte, son index et ses réglages. Un nouveau serveur de lecture reprend le
 mot de passe mémorisé, qui change de clé dans le coffre avec lui ; s'il est
 injoignable, la fenêtre revient avec le motif.
 
+### Comptes Microsoft (Office 365, Outlook.com)
+
+Office 365 n'accepte plus de mot de passe en IMAP : « Comptes › Ajouter un
+compte Microsoft (Office 365, Outlook.com)… » ouvre la page de connexion de
+Microsoft dans le navigateur. La personne s'y connecte — mot de passe, double
+authentification, tout se passe chez Microsoft — et consent ; MMail reçoit le
+retour sur une écoute locale (`http://localhost`, flux « code
+d'autorisation » avec PKCE) et ne voit jamais le mot de passe. Il garde, dans
+le coffre du système, le **jeton de rafraîchissement** que Microsoft lui
+délivre, à la place du mot de passe ; les jetons d'accès, valables une heure,
+ne vivent qu'en mémoire.
+
+- **Une seule application pour tous** : MMail est une application publique
+  (sans secret), ouverte à toutes les organisations et aux comptes
+  personnels. Rien n'est à inscrire chez le client.
+- **Consentement** : l'utilisateur consent lui-même si son organisation le
+  permet. Sinon, MMail affiche un lien de consentement à transmettre à
+  l'administrateur du Microsoft 365 de l'organisation
+  (`https://login.microsoftonline.com/organizations/adminconsent?client_id=…`) :
+  ouvert une fois, il autorise MMail pour tous les utilisateurs.
+- **Lecture** en IMAPS sur `outlook.office365.com` (`AUTHENTICATE XOAUTH2`) ;
+  **envoi par Microsoft Graph** (`Mail.Send`) et non par SMTP, coupé par
+  défaut dans Office 365. Microsoft range lui-même la copie dans « Éléments
+  envoyés ».
+- « Modifier le compte… » n'y propose ni serveur ni mot de passe, mais « Se
+  reconnecter à Microsoft… ».
+
+Limites : IMAP doit être permis pour la boîte (c'est le réglage par défaut
+d'Office 365) ; un message envoyé par Graph pèse 3 Mo au plus, pièces jointes
+comprises ; pas d'accusé de remise ; pas d'agenda (Office 365 ne parle pas
+CalDAV) ; la sauvegarde de la configuration garde le compte, mais pas son
+jeton — il se reconnecte à Microsoft sur le poste où elle est remise — et ne
+se chiffre que par les comptes à mot de passe.
+
 ### Lien de configuration
 
 Un administrateur peut préparer un ou plusieurs comptes, mot de passe compris,

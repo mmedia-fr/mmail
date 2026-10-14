@@ -3847,6 +3847,10 @@ ApplicationWindow {
             onTriggered: fenetre.demanderCompte(null, "")
         }
         MenuItem {
+            text: qsTr("Ajouter un compte Microsoft (Office 365, Outlook.com)…")
+            onTriggered: fenetre.connecterMicrosoft("")
+        }
+        MenuItem {
             text: qsTr("Ajouter avec un lien de configuration…")
             onTriggered: dlgLien.ouvrir("", "")
         }
@@ -4436,6 +4440,9 @@ ApplicationWindow {
         id: dlgCompte
         property int compteId: 0
         property bool modification: false
+        // Compte Microsoft (en modification) : ni serveur ni mot de passe à
+        // saisir, la connexion se refait chez Microsoft.
+        property bool microsoft: false
         // Serveurs du compte à l'ouverture : ce qui a changé se compare à eux.
         property string ancienHote: ""
         property string ancienHoteEnvoi: ""
@@ -4451,7 +4458,7 @@ ApplicationWindow {
         property string infoServeur: ""
         onAccepted: fenetre.validerCompte()
         onRejected: fenetre.demandeSuivante()
-        onOpened: (dlgCompte.modification ? champHote
+        onOpened: (dlgCompte.microsoft ? boutonReconnexion : dlgCompte.modification ? champHote
                    : champAdresse.text.length > 0 ? champMotDePasse : champAdresse).forceActiveFocus()
 
         GridLayout {
@@ -4477,9 +4484,10 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 onEditingFinished: fenetre.chercherServeur()
             }
-            Label { text: qsTr("Serveur IMAP :") }
+            Label { text: qsTr("Serveur IMAP :"); visible: !dlgCompte.microsoft }
             TextField {
                 id: champHote
+                visible: !dlgCompte.microsoft
                 placeholderText: "mail.exemple.fr"
                 enabled: dlgCompte.compteId === 0 || dlgCompte.modification
                 inputMethodHints: Qt.ImhUrlCharactersOnly | Qt.ImhNoAutoUppercase
@@ -4489,7 +4497,7 @@ ApplicationWindow {
             Label {
                 Layout.columnSpan: 2
                 Layout.fillWidth: true
-                visible: text.length > 0
+                visible: text.length > 0 && !dlgCompte.microsoft
                 wrapMode: Text.Wrap
                 opacity: 0.75
                 font.pixelSize: 11
@@ -4497,17 +4505,19 @@ ApplicationWindow {
             }
             // Facultatif : la plupart des serveurs reçoivent l'envoi sur le
             // nom de la lecture ; Orange, Free, SFR ont un serveur à part.
-            Label { text: qsTr("Serveur d'envoi :") }
+            Label { text: qsTr("Serveur d'envoi :"); visible: !dlgCompte.microsoft }
             TextField {
                 id: champHoteEnvoi
+                visible: !dlgCompte.microsoft
                 placeholderText: qsTr("identique au serveur IMAP")
                 enabled: dlgCompte.compteId === 0 || dlgCompte.modification
                 inputMethodHints: Qt.ImhUrlCharactersOnly | Qt.ImhNoAutoUppercase
                 Layout.fillWidth: true
             }
-            Label { text: qsTr("Mot de passe :") }
+            Label { text: qsTr("Mot de passe :"); visible: !dlgCompte.microsoft }
             TextField {
                 id: champMotDePasse
+                visible: !dlgCompte.microsoft
                 echoMode: TextInput.Password
                 // Vide : le mot de passe ne change pas.
                 placeholderText: dlgCompte.modification ? qsTr("inchangé") : ""
@@ -4517,8 +4527,31 @@ ApplicationWindow {
             CheckBox {
                 id: caseMemoriser
                 Layout.columnSpan: 2
+                visible: !dlgCompte.microsoft
                 checked: reglages.memoriser
                 text: qsTr("Mémoriser le mot de passe dans le coffre du système")
+            }
+            // Office 365 n'accepte plus de mot de passe : la connexion se fait
+            // chez Microsoft, dans le navigateur.
+            Button {
+                Layout.columnSpan: 2
+                visible: dlgCompte.compteId === 0 && boite.microsoftDisponible()
+                text: qsTr("Compte Microsoft (Office 365, Outlook.com)…")
+                onClicked: {
+                    dlgCompte.close()
+                    fenetre.connecterMicrosoft("")
+                }
+            }
+            Button {
+                id: boutonReconnexion
+                Layout.columnSpan: 2
+                visible: dlgCompte.microsoft
+                text: qsTr("Se reconnecter à Microsoft…")
+                onClicked: {
+                    var adresse = champAdresse.text
+                    dlgCompte.close()
+                    fenetre.connecterMicrosoft(adresse)
+                }
             }
             Button {
                 Layout.columnSpan: 2
@@ -4536,7 +4569,55 @@ ApplicationWindow {
                 wrapMode: Text.Wrap
                 opacity: 0.75
                 font.pixelSize: 11
-                text: qsTr("Le mot de passe n'est jamais écrit par MMail : il est confié au coffre du système (Gestionnaire d'identifiants sous Windows, Secret Service ou KWallet sous Linux, Keystore sous Android). Connexion en IMAPS, port 993 ; envoi en SMTP sur TLS, port 465.")
+                text: dlgCompte.microsoft
+                      ? qsTr("Compte Microsoft : la connexion se fait chez Microsoft, dans votre navigateur ; MMail ne voit jamais le mot de passe. Il garde, dans le coffre du système, le jeton que Microsoft lui délivre. Lecture en IMAPS (outlook.office365.com), envoi par Microsoft Graph.")
+                      : qsTr("Le mot de passe n'est jamais écrit par MMail : il est confié au coffre du système (Gestionnaire d'identifiants sous Windows, Secret Service ou KWallet sous Linux, Keystore sous Android). Connexion en IMAPS, port 993 ; envoi en SMTP sur TLS, port 465.")
+            }
+        }
+    }
+
+    // Refus de consentement : l'organisation veut que son administrateur
+    // autorise MMail, une fois pour tous ses utilisateurs, par un lien.
+    Dialog {
+        id: dlgConsentement
+        property string motif: ""
+        function ouvrir(m) {
+            motif = m
+            open()
+        }
+        title: qsTr("Autorisation de l'administrateur nécessaire")
+        modal: true
+        anchors.centerIn: Overlay.overlay
+        width: Math.min(560, fenetre.width - 24)
+        standardButtons: Dialog.Close
+        ColumnLayout {
+            width: dlgConsentement.availableWidth
+            spacing: 8
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                text: qsTr("Votre organisation ne laisse pas ses utilisateurs autoriser eux-mêmes une application. Transmettez ce lien à l'administrateur de votre Microsoft 365 : en l'ouvrant, il autorise MMail une fois pour toute l'organisation. Vous pourrez ensuite ajouter votre compte.")
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                TextField {
+                    id: champConsentement
+                    Layout.fillWidth: true
+                    readOnly: true
+                    selectByMouse: true
+                    text: boite.consentementMicrosoft()
+                }
+                Button {
+                    text: qsTr("Copier le lien")
+                    onClicked: fenetre.copierTexte(champConsentement.text, "message")
+                }
+            }
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                opacity: 0.75
+                font.pixelSize: 11
+                text: dlgConsentement.motif
             }
         }
     }
@@ -5015,6 +5096,9 @@ ApplicationWindow {
                     + "configuration, reçu de votre administrateur, ajoute un ou plusieurs comptes "
                     + "sans rien saisir ; il ne sert qu'une fois. Retirer un compte efface de ce "
                     + "poste son index et son mot de passe mémorisé ; rien n'est supprimé sur le serveur. "
+                    + "« Ajouter un compte Microsoft (Office 365, Outlook.com)… » : la connexion se fait chez "
+                    + "Microsoft, dans le navigateur ; si votre organisation l'exige, MMail donne le lien que "
+                    + "son administrateur ouvre une fois pour l'autoriser. "
                     + "« Modifier un compte » (aussi au clic droit sur le compte, « Modifier ce compte… ») : "
                     + "serveur de lecture, serveur d'envoi, mot de passe — laissé vide, il ne change pas —, "
                     + "et de là, nom et signature. Clic droit sur un compte : aussi se connecter, se "
@@ -5409,6 +5493,26 @@ ApplicationWindow {
 
     Connections {
         target: boite
+
+        function onMicrosoftConnecte(adresse, hote, jeton) {
+            // Un compte Microsoft ne vit que par le coffre : sans son jeton,
+            // il faudrait se reconnecter à chaque lancement. Écrit une fois la
+            // connexion acceptée (cf. onConnecte).
+            fenetre.secretsAConserver[adresse] = { cle: fenetre.cle(adresse, hote), motDePasse: jeton }
+            fenetre.dernierDemande = null
+            messageEtat.texte = qsTr("Connexion de %1…").arg(adresse)
+        }
+
+        function onMicrosoftRefuse(message, consentement) {
+            if (consentement)
+                dlgConsentement.ouvrir(message)
+            else
+                messageEtat.texte = qsTr("Connexion à Microsoft : %1").arg(message)
+        }
+
+        function onJetonRenouvele(adresse, hote, jeton) {
+            coffre.ecrire(fenetre.cle(adresse, hote), jeton)
+        }
 
         function onConfigurationSauvegardee(empreinte, copies) {
             reglagesSauvegarde.empreinte = empreinte
@@ -6052,7 +6156,7 @@ ApplicationWindow {
     }
 
     function dialogueOuvert() {
-        return dlgCompte.visible || dlgDeplacer.visible || dlgRetrait.visible
+        return dlgCompte.visible || dlgConsentement.visible || dlgDeplacer.visible || dlgRetrait.visible
             || dlgAide.visible || dlgAPropos.visible || dlgLien.visible || dlgIdentite.visible
             || dlgNouveauDossier.visible
             // Sur téléphone, la rédaction couvre la fenêtre principale.
@@ -6067,9 +6171,18 @@ ApplicationWindow {
                 aDemander.push({ compte: compte, note: note })
             return
         }
+        // Un compte Microsoft n'a pas de mot de passe à redemander : la
+        // fenêtre propose de se reconnecter à Microsoft.
+        if (compte && compte.id > 0 && compte.auth === undefined) {
+            var connu = compteParId(compte.id)
+            compte.auth = connu ? connu.auth : ""
+        }
+        if (compte && compte.auth === "microsoft")
+            modification = true
         dernierDemande = compte
         dlgCompte.compteId = compte && compte.id ? compte.id : 0
         dlgCompte.modification = modification === true && dlgCompte.compteId > 0
+        dlgCompte.microsoft = dlgCompte.modification && compte.auth === "microsoft"
         dlgCompte.ancienHote = compte ? compte.hote : ""
         dlgCompte.ancienHoteEnvoi = compte && compte.hoteEnvoi ? compte.hoteEnvoi : ""
         champAdresse.text = compte ? compte.adresse : ""
@@ -6189,6 +6302,11 @@ ApplicationWindow {
         var nouveau = dlgCompte.compteId === 0
         var motDePasse = champMotDePasse.text
         champMotDePasse.text = ""
+        if (dlgCompte.microsoft) {
+            // Rien à appliquer ici : la reconnexion passe par son bouton.
+            demandeSuivante()
+            return
+        }
         reglages.memoriser = caseMemoriser.checked
         if (dlgCompte.modification) {
             appliquerModification(dlgCompte.compteId, adresse, dlgCompte.ancienHote, hote.toLowerCase(),
@@ -6419,7 +6537,10 @@ ApplicationWindow {
             if (p && (p.etat === "pret" || p.etat === "connexion"))
                 continue
             var hote = p ? p.hote : c.hote
-            if (typeof c.motDePasse === "string" && c.motDePasse.length > 0) {
+            if (c.auth === "microsoft") {
+                demanderCompte({ id: p ? p.id : 0, adresse: c.adresse, hote: hote, auth: "microsoft" },
+                               qsTr("Compte Microsoft : reconnectez-le à Microsoft."))
+            } else if (typeof c.motDePasse === "string" && c.motDePasse.length > 0) {
                 if (reglages.memoriser)
                     secretsAConserver[c.adresse] = { cle: cle(c.adresse, hote), motDePasse: c.motDePasse }
                 boite.connecter(hote, c.adresse, c.motDePasse)
@@ -6440,10 +6561,29 @@ ApplicationWindow {
     }
 
     function connecterCompte(compte) {
-        if (reglages.memoriser)
+        var connu = compte.id > 0 ? compteParId(compte.id) : null
+        // Un compte Microsoft ne vit que par son jeton au coffre.
+        if (reglages.memoriser || (connu && connu.auth === "microsoft"))
             coffre.lire(cle(compte.adresse, compte.hote))
         else
             demanderCompte(compte, "")
+    }
+
+    /// Connexion d'un compte Microsoft : la page de Microsoft s'ouvre dans le
+    /// navigateur ; la suite revient par `microsoftConnecte` ou
+    /// `microsoftRefuse`. `indice` : l'adresse d'un compte à reconnecter.
+    function connecterMicrosoft(indice) {
+        if (!boite.microsoftDisponible()) {
+            messageEtat.texte = qsTr("Comptes Microsoft indisponibles dans cette version de MMail.")
+            return
+        }
+        var url = boite.connecterMicrosoft(indice)
+        if (url.length === 0) {
+            messageEtat.texte = qsTr("Connexion à Microsoft impossible : %1").arg(boite.erreur)
+            return
+        }
+        Qt.openUrlExternally(url)
+        messageEtat.texte = qsTr("Connexion à Microsoft dans votre navigateur : MMail attend son retour…")
     }
 
     // ---- arborescence
@@ -7682,6 +7822,36 @@ ApplicationWindow {
                     Qt.quit()
                 })
                 attenteUnifiee.start()
+            }
+            // Scénario « compte-microsoft » : sans serveur. Un compte Microsoft
+            // de l'index s'ouvre en modification sans serveur ni mot de passe,
+            // avec « Se reconnecter à Microsoft… » — aussi quand son mot de
+            // passe serait redemandé ; la connexion prépare l'adresse de
+            // Microsoft (MMAIL_MICROSOFT_CLIENT_ID) ; le refus de consentement
+            // montre le lien de l'administrateur.
+            if (essai.scenario === "compte-microsoft") {
+                var attenteMs = Qt.createQmlObject('import QtQuick; Timer { interval: 2000 }', fenetre)
+                attenteMs.triggered.connect(function() {
+                    var ms = listeComptes().filter(function(c) { return c.auth === "microsoft" })[0]
+                    console.log("scenario: compte", ms ? ms.adresse : "aucun", "| auth", ms ? ms.auth : "")
+                    modifierCompte(ms.id)
+                    console.log("scenario: modification", dlgCompte.visible, dlgCompte.title, "| microsoft", dlgCompte.microsoft,
+                                "| serveur", champHote.visible, "| mot de passe", champMotDePasse.visible,
+                                "| reconnexion", boutonReconnexion.visible)
+                    dlgCompte.close()
+                    demanderCompte(compteParId(ms.id), "jeton refusé")
+                    console.log("scenario: redemande", dlgCompte.modification, dlgCompte.microsoft, "| note", noteCompte.text)
+                    dlgCompte.close()
+                    console.log("scenario: disponible", boite.microsoftDisponible())
+                    var url = boite.connecterMicrosoft(ms.adresse)
+                    console.log("scenario: adresse", url.indexOf("https://login.microsoftonline.com/common/oauth2/v2.0/authorize?") === 0,
+                                "| indice", url.indexOf("login_hint=" + encodeURIComponent(ms.adresse)) > 0,
+                                "| redirection", /redirect_uri=http%3A%2F%2Flocalhost%3A[0-9]+&/.test(url))
+                    dlgConsentement.ouvrir("AADSTS65001: consentement requis")
+                    console.log("scenario: consentement", dlgConsentement.visible, "|", champConsentement.text)
+                    Qt.quit()
+                })
+                attenteMs.start()
             }
             // Scénario « modifier-compte » : « Modifier le compte… » pose puis
             // retire un serveur d'envoi, mène le compte à un serveur de lecture

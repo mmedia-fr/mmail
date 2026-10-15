@@ -104,9 +104,14 @@ de projet interne.
   recherches (dix visibles, ascenseur au-delà), Entrée lance la recherche ; la
   liste des messages ne contient alors que les résultats — dans le dossier
   actif, objet et expéditeur d'après l'index puis le texte entier des messages
-  par le serveur ; dans toutes les boîtes (index du poste), chaque résultat avec
-  son dossier, un seul choisi à la fois, et l'on revient au dossier de départ
-  en sortant de la recherche (Échap). Les résultats se **trient** — plus
+  par le serveur ; dans toutes les boîtes, l'index du poste tout de suite, puis
+  le serveur dossier par dossier (texte entier, dossiers jamais ouverts
+  compris, progression dans la barre d'état, après ce que l'on demande par
+  ailleurs), chaque résultat avec son dossier, un seul choisi à la fois, et
+  l'on revient au dossier de départ en sortant de la recherche (Échap). Un
+  message trouvé par le serveur mais pas encore sur le poste y est rangé (les
+  500 plus récents par dossier) ; la liste s'arrête aux 1 000 résultats les
+  plus récents. Les résultats se **trient** — plus
   récents, plus anciens, expéditeur, objet (sans ses « RE : »), plus gros,
   dossier dans toutes les boîtes — sur le poste : le tri n'est jamais demandé
   au serveur, pour qui il coûte cher sur un gros dossier ;

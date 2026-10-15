@@ -1143,6 +1143,23 @@ impl Magasin {
         Ok(trouves)
     }
 
+    /// Comme `messages_par_uid`, avec le compte et le dossier de chaque
+    /// message : les résultats du serveur dans une recherche sur toutes les
+    /// boîtes.
+    pub fn trouves_par_uid(&self, dossier: i64, uids: &[u32]) -> Resultat<Vec<Trouve>> {
+        let mut trouves = Vec::new();
+        let mut requete = self.base.prepare(&format!("{SELECT_TROUVE} WHERE m.folder_id = ?1 AND m.uid = ?2"))?;
+        for uid in uids {
+            if let Some(t) = requete.query_row(params![dossier, uid], lire_trouve).optional()? {
+                trouves.push(t);
+            }
+        }
+        trouves.sort_by(|a, b| {
+            (b.message.horodatage, b.message.uid).cmp(&(a.message.horodatage, a.message.uid))
+        });
+        Ok(trouves)
+    }
+
     /// Messages d'un dossier, du plus récent au plus ancien — par date de
     /// réception, que le déplacement entre boîtes conserve, et non par UID,
     /// qu'il renouvelle.
@@ -2246,6 +2263,10 @@ mod tests {
         // Par UID, du plus récent au plus ancien.
         let par_uid = m.messages_par_uid(inbox, &[1, 3, 9]).unwrap();
         assert_eq!(par_uid.iter().map(|l| l.uid).collect::<Vec<_>>(), vec![3, 1]);
+        // Résultats du serveur d'un autre dossier : avec leur compte et chemin.
+        let ailleurs = m.trouves_par_uid(archives, &[1, 9]).unwrap();
+        assert_eq!(sujets(&ailleurs), vec!["Facture de février"]);
+        assert_eq!((ailleurs[0].compte, ailleurs[0].chemin.as_str()), (compte, "Archives"));
     }
 
     #[test]

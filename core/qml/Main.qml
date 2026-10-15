@@ -198,6 +198,16 @@ ApplicationWindow {
     // simple : deux boîtes peuvent donner le même UID. On revient au dossier
     // d'avant en sortant de la recherche.
     property bool rechercheGlobale: false
+    // … et ce que le serveur y trouve, dossier par dossier, dans le texte des
+    // messages : « compte\nchemin » → UID, rangés dans l'index par le noyau.
+    // `dossiersPartout` : dossiers à interroger, `dossiersFaits` : ceux qui
+    // ont répondu. La liste s'arrête à `resultatsMax` lignes, les plus
+    // récentes : au-delà, l'affichage ralentirait sans rien apprendre.
+    property var trouvesPartout: ({})
+    property int dossiersPartout: 0
+    property int dossiersFaits: 0
+    readonly property int resultatsMax: 1000
+    property bool resultatsTronques: false
     // Tri des résultats d'une recherche (demande de Manu, 11/10) : fait sur le
     // poste, jamais demandé au serveur — un tri IMAP sur un gros dossier
     // continue de tourner après qu'on l'a abandonné (constaté le 05/10).
@@ -5679,6 +5689,19 @@ ApplicationWindow {
                 console.log("scenario: l'index trouve", modeleMessages.count, "message(s)")
                 return
             }
+            // Scénario « recherche-serveur » : INBOX seule passée par l'index,
+            // le texte de MMAIL_DOSSIER est cherché dans toutes les boîtes ; le
+            // serveur le trouve aussi dans le corps des messages et dans les
+            // dossiers jamais ouverts (suite dans onResultatsPartout).
+            if (fenetre.essai && fenetre.essai.scenario === "recherche-serveur" && !fenetre.essai.cherche) {
+                fenetre.essai.cherche = true
+                porteeRecherche.currentIndex = 1
+                champRecherche.text = identifiantsEssai.dossier
+                fenetre.lancerRecherche()
+                console.log("scenario: l'index trouve", modeleMessages.count, "message(s) | dossiers à interroger",
+                            fenetre.dossiersPartout)
+                return
+            }
             // Scénario « sous-dossier » : le sous-dossier MMAIL_DOSSIER de la
             // boîte de réception, créé par le dialogue du clic droit. Un nom
             // déjà pris ou interdit est refusé dans le dialogue même.
@@ -5995,6 +6018,36 @@ ApplicationWindow {
             }
             if (fenetre.essai && fenetre.essai.scenario === "pieces")
                 console.log("scenario: piece ecrite", chemin, ouvrir)
+        }
+
+        // Recherche dans toutes les boîtes : un dossier de plus a répondu. La
+        // liste n'est reposée que s'il a trouvé quelque chose, ou à la fin ;
+        // elle garde sa position si l'on s'y est déplacé.
+        function onResultatsPartout(compte, chemin, texte, uids, restants) {
+            if (!fenetre.rechercheGlobale || texte !== fenetre.recherche)
+                return
+            fenetre.dossiersFaits += 1
+            if (uids.length > 0) {
+                var trouves = fenetre.trouvesPartout
+                trouves[compte + "\n" + chemin] = uids.split(",").map(Number)
+                fenetre.trouvesPartout = trouves
+            }
+            var fini = fenetre.dossiersFaits >= fenetre.dossiersPartout
+            if (uids.length > 0 || fini)
+                fenetre.poserResultats()
+            messageEtat.texte = fenetre.etatRecherchePartout()
+            if (fenetre.essai && fenetre.essai.scenario === "recherche-serveur") {
+                console.log("scenario: serveur,", chemin, ":", uids.length > 0 ? uids.split(",").length : 0,
+                            "| restants", restants, "| liste", modeleMessages.count)
+                if (fini) {
+                    var dossiers = {}
+                    for (var i = 0; i < modeleMessages.count; ++i)
+                        dossiers[modeleMessages.get(i).chemin] = true
+                    console.log("scenario: fin |", messageEtat.texte, "| dossiers", Object.keys(dossiers).join(", "),
+                                "| premier :", modeleMessages.count > 0 ? modeleMessages.get(0).sujet : "—")
+                    Qt.quit()
+                }
+            }
         }
 
         // Ce que le serveur a trouvé dans le texte des messages, ajouté aux
@@ -7108,10 +7161,14 @@ ApplicationWindow {
             recherche = texte
             uidsServeur = []
             cleChoisie = ""
+            arreterRecherchePartout()
             viderListe()
             poserResultats()
-            messageEtat.texte = qsTr("Recherche « %1 » dans toutes les boîtes : %2.").arg(texte)
-                    .arg(accord(modeleMessages.count, qsTr("résultat"), qsTr("résultats")))
+            // L'index répond tout de suite ; le serveur suit, dossier par
+            // dossier, dans le texte des messages et jusque dans les dossiers
+            // jamais ouverts sur ce poste.
+            dossiersPartout = boite.chercherPartoutSurLeServeur(texte)
+            messageEtat.texte = etatRecherchePartout()
             return
         }
         // De toutes les boîtes au dossier actif : celui d'où l'on était parti.
@@ -7131,11 +7188,28 @@ ApplicationWindow {
             messageEtat.texte = qsTr("Recherche dans l'index seulement (compte hors ligne).")
     }
 
-    /// Résultats de l'index — et, dans le dossier ouvert, ceux que le serveur a
-    /// trouvés dans le texte des messages —, du plus récent au plus ancien.
+    /// Résultats de l'index et ceux que le serveur a trouvés dans le texte des
+    /// messages — du dossier ouvert, ou de chaque dossier de chaque boîte —,
+    /// du plus récent au plus ancien.
     function poserResultats() {
         if (rechercheGlobale) {
-            poserListe(trierResultats(JSON.parse(boite.chercher(recherche, true)).map(function(r) {
+            var trouves = JSON.parse(boite.chercher(recherche, true))
+            var connus = {}
+            for (var j = 0; j < trouves.length; ++j)
+                connus[trouves[j].compte + "\n" + trouves[j].chemin + "\n" + trouves[j].uid] = true
+            for (var cle in trouvesPartout) {
+                var absents = trouvesPartout[cle].filter(function(u) { return !connus[cle + "\n" + u] })
+                if (absents.length === 0)
+                    continue
+                var coupure = cle.indexOf("\n")
+                trouves = trouves.concat(JSON.parse(boite.trouvesParUid(Number(cle.slice(0, coupure)),
+                                                                         cle.slice(coupure + 1),
+                                                                         absents.join(","))))
+            }
+            // Les plus récents d'abord pour la coupure, puis le tri choisi.
+            trouves.sort(function(a, b) { return b.h - a.h || b.uid - a.uid })
+            resultatsTronques = trouves.length > resultatsMax
+            poserListe(trierResultats(trouves.slice(0, resultatsMax).map(function(r) {
                 // Une liste JS deviendrait un sous-modèle dans la ListModel.
                 r.cheminAffiche = cheminResultat(r)
                 delete r.segments
@@ -7188,7 +7262,32 @@ ApplicationWindow {
         dossierAvantRecherche = null
         recherche = ""
         uidsServeur = []
+        arreterRecherchePartout()
         viderListe()
+    }
+
+    /// Arrête la recherche sur le serveur de toutes les boîtes, si elle court
+    /// encore : les dossiers qui restaient ne sont pas interrogés.
+    function arreterRecherchePartout() {
+        if (dossiersFaits < dossiersPartout)
+            boite.chercherPartoutSurLeServeur("")
+        trouvesPartout = ({})
+        dossiersPartout = 0
+        dossiersFaits = 0
+        resultatsTronques = false
+    }
+
+    /// État d'une recherche dans toutes les boîtes, pour la barre d'état.
+    function etatRecherchePartout() {
+        var nombre = accord(modeleMessages.count, qsTr("résultat"), qsTr("résultats"))
+        if (resultatsTronques)
+            nombre = qsTr("les %1 plus récents").arg(modeleMessages.count)
+        var debut = qsTr("Recherche « %1 » dans toutes les boîtes : %2").arg(recherche).arg(nombre)
+        if (dossiersPartout === 0)
+            return debut + qsTr(" (messages déjà sur le poste seulement : aucun compte connecté).")
+        if (dossiersFaits < dossiersPartout)
+            return debut + qsTr(" — recherche sur le serveur, dossier %1 sur %2…").arg(dossiersFaits + 1).arg(dossiersPartout)
+        return debut + "."
     }
 
     /// Sort de la recherche : la liste du dossier revient entière — celui d'où

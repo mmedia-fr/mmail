@@ -249,6 +249,21 @@ pub mod qobject {
         #[cxx_name = "chercherSurLeServeur"]
         fn chercher_sur_le_serveur(self: Pin<&mut Boite>, texte: &QString) -> bool;
 
+        /// Cherche aussi sur le serveur, dans chaque dossier de chaque compte
+        /// connecté, un dossier à la fois et après ce que l'utilisateur
+        /// demande. Rend le nombre de dossiers à interroger ; un texte vide
+        /// arrête la recherche en cours. Issue : `resultatsPartout`, par
+        /// dossier.
+        #[qinvokable]
+        #[cxx_name = "chercherPartoutSurLeServeur"]
+        fn chercher_partout_sur_le_serveur(self: Pin<&mut Boite>, texte: &QString) -> i32;
+
+        /// Lignes d'un dossier quelconque pour des UID (« 3,5,7 »), comme
+        /// `chercher(texte, true)` : compte, chemin et dossier compris.
+        #[qinvokable]
+        #[cxx_name = "trouvesParUid"]
+        fn trouves_par_uid(&self, compte: i32, chemin: &QString, uids: &QString) -> QString;
+
         /// Lignes du dossier ouvert pour des UID (« 3,5,7 »), en JSON.
         #[qinvokable]
         #[cxx_name = "messagesParUid"]
@@ -690,6 +705,20 @@ pub mod qobject {
         #[cxx_name = "resultatsServeur"]
         fn resultats_serveur(self: Pin<&mut Boite>, compte: i32, chemin: &QString, texte: &QString, uids: &QString);
 
+        /// Recherche sur toutes les boîtes : UID trouvés par le serveur dans
+        /// un dossier (« 3,5,7 », déjà rangés dans l'index), et nombre de
+        /// dossiers qui restent à interroger pour ce compte.
+        #[qsignal]
+        #[cxx_name = "resultatsPartout"]
+        fn resultats_partout(
+            self: Pin<&mut Boite>,
+            compte: i32,
+            chemin: &QString,
+            texte: &QString,
+            uids: &QString,
+            restants: i32,
+        );
+
         /// Messages différés partis ; `erreurs` non vide si certains ont échoué.
         #[qsignal]
         #[cxx_name = "differesEnvoyes"]
@@ -956,6 +985,10 @@ enum Commande {
     Signale,
     /// Chercher un texte dans les messages d'un dossier, sur le serveur.
     Chercher { chemin: String, texte: String },
+    /// Chercher un texte sur le serveur dans le premier de `chemins` ; la
+    /// suite revient dans la file, derrière ce que l'utilisateur demande.
+    /// `chemins` vide : arrête la recherche en cours.
+    ChercherPartout { texte: String, chemins: Vec<String> },
     /// Garder sur le poste les messages récents d'un dossier (décision 17),
     /// par petits lots, après tout ce que l'utilisateur demande.
     Precharger { chemin: String },
@@ -977,15 +1010,32 @@ impl Commande {
                 | (EnvoyerDifferes { .. }, EnvoyerDifferes { .. })
                 | (Signale, Signale)
                 | (Chercher { .. }, Chercher { .. })
+                | (ChercherPartout { .. }, ChercherPartout { .. })
         ) || (matches!(anterieure, Veille) && (self.comptee() || matches!(self, Veille)))
+    }
+
+    /// Ordre de passage dans la file : ce que l'utilisateur demande, puis la
+    /// recherche sur toutes les boîtes, puis le préchargement.
+    fn rang(&self) -> u8 {
+        match self {
+            Commande::ChercherPartout { .. } => 1,
+            Commande::Precharger { .. } => 2,
+            _ => 0,
+        }
     }
 
     /// Vrai si la commande vient de l'interface et compte dans `occupe`.
     fn comptee(&self) -> bool {
-        // Les tâches de fond ne font pas tourner l'indicateur d'activité.
+        // Les tâches de fond ne font pas tourner l'indicateur d'activité. La
+        // recherche sur toutes les boîtes, que le fil remet lui-même dans sa
+        // file dossier après dossier, affiche sa propre progression.
         !matches!(
             self,
-            Commande::Veille | Commande::Signale | Commande::EnvoyerDifferes { .. } | Commande::Precharger { .. }
+            Commande::Veille
+                | Commande::Signale
+                | Commande::EnvoyerDifferes { .. }
+                | Commande::ChercherPartout { .. }
+                | Commande::Precharger { .. }
         )
     }
 }
@@ -1027,6 +1077,9 @@ enum Issue {
     DeplacementEchoue { message: String },
     /// UID trouvés par le serveur pour une recherche.
     Recherche { chemin: String, texte: String, uids: Vec<u32> },
+    /// UID trouvés par le serveur dans un dossier, pour une recherche sur
+    /// toutes les boîtes ; `restants` : dossiers encore à interroger.
+    RecherchePartout { chemin: String, texte: String, uids: Vec<u32>, restants: usize },
     /// Un marquage n'a pas atteint le serveur : l'index du dossier a peut-être
     /// pris de l'avance, il sera réconcilié à la prochaine ouverture.
     MarquageAbandonne { chemin: String },
@@ -2315,6 +2368,44 @@ impl qobject::Boite {
         self.as_mut().envoyer(compte, Commande::Chercher { chemin, texte })
     }
 
+    pub fn chercher_partout_sur_le_serveur(mut self: Pin<&mut Self>, texte: &QString) -> i32 {
+        let texte = texte.to_string().trim().to_string();
+        let mut comptes: Vec<i64> = self.sessions.keys().copied().collect();
+        comptes.sort_unstable();
+        let mut total = 0;
+        for compte in comptes {
+            // Tous les dossiers qui contiennent des messages, masqués compris :
+            // la boîte de réception d'abord, puis l'ordre de l'arborescence.
+            let chemins: Vec<String> = if texte.is_empty() {
+                Vec::new()
+            } else {
+                self.magasin
+                    .as_ref()
+                    .and_then(|m| m.dossiers(compte).ok())
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|d| d.selectionnable)
+                    .map(|d| d.chemin)
+                    .collect()
+            };
+            let nombre = chemins.len();
+            if self.as_mut().envoyer(compte, Commande::ChercherPartout { texte: texte.clone(), chemins }) {
+                total += nombre;
+            }
+        }
+        total as i32
+    }
+
+    pub fn trouves_par_uid(&self, compte: i32, chemin: &QString, uids: &QString) -> QString {
+        let Some(magasin) = self.magasin.as_ref() else {
+            return QString::from("[]");
+        };
+        let Ok(id) = magasin.dossier_id(compte as i64, &chemin.to_string()) else {
+            return QString::from("[]");
+        };
+        QString::from(&json_trouves(&magasin.trouves_par_uid(id, &lire_uids(uids)).unwrap_or_default()))
+    }
+
     pub fn messages_par_uid(&self, uids: &QString) -> QString {
         let (Some(magasin), Some((_, _, id))) = (self.magasin.as_ref(), self.courant.as_ref()) else {
             return QString::from("[]");
@@ -3097,6 +3188,16 @@ impl qobject::Boite {
                 // de la connexion : ici, seulement de quoi rendre les lignes.
                 self.as_mut().deplacement_termine(0, &QString::from(&message));
             }
+            Issue::RecherchePartout { chemin, texte, uids, restants } => {
+                let uids: Vec<String> = uids.iter().map(u32::to_string).collect();
+                self.as_mut().resultats_partout(
+                    compte_qt,
+                    &QString::from(&chemin),
+                    &QString::from(&texte),
+                    &QString::from(&uids.join(",")),
+                    restants as i32,
+                );
+            }
             Issue::Recherche { chemin, texte, uids } => {
                 let uids: Vec<String> = uids.iter().map(u32::to_string).collect();
                 self.as_mut().resultats_serveur(
@@ -3618,8 +3719,9 @@ impl Travail {
             }
             let (restantes, abandonnees) = regrouper(file);
             file = restantes;
-            // Le préchargement passe après tout ce que l'utilisateur demande.
-            file.sort_by_key(|c| matches!(c, Commande::Precharger { .. }));
+            // La recherche sur toutes les boîtes, puis le préchargement, passent
+            // après tout ce que l'utilisateur demande (tri stable).
+            file.sort_by_key(Commande::rang);
             self.terminer(abandonnees);
 
             let commande = file.remove(0);
@@ -3628,6 +3730,14 @@ impl Travail {
                 Commande::OuvrirDossier(chemin) => Some(chemin.clone()),
                 Commande::Veille => etabli.ouvert.clone(),
                 Commande::Signale => Some(dossier_surveille(&etabli)),
+                _ => None,
+            };
+            // Recherche sur toutes les boîtes : les dossiers suivants reviennent
+            // dans la file, un à la fois.
+            let suite = match &commande {
+                Commande::ChercherPartout { texte, chemins } if chemins.len() > 1 => {
+                    Some(Commande::ChercherPartout { texte: texte.clone(), chemins: chemins[1..].to_vec() })
+                }
                 _ => None,
             };
             let est_veille = matches!(commande, Commande::Veille);
@@ -3649,6 +3759,9 @@ impl Travail {
             };
             if let (false, Some(chemin)) = (perdue, a_precharger) {
                 file.push(Commande::Precharger { chemin });
+            }
+            if let (false, Some(suite)) = (perdue, suite) {
+                file.push(suite);
             }
             if perdue {
                 // Les commandes en attente ne seront pas traitées : chacune
@@ -3842,12 +3955,24 @@ impl Travail {
                 })
             }
             Commande::Chercher { chemin, texte } => {
-                let resultat = assurer_selection(&mut e.client, &chemin).and_then(|()| Ok(e.client.chercher_texte(&texte)?));
+                let resultat = self.chercher_au_serveur(e, &chemin, &texte);
                 Some(match resultat {
                     Ok(uids) => Issue::Recherche { chemin, texte, uids },
                     Err(err) if err.reseau() => echec("reseau", format!("recherche : {err}"), &err),
                     // Refusée par le serveur : l'index seul répond.
                     Err(_) => Issue::Recherche { chemin, texte, uids: Vec::new() },
+                })
+            }
+            Commande::ChercherPartout { texte, chemins } => {
+                // Liste vide : la recherche en cours est arrêtée, rien à rendre.
+                let chemin = chemins.first().cloned().filter(|_| !texte.is_empty())?;
+                let restants = chemins.len() - 1;
+                Some(match self.chercher_au_serveur(e, &chemin, &texte) {
+                    Ok(uids) => Issue::RecherchePartout { chemin, texte, uids, restants },
+                    Err(err) if err.reseau() => echec("reseau", format!("recherche : {err}"), &err),
+                    // Dossier refusé (droits, disparu) : il ne rend rien, la
+                    // recherche passe au suivant.
+                    Err(_) => Issue::RecherchePartout { chemin, texte, uids: Vec::new(), restants },
                 })
             }
             Commande::Signale => {
@@ -4198,6 +4323,18 @@ impl Travail {
             let _ = synchro::arborescence(&mut e.client, &e.magasin, self.compte);
         }
         resultat
+    }
+
+    /// Cherche `texte` sur le serveur dans le dossier `chemin`, et range dans
+    /// l'index ceux des messages trouvés qu'il n'a pas encore — les plus
+    /// récents, `RECHERCHE_MAX` au plus : un dossier jamais ouvert, ou dont la
+    /// première lecture n'est pas finie, rend ses résultats comme les autres.
+    fn chercher_au_serveur(&self, e: &mut Etabli, chemin: &str, texte: &str) -> Result<Vec<u32>, Echec> {
+        assurer_selection(&mut e.client, chemin)?;
+        let uids = e.client.chercher_texte(texte)?;
+        let id = e.magasin.dossier_id(self.compte, chemin)?;
+        synchro::completer(&e.magasin, &mut e.client, id, &uids, RECHERCHE_MAX)?;
+        Ok(uids)
     }
 
     /// Garde sur le poste, par lot de quelques messages, ceux d'un dossier reçus
@@ -5017,6 +5154,7 @@ mod tests {
                 Commande::Veille => "veille".into(),
                 Commande::Signale => "signale".into(),
                 Commande::Chercher { texte, .. } => format!("chercher {texte}"),
+                Commande::ChercherPartout { texte, chemins } => format!("partout {texte} {}", chemins.join("|")),
                 Commande::Precharger { chemin } => format!("precharger {chemin}"),
                 Commande::Preparer { .. } => "preparer".into(),
                 Commande::Envoyer { .. } => "envoyer".into(),
@@ -5024,6 +5162,27 @@ mod tests {
                 Commande::Brouillon { .. } => "brouillon".into(),
             })
             .collect()
+    }
+
+    fn partout(texte: &str, chemins: &[&str]) -> Commande {
+        Commande::ChercherPartout { texte: texte.into(), chemins: chemins.iter().map(|c| c.to_string()).collect() }
+    }
+
+    #[test]
+    fn recherche_partout_derriere_l_utilisateur_et_devant_le_prechargement() {
+        let (mut file, abandonnees) = regrouper(vec![
+            Commande::Precharger { chemin: "INBOX".into() },
+            partout("devis", &["INBOX", "Archives"]),
+            dossier("Sent"),
+            // Une nouvelle recherche remplace la précédente, avec ses dossiers.
+            partout("facture", &["Archives"]),
+            corps(4),
+        ]);
+        file.sort_by_key(Commande::rang);
+        assert_eq!(noms(&file), vec!["ouvrir Sent", "corps 4", "partout facture Archives", "precharger INBOX"]);
+        // Ni l'une ni l'autre ne comptait dans l'indicateur d'activité.
+        assert_eq!(abandonnees, 0);
+        assert!(!partout("x", &[]).comptee());
     }
 
     #[test]

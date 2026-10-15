@@ -274,6 +274,33 @@ CalDAV) ; la sauvegarde de la configuration garde le compte, mais pas son
 jeton — il se reconnecte à Microsoft sur le poste où elle est remise — et ne
 se chiffre que par les comptes à mot de passe.
 
+### Comptes Google (Gmail)
+
+Même principe : « Comptes › Ajouter un compte Google (Gmail)… » ouvre la page
+de connexion de Google dans le navigateur ; la personne s'y connecte et
+autorise MMail ; le retour arrive sur une écoute locale
+(`http://127.0.0.1:<port>`, flux « code d'autorisation » avec PKCE). Le jeton
+de rafraîchissement va au coffre du système, à la place du mot de passe.
+
+- **Inscription chez Google** : MMail y est inscrit comme « application de
+  bureau » ; son identifiant et son secret sont livrés avec le programme — Google
+  ne tient pas ce secret pour confidentiel dans ce cas. Sans inscription, le
+  menu n'apparaît pas. `MMAIL_GOOGLE_CLIENT_ID` et `MMAIL_GOOGLE_CLIENT_SECRET`
+  remplacent ceux du programme (essais, autre inscription).
+- **Portée** : `https://mail.google.com/`, tout le courrier — lecture et envoi ;
+  `openid email` pour l'adresse du compte.
+- **Lecture** en IMAPS sur `imap.gmail.com` (`AUTHENTICATE XOAUTH2`) ; **envoi**
+  en SMTP sur TLS, `smtp.gmail.com:465` (`AUTH XOAUTH2`). Gmail range lui-même
+  la copie dans ses messages envoyés : MMail n'en dépose pas.
+- « Modifier le compte… » propose « Se reconnecter à Google… », de même quand
+  Google refuse le jeton (expiré ou révoqué).
+
+Limites : tant que Google n'a pas vérifié l'application, il l'annonce comme non
+vérifiée à la connexion, et seuls ses « utilisateurs de test » peuvent s'y
+connecter ; une application laissée « En test » voit ses jetons expirer au bout
+de sept jours — il faut alors se reconnecter. Pas d'agenda ; la sauvegarde de
+la configuration garde le compte, pas son jeton.
+
 ### Lien de configuration
 
 Un administrateur peut préparer un ou plusieurs comptes, mot de passe compris,

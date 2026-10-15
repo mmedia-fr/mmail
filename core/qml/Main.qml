@@ -3886,6 +3886,12 @@ ApplicationWindow {
             onTriggered: fenetre.connecterMicrosoft("")
         }
         MenuItem {
+            text: qsTr("Ajouter un compte Google (Gmail)…")
+            visible: boite.googleDisponible()
+            height: visible ? implicitHeight : 0
+            onTriggered: fenetre.connecterGoogle("")
+        }
+        MenuItem {
             text: qsTr("Ajouter avec un lien de configuration…")
             onTriggered: dlgLien.ouvrir("", "")
         }
@@ -4475,9 +4481,12 @@ ApplicationWindow {
         id: dlgCompte
         property int compteId: 0
         property bool modification: false
-        // Compte Microsoft (en modification) : ni serveur ni mot de passe à
-        // saisir, la connexion se refait chez Microsoft.
-        property bool microsoft: false
+        // Compte à jetons en modification — « microsoft » ou « google » : ni
+        // serveur ni mot de passe à saisir, la connexion se refait chez le
+        // service. Vide pour un compte à mot de passe.
+        property string service: ""
+        readonly property bool microsoft: service === "microsoft"
+        readonly property bool oauth: service.length > 0
         // Serveurs du compte à l'ouverture : ce qui a changé se compare à eux.
         property string ancienHote: ""
         property string ancienHoteEnvoi: ""
@@ -4493,7 +4502,7 @@ ApplicationWindow {
         property string infoServeur: ""
         onAccepted: fenetre.validerCompte()
         onRejected: fenetre.demandeSuivante()
-        onOpened: (dlgCompte.microsoft ? boutonReconnexion : dlgCompte.modification ? champHote
+        onOpened: (dlgCompte.oauth ? boutonReconnexion : dlgCompte.modification ? champHote
                    : champAdresse.text.length > 0 ? champMotDePasse : champAdresse).forceActiveFocus()
 
         GridLayout {
@@ -4519,10 +4528,10 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 onEditingFinished: fenetre.chercherServeur()
             }
-            Label { text: qsTr("Serveur IMAP :"); visible: !dlgCompte.microsoft }
+            Label { text: qsTr("Serveur IMAP :"); visible: !dlgCompte.oauth }
             TextField {
                 id: champHote
-                visible: !dlgCompte.microsoft
+                visible: !dlgCompte.oauth
                 placeholderText: "mail.exemple.fr"
                 enabled: dlgCompte.compteId === 0 || dlgCompte.modification
                 inputMethodHints: Qt.ImhUrlCharactersOnly | Qt.ImhNoAutoUppercase
@@ -4532,7 +4541,7 @@ ApplicationWindow {
             Label {
                 Layout.columnSpan: 2
                 Layout.fillWidth: true
-                visible: text.length > 0 && !dlgCompte.microsoft
+                visible: text.length > 0 && !dlgCompte.oauth
                 wrapMode: Text.Wrap
                 opacity: 0.75
                 font.pixelSize: 11
@@ -4540,19 +4549,19 @@ ApplicationWindow {
             }
             // Facultatif : la plupart des serveurs reçoivent l'envoi sur le
             // nom de la lecture ; Orange, Free, SFR ont un serveur à part.
-            Label { text: qsTr("Serveur d'envoi :"); visible: !dlgCompte.microsoft }
+            Label { text: qsTr("Serveur d'envoi :"); visible: !dlgCompte.oauth }
             TextField {
                 id: champHoteEnvoi
-                visible: !dlgCompte.microsoft
+                visible: !dlgCompte.oauth
                 placeholderText: qsTr("identique au serveur IMAP")
                 enabled: dlgCompte.compteId === 0 || dlgCompte.modification
                 inputMethodHints: Qt.ImhUrlCharactersOnly | Qt.ImhNoAutoUppercase
                 Layout.fillWidth: true
             }
-            Label { text: qsTr("Mot de passe :"); visible: !dlgCompte.microsoft }
+            Label { text: qsTr("Mot de passe :"); visible: !dlgCompte.oauth }
             TextField {
                 id: champMotDePasse
-                visible: !dlgCompte.microsoft
+                visible: !dlgCompte.oauth
                 echoMode: TextInput.Password
                 // Vide : le mot de passe ne change pas.
                 placeholderText: dlgCompte.modification ? qsTr("inchangé") : ""
@@ -4562,7 +4571,7 @@ ApplicationWindow {
             CheckBox {
                 id: caseMemoriser
                 Layout.columnSpan: 2
-                visible: !dlgCompte.microsoft
+                visible: !dlgCompte.oauth
                 checked: reglages.memoriser
                 text: qsTr("Mémoriser le mot de passe dans le coffre du système")
             }
@@ -4577,15 +4586,30 @@ ApplicationWindow {
                     fenetre.connecterMicrosoft("")
                 }
             }
+            // Gmail : la connexion se fait chez Google, dans le navigateur.
+            Button {
+                Layout.columnSpan: 2
+                visible: dlgCompte.compteId === 0 && boite.googleDisponible()
+                text: qsTr("Compte Google (Gmail)…")
+                onClicked: {
+                    dlgCompte.close()
+                    fenetre.connecterGoogle("")
+                }
+            }
             Button {
                 id: boutonReconnexion
                 Layout.columnSpan: 2
-                visible: dlgCompte.microsoft
-                text: qsTr("Se reconnecter à Microsoft…")
+                visible: dlgCompte.oauth
+                text: dlgCompte.service === "google" ? qsTr("Se reconnecter à Google…")
+                                                     : qsTr("Se reconnecter à Microsoft…")
                 onClicked: {
                     var adresse = champAdresse.text
+                    var service = dlgCompte.service
                     dlgCompte.close()
-                    fenetre.connecterMicrosoft(adresse)
+                    if (service === "google")
+                        fenetre.connecterGoogle(adresse)
+                    else
+                        fenetre.connecterMicrosoft(adresse)
                 }
             }
             Button {
@@ -4606,6 +4630,8 @@ ApplicationWindow {
                 font.pixelSize: 11
                 text: dlgCompte.microsoft
                       ? qsTr("Compte Microsoft : la connexion se fait chez Microsoft, dans votre navigateur ; MMail ne voit jamais le mot de passe. Il garde, dans le coffre du système, le jeton que Microsoft lui délivre. Lecture en IMAPS (outlook.office365.com), envoi par Microsoft Graph.")
+                      : dlgCompte.service === "google"
+                      ? qsTr("Compte Google : la connexion se fait chez Google, dans votre navigateur ; MMail ne voit jamais le mot de passe. Il garde, dans le coffre du système, le jeton que Google lui délivre. Lecture en IMAPS (imap.gmail.com), envoi en SMTP sur TLS (smtp.gmail.com).")
                       : qsTr("Le mot de passe n'est jamais écrit par MMail : il est confié au coffre du système (Gestionnaire d'identifiants sous Windows, Secret Service ou KWallet sous Linux, Keystore sous Android). Connexion en IMAPS, port 993 ; envoi en SMTP sur TLS, port 465.")
             }
         }
@@ -5134,6 +5160,9 @@ ApplicationWindow {
                     + "« Ajouter un compte Microsoft (Office 365, Outlook.com)… » : la connexion se fait chez "
                     + "Microsoft, dans le navigateur ; si votre organisation l'exige, MMail donne le lien que "
                     + "son administrateur ouvre une fois pour l'autoriser. "
+                    + "« Ajouter un compte Google (Gmail)… » : de même chez Google ; tant que Google n'a pas "
+                    + "vérifié MMail, il l'annonce comme non vérifié, et seuls les comptes déclarés pour les "
+                    + "essais peuvent s'y connecter. "
                     + "« Modifier un compte » (aussi au clic droit sur le compte, « Modifier ce compte… ») : "
                     + "serveur de lecture, serveur d'envoi, mot de passe — laissé vide, il ne change pas —, "
                     + "et de là, nom et signature. Clic droit sur un compte : aussi se connecter, se "
@@ -5544,6 +5573,18 @@ ApplicationWindow {
                 dlgConsentement.ouvrir(message)
             else
                 messageEtat.texte = qsTr("Connexion à Microsoft : %1").arg(message)
+        }
+
+        function onGoogleConnecte(adresse, hote, jeton) {
+            // Comme un compte Microsoft : le jeton va au coffre une fois la
+            // connexion acceptée.
+            fenetre.secretsAConserver[adresse] = { cle: fenetre.cle(adresse, hote), motDePasse: jeton }
+            fenetre.dernierDemande = null
+            messageEtat.texte = qsTr("Connexion de %1…").arg(adresse)
+        }
+
+        function onGoogleRefuse(message) {
+            messageEtat.texte = qsTr("Connexion à Google : %1").arg(message)
         }
 
         function onJetonRenouvele(adresse, hote, jeton) {
@@ -6287,18 +6328,18 @@ ApplicationWindow {
                 aDemander.push({ compte: compte, note: note })
             return
         }
-        // Un compte Microsoft n'a pas de mot de passe à redemander : la
-        // fenêtre propose de se reconnecter à Microsoft.
+        // Un compte Microsoft ou Google n'a pas de mot de passe à redemander :
+        // la fenêtre propose de se reconnecter au service.
         if (compte && compte.id > 0 && compte.auth === undefined) {
             var connu = compteParId(compte.id)
             compte.auth = connu ? connu.auth : ""
         }
-        if (compte && compte.auth === "microsoft")
+        if (compte && compteOAuth(compte.auth))
             modification = true
         dernierDemande = compte
         dlgCompte.compteId = compte && compte.id ? compte.id : 0
         dlgCompte.modification = modification === true && dlgCompte.compteId > 0
-        dlgCompte.microsoft = dlgCompte.modification && compte.auth === "microsoft"
+        dlgCompte.service = dlgCompte.modification && compteOAuth(compte.auth) ? compte.auth : ""
         dlgCompte.ancienHote = compte ? compte.hote : ""
         dlgCompte.ancienHoteEnvoi = compte && compte.hoteEnvoi ? compte.hoteEnvoi : ""
         champAdresse.text = compte ? compte.adresse : ""
@@ -6418,7 +6459,7 @@ ApplicationWindow {
         var nouveau = dlgCompte.compteId === 0
         var motDePasse = champMotDePasse.text
         champMotDePasse.text = ""
-        if (dlgCompte.microsoft) {
+        if (dlgCompte.oauth) {
             // Rien à appliquer ici : la reconnexion passe par son bouton.
             demandeSuivante()
             return
@@ -6656,6 +6697,9 @@ ApplicationWindow {
             if (c.auth === "microsoft") {
                 demanderCompte({ id: p ? p.id : 0, adresse: c.adresse, hote: hote, auth: "microsoft" },
                                qsTr("Compte Microsoft : reconnectez-le à Microsoft."))
+            } else if (c.auth === "google") {
+                demanderCompte({ id: p ? p.id : 0, adresse: c.adresse, hote: hote, auth: "google" },
+                               qsTr("Compte Google : reconnectez-le à Google."))
             } else if (typeof c.motDePasse === "string" && c.motDePasse.length > 0) {
                 if (reglages.memoriser)
                     secretsAConserver[c.adresse] = { cle: cle(c.adresse, hote), motDePasse: c.motDePasse }
@@ -6678,11 +6722,32 @@ ApplicationWindow {
 
     function connecterCompte(compte) {
         var connu = compte.id > 0 ? compteParId(compte.id) : null
-        // Un compte Microsoft ne vit que par son jeton au coffre.
-        if (reglages.memoriser || (connu && connu.auth === "microsoft"))
+        // Un compte Microsoft ou Google ne vit que par son jeton au coffre.
+        if (reglages.memoriser || (connu && compteOAuth(connu.auth)))
             coffre.lire(cle(compte.adresse, compte.hote))
         else
             demanderCompte(compte, "")
+    }
+
+    /// Compte à jetons OAuth2 : Microsoft ou Google, pas de mot de passe.
+    function compteOAuth(auth) {
+        return auth === "microsoft" || auth === "google"
+    }
+
+    /// Connexion d'un compte Google (Gmail) : comme `connecterMicrosoft` ;
+    /// la suite revient par `googleConnecte` ou `googleRefuse`.
+    function connecterGoogle(indice) {
+        if (!boite.googleDisponible()) {
+            messageEtat.texte = qsTr("Comptes Google indisponibles dans cette version de MMail.")
+            return
+        }
+        var url = boite.connecterGoogle(indice)
+        if (url.length === 0) {
+            messageEtat.texte = qsTr("Connexion à Google impossible : %1").arg(boite.erreur)
+            return
+        }
+        Qt.openUrlExternally(url)
+        messageEtat.texte = qsTr("Connexion à Google dans votre navigateur : MMail attend son retour…")
     }
 
     /// Connexion d'un compte Microsoft : la page de Microsoft s'ouvre dans le
@@ -7968,6 +8033,39 @@ ApplicationWindow {
                     Qt.quit()
                 })
                 attenteMs.start()
+            }
+            // Scénario « compte-google » : sans serveur, comme
+            // « compte-microsoft ». Un compte Google de l'index s'ouvre en
+            // modification sans serveur ni mot de passe, avec « Se reconnecter
+            // à Google… » — aussi quand son jeton serait redemandé ; la
+            // connexion prépare l'adresse de Google (MMAIL_GOOGLE_CLIENT_ID et
+            // MMAIL_GOOGLE_CLIENT_SECRET), sinon dit pourquoi elle ne peut pas.
+            if (essai.scenario === "compte-google") {
+                var attenteG = Qt.createQmlObject('import QtQuick; Timer { interval: 2000 }', fenetre)
+                attenteG.triggered.connect(function() {
+                    var g = listeComptes().filter(function(c) { return c.auth === "google" })[0]
+                    console.log("scenario: compte", g ? g.adresse : "aucun", "| auth", g ? g.auth : "")
+                    modifierCompte(g.id)
+                    console.log("scenario: modification", dlgCompte.visible, dlgCompte.title, "| service", dlgCompte.service,
+                                "| serveur", champHote.visible, "| mot de passe", champMotDePasse.visible,
+                                "| reconnexion", boutonReconnexion.visible, "«" + boutonReconnexion.text + "»")
+                    dlgCompte.close()
+                    demanderCompte(compteParId(g.id), "jeton refusé")
+                    console.log("scenario: redemande", dlgCompte.modification, dlgCompte.service, "| note", noteCompte.text)
+                    dlgCompte.close()
+                    console.log("scenario: disponible", boite.googleDisponible())
+                    var url = boite.connecterGoogle(g.adresse)
+                    if (url.length === 0) {
+                        console.log("scenario: sans client :", boite.erreur)
+                    } else {
+                        console.log("scenario: adresse", url.indexOf("https://accounts.google.com/o/oauth2/v2/auth?") === 0,
+                                    "| indice", url.indexOf("login_hint=" + encodeURIComponent(g.adresse)) > 0,
+                                    "| redirection", /redirect_uri=http%3A%2F%2F127\.0\.0\.1%3A[0-9]+&/.test(url),
+                                    "| hors ligne", url.indexOf("access_type=offline") > 0)
+                    }
+                    Qt.quit()
+                })
+                attenteG.start()
             }
             // Scénario « modifier-compte » : « Modifier le compte… » pose puis
             // retire un serveur d'envoi, mène le compte à un serveur de lecture

@@ -27,6 +27,9 @@ const LOT_ECRITURE: usize = 500;
 /// Mode d'authentification d'un compte Microsoft (`accounts.auth`).
 pub const AUTH_MICROSOFT: &str = "microsoft";
 
+/// Mode d'authentification d'un compte Google (`accounts.auth`).
+pub const AUTH_GOOGLE: &str = "google";
+
 /// Version du schéma, portée par `PRAGMA user_version`.
 const VERSION_SCHEMA: i32 = 13;
 
@@ -97,7 +100,8 @@ pub struct CompteLocal {
     /// Replié dans l'arborescence : ses dossiers ne s'affichent pas.
     pub replie: bool,
     /// Mode d'authentification : vide pour un mot de passe, `microsoft` pour
-    /// un compte Microsoft (OAuth2, cf. `crate::microsoft`).
+    /// un compte Microsoft, `google` pour un compte Google (OAuth2, cf.
+    /// `crate::oauth`).
     pub auth: String,
 }
 
@@ -106,6 +110,16 @@ impl CompteLocal {
     /// Graph.
     pub fn microsoft(&self) -> bool {
         self.auth == AUTH_MICROSOFT
+    }
+
+    /// Compte à jetons OAuth2 (Microsoft, Google) : pas de mot de passe.
+    pub fn oauth(&self) -> bool {
+        self.fournisseur().is_some()
+    }
+
+    /// Service d'un compte à jetons ; `None` pour un mot de passe.
+    pub fn fournisseur(&self) -> Option<crate::oauth::Fournisseur> {
+        crate::oauth::Fournisseur::de_auth(&self.auth)
     }
 
     /// Serveur auquel remettre les messages : celui de l'envoi s'il est
@@ -512,7 +526,8 @@ impl Magasin {
         Ok(n > 0)
     }
 
-    /// Pose le mode d'authentification d'un compte (`AUTH_MICROSOFT`, ou
+    /// Pose le mode d'authentification d'un compte (`AUTH_MICROSOFT`,
+    /// `AUTH_GOOGLE`, ou
     /// vide pour un mot de passe). Le compte doit exister : rien n'est créé.
     pub fn poser_auth(&self, adresse: &str, auth: &str) -> Resultat<bool> {
         let n = self.base.execute("UPDATE accounts SET auth = ?2 WHERE adresse = ?1", params![adresse, auth])?;
@@ -2090,6 +2105,19 @@ mod tests {
         m.compte("a@contoso.fr", crate::microsoft::HOTE_IMAP, 993, "a@contoso.fr").unwrap();
         assert!(m.comptes().unwrap()[0].microsoft());
         assert!(!m.poser_auth("inconnu@b.fr", AUTH_MICROSOFT).unwrap(), "rien n'est créé");
+    }
+
+    #[test]
+    fn compte_google() {
+        use crate::oauth::Fournisseur;
+        let m = Magasin::en_memoire().unwrap();
+        m.compte("a@gmail.com", crate::google::HOTE_IMAP, 993, "a@gmail.com").unwrap();
+        m.compte("b@b.fr", "h", 993, "b@b.fr").unwrap();
+        assert!(m.poser_auth("a@gmail.com", AUTH_GOOGLE).unwrap());
+        let comptes = m.comptes().unwrap();
+        assert!(comptes[0].oauth() && !comptes[0].microsoft());
+        assert_eq!(comptes[0].fournisseur(), Some(Fournisseur::Google));
+        assert!(!comptes[1].oauth() && comptes[1].fournisseur().is_none());
     }
 
     #[test]

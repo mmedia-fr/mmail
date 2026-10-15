@@ -74,8 +74,8 @@ pub mod qobject {
 
         /// Comptes du profil, en JSON : `[{id, adresse, hote, hoteEnvoi, auth,
         /// etat}]` — `hoteEnvoi` vide : l'envoi passe par le serveur de
-        /// lecture ; `auth` : `microsoft` pour un compte Microsoft, vide pour
-        /// un mot de passe.
+        /// lecture ; `auth` : `microsoft` pour un compte Microsoft, `google`
+        /// pour un compte Google, vide pour un mot de passe.
         #[qinvokable]
         #[cxx_name = "comptes"]
         fn comptes(&self) -> QString;
@@ -121,6 +121,17 @@ pub mod qobject {
         #[qinvokable]
         #[cxx_name = "connecterMicrosoft"]
         fn connecter_microsoft(self: Pin<&mut Boite>, indice: &QString) -> QString;
+
+        /// Vrai si MMail a un client Google : sans lui, pas de compte Google.
+        #[qinvokable]
+        #[cxx_name = "googleDisponible"]
+        fn google_disponible(&self) -> bool;
+
+        /// Connexion d'un compte Google (Gmail) : comme `connecterMicrosoft`.
+        /// Issue : `googleConnecte`, ou `googleRefuse`.
+        #[qinvokable]
+        #[cxx_name = "connecterGoogle"]
+        fn connecter_google(self: Pin<&mut Boite>, indice: &QString) -> QString;
 
         /// Ferme la session d'un compte ; son index reste consultable.
         #[qinvokable]
@@ -627,6 +638,17 @@ pub mod qobject {
         #[cxx_name = "microsoftRefuse"]
         fn microsoft_refuse(self: Pin<&mut Boite>, message: &QString, consentement: bool);
 
+        /// Compte Google autorisé, enregistré et en cours de connexion : comme
+        /// `microsoftConnecte`.
+        #[qsignal]
+        #[cxx_name = "googleConnecte"]
+        fn google_connecte(self: Pin<&mut Boite>, adresse: &QString, hote: &QString, jeton: &QString);
+
+        /// Connexion Google non aboutie : le motif, à montrer tel quel.
+        #[qsignal]
+        #[cxx_name = "googleRefuse"]
+        fn google_refuse(self: Pin<&mut Boite>, message: &QString);
+
         /// Microsoft a renouvelé le jeton de rafraîchissement d'un compte : il
         /// remplace l'ancien au coffre.
         #[qsignal]
@@ -774,11 +796,11 @@ struct Identifiants {
     /// Serveur de soumission, s'il n'est pas celui de la lecture ; vide sinon.
     hote_envoi: String,
     utilisateur: String,
-    /// Vide pour un compte Microsoft.
+    /// Vide pour un compte à jetons (Microsoft, Google).
     mot_de_passe: String,
-    /// Compte Microsoft : ses jetons OAuth2, partagés par toutes ses
+    /// Compte à jetons : ses jetons OAuth2, partagés par toutes ses
     /// sessions ; `None` pour un mot de passe.
-    microsoft: Option<crate::microsoft::Partage>,
+    oauth: Option<crate::oauth::Partage>,
 }
 
 impl Identifiants {
@@ -796,30 +818,46 @@ fn ouvrir_imap(p: &Identifiants) -> Result<Client, Erreur> {
 }
 
 /// Authentifie une session : mot de passe, ou jeton OAuth2 d'un compte
-/// Microsoft — redemandé une fois si le serveur le refuse (révoqué, ou
-/// périmé avant l'heure annoncée).
+/// Microsoft ou Google — redemandé une fois si le serveur le refuse (révoqué,
+/// ou périmé avant l'heure annoncée).
 fn authentifier(client: &mut Client, p: &Identifiants) -> Result<(), Erreur> {
-    let Some(jetons) = &p.microsoft else {
+    let Some(jetons) = &p.oauth else {
         return client.ouvrir_session(&p.utilisateur, &p.mot_de_passe);
     };
-    let jeton = crate::microsoft::jeton_acces(jetons, crate::microsoft::PORTEE_IMAP)?;
+    let service = crate::oauth::fournisseur(jetons);
+    let portee = service.portee_imap();
+    let jeton = crate::oauth::jeton_acces(jetons, portee).map_err(|e| e.vers_erreur(service.nom()))?;
     match client.ouvrir_session_jeton(&p.utilisateur, &jeton) {
         Err(Erreur::Refuse(_)) => {
-            crate::microsoft::oublier(jetons, crate::microsoft::PORTEE_IMAP);
-            let jeton = crate::microsoft::jeton_acces(jetons, crate::microsoft::PORTEE_IMAP)?;
+            crate::oauth::oublier(jetons, portee);
+            let jeton = crate::oauth::jeton_acces(jetons, portee).map_err(|e| e.vers_erreur(service.nom()))?;
             client.ouvrir_session_jeton(&p.utilisateur, &jeton)
         }
         autre => autre,
     }
 }
 
-/// Remet un message : par SMTP, ou par Graph pour un compte Microsoft (le
-/// SMTP authentifié y est coupé par défaut).
+/// Remet un message : par SMTP, par Graph pour un compte Microsoft (le SMTP
+/// authentifié y est coupé par défaut), par SMTP avec un jeton pour un compte
+/// Google.
 fn remettre_message(id: &Identifiants, de: &str, destinataires: &[String], octets: &[u8], accuse: bool) -> Result<(), Erreur> {
     use crate::microsoft::{self as ms, ErreurOAuth};
-    let Some(jetons) = &id.microsoft else {
+    use crate::oauth::Fournisseur;
+    let Some(jetons) = &id.oauth else {
         return smtp::envoyer(id.serveur_envoi(), &id.utilisateur, &id.mot_de_passe, de, destinataires, octets, accuse);
     };
+    if crate::oauth::fournisseur(jetons) == Fournisseur::Google {
+        use crate::google::{HOTE_SMTP, PORTEE_MAIL};
+        let jeton = crate::oauth::jeton_acces(jetons, PORTEE_MAIL).map_err(|e| e.vers_erreur("Google"))?;
+        return match smtp::envoyer_jeton(HOTE_SMTP, &id.utilisateur, &jeton, de, destinataires, octets, accuse) {
+            Err(Erreur::Refuse(m)) if m.starts_with("authentification") => {
+                crate::oauth::oublier(jetons, PORTEE_MAIL);
+                let jeton = crate::oauth::jeton_acces(jetons, PORTEE_MAIL).map_err(|e| e.vers_erreur("Google"))?;
+                smtp::envoyer_jeton(HOTE_SMTP, &id.utilisateur, &jeton, de, destinataires, octets, accuse)
+            }
+            autre => autre,
+        };
+    }
     let jeton = ms::jeton_acces(jetons, ms::PORTEE_ENVOI)?;
     match ms::envoyer(&jeton, octets, destinataires) {
         Err(ErreurOAuth::Refus { code, .. }) if code == "InvalidAuthenticationToken" => {
@@ -831,13 +869,30 @@ fn remettre_message(id: &Identifiants, de: &str, destinataires: &[String], octet
     }
 }
 
-/// Ce que rend une connexion Microsoft aboutie : l'adresse du compte, ses
-/// jetons.
-struct ConnexionMicrosoft {
+/// Ce que rend une connexion OAuth2 aboutie (Microsoft, Google) : l'adresse
+/// du compte, ses jetons.
+struct ConnexionOAuth {
     adresse: String,
     rafraichissement: String,
     acces: String,
     duree: u64,
+}
+
+/// Ce que le service doit rendre à l'échange du code : l'adresse du compte
+/// (`id_token`) et un jeton de rafraîchissement.
+fn connexion_aboutie(r: crate::oauth::ReponseJeton, nom: &str) -> Result<ConnexionOAuth, crate::oauth::ErreurOAuth> {
+    use crate::oauth::ErreurOAuth;
+    let refus = |code: &str, description: String| ErreurOAuth::Refus { code: code.into(), description };
+    let adresse = r
+        .id_token
+        .as_deref()
+        .and_then(crate::oauth::adresse_id_token)
+        .ok_or_else(|| refus("adresse", format!("{nom} n'a pas donné l'adresse du compte")))?;
+    let rafraichissement = r
+        .rafraichissement
+        .clone()
+        .ok_or_else(|| refus("offline_access", format!("{nom} n'a pas rendu de jeton de rafraîchissement")))?;
+    Ok(ConnexionOAuth { adresse, rafraichissement, acces: r.acces, duree: r.duree })
 }
 
 /// Dossier cible d'un déplacement.
@@ -1182,13 +1237,13 @@ impl qobject::Boite {
         }
         let Some(magasin) = self.magasin.as_ref() else { return };
         // Les comptes dont on a le mot de passe : ceux qui sont connectés. Un
-        // compte Microsoft n'a pas d'agenda CalDAV.
+        // compte Microsoft ou Google n'a pas d'agenda CalDAV.
         let comptes: Vec<(i64, String, Identifiants)> = magasin
             .comptes()
             .unwrap_or_default()
             .into_iter()
             .filter_map(|c| self.identites.get(&c.id).map(|id| (c.id, c.adresse, id.clone())))
-            .filter(|(_, _, id)| id.microsoft.is_none())
+            .filter(|(_, _, id)| id.oauth.is_none())
             .collect();
         if comptes.is_empty() {
             return;
@@ -1239,7 +1294,7 @@ impl qobject::Boite {
             .comptes()
             .unwrap_or_default()
             .into_iter()
-            .filter(|c| self.authentifies.contains(&c.id) && !c.microsoft())
+            .filter(|c| self.authentifies.contains(&c.id) && !c.oauth())
             .filter_map(|c| self.identites.get(&c.id).map(|i| (c.adresse, i.mot_de_passe.clone())))
             .collect();
         if comptes.is_empty() {
@@ -1305,9 +1360,12 @@ impl qobject::Boite {
             self.as_mut().sauvegardes_trouvees(compte, &QString::from("[]"), &QString::from("compte non connecté"));
             return;
         };
-        if identifiants.microsoft.is_some() {
-            let motif = "compte Microsoft : une sauvegarde se retrouve par un compte à mot de passe";
-            self.as_mut().sauvegardes_trouvees(compte, &QString::from("[]"), &QString::from(motif));
+        if let Some(jetons) = &identifiants.oauth {
+            let motif = format!(
+                "compte {} : une sauvegarde se retrouve par un compte à mot de passe",
+                crate::oauth::fournisseur(jetons).nom()
+            );
+            self.as_mut().sauvegardes_trouvees(compte, &QString::from("[]"), &QString::from(&motif));
             return;
         }
         let fil = self.qt_thread();
@@ -1664,8 +1722,9 @@ impl qobject::Boite {
             self.as_mut().evenement_enregistre(false, &QString::from("cette boîte n'est pas connectée"));
             return;
         };
-        if id.microsoft.is_some() {
-            self.as_mut().evenement_enregistre(false, &QString::from("pas d'agenda pour un compte Microsoft dans MMail"));
+        if let Some(jetons) = &id.oauth {
+            let motif = format!("pas d'agenda pour un compte {} dans MMail", crate::oauth::fournisseur(jetons).nom());
+            self.as_mut().evenement_enregistre(false, &QString::from(&motif));
             return;
         }
         let profil = self.profil.clone();
@@ -1755,8 +1814,8 @@ impl qobject::Boite {
                 Ok(id) => {
                     let present = magasin.compte_par_id(id).ok().flatten();
                     let hote_envoi = present.as_ref().map(|c| c.hote_envoi.clone()).unwrap_or_default();
-                    let microsoft = present.is_some_and(|c| c.microsoft());
-                    (id, nouveau, hote_envoi, microsoft)
+                    let service = present.and_then(|c| c.fournisseur());
+                    (id, nouveau, hote_envoi, service)
                 }
                 Err(e) => {
                     let message = QString::from(&format!("index local : {e}"));
@@ -1765,20 +1824,19 @@ impl qobject::Boite {
                 }
             }
         };
-        let (id, nouveau, hote_envoi, microsoft) = compte;
-        // Compte Microsoft : ce que l'interface tient du coffre est le jeton de
-        // rafraîchissement, pas un mot de passe.
-        let (mot_de_passe, microsoft) = if microsoft {
-            (String::new(), Some(crate::microsoft::partager(&mot_de_passe.to_string())))
-        } else {
-            (mot_de_passe.to_string(), None)
+        let (id, nouveau, hote_envoi, service) = compte;
+        // Compte à jetons (Microsoft, Google) : ce que l'interface tient du
+        // coffre est le jeton de rafraîchissement, pas un mot de passe.
+        let (mot_de_passe, oauth) = match service {
+            Some(f) => (String::new(), Some(crate::oauth::partager(f, &mot_de_passe.to_string()))),
+            None => (mot_de_passe.to_string(), None),
         };
         {
             let mut noyau = self.as_mut().rust_mut();
             if nouveau {
                 noyau.nouveaux.insert(id);
             }
-            noyau.identites.insert(id, Identifiants { hote, hote_envoi, utilisateur: adresse, mot_de_passe, microsoft });
+            noyau.identites.insert(id, Identifiants { hote, hote_envoi, utilisateur: adresse, mot_de_passe, oauth });
             noyau.authentifies.remove(&id);
         }
         self.as_mut().lancer(id, Vec::new())
@@ -1793,7 +1851,7 @@ impl qobject::Boite {
     }
 
     pub fn connecter_microsoft(mut self: Pin<&mut Self>, indice: &QString) -> QString {
-        use crate::microsoft::{self as ms, ErreurOAuth};
+        use crate::microsoft as ms;
         let client = ms::identifiant_client();
         if client.is_empty() {
             self.as_mut().set_erreur(QString::from(
@@ -1813,21 +1871,9 @@ impl qobject::Boite {
         let url = ms::url_autorisation(&client, &ecoute.redirection, &pkce.defi, &etat, &indice.to_string());
         let fil = self.qt_thread();
         let lance = thread::Builder::new().name("mmail-microsoft".into()).spawn(move || {
-            let refus = |code: &str, description: &str| ErreurOAuth::Refus { code: code.into(), description: description.into() };
             let issue = ms::attendre_code(&ecoute, &etat, ms::DELAI_CONNEXION)
                 .and_then(|code| ms::echanger_code(&client, &code, &pkce.verificateur, &ecoute.redirection))
-                .and_then(|r| {
-                    let adresse = r
-                        .id_token
-                        .as_deref()
-                        .and_then(ms::adresse_id_token)
-                        .ok_or_else(|| refus("adresse", "Microsoft n'a pas donné l'adresse du compte"))?;
-                    let rafraichissement = r
-                        .rafraichissement
-                        .clone()
-                        .ok_or_else(|| refus("offline_access", "Microsoft n'a pas rendu de jeton de rafraîchissement"))?;
-                    Ok(ConnexionMicrosoft { adresse, rafraichissement, acces: r.acces, duree: r.duree })
-                });
+                .and_then(|r| connexion_aboutie(r, "Microsoft"));
             let _ = fil.queue(move |boite: Pin<&mut qobject::Boite>| boite.accueillir_microsoft(issue));
         });
         if let Err(e) = lance {
@@ -1841,8 +1887,7 @@ impl qobject::Boite {
     /// Issue de la connexion Microsoft, sur le fil Qt : le compte est
     /// enregistré — ou converti, s'il existait avec un mot de passe — puis
     /// connecté.
-    fn accueillir_microsoft(mut self: Pin<&mut Self>, issue: Result<ConnexionMicrosoft, crate::microsoft::ErreurOAuth>) {
-        use crate::microsoft as ms;
+    fn accueillir_microsoft(mut self: Pin<&mut Self>, issue: Result<ConnexionOAuth, crate::microsoft::ErreurOAuth>) {
         let c = match issue {
             Ok(c) => c,
             Err(e) => {
@@ -1850,26 +1895,88 @@ impl qobject::Boite {
                 return;
             }
         };
-        let enregistre = match self.magasin.as_ref() {
-            None => Err("le profil n'est pas ouvert".to_string()),
-            Some(magasin) => {
-                let nouveau = matches!(magasin.compte_connu(&c.adresse), Ok(None));
-                magasin
-                    .compte(&c.adresse, ms::HOTE_IMAP, PORT_IMAPS, &c.adresse)
-                    .and_then(|id| magasin.poser_auth(&c.adresse, crate::magasin::AUTH_MICROSOFT).map(|_| id))
-                    .map(|id| (id, nouveau))
-                    .map_err(|e| format!("index local : {e}"))
+        match self.as_mut().enregistrer_oauth(crate::oauth::Fournisseur::Microsoft, &c) {
+            Ok(()) => self.as_mut().microsoft_connecte(
+                &QString::from(&c.adresse),
+                &QString::from(crate::microsoft::HOTE_IMAP),
+                &QString::from(&c.rafraichissement),
+            ),
+            Err(message) => self.as_mut().microsoft_refuse(&QString::from(&message), false),
+        }
+    }
+
+    pub fn google_disponible(&self) -> bool {
+        crate::google::disponible()
+    }
+
+    pub fn connecter_google(mut self: Pin<&mut Self>, indice: &QString) -> QString {
+        use crate::google as g;
+        let (client, secret) = (g::identifiant_client(), g::secret_client());
+        if client.is_empty() || secret.is_empty() {
+            self.as_mut().set_erreur(QString::from("connexion Google indisponible : MMail n'a pas de client Google"));
+            return QString::default();
+        }
+        let ecoute = match g::ecouter() {
+            Ok(e) => e,
+            Err(e) => {
+                self.as_mut().set_erreur(QString::from(&format!("écoute locale : {e}")));
+                return QString::default();
             }
         };
-        let (id, nouveau) = match enregistre {
-            Ok(r) => r,
-            Err(message) => {
-                self.as_mut().microsoft_refuse(&QString::from(&message), false);
+        let pkce = crate::oauth::pkce();
+        let etat = crate::oauth::etat();
+        let url = g::url_autorisation(&client, &ecoute.redirection, &pkce.defi, &etat, &indice.to_string());
+        let fil = self.qt_thread();
+        let lance = thread::Builder::new().name("mmail-google".into()).spawn(move || {
+            let issue = g::attendre_code(&ecoute, &etat, crate::oauth::DELAI_CONNEXION)
+                .and_then(|code| g::echanger_code(&client, &secret, &code, &pkce.verificateur, &ecoute.redirection))
+                .and_then(|r| connexion_aboutie(r, "Google"));
+            let _ = fil.queue(move |boite: Pin<&mut qobject::Boite>| boite.accueillir_google(issue));
+        });
+        if let Err(e) = lance {
+            self.as_mut().set_erreur(QString::from(&format!("connexion Google : {e}")));
+            return QString::default();
+        }
+        self.as_mut().set_erreur(QString::from(""));
+        QString::from(&url)
+    }
+
+    /// Issue de la connexion Google, sur le fil Qt : comme pour Microsoft.
+    fn accueillir_google(mut self: Pin<&mut Self>, issue: Result<ConnexionOAuth, crate::oauth::ErreurOAuth>) {
+        let c = match issue {
+            Ok(c) => c,
+            Err(e) => {
+                self.as_mut().google_refuse(&QString::from(&crate::google::message_refus(&e)));
                 return;
             }
         };
-        let jetons = ms::partager(&c.rafraichissement);
-        ms::retenir(&jetons, ms::PORTEE_IMAP, &c.acces, c.duree);
+        match self.as_mut().enregistrer_oauth(crate::oauth::Fournisseur::Google, &c) {
+            Ok(()) => self.as_mut().google_connecte(
+                &QString::from(&c.adresse),
+                &QString::from(crate::google::HOTE_IMAP),
+                &QString::from(&c.rafraichissement),
+            ),
+            Err(message) => self.as_mut().google_refuse(&QString::from(&message)),
+        }
+    }
+
+    /// Enregistre le compte d'une connexion OAuth2 aboutie — ou le convertit,
+    /// s'il existait avec un mot de passe —, garde ses jetons et le connecte.
+    fn enregistrer_oauth(mut self: Pin<&mut Self>, service: crate::oauth::Fournisseur, c: &ConnexionOAuth) -> Result<(), String> {
+        let hote = service.hote_imap();
+        let (id, nouveau) = match self.magasin.as_ref() {
+            None => return Err("le profil n'est pas ouvert".to_string()),
+            Some(magasin) => {
+                let nouveau = matches!(magasin.compte_connu(&c.adresse), Ok(None));
+                magasin
+                    .compte(&c.adresse, hote, PORT_IMAPS, &c.adresse)
+                    .and_then(|id| magasin.poser_auth(&c.adresse, service.auth()).map(|_| id))
+                    .map(|id| (id, nouveau))
+                    .map_err(|e| format!("index local : {e}"))?
+            }
+        };
+        let jetons = crate::oauth::partager(service, &c.rafraichissement);
+        crate::oauth::retenir(&jetons, service.portee_imap(), &c.acces, c.duree);
         {
             let mut noyau = self.as_mut().rust_mut();
             if nouveau {
@@ -1878,21 +1985,17 @@ impl qobject::Boite {
             noyau.identites.insert(
                 id,
                 Identifiants {
-                    hote: ms::HOTE_IMAP.into(),
+                    hote: hote.into(),
                     hote_envoi: String::new(),
                     utilisateur: c.adresse.clone(),
                     mot_de_passe: String::new(),
-                    microsoft: Some(jetons),
+                    oauth: Some(jetons),
                 },
             );
             noyau.authentifies.remove(&id);
         }
         self.as_mut().lancer(id, Vec::new());
-        self.as_mut().microsoft_connecte(
-            &QString::from(&c.adresse),
-            &QString::from(ms::HOTE_IMAP),
-            &QString::from(&c.rafraichissement),
-        );
+        Ok(())
     }
 
     /// Jetons de rafraîchissement que Microsoft a renouvelés pendant le
@@ -1902,7 +2005,7 @@ impl qobject::Boite {
             .identites
             .values()
             .filter_map(|i| {
-                let jeton = crate::microsoft::a_conserver(i.microsoft.as_ref()?)?;
+                let jeton = crate::oauth::a_conserver(i.oauth.as_ref()?)?;
                 Some((i.utilisateur.clone(), i.hote.clone(), jeton))
             })
             .collect();
@@ -4064,8 +4167,9 @@ impl Travail {
                     continue;
                 }
                 nombre += 1;
-                // Graph range lui-même la copie d'un compte Microsoft.
-                if let (Some(envoyes), None) = (&envoyes, &id.microsoft) {
+                // Graph range lui-même la copie d'un compte Microsoft, Gmail
+                // celle d'un compte Google.
+                if let (Some(envoyes), None) = (&envoyes, &id.oauth) {
                     let _ = e.client.deposer(envoyes, &["\\Seen".into()], "", &envoi.copie);
                 }
                 // Parti : il quitte « Envoi différé ». S'il y reste, il garde
@@ -4248,10 +4352,10 @@ impl Travail {
             .collect();
         let _ = e.magasin.noter_correspondants(&destinataires, maintenant());
         let mut avertissements = Vec::new();
-        // Envoyé par Graph : Microsoft a déjà rangé la copie.
-        let par_graph = e.magasin.compte_par_id(self.compte).ok().flatten().is_some_and(|c| c.microsoft());
+        // Envoyé par Graph ou par Gmail : le service a déjà rangé la copie.
+        let copie_rangee = e.magasin.compte_par_id(self.compte).ok().flatten().is_some_and(|c| c.oauth());
         match self.dossier_de_role(e, "Sent") {
-            _ if par_graph => {}
+            _ if copie_rangee => {}
             Some(envoyes) => {
                 if let Err(x) = e.client.deposer(&envoyes, &["\\Seen".into()], "", copie) {
                     avertissements.push(format!("copie dans « {envoyes} » : {x}"));
@@ -4958,7 +5062,7 @@ mod tests {
                 hote_envoi: String::new(),
                 utilisateur: "u".into(),
                 mot_de_passe: "p".into(),
-                microsoft: None,
+                oauth: None,
             },
         };
         let (file, _) = regrouper(vec![Commande::Veille, differes]);

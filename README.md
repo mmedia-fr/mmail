@@ -47,6 +47,10 @@ de projet interne.
   — sur ce poste ou un autre ; sinon à la prochaine ouverture. Le premier MMail
   qui le réserve (CONDSTORE) l'envoie, les autres le laissent : il ne part
   qu'une fois ;
+- **corbeille sur chaque ligne** : au survol de la souris, une corbeille en bout
+  de ligne envoie ce message à la corbeille de sa boîte sans l'ouvrir — dans un
+  dossier comme dans « Toutes les BàL » ; le message affiché et la sélection ne
+  bougent pas ;
 - **drapeau de suivi** (`\Flagged`) posé ou retiré d'un clic en bout de ligne,
   par le menu ou la touche Insertion ; importance des messages reçus signalée
   dans la liste (« ! », « ↓ ») et dans l'en-tête ;

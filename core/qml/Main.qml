@@ -3642,7 +3642,9 @@ ApplicationWindow {
                 RowLayout {
                     Layout.fillWidth: true
                     Layout.leftMargin: 10
-                    Layout.rightMargin: 8
+                    // Place de la corbeille, posée par-dessus en bout de ligne
+                    // (au survol de la souris seulement : rien au doigt).
+                    Layout.rightMargin: 8 + (fenetre.compact ? 0 : corbeilleLigne.width + 6)
                     Label {
                         text: model.expediteur
                         color: ligne.highlighted ? fenetre.palette.highlightedText : fenetre.palette.windowText
@@ -3833,6 +3835,39 @@ ApplicationWindow {
                     anchors.margins: -4
                     hoverEnabled: true
                     onClicked: fenetre.basculerSuivi([model.uid], model.suivi !== true)
+                }
+            }
+
+            // Corbeille en bout de première ligne, au survol (demande de Manu
+            // du 15/10) : le message part à la corbeille sans être ouvert.
+            // Rien dans la corbeille elle-même.
+            Canvas {
+                id: corbeilleLigne
+                anchors.right: parent.right
+                anchors.rightMargin: 8
+                anchors.top: parent.top
+                anchors.topMargin: 7
+                height: dateLigne.implicitHeight
+                width: Math.round(height * 0.8)
+                visible: !fenetre.compact
+                         && (fenetre.listeMulti ? model.role : fenetre.roleCourant) !== "Trash"
+                         && (ligne.hovered || survolCorbeille.containsMouse)
+                property color encre: ligne.highlighted ? fenetre.palette.highlightedText
+                                                        : fenetre.palette.windowText
+                opacity: survolCorbeille.containsMouse ? 1 : 0.55
+                onEncreChanged: requestPaint()
+                onWidthChanged: requestPaint()
+                onHeightChanged: requestPaint()
+                onPaint: fenetre.dessinerCorbeille(getContext("2d"), width, height, encre)
+                ToolTip.visible: survolCorbeille.containsMouse
+                ToolTip.delay: 600
+                ToolTip.text: qsTr("Mettre à la corbeille")
+                MouseArea {
+                    id: survolCorbeille
+                    anchors.fill: parent
+                    anchors.margins: -4
+                    hoverEnabled: true
+                    onClicked: fenetre.supprimerLigne(index)
                 }
             }
         }
@@ -5162,7 +5197,8 @@ ApplicationWindow {
                     + "Suppr : envoyer à la corbeille de la boîte, rien n'est détruit · Ctrl+Q : marquer "
                     + "comme lu · Ctrl+U : marquer comme non lu · Ctrl+Maj+V : déplacer vers… · "
                     + "Ctrl+A : tout sélectionner · F5 : actualiser · F1 : cette aide. "
-                    + "Ctrl+clic et Maj+clic sélectionnent plusieurs messages.<br><br>"
+                    + "Ctrl+clic et Maj+clic sélectionnent plusieurs messages. Au survol d'une ligne, "
+                    + "la corbeille en bout de ligne y envoie ce message sans l'ouvrir.<br><br>"
                     + "<b>Affichage</b><br>"
                     + "Chaque colonne a son propre zoom : Ctrl + molette sur la colonne, ou Ctrl +, "
                     + "Ctrl − et Ctrl 0 sur la dernière colonne survolée ; pincement au doigt. Le menu "
@@ -5582,6 +5618,8 @@ ApplicationWindow {
                 fenetre.etapeScenario()
                 if (fenetre.essai.scenario === "glisser")
                     fenetre.etapeScenarioGlisser()
+                if (fenetre.essai.scenario === "corbeille-ligne")
+                    fenetre.etapeScenarioCorbeille()
             }
         }
 
@@ -5663,6 +5701,8 @@ ApplicationWindow {
                 fenetre.etapeScenario()
             if (fenetre.essai && fenetre.essai.scenario === "glisser")
                 fenetre.etapeScenarioGlisser()
+            if (fenetre.essai && fenetre.essai.scenario === "corbeille-ligne")
+                fenetre.etapeScenarioCorbeille()
             if (fenetre.essai && fenetre.essai.scenario === "chevron")
                 fenetre.etapeScenarioChevron()
             if (fenetre.essai && (fenetre.essai.scenario === "defilement" || fenetre.essai.scenario === "favoris-fixes"))
@@ -5962,6 +6002,8 @@ ApplicationWindow {
                 fenetre.etapeScenario()
                 if (fenetre.essai.scenario === "glisser")
                     fenetre.etapeScenarioGlisser()
+                if (fenetre.essai.scenario === "corbeille-ligne")
+                    fenetre.etapeScenarioCorbeille()
             }
         }
 
@@ -6115,6 +6157,80 @@ ApplicationWindow {
             ctx.fill()
         else
             ctx.stroke()
+    }
+
+    function dessinerCorbeille(ctx, w, h, encre) {
+        ctx.reset()
+        ctx.strokeStyle = encre
+        ctx.lineWidth = Math.max(1.2, w * 0.11)
+        ctx.lineJoin = "round"
+        ctx.lineCap = "round"
+        // Couvercle et poignée.
+        ctx.beginPath()
+        ctx.moveTo(w * 0.08, h * 0.2)
+        ctx.lineTo(w * 0.92, h * 0.2)
+        ctx.moveTo(w * 0.36, h * 0.2)
+        ctx.lineTo(w * 0.4, h * 0.07)
+        ctx.lineTo(w * 0.6, h * 0.07)
+        ctx.lineTo(w * 0.64, h * 0.2)
+        ctx.stroke()
+        // Cuve, et ses deux rainures.
+        ctx.beginPath()
+        ctx.moveTo(w * 0.18, h * 0.3)
+        ctx.lineTo(w * 0.26, h * 0.94)
+        ctx.lineTo(w * 0.74, h * 0.94)
+        ctx.lineTo(w * 0.82, h * 0.3)
+        ctx.moveTo(w * 0.42, h * 0.42)
+        ctx.lineTo(w * 0.43, h * 0.8)
+        ctx.moveTo(w * 0.58, h * 0.42)
+        ctx.lineTo(w * 0.57, h * 0.8)
+        ctx.stroke()
+    }
+
+    /// Bouton corbeille d'une ligne : ce message seul part à la corbeille,
+    /// sans être ouvert ; le message affiché et la sélection ne bougent pas.
+    /// Si c'est le message affiché, seul choisi, c'est « Supprimer » : le
+    /// suivant prend sa place.
+    function supprimerLigne(index) {
+        if (index < 0 || index >= modeleMessages.count)
+            return
+        var r = modeleMessages.get(index)
+        var compte = listeMulti ? r.compte : boite.compteCourant
+        var chemin = listeMulti ? r.chemin : boite.dossierCourant
+        var cle = compte + "|" + chemin + "|" + r.uid
+        var seulChoisi = listeMulti ? cleChoisie === cle
+                                    : selection[r.uid] === true && uidsChoisis().length === 1
+        if (seulChoisi && compte === boite.compteCourant && chemin === boite.dossierCourant) {
+            supprimerSelection()
+            return
+        }
+        if (!boite.supprimerDans(compte, chemin, String(r.uid))) {
+            messageEtat.texte = boite.erreur
+            return
+        }
+        var retires = {}
+        for (var u in enDeplacement)
+            retires[u] = true
+        retires[cle] = true
+        enDeplacement = retires
+        deplacementsEnVol += 1
+        modeleMessages.remove(index)
+        if (!listeMulti && selection[r.uid] === true) {
+            var reste = {}
+            for (var k in selection) {
+                if (parseInt(k) !== r.uid)
+                    reste[k] = true
+            }
+            selection = reste
+        }
+        // Le message affiché, choisi parmi d'autres : il ne reste pas à l'écran.
+        if (!listeMulti && uidCourant === r.uid) {
+            uidCourant = 0
+            sujetAffiche.text = ""
+            auteurAffiche.text = ""
+            afficherTexte(qsTr("Aucun message sélectionné."))
+        }
+        messageEtat.texte = qsTr("Message mis à la corbeille.")
     }
 
     function basculerSuivi(uids, suivi) {
@@ -7933,6 +8049,51 @@ ApplicationWindow {
                 })
                 pas.start()
             }
+            // Scénario « corbeille-unifiee » : la corbeille d'une ligne dans
+            // Toutes les BàL — une autre ligne que celle choisie. Le message
+            // part, ne revient pas à la relecture de la liste, la ligne choisie
+            // reste ; il est ensuite ramené de la corbeille.
+            if (essai.scenario === "corbeille-unifiee") {
+                var tic = Qt.createQmlObject('import QtQuick; Timer { interval: 1000; repeat: true }', fenetre)
+                var suiviU = { n: 0, cle: "", sujet: "" }
+                tic.triggered.connect(function() {
+                    suiviU.n += 1
+                    var a = listeComptes()[0]
+                    if (suiviU.n === 12) {
+                        ouvrirBoitesUnifiees()
+                    } else if (suiviU.n === 14) {
+                        choisir(0, 0)
+                        suiviU.cle = cleChoisie
+                        var r = modeleMessages.get(1)
+                        suiviU.sujet = r.sujet
+                        var avant = modeleMessages.count
+                        supprimerLigne(1)
+                        console.log("scenario: unifiée", avant, "->", modeleMessages.count, "| choisie gardée",
+                                    cleChoisie === suiviU.cle, "|", suiviU.sujet)
+                    } else if (suiviU.n === 20) {
+                        var revenu = false
+                        for (var i = 0; i < modeleMessages.count; ++i)
+                            revenu = revenu || modeleMessages.get(i).sujet === suiviU.sujet
+                        console.log(!revenu && deplacementsEnVol === 0 && cleChoisie === suiviU.cle
+                                    ? "scenario: OK corbeille dans Toutes les BàL"
+                                    : "scenario: ECHEC revenu " + revenu + " en vol " + deplacementsEnVol)
+                        ouvrirDossier(a.id, "Trash")
+                    } else if (suiviU.n === 24) {
+                        for (var j = 0; j < modeleMessages.count; ++j) {
+                            if (modeleMessages.get(j).sujet === suiviU.sujet) {
+                                choisir(j, 0)
+                                deplacerVers(a.id, "INBOX")
+                                console.log("scenario: message ramene de la corbeille")
+                                break
+                            }
+                        }
+                    } else if (suiviU.n === 28) {
+                        tic.stop()
+                        Qt.quit()
+                    }
+                })
+                tic.start()
+            }
             if (essai.scenario.indexOf("mise-a-jour") === 0) {
                 reglagesMiseAJour.version = ""
                 reglagesMiseAJour.choix = ""
@@ -8659,6 +8820,61 @@ ApplicationWindow {
             boite.epinglerDossier(a.id, "Essais", false)
             boite.epinglerDossier(b.id, "INBOX", false)
             console.log("scenario: message ramene, favoris retires :", JSON.stringify(favorisActuels()))
+        }
+    }
+
+    /// Scénario « corbeille-ligne » : dans la boîte de réception, le premier
+    /// message affiché, la corbeille de la deuxième ligne l'envoie à la
+    /// corbeille sans toucher au message affiché ni à la sélection ; il y est
+    /// retrouvé, puis ramené.
+    function etapeScenarioCorbeille() {
+        var a = listeComptes()[0]
+        if (!a || a.etat !== "pret")
+            return
+        if (essai.etape === 0 && boite.dossierCourant === "INBOX" && modeleMessages.count >= 2) {
+            essai.etape = 1
+            choisir(0, 0)
+            var affiche = modeleMessages.get(0).uid
+            var avant = modeleMessages.count
+            essai.sujet = modeleMessages.get(1).sujet
+            supprimerLigne(1)
+            var garde = uidCourant === affiche && selection[affiche] === true && uidsChoisis().length === 1
+            console.log("scenario: ligne retiree", avant, "->", modeleMessages.count, "|", essai.sujet)
+            console.log(modeleMessages.count === avant - 1 && garde
+                        ? "scenario: OK message affiche et selection inchanges"
+                        : "scenario: ECHEC affiche " + uidCourant + " / " + affiche)
+        } else if (essai.etape === 1 && deplacementsEnVol === 0) {
+            essai.etape = 2
+            var corbeille = ""
+            var parcourir = function(noeuds) {
+                for (var i = 0; i < noeuds.length && !corbeille; ++i) {
+                    if (noeuds[i].compte === a.id && noeuds[i].role === "Trash")
+                        corbeille = noeuds[i].chemin
+                    else if (noeuds[i].enfants)
+                        parcourir(noeuds[i].enfants)
+                }
+            }
+            parcourir(JSON.parse(boite.arborescence(true)))
+            essai.corbeille = corbeille
+            console.log("scenario: corbeille", corbeille)
+            ouvrirDossier(a.id, corbeille)
+        } else if (essai.etape === 2 && boite.dossierCourant === essai.corbeille) {
+            for (var j = 0; j < modeleMessages.count; ++j) {
+                if (modeleMessages.get(j).sujet === essai.sujet) {
+                    essai.etape = 3
+                    console.log("scenario: OK message dans la corbeille")
+                    choisir(j, 0)
+                    deplacerVers(a.id, "INBOX")
+                    return
+                }
+            }
+            console.log("scenario: ECHEC message absent de la corbeille")
+            essai.etape = 9
+            Qt.quit()
+        } else if (essai.etape === 3 && deplacementsEnVol === 0) {
+            essai.etape = 9
+            console.log("scenario: message ramene en boite de reception")
+            Qt.quit()
         }
     }
 

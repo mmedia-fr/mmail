@@ -315,6 +315,14 @@ pub mod qobject {
         #[cxx_name = "supprimer"]
         fn supprimer(self: Pin<&mut Boite>, uids: &QString) -> bool;
 
+        /// Envoie des messages d'un dossier donné à la corbeille de son
+        /// compte, sans en faire le dossier ouvert : le bouton corbeille d'une
+        /// ligne, dans un dossier comme dans « Toutes les BàL ». Issue :
+        /// `deplacementTermine`.
+        #[qinvokable]
+        #[cxx_name = "supprimerDans"]
+        fn supprimer_dans(self: Pin<&mut Boite>, compte: i32, chemin: &QString, uids: &QString) -> bool;
+
         /// Signale des messages du dossier ouvert comme indésirables : ils vont
         /// dans le dossier d'indésirables de leur compte, et le filtre du
         /// serveur l'apprend (Mailcow : Rspamd, par IMAPSieve). Depuis ce
@@ -2322,15 +2330,26 @@ impl qobject::Boite {
         self.as_mut().envoyer(compte, Commande::Deplacer { source, uids, cible })
     }
 
-    pub fn supprimer(mut self: Pin<&mut Self>, uids: &QString) -> bool {
+    pub fn supprimer(self: Pin<&mut Self>, uids: &QString) -> bool {
         let Some((compte, source, _)) = self.courant.clone() else {
             return false;
         };
+        self.supprimer_dans(compte as i32, &QString::from(&source), uids)
+    }
+
+    pub fn supprimer_dans(mut self: Pin<&mut Self>, compte: i32, chemin: &QString, uids: &QString) -> bool {
+        let compte = compte as i64;
+        let source = chemin.to_string();
+        let uids = lire_uids(uids);
+        if uids.is_empty() {
+            return false;
+        }
         let corbeille =
             self.magasin.as_ref().and_then(|m| dossier_de_role(&m.dossiers(compte).ok()?, "Trash"));
         match corbeille {
             Some(corbeille) if corbeille != source => {
-                self.deplacer(uids, compte as i32, &QString::from(&corbeille))
+                let cible = Cible { compte, chemin: corbeille, identifiants: None };
+                self.as_mut().envoyer(compte, Commande::Deplacer { source, uids, cible })
             }
             Some(_) => {
                 self.as_mut().set_erreur(QString::from("ces messages sont déjà dans la corbeille"));

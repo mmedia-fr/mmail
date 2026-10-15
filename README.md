@@ -284,9 +284,12 @@ de rafraîchissement va au coffre du système, à la place du mot de passe.
 
 - **Inscription chez Google** : MMail y est inscrit comme « application de
   bureau » ; son identifiant et son secret sont livrés avec le programme — Google
-  ne tient pas ce secret pour confidentiel dans ce cas. Sans inscription, le
-  menu n'apparaît pas. `MMAIL_GOOGLE_CLIENT_ID` et `MMAIL_GOOGLE_CLIENT_SECRET`
-  remplacent ceux du programme (essais, autre inscription).
+  ne tient pas ce secret pour confidentiel dans ce cas. Le secret n'est pas dans
+  le code source : il est donné à la compilation (variable
+  `MMAIL_GOOGLE_CLIENT_SECRET`, secret de l'intégration continue). Une
+  compilation sans lui n'affiche pas le menu. À l'exécution,
+  `MMAIL_GOOGLE_CLIENT_ID` et `MMAIL_GOOGLE_CLIENT_SECRET` remplacent ceux du
+  programme (essais, autre inscription).
 - **Portée** : `https://mail.google.com/`, tout le courrier — lecture et envoi ;
   `openid email` pour l'adresse du compte.
 - **Lecture** en IMAPS sur `imap.gmail.com` (`AUTHENTICATE XOAUTH2`) ; **envoi**

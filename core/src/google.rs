@@ -37,10 +37,17 @@ pub const PORTEE_MAIL: &str = "https://mail.google.com/";
 /// l'adresse du compte.
 const PORTEE_AUTORISATION: &str = "openid email https://mail.google.com/";
 
-/// Client « application de bureau » de MMail chez Google ; vides tant qu'il
-/// n'est pas créé.
-const GOOGLE_CLIENT_ID: &str = "";
-const GOOGLE_CLIENT_SECRET: &str = "";
+/// Client « application de bureau » de MMail chez Google (projet « MMail »).
+/// Son secret n'est pas confidentiel pour une application de bureau — il est
+/// livré dans le programme —, mais il n'est pas écrit ici : les détecteurs de
+/// secrets le signaleraient. Il est donné à la compilation
+/// (`MMAIL_GOOGLE_CLIENT_SECRET`, secret de l'intégration continue) ; sans
+/// lui, la connexion Google est indisponible.
+const GOOGLE_CLIENT_ID: &str = "40879489364-nsefhmvm7mv1mq3rc9phfgllhqvs2nbs.apps.googleusercontent.com";
+const GOOGLE_CLIENT_SECRET: &str = match option_env!("MMAIL_GOOGLE_CLIENT_SECRET") {
+    Some(secret) => secret,
+    None => "",
+};
 
 fn reglage(variable: &str, defaut: &str) -> String {
     std::env::var(variable)

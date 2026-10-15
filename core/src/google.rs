@@ -143,6 +143,20 @@ pub fn echanger_code(
     crate::oauth::demander_jeton(POINT_JETON, &corps_echange(client, secret, code, verificateur, redirection))
 }
 
+/// Refuse un échange où la messagerie n'a pas été accordée : sur sa page
+/// d'autorisation, Google présente l'accès à Gmail comme une case à cocher,
+/// décochée d'origine. Sans elle, le jeton ne vaut que pour l'adresse et
+/// Gmail le refuse en IMAP (« Invalid credentials », constaté le 15/10).
+pub fn verifier_portee(r: ReponseJeton) -> Result<ReponseJeton, ErreurOAuth> {
+    match r.portees.as_deref() {
+        Some(portees) if !portees.split_whitespace().any(|p| p == PORTEE_MAIL) => Err(ErreurOAuth::refus(
+            "portee",
+            "l'accès à la messagerie n'a pas été accordé",
+        )),
+        _ => Ok(r),
+    }
+}
+
 /// Jeton d'accès par le jeton de rafraîchissement.
 pub fn rafraichir(client: &str, secret: &str, rafraichissement: &str) -> Result<ReponseJeton, ErreurOAuth> {
     crate::oauth::demander_jeton(POINT_JETON, &corps_rafraichissement(client, secret, rafraichissement))
@@ -163,6 +177,10 @@ pub fn message_refus(e: &ErreurOAuth) -> String {
         ErreurOAuth::Refus { code, .. } if code == "access_denied" => "Google a refusé l'accès : connexion annulée, \
              ou compte qui n'est pas encore autorisé — tant que Google n'a pas vérifié MMail, seuls ses \
              utilisateurs de test peuvent s'y connecter."
+            .into(),
+        ErreurOAuth::Refus { code, .. } if code == "portee" => "Google n'a pas accordé à MMail l'accès à la \
+             messagerie : sur la page d'autorisation de Google, cochez « Lire, rédiger, envoyer et supprimer \
+             définitivement des e-mails dans Gmail », puis recommencez."
             .into(),
         ErreurOAuth::Refus { code, .. } if code == "invalid_grant" => {
             "Google a refusé le jeton du compte, expiré ou révoqué : reconnectez-vous à Google.".into()
@@ -208,8 +226,29 @@ mod tests {
         assert!(message_refus(&annule).contains("utilisateurs de test"));
         let expire = ErreurOAuth::Refus { code: "invalid_grant".into(), description: "Token has been expired or revoked.".into() };
         assert!(message_refus(&expire).contains("reconnectez-vous à Google"));
+        let sans_gmail = ErreurOAuth::Refus { code: "portee".into(), description: String::new() };
+        assert!(message_refus(&sans_gmail).contains("cochez"));
         let reseau = ErreurOAuth::Reseau("délai dépassé".into());
         assert_eq!(message_refus(&reseau), "Google injoignable : délai dépassé");
+    }
+
+    #[test]
+    fn messagerie_accordee_ou_non() {
+        let reponse = |portees: Option<&str>| ReponseJeton {
+            acces: "AT".into(),
+            rafraichissement: Some("RT".into()),
+            duree: 3599,
+            id_token: None,
+            portees: portees.map(str::to_string),
+        };
+        // Réponse réelle de Google, case de Gmail cochée, puis décochée.
+        let accordee = reponse(Some("https://mail.google.com/ openid https://www.googleapis.com/auth/userinfo.email"));
+        assert!(verifier_portee(accordee).is_ok());
+        let refusee = reponse(Some("openid https://www.googleapis.com/auth/userinfo.email"));
+        let e = verifier_portee(refusee).unwrap_err();
+        assert!(matches!(e, ErreurOAuth::Refus { ref code, .. } if code == "portee"));
+        // Sans `scope` dans la réponse, rien à vérifier : IMAP tranchera.
+        assert!(verifier_portee(reponse(None)).is_ok());
     }
 
     #[test]

@@ -6920,6 +6920,7 @@ ApplicationWindow {
             poserBoitesUnifiees()
             return
         }
+        var enHaut = listeEnHaut()
         var c = JSON.parse(boite.changementsListe(complet === true))
         if (c.complet !== undefined) {
             poserListe(c.complet, c.suite === true)
@@ -6948,8 +6949,18 @@ ApplicationWindow {
                 continue
             modeleMessages.insert(rangInsertion(n.h, n.uid), n)
         }
+        if (enHaut)
+            vueMessages.positionViewAtBeginning()
         oublierAbsents(absents)
         majInfoDossier()
+    }
+
+    /// Vrai si la liste est tout en haut. Des messages qui arrivent au-dessus
+    /// doivent alors se voir : la vue garde sinon à l'écran les lignes déjà
+    /// affichées, et les nouvelles se glissent au-dessus (constaté le 15/10, à
+    /// la première synchronisation d'une boîte Gmail de 1 300 messages).
+    function listeEnHaut() {
+        return modeleMessages.count === 0 || vueMessages.contentY <= vueMessages.originY + 1
     }
 
     /// Pose une liste entière, en gardant la position et ce qui est choisi.
@@ -6960,6 +6971,7 @@ ApplicationWindow {
         var messages = liste.filter(function(m) {
             return fenetre.enDeplacement[cleDeplacement(m.uid)] !== true
         })
+        var enHaut = listeEnHaut()
         var position = vueMessages.contentY
         var rangHaut = Math.max(0, vueMessages.indexAt(1, position + 1))
         modeleMessages.clear()
@@ -6987,7 +6999,10 @@ ApplicationWindow {
                 }
             }
         }
-        vueMessages.contentY = position
+        if (enHaut)
+            vueMessages.positionViewAtBeginning()
+        else
+            vueMessages.contentY = position
         // La sélection ne garde que les messages encore là — ceux qui manquent
         // alors qu'une suite reste à lire n'y sont plus non plus : elle a été
         // lue jusqu'à les trouver.
@@ -7249,6 +7264,7 @@ ApplicationWindow {
         var voulues = {}
         for (var i = 0; i < lignes.length; ++i)
             voulues[cle(lignes[i])] = true
+        var enHaut = listeEnHaut()
         if (modeleMessages.count === 0) {
             modeleMessages.append(lignes)
         } else {
@@ -7282,6 +7298,8 @@ ApplicationWindow {
                 }
             }
         }
+        if (enHaut)
+            vueMessages.positionViewAtBeginning()
         // Même règle que poserListe : la sélection ne garde que les messages
         // encore là.
         var presents = {}
@@ -8146,6 +8164,36 @@ ApplicationWindow {
                     }
                 })
                 pas.start()
+            }
+            // Scénario « arrivee-en-haut » : boîte de réception ouverte, tout en
+            // haut, le premier message choisi ; un message déposé de l'extérieur
+            // doit arriver en tête ET se voir (essai du 15/10 sous Gmail : il se
+            // glissait au-dessus de la partie visible).
+            if (essai.scenario === "arrivee-en-haut") {
+                var veille = Qt.createQmlObject('import QtQuick; Timer { interval: 1000; repeat: true }', fenetre)
+                // MMAIL_DOSSIER : nombre de messages attendus (une rafale).
+                var suiviA = { n: 0, avant: -1, attendus: Math.max(1, parseInt(identifiantsEssai.dossier) || 1) }
+                veille.triggered.connect(function() {
+                    suiviA.n += 1
+                    if (suiviA.n === 10 && boite.dossierCourant === "INBOX") {
+                        choisir(0, 0)
+                        suiviA.avant = modeleMessages.count
+                        console.log("scenario: pret", modeleMessages.count, "messages, haut", vueMessages.contentY, vueMessages.originY)
+                    } else if (suiviA.avant >= 0 && modeleMessages.count >= suiviA.avant + suiviA.attendus) {
+                        veille.stop()
+                        var haut = vueMessages.indexAt(1, vueMessages.contentY + 1)
+                        console.log("scenario: arrive", modeleMessages.get(0).sujet, "| premiere ligne visible", haut,
+                                    "| contentY", vueMessages.contentY, "originY", vueMessages.originY)
+                        console.log(haut === 0 ? "scenario: OK nouveau message visible en tete"
+                                               : "scenario: ECHEC nouveau message hors de la vue")
+                        Qt.quit()
+                    } else if (suiviA.n > 120) {
+                        veille.stop()
+                        console.log("scenario: ECHEC rien n'est arrive")
+                        Qt.quit()
+                    }
+                })
+                veille.start()
             }
             // Scénario « corbeille-unifiee » : la corbeille d'une ligne dans
             // Toutes les BàL — une autre ligne que celle choisie. Le message

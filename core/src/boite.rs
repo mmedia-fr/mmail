@@ -1930,6 +1930,7 @@ impl qobject::Boite {
         let lance = thread::Builder::new().name("mmail-google".into()).spawn(move || {
             let issue = g::attendre_code(&ecoute, &etat, crate::oauth::DELAI_CONNEXION)
                 .and_then(|code| g::echanger_code(&client, &secret, &code, &pkce.verificateur, &ecoute.redirection))
+                .and_then(g::verifier_portee)
                 .and_then(|r| connexion_aboutie(r, "Google"));
             let _ = fil.queue(move |boite: Pin<&mut qobject::Boite>| boite.accueillir_google(issue));
         });

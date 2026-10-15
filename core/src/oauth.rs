@@ -341,6 +341,9 @@ pub struct ReponseJeton {
     /// Durée de validité du jeton d'accès, en secondes.
     pub duree: u64,
     pub id_token: Option<String>,
+    /// Portées accordées (`scope`), quand le service les rend : la personne a
+    /// pu en décocher une sur la page d'autorisation (Google).
+    pub portees: Option<String>,
 }
 
 pub fn lire_reponse_jeton(statut: u16, corps: &[u8]) -> Result<ReponseJeton, ErreurOAuth> {
@@ -357,7 +360,13 @@ pub fn lire_reponse_jeton(statut: u16, corps: &[u8]) -> Result<ReponseJeton, Err
         .get("expires_in")
         .and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
         .unwrap_or(3600);
-    Ok(ReponseJeton { acces, rafraichissement: texte("refresh_token"), duree, id_token: texte("id_token") })
+    Ok(ReponseJeton {
+        acces,
+        rafraichissement: texte("refresh_token"),
+        duree,
+        id_token: texte("id_token"),
+        portees: texte("scope"),
+    })
 }
 
 /// Adresse du compte, tirée de l'`id_token` : `email`, à défaut

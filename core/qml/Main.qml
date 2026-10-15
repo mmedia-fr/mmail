@@ -3887,7 +3887,7 @@ ApplicationWindow {
         }
         MenuItem {
             text: qsTr("Ajouter un compte Google (Gmail)…")
-            visible: boite.googleDisponible()
+            visible: boite.googleAjoutOuvert()
             height: visible ? implicitHeight : 0
             onTriggered: fenetre.connecterGoogle("")
         }
@@ -4589,7 +4589,7 @@ ApplicationWindow {
             // Gmail : la connexion se fait chez Google, dans le navigateur.
             Button {
                 Layout.columnSpan: 2
-                visible: dlgCompte.compteId === 0 && boite.googleDisponible()
+                visible: dlgCompte.compteId === 0 && boite.googleAjoutOuvert()
                 text: qsTr("Compte Google (Gmail)…")
                 onClicked: {
                     dlgCompte.close()
@@ -5160,9 +5160,9 @@ ApplicationWindow {
                     + "« Ajouter un compte Microsoft (Office 365, Outlook.com)… » : la connexion se fait chez "
                     + "Microsoft, dans le navigateur ; si votre organisation l'exige, MMail donne le lien que "
                     + "son administrateur ouvre une fois pour l'autoriser. "
-                    + "« Ajouter un compte Google (Gmail)… » : de même chez Google ; tant que Google n'a pas "
-                    + "vérifié MMail, il l'annonce comme non vérifié, et seuls les comptes déclarés pour les "
-                    + "essais peuvent s'y connecter. "
+                    + "« Ajouter un compte Google (Gmail)… » : de même chez Google ; ce menu n'apparaît "
+                    + "qu'une fois MMail publié par Google — avant, seuls les comptes déclarés pour les "
+                    + "essais pourraient s'y connecter. "
                     + "« Modifier un compte » (aussi au clic droit sur le compte, « Modifier ce compte… ») : "
                     + "serveur de lecture, serveur d'envoi, mot de passe — laissé vide, il ne change pas —, "
                     + "et de là, nom et signature. Clic droit sur un compte : aussi se connecter, se "
@@ -8071,7 +8071,7 @@ ApplicationWindow {
                     demanderCompte(compteParId(g.id), "jeton refusé")
                     console.log("scenario: redemande", dlgCompte.modification, dlgCompte.service, "| note", noteCompte.text)
                     dlgCompte.close()
-                    console.log("scenario: disponible", boite.googleDisponible())
+                    console.log("scenario: disponible", boite.googleDisponible(), "| ajout ouvert", boite.googleAjoutOuvert())
                     var url = boite.connecterGoogle(g.adresse)
                     if (url.length === 0) {
                         console.log("scenario: sans client :", boite.erreur)

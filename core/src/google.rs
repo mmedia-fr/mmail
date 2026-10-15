@@ -73,6 +73,19 @@ pub fn disponible() -> bool {
     !identifiant_client().is_empty() && !secret_client().is_empty()
 }
 
+/// L'application Google de MMail est-elle publiée ? Tant qu'elle est « En
+/// test », Google ne laisse se connecter que ses utilisateurs de test : à tout
+/// autre, MMail montrerait l'ajout d'un compte Gmail puis un refus. L'ajout
+/// reste donc masqué ; la reconnexion d'un compte déjà là, elle, fonctionne.
+/// À passer à `true` quand Google a publié l'application.
+const APPLICATION_PUBLIEE: bool = false;
+
+/// Vrai si l'ajout d'un compte Google s'affiche : application publiée, ou
+/// `MMAIL_GOOGLE_ESSAI` posée (utilisateurs de test).
+pub fn ajout_ouvert() -> bool {
+    disponible() && (APPLICATION_PUBLIEE || !reglage("MMAIL_GOOGLE_ESSAI", "").is_empty())
+}
+
 /// Écoute locale du retour de Google : `http://127.0.0.1:<port>`.
 pub fn ecouter() -> std::io::Result<Ecoute> {
     crate::oauth::ecouter("127.0.0.1")
@@ -263,6 +276,13 @@ mod tests {
         assert_eq!(identifiant_client(), "42.apps.googleusercontent.com");
         assert_eq!(secret_client(), "GOCSPX-essai");
         assert!(disponible());
+        // Ajout d'un compte : masqué tant que l'application Google est « En
+        // test », sauf MMAIL_GOOGLE_ESSAI.
+        std::env::remove_var("MMAIL_GOOGLE_ESSAI");
+        assert_eq!(ajout_ouvert(), APPLICATION_PUBLIEE);
+        std::env::set_var("MMAIL_GOOGLE_ESSAI", "1");
+        assert!(ajout_ouvert());
+        std::env::remove_var("MMAIL_GOOGLE_ESSAI");
         std::env::remove_var("MMAIL_GOOGLE_CLIENT_ID");
         std::env::remove_var("MMAIL_GOOGLE_CLIENT_SECRET");
         if GOOGLE_CLIENT_ID.is_empty() {

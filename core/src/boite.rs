@@ -127,6 +127,12 @@ pub mod qobject {
         #[cxx_name = "googleDisponible"]
         fn google_disponible(&self) -> bool;
 
+        /// Vrai si l'ajout d'un compte Google s'affiche : l'application Google
+        /// de MMail est publiée, ou `MMAIL_GOOGLE_ESSAI` est posée.
+        #[qinvokable]
+        #[cxx_name = "googleAjoutOuvert"]
+        fn google_ajout_ouvert(&self) -> bool;
+
         /// Connexion d'un compte Google (Gmail) : comme `connecterMicrosoft`.
         /// Issue : `googleConnecte`, ou `googleRefuse`.
         #[qinvokable]
@@ -1907,6 +1913,10 @@ impl qobject::Boite {
 
     pub fn google_disponible(&self) -> bool {
         crate::google::disponible()
+    }
+
+    pub fn google_ajout_ouvert(&self) -> bool {
+        crate::google::ajout_ouvert()
     }
 
     pub fn connecter_google(mut self: Pin<&mut Self>, indice: &QString) -> QString {

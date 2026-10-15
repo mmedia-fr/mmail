@@ -304,6 +304,14 @@ connecter ; une application laissée « En test » voit ses jetons expirer au bo
 de sept jours — il faut alors se reconnecter. Pas d'agenda ; la sauvegarde de
 la configuration garde le compte, pas son jeton.
 
+**Ajout masqué tant que l'application Google est « En test ».** Google n'y
+laisse se connecter que ses utilisateurs de test : pour tout autre, le menu
+mènerait à un refus. « Ajouter un compte Google (Gmail)… » ne s'affiche donc
+que si la variable `MMAIL_GOOGLE_ESSAI` est posée (n'importe quelle valeur
+non vide) ; un compte Gmail déjà ajouté reste utilisable et se reconnecte
+normalement. L'ajout s'ouvrira à tous quand Google aura publié l'application
+(constante `APPLICATION_PUBLIEE` de `core/src/google.rs`).
+
 ### Lien de configuration
 
 Un administrateur peut préparer un ou plusieurs comptes, mot de passe compris,

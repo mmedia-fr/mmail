@@ -1822,7 +1822,7 @@ ApplicationWindow {
             etatMiseAJour = "proposee"
         }
         if (essai && essai.scenario.indexOf("mise-a-jour") === 0)
-            etapeScenarioMiseAJour("proposee")
+            scenarios.etapeScenarioMiseAJour("proposee")
     }
 
     function choisirMiseAJour(choix) {
@@ -1855,14 +1855,14 @@ ApplicationWindow {
         installeur.programmer(fichier, false)
         etatMiseAJour = reglagesMiseAJour.choix === "maintenant" ? "prete" : ""
         if (essai && essai.scenario.indexOf("mise-a-jour") === 0)
-            etapeScenarioMiseAJour("prete")
+            scenarios.etapeScenarioMiseAJour("prete")
     }
 
     function miseAJourEchouee(version, message) {
         erreurMiseAJour = message
         etatMiseAJour = "echec"
         if (essai && essai.scenario.indexOf("mise-a-jour") === 0)
-            etapeScenarioMiseAJour("echec")
+            scenarios.etapeScenarioMiseAJour("echec")
     }
 
     // Les rédactions ouvertes sont gardées sur le poste à la fermeture, et
@@ -3308,7 +3308,7 @@ ApplicationWindow {
             if (fenetre.essai && fenetre.essai.scenario === "sauvegarde" && fenetre.essai.etape === 0) {
                 fenetre.essai.etape = 1
                 var pauseSauvegarde = Qt.createQmlObject('import QtQuick; Timer { interval: 4000 }', fenetre)
-                pauseSauvegarde.triggered.connect(function() { fenetre.etapeScenarioSauvegarde(compte, adresse) })
+                pauseSauvegarde.triggered.connect(function() { scenarios.etapeScenarioSauvegarde(compte, adresse) })
                 pauseSauvegarde.start()
             }
             // Les agendas suivent, une fois les connexions du démarrage faites.
@@ -3340,11 +3340,11 @@ ApplicationWindow {
             if (boite.dossierCourant.length === 0)
                 fenetre.ouvrirDossier(compte, "INBOX")
             else if (fenetre.essai && fenetre.essai.scenario) {
-                fenetre.etapeScenario()
+                scenarios.etapeScenario()
                 if (fenetre.essai.scenario === "glisser")
-                    fenetre.etapeScenarioGlisser()
+                    scenarios.etapeScenarioGlisser()
                 if (fenetre.essai.scenario === "corbeille-ligne")
-                    fenetre.etapeScenarioCorbeille()
+                    scenarios.etapeScenarioCorbeille()
             }
         }
 
@@ -3422,7 +3422,7 @@ ApplicationWindow {
                 console.log("scenario: historique proposé", panneauHistorique.entrees.length, "| ouvert", panneauHistorique.opened)
             }
             if (fenetre.essai && fenetre.essai.scenario === "recherche-partout" && fenetre.essai.etape < 3) {
-                fenetre.etapeScenarioRecherchePartout(compte, chemin)
+                scenarios.etapeScenarioRecherchePartout(compte, chemin)
                 return
             }
             fenetre.rafraichirListe()
@@ -3436,19 +3436,19 @@ ApplicationWindow {
                 fenetre.choisir(0, 0)
             }
             if (fenetre.essai && fenetre.essai.scenario)
-                fenetre.etapeScenario()
+                scenarios.etapeScenario()
             if (fenetre.essai && fenetre.essai.scenario === "glisser")
-                fenetre.etapeScenarioGlisser()
+                scenarios.etapeScenarioGlisser()
             if (fenetre.essai && fenetre.essai.scenario === "corbeille-ligne")
-                fenetre.etapeScenarioCorbeille()
+                scenarios.etapeScenarioCorbeille()
             if (fenetre.essai && fenetre.essai.scenario === "en-tete")
-                fenetre.etapeScenarioEnTete()
+                scenarios.etapeScenarioEnTete()
             if (fenetre.essai && fenetre.essai.scenario === "accessibilite")
-                fenetre.etapeScenarioAccessibilite()
+                scenarios.etapeScenarioAccessibilite()
             if (fenetre.essai && fenetre.essai.scenario === "chevron")
-                fenetre.etapeScenarioChevron()
+                scenarios.etapeScenarioChevron()
             if (fenetre.essai && (fenetre.essai.scenario === "defilement" || fenetre.essai.scenario === "favoris-fixes"))
-                fenetre.etapeScenarioDefilement()
+                scenarios.etapeScenarioDefilement()
             if (fenetre.essai && fenetre.essai.scenario === "joindre" && !fenetre.essai.choisi) {
                 for (var k = 0; k < modeleMessages.count; ++k) {
                     if (modeleMessages.get(k).pieces) {
@@ -3459,7 +3459,7 @@ ApplicationWindow {
                 }
             }
             if (fenetre.essai && fenetre.essai.scenario.indexOf("signature") === 0)
-                fenetre.etapeScenarioSignature()
+                scenarios.etapeScenarioSignature()
         }
 
         function onDrapeauxModifies() {
@@ -3502,9 +3502,9 @@ ApplicationWindow {
                     modeleMessages.setProperty(i, "pieces", fenetre.pieces.length > 0)
             }
             if (fenetre.essai && fenetre.essai.scenario === "pieces")
-                fenetre.etapeScenarioPieces()
+                scenarios.etapeScenarioPieces()
             if (fenetre.essai && fenetre.essai.scenario === "ouvrir-avec")
-                fenetre.etapeScenarioOuvrirAvec()
+                scenarios.etapeScenarioOuvrirAvec()
             // Scénario « joindre » : la première pièce du message affiché,
             // jointe à un nouveau message.
             if (fenetre.essai && fenetre.essai.scenario === "joindre" && !brut
@@ -3571,7 +3571,7 @@ ApplicationWindow {
                 console.log("scenario: brouillon enregistré", uid, "| modifiée", r.modifie,
                             "| gardées après", JSON.parse(boite.redactionsGardees()).length, "| note", r.note)
             if (fenetre.essai && fenetre.essai.scenario === "brouillon-auto")
-                fenetre.etapeScenarioBrouillonAuto(r, uid)
+                scenarios.etapeScenarioBrouillonAuto(r, uid)
             if (fenetre.essai && fenetre.essai.scenario === "coller-image") {
                 console.log("scenario: brouillon enregistré", uid, "| note", r.note)
                 Qt.quit()
@@ -3771,11 +3771,11 @@ ApplicationWindow {
                 messageEtat.texte = fenetre.accord(nombre, qsTr("message déplacé."), qsTr("messages déplacés."))
             if (fenetre.essai && fenetre.essai.scenario) {
                 console.log("scenario: deplacement termine", nombre, erreurs)
-                fenetre.etapeScenario()
+                scenarios.etapeScenario()
                 if (fenetre.essai.scenario === "glisser")
-                    fenetre.etapeScenarioGlisser()
+                    scenarios.etapeScenarioGlisser()
                 if (fenetre.essai.scenario === "corbeille-ligne")
-                    fenetre.etapeScenarioCorbeille()
+                    scenarios.etapeScenarioCorbeille()
             }
         }
 
@@ -3808,12 +3808,12 @@ ApplicationWindow {
                 qsTr("message effacé des corbeilles et indésirables."),
                 qsTr("messages effacés des corbeilles et indésirables."))
             if (fenetre.essai && fenetre.essai.scenario === "vidage")
-                fenetre.bilanScenarioVidage("vidées, " + nombre + " message(s) | " + messageEtat.texte)
+                scenarios.bilanScenarioVidage("vidées, " + nombre + " message(s) | " + messageEtat.texte)
         }
 
         function onEchec(compte, etape, message) {
             if (fenetre.essai && fenetre.essai.scenario === "vidage")
-                fenetre.bilanScenarioVidage("échec du compte " + compte + " | étape " + etape + " | " + message)
+                scenarios.bilanScenarioVidage("échec du compte " + compte + " | étape " + etape + " | " + message)
             if (etape === "tri") {
                 // Le compte des déplacements en cours n'est pas touché ici : un
                 // déplacement rend toujours « deplacementTermine », réussi ou
@@ -4447,7 +4447,7 @@ ApplicationWindow {
         if (fenetre.essai && fenetre.essai.scenario === "restauration") {
             console.log("scenario: restaurée,", (r.comptes || []).length, "compte(s),", r.images, "image(s),", connectes, "connexion(s)")
             var bilan = Qt.createQmlObject('import QtQuick; Timer { interval: 3000 }', fenetre)
-            bilan.triggered.connect(bilanScenarioRestauration)
+            bilan.triggered.connect(scenarios.bilanScenarioRestauration)
             bilan.start()
         }
     }
@@ -5747,7 +5747,7 @@ ApplicationWindow {
             // suivante, se rouvre telle quelle, et disparaît à son issue.
             if (essai.scenario === "garde" || essai.scenario === "reprise-ouvrir") {
                 var pause = Qt.createQmlObject('import QtQuick; Timer { interval: 1500 }', fenetre)
-                pause.triggered.connect(essai.scenario === "garde" ? etapeScenarioGarde : etapeScenarioReprise)
+                pause.triggered.connect(essai.scenario === "garde" ? scenarios.etapeScenarioGarde : scenarios.etapeScenarioReprise)
                 pause.start()
                 return
             }
@@ -5759,7 +5759,7 @@ ApplicationWindow {
                 reglagesSauvegarde.aChercher = true
             if (essai.scenario === "garde-serveur") {
                 var delai = Qt.createQmlObject('import QtQuick; Timer { interval: 6000 }', fenetre)
-                delai.triggered.connect(etapeScenarioGardeServeur)
+                delai.triggered.connect(scenarios.etapeScenarioGardeServeur)
                 delai.start()
             }
             // Scénario « veille-fond » : le second compte n'est jamais ouvert ;
@@ -6061,12 +6061,12 @@ ApplicationWindow {
             }
             if (essai.scenario === "coller-image") {
                 var attenteImage = Qt.createQmlObject('import QtQuick; Timer { interval: 6000 }', fenetre)
-                attenteImage.triggered.connect(etapeScenarioCollerImage)
+                attenteImage.triggered.connect(scenarios.etapeScenarioCollerImage)
                 attenteImage.start()
             }
             if (essai.scenario === "brouillon-auto") {
                 var attente = Qt.createQmlObject('import QtQuick; Timer { interval: 6000 }', fenetre)
-                attente.triggered.connect(function() { etapeScenarioBrouillonAuto(null, 0) })
+                attente.triggered.connect(function() { scenarios.etapeScenarioBrouillonAuto(null, 0) })
                 attente.start()
             }
             // Scénario « horsligne » : aucune connexion ; le profil d'une
@@ -6075,19 +6075,19 @@ ApplicationWindow {
             // l'ouverture d'INBOX depuis l'index et ses rafraîchissements.
             if (essai.scenario === "mesure-recherche") {
                 var mesureRecherche = Qt.createQmlObject('import QtQuick; Timer { interval: 1500 }', fenetre)
-                mesureRecherche.triggered.connect(etapeScenarioMesureRecherche)
+                mesureRecherche.triggered.connect(scenarios.etapeScenarioMesureRecherche)
                 mesureRecherche.start()
                 return
             }
             if (essai.scenario === "mesure-liste") {
                 var mesure = Qt.createQmlObject('import QtQuick; Timer { interval: 1500 }', fenetre)
-                mesure.triggered.connect(etapeScenarioMesure)
+                mesure.triggered.connect(scenarios.etapeScenarioMesure)
                 mesure.start()
                 return
             }
             if (essai.scenario === "horsligne") {
                 var attente = Qt.createQmlObject('import QtQuick; Timer { interval: 1500 }', fenetre)
-                attente.triggered.connect(etapeScenarioHorsLigne)
+                attente.triggered.connect(scenarios.etapeScenarioHorsLigne)
                 attente.start()
                 return
             }
@@ -6111,554 +6111,13 @@ ApplicationWindow {
             connecterCompte(comptes[i])
     }
 
-    /// Scénario « vidage » : chaque issue, puis l'état des comptes cinq
-    /// secondes après la dernière — le 01/10, ils étaient tous passés en
-    /// « erreur » après un vidage.
-    function bilanScenarioVidage(issue) {
-        console.log("scenario: " + issue)
-        if (!essai.bilanVidage) {
-            essai.bilanVidage = Qt.createQmlObject('import QtQuick; Timer { interval: 5000 }', fenetre)
-            essai.bilanVidage.triggered.connect(function() {
-                JSON.parse(boite.arborescence(false))
-                    .filter(function(l) { return l.genre === "compte" })
-                    .forEach(function(l) {
-                        console.log("scenario: compte", l.adresse, "| état :", l.etat, "| motif :", l.motif || "—")
-                    })
-                Qt.quit()
-            })
-        }
-        essai.bilanVidage.restart()
-    }
-
-    /// Scénario « sauvegarde » : des réglages, une signature avec son image
-    /// (MMAIL_DOSSIER : adresse d'une image) et un favori, puis la sauvegarde.
-    /// Le scénario « restauration », sur un profil neuf, les retrouve.
-    function etapeScenarioSauvegarde(compte, adresse) {
-        reglages.zoomListe = 1.25
-        reglagesApparence.theme = "classique"
-        var image = boite.imageSignature(adresse, identifiantsEssai.dossier)
-        var identites = {}
-        identites[adresse] = { nom: "Essai Sauvegarde", signature: "<p>Cordialement</p><img src=\"" + image + "\">" }
-        reglagesRedaction.identites = JSON.stringify(identites)
-        boite.epinglerDossier(compte, "INBOX", true)
-        console.log("scenario: image de signature", image)
-        console.log("scenario: réglages", JSON.stringify(lireReglages()).length, "caractères")
-        sauvegarderConfiguration(true)
-    }
-
-    /// Scénario « restauration » : ce que la sauvegarde a rapporté.
-    function bilanScenarioRestauration() {
-        var identites = JSON.parse(reglagesRedaction.identites)
-        var adresses = Object.keys(identites)
-        var signature = adresses.length > 0 ? identites[adresses[0]].signature : ""
-        var image = (signature.match(/src="([^"]+)"/) || [])[1] || ""
-        var favoris = 0
-        for (var i = 0; i < modeleFavoris.count; ++i)
-            if (modeleFavoris.get(i).genre === "favori")
-                ++favoris
-        console.log("scenario: bilan zoomListe", reglages.zoomListe, "apparence", fenetre.apparence,
-                    "identités", adresses.join(","), "favoris", favoris)
-        console.log("scenario: image", image)
-    }
-
-    function etapeScenarioGarde() {
-        var r = ouvrirRedaction(comptesConnus.length > 0 ? comptesConnus[0].compte : 0)
-        r.remplir({ a: "destinataire@exemple.fr", objet: "Essai de reprise",
-                    texte: "Texte tapé avant la coupure.", mode: "brouillon" })
-        r.modifie = true
-        r.garder()
-        console.log("scenario: gardée", r.idGarde, r.etatGarde.length > 0 ? "OK" : "ECHEC")
-    }
-
-    /// Scénario « garde-serveur » : l'enregistrement périodique sur le
-    /// serveur efface la rédaction gardée sur le poste.
-    function etapeScenarioGardeServeur() {
-        var r = ouvrirRedaction(comptesConnus[0].compte)
-        r.remplir({ a: "destinataire@exemple.fr", objet: "Essai d'enregistrement automatique",
-                    texte: "Brouillon parti seul.", mode: "brouillon" })
-        r.modifie = true
-        r.garder()
-        console.log("scenario: gardées avant", JSON.parse(boite.redactionsGardees()).length)
-        r.enregistrer(true)
-    }
-
-    /// Scénario « coller-image » : l'image de MMAIL_DOSSIER (un fichier) passe
-    /// par le presse-papier, se colle dans un message neuf, et le brouillon
-    /// part sur le serveur — l'image y doit être intégrée.
-    // Scénarios « mise-a-jour » et « mise-a-jour-fermeture » : MMail se croit
-    // ancien (MMAIL_VERSION_ESSAI), installé par l'installeur ou lancé en
-    // AppImage. La dernière publication est proposée, choisie « Maintenant »
-    // (ou « À la fermeture »), téléchargée et contrôlée ; puis MMail redémarre
-    // (ou se ferme), et le programme l'installe.
-    function etapeScenarioMiseAJour(etape) {
-        var fermeture = essai.scenario === "mise-a-jour-fermeture"
-        console.log("scenario: mise à jour", etape, "| publiée", versionNouvelle, "| actuelle", miseAJour.versionActuelle(),
-                    "| genre", genreMiseAJour, "| état", etatMiseAJour, "| fichier", fichierMiseAJour,
-                    "| programmée", installeur.programme(), erreurMiseAJour)
-        capturerBandeauVersion(etape)
-        if (etape === "proposee" && etatMiseAJour === "proposee") {
-            var choix = Qt.createQmlObject('import QtQuick; Timer { interval: 4000 }', fenetre)
-            choix.triggered.connect(function() { choisirMiseAJour(fermeture ? "fermeture" : "maintenant") })
-            choix.start()
-        } else if (etape === "prete") {
-            var pause = Qt.createQmlObject('import QtQuick; Timer { interval: 1500 }', fenetre)
-            pause.triggered.connect(function() {
-                console.log("scenario: mise à jour —", fermeture ? "fermeture" : "redémarrage", "| pid", Qt.application.arguments)
-                if (fermeture)
-                    Qt.quit()
-                else
-                    redemarrerPourMettreAJour()
-            })
-            pause.start()
-        } else if (etape === "echec") {
-            Qt.quit()
-        }
-    }
+    Scenarios { id: scenarios }
 
     function capturerBandeauVersion(nom) {
         if (!identifiantsEssai.sortie)
             return
         var chemin = lanceur.chemin(identifiantsEssai.sortie + "/bandeau-" + nom + ".png")
         bandeauVersion.grabToImage(function(r) { r.saveToFile(chemin) })
-    }
-
-    function etapeScenarioCollerImage() {
-        var r = ouvrirRedaction(comptesConnus[0].compte)
-        r.pret()
-        r.remplir({ a: "destinataire@exemple.fr", objet: "Essai image collée " + Date.now(),
-                    texte: "Avant l'image.", mode: "brouillon" })
-        console.log("scenario: image dans le presse-papier", pressePapier.deposerImage(identifiantsEssai.dossier))
-        console.log("scenario: collée", r.collerImage(), "| mise en forme", r.miseEnForme,
-                    "| image dans le corps", r.htmlActuel().indexOf("<img") >= 0,
-                    "| parmi les images collées", r.htmlActuel().indexOf("images-redaction/collees/collee-") >= 0)
-        essai.etape = 1
-        r.enregistrer(false)
-    }
-
-    /// Scénario « brouillon-auto » : un message neuf que l'on ne touche pas ne
-    /// passe pas pour modifié ; modifié, il est enregistré sur le serveur sans
-    /// rien demander 30 s plus tard, puis une minute après la frappe suivante,
-    /// la version précédente effacée (UID rendus par le serveur).
-    function etapeScenarioBrouillonAuto(r, uid) {
-        var ecoule = function() { return Math.round((Date.now() - essai.depart) / 1000) }
-        if (essai.etape === 0) {
-            essai.etape = 1
-            var n = ouvrirRedaction(comptesConnus[0].compte)
-            n.pret()
-            var controle = Qt.createQmlObject('import QtQuick; Timer { interval: 3000 }', fenetre)
-            controle.triggered.connect(function() {
-                console.log("scenario: message neuf, modifié", n.modifie)
-                n.remplir({ a: "destinataire@exemple.fr", objet: "Essai brouillon automatique " + Date.now(),
-                            texte: "Première frappe.", mode: "brouillon" })
-                n.modifie = true
-                essai.depart = Date.now()
-                var garde = Qt.createQmlObject('import QtQuick; Timer { interval: 150000 }', fenetre)
-                garde.triggered.connect(function() {
-                    if (essai.etape < 3)
-                        console.log("scenario: ECHEC, étape", essai.etape, "| note", n.note)
-                })
-                garde.start()
-            })
-            controle.start()
-        } else if (essai.etape === 1) {
-            essai.etape = 2
-            essai.premier = uid
-            console.log("scenario: 1er enregistrement après", ecoule(), "s | uid", uid, "| modifiée", r.modifie,
-                        "| note", r.note)
-            // La frappe reprend un peu plus tard.
-            var reprise = Qt.createQmlObject('import QtQuick; Timer { interval: 5000 }', fenetre)
-            reprise.triggered.connect(function() {
-                r.modifie = true
-                essai.depart = Date.now()
-            })
-            reprise.start()
-        } else if (essai.etape === 2) {
-            essai.etape = 3
-            console.log("scenario: 2e enregistrement après", ecoule(), "s | uid", uid, "| précédent", essai.premier,
-                        "| modifiée", r.modifie)
-        }
-    }
-
-    /// Scénario « recherche-partout » : « Éléments envoyés » puis la boîte de
-    /// réception passent par l'index ; le texte de MMAIL_DOSSIER est cherché
-    /// dans toutes les boîtes ; un résultat d'un autre dossier est choisi — le
-    /// noyau y passe, la liste reste celle des résultats ; Échap ramène au
-    /// dossier de départ. MMAIL_SORTIE_PRECOCE absent : la fenêtre reste sur
-    /// les résultats pour la capture.
-    function etapeScenarioRecherchePartout(compte, chemin) {
-        if (essai.etape === 0) {
-            essai.etape = 1
-            ouvrirDossier(compte, "Sent")
-        } else if (essai.etape === 1 && chemin === "Sent") {
-            essai.etape = 2
-            ouvrirDossier(compte, "INBOX")
-        } else if (essai.etape === 2 && chemin === "INBOX") {
-            essai.etape = 3
-            porteeRecherche.currentIndex = 1
-            champRecherche.text = identifiantsEssai.dossier
-            lancerRecherche()
-            var dossiers = {}
-            var autre = -1
-            for (var i = 0; i < modeleMessages.count; ++i) {
-                var r = modeleMessages.get(i)
-                dossiers[r.chemin] = true
-                if (autre < 0 && r.chemin !== "INBOX")
-                    autre = i
-            }
-            console.log("scenario: résultats", modeleMessages.count, "| dossiers", Object.keys(dossiers).join(", "),
-                        "| premier :", modeleMessages.count > 0 ? modeleMessages.get(0).cheminAffiche : "—",
-                        "| historique", historiqueRecherches().slice(0, 3).join(" / "))
-            if (autre < 0 || identifiantsEssai.sortie.length === 0)
-                return
-            choisir(autre, 0)
-            var suite = Qt.createQmlObject('import QtQuick; Timer { interval: 3000 }', fenetre)
-            suite.triggered.connect(function() {
-                console.log("scenario: choisi", modeleMessages.get(autre).sujet, "| noyau sur", boite.dossierCourant,
-                            "| affiché", sujetAffiche.text, "| liste", modeleMessages.count, "| globale", rechercheGlobale)
-                quitterRecherche()
-                var fin = Qt.createQmlObject('import QtQuick; Timer { interval: 2000 }', fenetre)
-                fin.triggered.connect(function() {
-                    console.log("scenario: après Échap, noyau sur", boite.dossierCourant, "| liste", modeleMessages.count,
-                                "| recherche", JSON.stringify(recherche), "| globale", rechercheGlobale)
-                    Qt.quit()
-                })
-                fin.start()
-            })
-            suite.start()
-        }
-    }
-
-    function etapeScenarioReprise() {
-        console.log("scenario: proposées", redactionsRetrouvees.length, "| dialogue ouvert", dlgReprise.opened)
-        dlgReprise.close()
-        rouvrirRedactions()
-        var jetons = Object.keys(redactions)
-        for (var k = 0; k < jetons.length; ++k) {
-            var r = redactions[jetons[k]]
-            var c = r.contenu()
-            console.log("scenario: reprise", r.idGarde, "|", c.a, "|", c.objet, "|", JSON.stringify(c.texte),
-                        "| modifiée", r.modifie, "| note", r.note)
-            r.conteneur.fermerRedaction()
-        }
-        console.log("scenario: restantes", JSON.parse(boite.redactionsGardees()).length)
-    }
-
-    /// Scénario d'essai « horsligne » : sans connexion, la boîte de réception
-    /// s'ouvre sur l'index et son premier message s'affiche depuis le poste.
-    function etapeScenarioHorsLigne() {
-        var c = comptesConnus[0]
-        ouvrirDossier(c.compte, "INBOX")
-        console.log("scenario: hors ligne,", modeleMessages.count, "messages dans la liste")
-        if (modeleMessages.count > 0)
-            choisir(0, 0)
-        var attente = Qt.createQmlObject('import QtQuick; Timer { interval: 1500 }', fenetre)
-        attente.triggered.connect(function() {
-            console.log("scenario: affiché :", sujetAffiche.text, "| html :", corpsHtml, "|",
-                        vueCorps.text.length, "caractères",
-                        vueCorps.text.indexOf("Chargement") === 0 || vueCorps.text.length < 20 ? "ECHEC" : "OK")
-        })
-        attente.start()
-    }
-
-    /// Scénario « mesure-recherche » : temps d'une recherche dans le dossier
-    /// ouvert (index seul, hors connexion), du retour à la liste entière, et
-    /// d'une recherche dans toutes les boîtes.
-    function etapeScenarioMesureRecherche() {
-        var c = comptesConnus[0]
-        ouvrirDossier(c.compte, "INBOX")
-        champRecherche.text = "Correspondant 12"
-        var t = Date.now()
-        lancerRecherche()
-        console.log("mesure: recherche dans le dossier,", modeleMessages.count, "résultats,", Date.now() - t, "ms")
-        t = Date.now()
-        quitterRecherche()
-        console.log("mesure: sortie de recherche,", modeleMessages.count, "messages,", Date.now() - t, "ms")
-        porteeRecherche.currentIndex = 1
-        champRecherche.text = "dossier 39"
-        t = Date.now()
-        lancerRecherche()
-        console.log("mesure: recherche dans toutes les boîtes,", modeleMessages.count, "résultats,",
-                    Date.now() - t, "ms")
-        Qt.quit()
-    }
-
-    /// Scénario « mesure-liste » : temps d'ouverture d'INBOX depuis l'index,
-    /// de trois rafraîchissements sans changement, puis d'un rafraîchissement
-    /// après l'arrivée d'un message, que l'épreuve insère dans l'index pendant
-    /// l'attente annoncée par « pret-insertion ».
-    function etapeScenarioMesure() {
-        var c = comptesConnus[0]
-        mesureSuite = { paquets: 0, plusLong: 0 }
-        var t = Date.now()
-        ouvrirDossier(c.compte, "INBOX")
-        console.log("mesure: ouverture (première page),", modeleMessages.count, "messages,", Date.now() - t, "ms")
-        // La suite, par paquets : la fenêtre ne doit jamais rester figée
-        // longtemps entre deux.
-        var suivi = Qt.createQmlObject('import QtQuick; Timer { interval: 10; repeat: true }', fenetre)
-        suivi.triggered.connect(function() {
-            if (minuteurSuite.running)
-                return
-            suivi.stop()
-            console.log("mesure: liste complète,", modeleMessages.count, "messages en", Date.now() - t, "ms |",
-                        mesureSuite.paquets, "paquets, le plus long", mesureSuite.plusLong, "ms")
-            mesureSuite = null
-            var index = JSON.parse(boite.messages())
-            var conforme = index.length === modeleMessages.count
-            for (var i = 0; conforme && i < index.length; ++i)
-                conforme = index[i].uid === modeleMessages.get(i).uid
-            console.log("mesure: liste conforme à l'index :", conforme)
-            // Relecture complète pendant qu'un message lointain est choisi : la
-            // suite est lue d'un trait jusqu'à lui, il reste choisi.
-            var loin = modeleMessages.get(30000).uid
-            uidCourant = loin
-            selection = ({ [loin]: true })
-            var t3 = Date.now()
-            rafraichirListe(true)
-            console.log("mesure: relecture complète, message choisi au rang 30 000 :", Date.now() - t3, "ms |",
-                        modeleMessages.count, "lignes | toujours choisi", uidCourant === loin && selection[loin] === true,
-                        "| à son rang", indexDe(loin) === 30000)
-            arreterSuite()
-            uidCourant = 0
-            selection = ({})
-            rafraichirListe(true)
-            completerListe()
-            etapeScenarioMesureSuite()
-        })
-        suivi.start()
-    }
-
-    function etapeScenarioMesureSuite() {
-        var t
-        for (var k = 0; k < 3; ++k) {
-            t = Date.now()
-            rafraichirListe()
-            console.log("mesure: rafraîchissement sans changement,", Date.now() - t, "ms")
-        }
-        // Ce que faisait la 0.4.4 à chaque rafraîchissement : la liste entière
-        // relue, puis comparée ligne à ligne.
-        for (k = 0; k < 3; ++k) {
-            t = Date.now()
-            var liste = JSON.parse(boite.messages())
-            var memeForme = liste.length === modeleMessages.count
-            for (var i = 0; memeForme && i < liste.length; ++i)
-                memeForme = liste[i].uid === modeleMessages.get(i).uid
-            for (var j = 0; memeForme && j < liste.length; ++j)
-                modeleMessages.get(j).lu !== liste[j].lu
-            console.log("mesure: ancien rafraîchissement sans changement,", Date.now() - t, "ms")
-        }
-        console.log("scenario: pret-insertion")
-        var attente = Qt.createQmlObject('import QtQuick; Timer { interval: 5000 }', fenetre)
-        attente.triggered.connect(function() {
-            var t2 = Date.now()
-            rafraichirListe()
-            console.log("mesure: rafraîchissement après une arrivée,", modeleMessages.count, "messages,",
-                        Date.now() - t2, "ms | premier :", modeleMessages.get(0).sujet)
-            // L'ancienne reconstruction, sur la même liste.
-            t2 = Date.now()
-            poserListe(JSON.parse(boite.messages()))
-            console.log("mesure: ancienne reconstruction,", Date.now() - t2, "ms")
-            Qt.quit()
-        })
-        attente.start()
-    }
-
-    /// Scénario d'essai « defilement » : l'arborescence, agrandie pour
-    /// déborder et défilée tout en bas, doit remonter d'elle-même quand un
-    /// élément glissé se tient contre son bord haut.
-    function etapeScenarioDefilement() {
-        if (essai.defilement)
-            return
-        essai.defilement = true
-        reglages.zoomArborescence = 3
-        // « favoris-fixes » : les comptes défilés tout en bas, sans glisser —
-        // la capture montre les Favoris restés en haut.
-        if (essai.scenario === "favoris-fixes") {
-            var attente = Qt.createQmlObject('import QtQuick; Timer { interval: 1000 }', fenetre)
-            attente.triggered.connect(function() {
-                var v = vueArborescence
-                v.contentY = Math.max(v.originY, v.originY + v.contentHeight - v.height)
-                console.log("scenario: comptes défilés à", v.contentY, "; Favoris visibles :", vueFavoris.visible, vueFavoris.count, "lignes")
-            })
-            attente.start()
-            return
-        }
-        Qt.callLater(function() {
-            var v = vueArborescence
-            v.contentY = Math.max(v.originY, v.originY + v.contentHeight - v.height)
-            var avant = v.contentY
-            var sonde = Qt.createQmlObject('import QtQuick; Rectangle { width: 40; height: 16 }', fenetre.contentItem)
-            var p = v.mapToItem(fenetre.contentItem, 20, 4)
-            sonde.x = p.x
-            sonde.y = p.y
-            glisse = sonde
-            var attente = Qt.createQmlObject('import QtQuick; Timer { interval: 3000 }', fenetre)
-            attente.triggered.connect(function() {
-                glisse = null
-                console.log("scenario: défilement de", avant, "à", v.contentY, "(haut :", v.originY + ")",
-                            v.contentY <= v.originY + 1 ? "OK" : "ECHEC")
-            })
-            attente.start()
-        })
-    }
-
-    /// Scénario d'essai « signature » : importe la signature Outlook déposée
-    /// dans le dossier de sortie (signature.htm et ses images), la pose sur le
-    /// compte, rédige un message à `MMAIL_DESTINATAIRE` et l'envoie.
-    function etapeScenarioSignature() {
-        if (essai.signatureFaite)
-            return
-        essai.signatureFaite = true
-        var a = comptesConnus[0]
-        var html = boite.importerSignature(a.adresse, identifiantsEssai.sortie + "/signature.htm")
-        console.log("scenario: signature importée :", html.length, "caractères", boite.erreur)
-        poserIdentite(a.adresse, { nom: "Essai MMail", signature: "Essai MMail", html: html,
-                                   nouveaux: true, reponses: true })
-        if (essai.scenario === "signature-vue") {
-            dlgIdentite.ouvrir(a.compte)
-            return
-        }
-        var r = ouvrirRedaction(a.compte)
-        essai.objetSignature = "Essai signature HTML " + Date.now()
-        r.remplir({ a: identifiantsEssai.utilisateur2, objet: essai.objetSignature, mode: "nouveau" })
-        var corps = r.htmlActuel()
-        console.log("scenario: rédaction :", (corps.match(/<img[^>]*>/g) || []).join(" "))
-        r.envoyer(false)
-    }
-
-    /// Scénario d'essai « chevron » : un clic sur le chevron du dossier
-    /// « Essais », tel que la ligne le reçoit, doit replier ses sous-dossiers ;
-    /// un second, les déplier.
-    function etapeScenarioChevron() {
-        if (essai.etapeChevron === undefined)
-            essai.etapeChevron = 0
-        // Trois clics, chacun à un tour de boucle d'événements du précédent :
-        // replier « INBOX/Fournisseurs », le déplier, replier la boîte de
-        // réception.
-        var cibles = identifiantsEssai.dossier ? [identifiantsEssai.dossier, identifiantsEssai.dossier]
-                                               : ["INBOX/Fournisseurs", "INBOX/Fournisseurs", "INBOX"]
-        if (essai.etapeChevron >= cibles.length)
-            return
-        var present = function(chemin) {
-            for (var k = 0; k < modeleArborescence.count; ++k) {
-                var l = modeleArborescence.get(k)
-                if (l.genre === "dossier" && l.chemin === chemin)
-                    return k
-            }
-            return -1
-        }
-        var etat = function() {
-            var noms = []
-            for (var k = 0; k < modeleArborescence.count; ++k) {
-                var l = modeleArborescence.get(k)
-                if (l.genre === "dossier")
-                    noms.push(l.chemin + (l.enfants ? (l.replie ? "[+]" : "[-]") : ""))
-            }
-            return noms.join(" | ")
-        }
-        var cible = cibles[essai.etapeChevron]
-        var i = present(cible)
-        var ligne = i >= 0 ? vueArborescence.itemAtIndex(i) : null
-        // Un clic au milieu de la place du chevron, où le doigt se pose :
-        // retrait du dossier plus la moitié de la largeur du chevron.
-        var x = ligne ? ligne.leftPadding + modeleArborescence.get(i).profondeur * 14 + 7 : -1
-        if (ligne && !ligne.surChevron(x))
-            x = -1
-        console.log("scenario: clic sur le chevron de", cible, "à x =", x)
-        if (x < 0)
-            return
-        boite.replierDossier(modeleArborescence.get(i).compte, cible, !modeleArborescence.get(i).replie)
-        console.log("scenario: arbre :", etat())
-        essai.etapeChevron += 1
-        Qt.callLater(etapeScenarioChevron)
-    }
-
-    /// Scénario d'essai « aller-retour » (MMAIL_SCENARIO) : le premier message
-    /// de la boîte de réception du premier compte part dans celle du second par
-    /// les fonctions mêmes de l'interface, puis revient. Chaque étape est tracée
-    /// sur la console ; sert à éprouver le tri sans personne devant l'écran.
-    function etapeScenario() {
-        if (!essai || essai.scenario !== "aller-retour")
-            return
-        var comptes = listeComptes()
-        if (comptes.length < 2 || comptes[0].etat !== "pret" || comptes[1].etat !== "pret")
-            return
-        var a = comptes[0], b = comptes[1]
-        if (essai.etape === 0 && boite.compteCourant === a.id && modeleMessages.count > 0) {
-            essai.etape = 1
-            essai.sujet = modeleMessages.get(0).sujet
-            console.log("scenario: aller", essai.sujet, "de", a.adresse, "vers", b.adresse)
-            choisir(0, 0)
-            deplacerVers(b.id, "INBOX")
-        } else if (essai.etape === 1 && boite.compteCourant === a.id && deplacementsEnVol === 0) {
-            essai.etape = 2
-            ouvrirDossier(b.id, "INBOX")
-        } else if (essai.etape === 2 && boite.compteCourant === b.id) {
-            for (var i = 0; i < modeleMessages.count; ++i) {
-                if (modeleMessages.get(i).sujet === essai.sujet) {
-                    essai.etape = 3
-                    console.log("scenario: trouve dans", b.adresse, "- retour")
-                    choisir(i, 0)
-                    deplacerVers(a.id, "INBOX")
-                    return
-                }
-            }
-            console.log("scenario: ECHEC, message absent de", b.adresse)
-            essai.etape = 9
-        } else if (essai.etape === 3 && deplacementsEnVol === 0) {
-            essai.etape = 4
-            ouvrirDossier(a.id, "INBOX")
-        } else if (essai.etape === 4 && boite.compteCourant === a.id) {
-            var revenu = false
-            for (var j = 0; j < modeleMessages.count; ++j)
-                revenu = revenu || modeleMessages.get(j).sujet === essai.sujet
-            console.log(revenu ? "scenario: OK, message revenu dans " + a.adresse
-                               : "scenario: ECHEC, message non revenu")
-            essai.etape = 9
-        }
-    }
-
-    /// Scénario d'essai « pieces » (MMAIL_SCENARIO) : dans la boîte de
-    /// réception du premier compte, le premier message portant une pièce
-    /// jointe est affiché, et sa première pièce enregistrée dans le dossier
-    /// désigné par MMAIL_SORTIE. Sert à éprouver la chaîne sans écran.
-    /// Scénario « ouvrir-avec » : MMAIL_DOSSIER désigne un programme d'essai.
-    /// Retenu pour les .pdf, il ouvre le PDF du premier message ; « Ouvrir
-    /// avec… » ponctuel sur le tableur ; puis le choix est retiré.
-    function etapeScenarioOuvrirAvec() {
-        if (essai.etape !== 0 || pieces.length === 0)
-            return
-        essai.etape = 1
-        var programme = identifiantsEssai.dossier
-        var de = function(ext) { return pieces.filter(function(p) { return extensionDe(p.nom) === ext })[0] }
-        retenirLogiciel("pdf", programme)
-        console.log("scenario: retenu pour .pdf :", lanceur.nom(logicielPour(de("pdf").nom)))
-        ouvrirPiece(de("pdf"))
-        var suite = Qt.createQmlObject('import QtQuick; Timer { interval: 2500 }', fenetre)
-        suite.triggered.connect(function() {
-            console.log("scenario: après le PDF :", messageEtat.texte)
-            ouvrirPiece(de("xlsx"), programme)
-            var fin = Qt.createQmlObject('import QtQuick; Timer { interval: 2500 }', fenetre)
-            fin.triggered.connect(function() {
-                console.log("scenario: après le tableur :", messageEtat.texte)
-                retenirLogiciel("pdf", "")
-                console.log("scenario: retenus après retrait :", JSON.stringify(logicielsPieces()))
-                Qt.quit()
-            })
-            fin.start()
-        })
-        suite.start()
-    }
-
-    function etapeScenarioPieces() {
-        if (essai.etape === 0 && pieces.length > 0) {
-            essai.etape = 1
-            console.log("scenario: pieces", JSON.stringify(pieces))
-            boite.enregistrerPiece(uidCourant, pieces[0].indice,
-                                   identifiantsEssai.sortie + "/" + encodeURIComponent(pieces[0].nom))
-        } else if (essai.etape === 0 && essai.examines < modeleMessages.count - 1) {
-            essai.examines += 1
-            choisir(essai.examines, 0)
-        }
     }
 
     // Sonde du scénario « glisser » : un objet de glisser-déposer Qt Quick,
@@ -6710,167 +6169,6 @@ ApplicationWindow {
         return JSON.parse(boite.arborescence(false))
                 .filter(function(l) { return l.genre === "favori" })
                 .map(function(l) { return l.adresse + ":" + l.chemin })
-    }
-
-    /// Scénario « glisser » (MMAIL_SCENARIO) : deux dossiers déposés sur la
-    /// rubrique Favoris puis l'un sur l'autre, et un message déposé sur un
-    /// dossier puis ramené. Chaque étape est tracée ; les favoris sont retirés
-    /// à la fin.
-    function etapeScenarioGlisser() {
-        var comptes = listeComptes()
-        if (comptes.length < 2 || comptes[0].etat !== "pret" || comptes[1].etat !== "pret")
-            return
-        var a = comptes[0], b = comptes[1]
-        if (essai.etape === 0 && boite.compteCourant === a.id && modeleMessages.count > 0) {
-            essai.etape = 1
-            var ok1 = deposerSonde(indexLigne("rubrique", 0, ""), "mmail/dossier", a.id, "Essais")
-            var ok2 = deposerSonde(indexLigne("favori", a.id, "Essais"), "mmail/dossier", b.id, "INBOX")
-            var ordre = favorisActuels()
-            console.log("scenario: favoris", ok1, ok2, JSON.stringify(ordre))
-            console.log(ordre.length === 2 && ordre[0] === b.adresse + ":INBOX" && ordre[1] === a.adresse + ":Essais"
-                        ? "scenario: OK favoris ordonnes" : "scenario: ECHEC favoris")
-            // Un dossier déposé sur un dossier ordinaire ne fait rien.
-            var refus = deposerSonde(indexLigne("dossier", a.id, "Archive"), "mmail/dossier", a.id, "Essais")
-            console.log(refus ? "scenario: ECHEC dossier accepte hors Favoris" : "scenario: OK dossier refuse hors Favoris")
-            // Un message déposé sur un dossier y part.
-            essai.sujet = modeleMessages.get(0).sujet
-            choisir(0, 0)
-            var ok3 = deposerSonde(indexLigne("dossier", a.id, "Essais/Clients"), "mmail/messages", 0, "")
-            console.log("scenario: message depose", ok3, essai.sujet)
-        } else if (essai.etape === 1 && deplacementsEnVol === 0) {
-            essai.etape = 2
-            ouvrirDossier(a.id, "Essais/Clients")
-        } else if (essai.etape === 2 && boite.dossierCourant === "Essais/Clients") {
-            for (var i = 0; i < modeleMessages.count; ++i) {
-                if (modeleMessages.get(i).sujet === essai.sujet) {
-                    essai.etape = 3
-                    console.log("scenario: OK message arrive dans Essais/Clients")
-                    choisir(i, 0)
-                    deplacerVers(a.id, "INBOX")
-                    return
-                }
-            }
-            console.log("scenario: ECHEC message absent de Essais/Clients")
-            essai.etape = 9
-        } else if (essai.etape === 3 && deplacementsEnVol === 0) {
-            essai.etape = 9
-            boite.epinglerDossier(a.id, "Essais", false)
-            boite.epinglerDossier(b.id, "INBOX", false)
-            console.log("scenario: message ramene, favoris retires :", JSON.stringify(favorisActuels()))
-        }
-    }
-
-    /// Scénario « corbeille-ligne » : dans la boîte de réception, le premier
-    /// message affiché, la corbeille de la deuxième ligne l'envoie à la
-    /// corbeille sans toucher au message affiché ni à la sélection ; il y est
-    /// retrouvé, puis ramené.
-    // Scénario « en-tete » : l'objet et l'expéditeur du message affiché se
-    // sélectionnent et se copient ; « Enregistrer sous… » propose le dernier
-    // dossier choisi s'il existe, sinon les téléchargements.
-    function etapeScenarioEnTete() {
-        var a = listeComptes()[0]
-        if (!a || a.etat !== "pret" || essai.etape || boite.dossierCourant !== "INBOX" || modeleMessages.count < 1)
-            return
-        essai.etape = 1
-        choisir(0, 0)
-        var ligne = modeleMessages.get(0)
-        sujetAffiche.selectAll()
-        console.log("scenario: objet sélectionnable", sujetAffiche.selectByMouse && sujetAffiche.readOnly,
-                    "| sélection = objet", sujetAffiche.selectedText === ligne.sujet)
-        menuEnTete.texteChoisi = sujetAffiche.selectedText
-        copierTexte(menuEnTete.texteChoisi, "message")
-        console.log("scenario: copie de l'objet", pressePapier.texte === ligne.sujet)
-        copierTexte(adresseAffichee, "message")
-        console.log("scenario: copie de l'adresse", adresseAffichee.length > 0 && pressePapier.texte === ligne.adresse,
-                    "|", adresseAffichee)
-        auteurAffiche.selectAll()
-        console.log("scenario: expéditeur sélectionnable", auteurAffiche.selectedText.indexOf(ligne.adresse) >= 0)
-        reglagesPieces.dernierDossier = ""
-        var d1 = dossierEnregistrement()
-        reglagesPieces.dernierDossier = "file:///tmp"
-        var d2 = dossierEnregistrement()
-        reglagesPieces.dernierDossier = "file:///tmp/mmail-dossier-absent"
-        var d3 = dossierEnregistrement()
-        reglagesPieces.dernierDossier = ""
-        console.log("scenario: dossier d'enregistrement", d1 === dossierTelechargements, d2 === "file:///tmp",
-                    d3 === dossierTelechargements)
-        Qt.quit()
-    }
-
-    // Scénario « accessibilite » : ce que les lecteurs d'écran recevront des
-    // lignes de la liste et de l'arborescence (rôle, nom, sélection), lu sur
-    // les objets eux-mêmes — la plateforme sans écran n'a pas de pont
-    // d'accessibilité à interroger.
-    function etapeScenarioAccessibilite() {
-        var a = listeComptes()[0]
-        if (!a || a.etat !== "pret" || essai.etape || boite.dossierCourant !== "INBOX" || modeleMessages.count < 1)
-            return
-        essai.etape = 1
-        choisir(0, 0)
-        for (var i = 0; i < Math.min(3, modeleMessages.count); ++i) {
-            var l = vueMessages.itemAtIndex(i)
-            if (l)
-                console.log("scenario: message", i, "| rôle", l.Accessible.role === Accessible.ListItem,
-                            "| choisi", l.Accessible.selected, "|", l.Accessible.name)
-        }
-        for (var k = 0; k < Math.min(8, vueArborescence.count); ++k) {
-            var d = vueArborescence.itemAtIndex(k)
-            if (d)
-                console.log("scenario: arborescence", k, "| rôle", d.Accessible.role === Accessible.TreeItem,
-                            "| courant", d.Accessible.selected, "|", d.Accessible.name)
-        }
-        Qt.quit()
-    }
-
-    function etapeScenarioCorbeille() {
-        var a = listeComptes()[0]
-        if (!a || a.etat !== "pret")
-            return
-        if (essai.etape === 0 && boite.dossierCourant === "INBOX" && modeleMessages.count >= 2) {
-            essai.etape = 1
-            choisir(0, 0)
-            var affiche = modeleMessages.get(0).uid
-            var avant = modeleMessages.count
-            essai.sujet = modeleMessages.get(1).sujet
-            supprimerLigne(1)
-            var garde = uidCourant === affiche && selection[affiche] === true && uidsChoisis().length === 1
-            console.log("scenario: ligne retiree", avant, "->", modeleMessages.count, "|", essai.sujet)
-            console.log(modeleMessages.count === avant - 1 && garde
-                        ? "scenario: OK message affiche et selection inchanges"
-                        : "scenario: ECHEC affiche " + uidCourant + " / " + affiche)
-        } else if (essai.etape === 1 && deplacementsEnVol === 0) {
-            essai.etape = 2
-            var corbeille = ""
-            var parcourir = function(noeuds) {
-                for (var i = 0; i < noeuds.length && !corbeille; ++i) {
-                    if (noeuds[i].compte === a.id && noeuds[i].role === "Trash")
-                        corbeille = noeuds[i].chemin
-                    else if (noeuds[i].enfants)
-                        parcourir(noeuds[i].enfants)
-                }
-            }
-            parcourir(JSON.parse(boite.arborescence(true)))
-            essai.corbeille = corbeille
-            console.log("scenario: corbeille", corbeille)
-            ouvrirDossier(a.id, corbeille)
-        } else if (essai.etape === 2 && boite.dossierCourant === essai.corbeille) {
-            for (var j = 0; j < modeleMessages.count; ++j) {
-                if (modeleMessages.get(j).sujet === essai.sujet) {
-                    essai.etape = 3
-                    console.log("scenario: OK message dans la corbeille")
-                    choisir(j, 0)
-                    deplacerVers(a.id, "INBOX")
-                    return
-                }
-            }
-            console.log("scenario: ECHEC message absent de la corbeille")
-            essai.etape = 9
-            Qt.quit()
-        } else if (essai.etape === 3 && deplacementsEnVol === 0) {
-            essai.etape = 9
-            console.log("scenario: message ramene en boite de reception")
-            Qt.quit()
-        }
     }
 
     /// Contrôle de fabrication : l'index local s'ouvre, s'écrit et se relit,

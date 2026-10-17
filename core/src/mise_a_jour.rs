@@ -9,6 +9,11 @@
 //! paquet et le fichier des empreintes (`SHA256SUMS-<version>.txt`) à leur
 //! adresse de publication, que MMail compose lui-même. Un paquet dont
 //! l'empreinte ne correspond pas à celle publiée n'est jamais gardé.
+//!
+//! Depuis la 0.5.17, le fichier des empreintes doit être signé (Ed25519,
+//! `SHA256SUMS-<version>.txt.sig`) par la clé de MMEDIA dont la partie publique
+//! est ici : la clé privée n'est pas sur GitHub, si bien qu'un compte GitHub
+//! compromis ne suffit plus à faire installer un paquet aux postes.
 
 #[cxx_qt::bridge]
 pub mod qobject {
@@ -149,6 +154,21 @@ fn nom_du_paquet(version: &str, genre: &str) -> Option<String> {
     }
 }
 
+/// Clé publique Ed25519 de MMEDIA qui signe le fichier des empreintes de chaque
+/// publication (fiche KeePass « MMail — clé de signature des empreintes de mise
+/// à jour », créée le 17/10/2026). En changer impose une version installée à la
+/// main sur chaque poste.
+const CLE_EMPREINTES: [u8; 32] = [
+    0xd7, 0x94, 0xc2, 0x9e, 0x42, 0x4b, 0xb0, 0xdb, 0xe9, 0x8d, 0x6a, 0x36, 0xc3, 0xb1, 0x7a, 0x24,
+    0x08, 0x18, 0xdc, 0x75, 0xf2, 0x1d, 0xaa, 0x26, 0x01, 0x80, 0xbc, 0xd3, 0x41, 0x61, 0xa1, 0x23,
+];
+
+/// Vrai si `signature` est la signature Ed25519 de `contenu` par la clé `cle`.
+fn signature_valide(contenu: &[u8], signature: &[u8], cle: &[u8]) -> bool {
+    use aws_lc_rs::signature::{UnparsedPublicKey, ED25519};
+    UnparsedPublicKey::new(&ED25519, cle).verify(contenu, signature).is_ok()
+}
+
 /// Empreinte publiée pour `nom` dans un fichier au format de `sha256sum` :
 /// « <64 chiffres hexadécimaux>  <nom> », en minuscules.
 fn empreinte_publiee(sommes: &str, nom: &str) -> Option<String> {
@@ -202,6 +222,19 @@ fn telecharger_paquet(
     .map_err(|e| format!("empreintes de la publication illisibles — {e}"))?;
     if sommes.statut != 200 {
         return Err(format!("empreintes de la publication introuvables (statut {})", sommes.statut));
+    }
+    let signature = http::requete_bornee(
+        "GET",
+        &format!("{TELECHARGEMENTS}/v{version}/SHA256SUMS-{version}.txt.sig"),
+        "application/octet-stream",
+        1024,
+    )
+    .map_err(|e| format!("signature des empreintes illisible — {e}"))?;
+    if signature.statut != 200 {
+        return Err(format!("signature des empreintes introuvable (statut {})", signature.statut));
+    }
+    if !signature_valide(&sommes.corps, &signature.corps, &CLE_EMPREINTES) {
+        return Err("les empreintes de la publication ne portent pas la signature de MMEDIA".into());
     }
     let attendue = empreinte_publiee(&String::from_utf8_lossy(&sommes.corps), &nom)
         .ok_or_else(|| format!("la publication ne donne pas l'empreinte de {nom}"))?;
@@ -339,6 +372,35 @@ impl qobject::MiseAJour {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// La clé compilée est bien celle de MMEDIA : signature témoin faite le
+    /// 17/10/2026 avec la clé privée, sur « mmail-empreintes\n ».
+    #[test]
+    fn cle_des_empreintes_de_mmedia() {
+        let temoin: Vec<u8> = (0..64)
+            .map(|i| u8::from_str_radix(&SIGNATURE_TEMOIN[2 * i..2 * i + 2], 16).unwrap())
+            .collect();
+        assert!(signature_valide(b"mmail-empreintes\n", &temoin, &CLE_EMPREINTES));
+        assert!(!signature_valide(b"mmail-empreintes", &temoin, &CLE_EMPREINTES));
+    }
+    const SIGNATURE_TEMOIN: &str = "abf624eac67a66b53920cb476babfad5a9a5dc63c5af061a83dcc8a3c657f317\
+                                    7f8235c9f6f986b15d0d6e22a15b75f712ac7594a9d30abbe117132318c4db03";
+
+    #[test]
+    fn signature_des_empreintes() {
+        use aws_lc_rs::signature::{Ed25519KeyPair, KeyPair};
+        let pkcs8 = Ed25519KeyPair::generate_pkcs8(&aws_lc_rs::rand::SystemRandom::new()).unwrap();
+        let paire = Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).unwrap();
+        let sommes = b"0123  MMail-0.5.17-setup.exe\n";
+        let signature = paire.sign(sommes);
+        let cle = paire.public_key().as_ref();
+        assert!(signature_valide(sommes, signature.as_ref(), cle));
+        // Une empreinte changée, une autre clé, une signature tronquée : refus.
+        assert!(!signature_valide(b"0124  MMail-0.5.17-setup.exe\n", signature.as_ref(), cle));
+        assert!(!signature_valide(sommes, signature.as_ref(), &CLE_EMPREINTES));
+        assert!(!signature_valide(sommes, &signature.as_ref()[..63], cle));
+        assert!(!signature_valide(sommes, b"", cle));
+    }
 
     #[test]
     #[ignore = "interroge l'API de GitHub"]

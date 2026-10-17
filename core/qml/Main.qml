@@ -456,31 +456,6 @@ ApplicationWindow {
         }
     }
 
-    // Bouton d'action du volet de lecture. Sous une apparence de marque, une
-    // pastille blanche cernée de bleu pétrole, pleine au survol ; ailleurs,
-    // le bouton du style.
-    component BoutonAction: Button {
-        id: ba
-        Rectangle {
-            visible: fenetre.marque !== null
-            z: -1
-            anchors.fill: parent
-            radius: height / 2
-            color: ba.down ? Qt.darker(fenetre.couleurRubrique, 1.2)
-                 : ba.hovered ? fenetre.couleurRubrique : fenetre.palette.base
-            border.width: 1
-            border.color: fenetre.couleurRubrique
-        }
-        SiMarque { target: ba.background; property: "visible"; value: false }
-        SiMarque {
-            target: ba.contentItem
-            property: "color"
-            value: ba.hovered || ba.down ? "#ffffff" : fenetre.palette.buttonText
-        }
-        SiMarque { target: ba; property: "leftPadding"; value: 14 }
-        SiMarque { target: ba; property: "rightPadding"; value: 14 }
-    }
-
     // Surcharges conditionnelles plutôt qu'affectations directes : quand
     // « when » redevient faux, RestoreBindingOrValue rend la valeur d'origine —
     // c'est ce qui permet de revenir à l'apparence du bureau sans redémarrer.
@@ -1578,35 +1553,6 @@ ApplicationWindow {
             var fichier = selectedFile.toString()
             reglagesPieces.dernierDossier = fichier.substring(0, fichier.lastIndexOf("/"))
             boite.enregistrerPiece(uid, piece.indice, fichier)
-        }
-    }
-
-    /// Ligne d'en-tête du message affiché (objet, expéditeur) : un texte
-    /// sélectionnable, sans cadre, aux couleurs d'un Label.
-    component EnTeteSelectionnable: TextEdit {
-        readOnly: true
-        selectByMouse: true
-        textFormat: TextEdit.PlainText
-        wrapMode: TextEdit.Wrap
-        color: fenetre.palette.windowText
-        selectionColor: fenetre.palette.highlight
-        selectedTextColor: fenetre.palette.highlightedText
-        font.pointSize: fenetre.tailleMessage
-        // Comme dans le corps : un Ctrl+C explicite passe par la règle du
-        // presse-papier, qui sait ainsi que le dépôt vient de MMail.
-        Keys.onPressed: function(touche) {
-            if (touche.matches(StandardKey.Copy) && selectedText.length > 0) {
-                fenetre.copierTexte(selectedText, "message")
-                touche.accepted = true
-            }
-        }
-        TapHandler {
-            acceptedButtons: Qt.RightButton
-            acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad | PointerDevice.Stylus
-            onTapped: {
-                menuEnTete.texteChoisi = parent.selectedText
-                menuEnTete.popup()
-            }
         }
     }
 

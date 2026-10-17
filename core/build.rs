@@ -7,7 +7,7 @@ fn main() {
     // « undefined symbol: qt_resourceFeatureZstd ». Leçon du portage de MMdedit.
     std::env::set_var("CXX_QT_AUTORCC_OPTIONS", "--no-zstd");
 
-    CxxQtBuilder::new_qml_module(QmlModule::new("fr.mmedia.mmail").qml_files(["qml/Main.qml", "qml/Agenda.qml", "qml/Redaction.qml", "qml/LigneArborescence.qml", "qml/LigneMessage.qml", "qml/DialogueIdentite.qml", "qml/DialogueAide.qml", "qml/BandeauVersion.qml", "qml/PopupRappels.qml", "qml/MenuComptes.qml", "qml/DialogueDeplacer.qml", "qml/DialogueRestauration.qml", "qml/DialogueAPropos.qml", "qml/CompteurNonLus.qml", "qml/MarqueSuite.qml", "qml/Scenarios.qml", "qml/ReactionsNoyau.qml", "qml/VoletArborescence.qml", "qml/VoletListe.qml", "qml/VoletLecture.qml"]))
+    CxxQtBuilder::new_qml_module(QmlModule::new("fr.mmedia.mmail").qml_files(["qml/Main.qml", "qml/Agenda.qml", "qml/Redaction.qml", "qml/LigneArborescence.qml", "qml/LigneMessage.qml", "qml/DialogueIdentite.qml", "qml/DialogueAide.qml", "qml/BandeauVersion.qml", "qml/PopupRappels.qml", "qml/MenuComptes.qml", "qml/DialogueDeplacer.qml", "qml/DialogueRestauration.qml", "qml/DialogueAPropos.qml", "qml/CompteurNonLus.qml", "qml/MarqueSuite.qml", "qml/Scenarios.qml", "qml/ReactionsNoyau.qml", "qml/VoletArborescence.qml", "qml/VoletListe.qml", "qml/VoletLecture.qml", "qml/BoutonAction.qml", "qml/EnTeteSelectionnable.qml"]))
         .qt_module("Qml")
         .files(["src/socle.rs", "src/boite.rs", "src/pont_presse_papier.rs", "src/configuration.rs", "src/mise_a_jour.rs"])
         .build();

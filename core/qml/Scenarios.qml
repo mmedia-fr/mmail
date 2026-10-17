@@ -735,6 +735,8 @@ QtObject {
             function() { saisir("menu") },
             function() { menuPlus.close(); choisir(0, 0) },
             function() { saisir("message") },
+            function() { vue = 1; rediger("nouveau") },
+            function() { saisir("redaction") },
             // Retour à la liste d’abord : depuis le message, la fermeture (et Qt.quit)
             // est le retour arrière d’Android, qui ramène à la liste sans quitter.
             function() { console.log("scenario: tactile fin | tactile", tactile, "| compact", compact); vue = 1; Qt.quit() }

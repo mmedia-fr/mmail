@@ -607,7 +607,7 @@ Page {
                 onToggled: redac.basculerMiseEnForme(checked)
             }
             ToolButton {
-                visible: redac.miseEnForme
+                visible: redac.miseEnForme && !fenetre.tactile
                 text: qsTr("G")
                 font.bold: true
                 checkable: true
@@ -618,7 +618,7 @@ Page {
                 ToolTip.text: qsTr("Gras (Ctrl+B)")
             }
             ToolButton {
-                visible: redac.miseEnForme
+                visible: redac.miseEnForme && !fenetre.tactile
                 text: qsTr("I")
                 font.italic: true
                 checkable: true
@@ -629,7 +629,7 @@ Page {
                 ToolTip.text: qsTr("Italique (Ctrl+I)")
             }
             ToolButton {
-                visible: redac.miseEnForme
+                visible: redac.miseEnForme && !fenetre.tactile
                 text: qsTr("S")
                 font.underline: true
                 checkable: true
@@ -640,7 +640,7 @@ Page {
                 ToolTip.text: qsTr("Souligné (Ctrl+U)")
             }
             ToolButton {
-                visible: redac.miseEnForme
+                visible: redac.miseEnForme && !fenetre.tactile
                 text: qsTr("• Liste")
                 checkable: true
                 checked: mef.puces
@@ -648,7 +648,7 @@ Page {
                 onClicked: mef.basculerListe(false)
             }
             ToolButton {
-                visible: redac.miseEnForme
+                visible: redac.miseEnForme && !fenetre.tactile
                 text: qsTr("1. Liste")
                 checkable: true
                 checked: mef.numeros
@@ -656,13 +656,13 @@ Page {
                 onClicked: mef.basculerListe(true)
             }
             ToolButton {
-                visible: redac.miseEnForme
+                visible: redac.miseEnForme && !fenetre.tactile
                 text: qsTr("Lien…")
                 focusPolicy: Qt.NoFocus
                 onClicked: dlgAdresseLien.open()
             }
             ToolButton {
-                visible: redac.miseEnForme
+                visible: redac.miseEnForme && !fenetre.tactile
                 text: qsTr("Effacer la mise en forme")
                 focusPolicy: Qt.NoFocus
                 onClicked: mef.effacerMiseEnForme()
@@ -729,6 +729,70 @@ Page {
                         ev.accepted = true
                 }
             }
+        }
+
+        // Vue tactile (décision 32, point 6) : la mise en forme en pastilles
+        // bascules, au bas de la rédaction — donc juste au-dessus du clavier,
+        // qui réduit la fenêtre. Contour arrondi, pleine quand l'option est
+        // active : l'aspect des marques RE / TR, mais en commandes.
+        Flow {
+            visible: fenetre.tactile && redac.miseEnForme
+            Layout.fillWidth: true
+            Layout.topMargin: 4
+            Layout.bottomMargin: 4
+            spacing: 6
+            PastilleMef { text: "G"; font.bold: true; checkable: true; checked: mef.gras
+                          Accessible.name: qsTr("Gras"); onClicked: mef.basculerGras() }
+            PastilleMef { text: "I"; font.italic: true; checkable: true; checked: mef.italique
+                          Accessible.name: qsTr("Italique"); onClicked: mef.basculerItalique() }
+            PastilleMef { text: "S"; font.underline: true; checkable: true; checked: mef.souligne
+                          Accessible.name: qsTr("Souligné"); onClicked: mef.basculerSouligne() }
+            PastilleMef { text: qsTr("• Liste"); checkable: true; checked: mef.puces
+                          Accessible.name: qsTr("Liste à puces"); onClicked: mef.basculerListe(false) }
+            PastilleMef { text: qsTr("Lien"); Accessible.name: qsTr("Lien"); onClicked: dlgAdresseLien.open() }
+            PastilleMef { text: qsTr("Image"); Accessible.name: qsTr("Insérer une image"); onClicked: choixImages.open() }
+        }
+    }
+
+    // Pastille de la barre de mise en forme tactile.
+    component PastilleMef: AbstractButton {
+        id: pm
+        focusPolicy: Qt.NoFocus
+        implicitHeight: 36
+        implicitWidth: Math.max(44, etiquettePastille.implicitWidth + 26)
+        background: Rectangle {
+            radius: height / 2
+            color: pm.checked ? fenetre.accent : "transparent"
+            border.width: 1.5
+            border.color: fenetre.accent
+            opacity: pm.pressed ? 0.7 : 1
+        }
+        contentItem: Label {
+            id: etiquettePastille
+            text: pm.text
+            font: pm.font
+            color: pm.checked ? fenetre.texteAccent : fenetre.accent
+            horizontalAlignment: Text.AlignHCenter
+            verticalAlignment: Text.AlignVCenter
+        }
+    }
+
+    // Images choisies pour le corps (pastille « Image ») : copiées parmi les
+    // images collées du profil, comme une image glissée ou collée.
+    FileDialog {
+        id: choixImages
+        title: qsTr("Insérer une image")
+        fileMode: FileDialog.OpenFiles
+        nameFilters: [qsTr("Images (*.png *.jpg *.jpeg *.gif *.webp *.bmp)")]
+        onAccepted: {
+            var images = []
+            for (var i = 0; i < selectedFiles.length; ++i) {
+                var copie = boite.importerImage(selectedFiles[i].toString())
+                if (copie.length > 0)
+                    images.push(copie)
+            }
+            if (images.length > 0)
+                redac.insererImages(images)
         }
     }
 

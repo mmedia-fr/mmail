@@ -1565,26 +1565,6 @@ ApplicationWindow {
         }
     }
 
-    component Avertissement: Canvas {
-        implicitWidth: 30
-        implicitHeight: 30
-        Layout.alignment: Qt.AlignTop
-        onPaint: {
-            var c = getContext("2d")
-            c.reset()
-            c.fillStyle = "#E6A100"
-            c.strokeStyle = "#9A6B00"
-            c.lineWidth = 1
-            c.beginPath()
-            c.moveTo(15, 2); c.lineTo(29, 27); c.lineTo(1, 27); c.closePath()
-            c.fill(); c.stroke()
-            c.fillStyle = "#1A1A1A"
-            c.font = "bold 19px sans-serif"
-            c.textAlign = "center"; c.textBaseline = "middle"
-            c.fillText("!", 15, 18)
-        }
-    }
-
     Dialog {
         id: dlgViderCorbeilles
         title: qsTr("Vider les corbeilles et indésirables ?")

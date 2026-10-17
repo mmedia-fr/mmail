@@ -3443,6 +3443,8 @@ ApplicationWindow {
                 fenetre.etapeScenarioCorbeille()
             if (fenetre.essai && fenetre.essai.scenario === "en-tete")
                 fenetre.etapeScenarioEnTete()
+            if (fenetre.essai && fenetre.essai.scenario === "accessibilite")
+                fenetre.etapeScenarioAccessibilite()
             if (fenetre.essai && fenetre.essai.scenario === "chevron")
                 fenetre.etapeScenarioChevron()
             if (fenetre.essai && (fenetre.essai.scenario === "defilement" || fenetre.essai.scenario === "favoris-fixes"))
@@ -6792,6 +6794,31 @@ ApplicationWindow {
         reglagesPieces.dernierDossier = ""
         console.log("scenario: dossier d'enregistrement", d1 === dossierTelechargements, d2 === "file:///tmp",
                     d3 === dossierTelechargements)
+        Qt.quit()
+    }
+
+    // Scénario « accessibilite » : ce que les lecteurs d'écran recevront des
+    // lignes de la liste et de l'arborescence (rôle, nom, sélection), lu sur
+    // les objets eux-mêmes — la plateforme sans écran n'a pas de pont
+    // d'accessibilité à interroger.
+    function etapeScenarioAccessibilite() {
+        var a = listeComptes()[0]
+        if (!a || a.etat !== "pret" || essai.etape || boite.dossierCourant !== "INBOX" || modeleMessages.count < 1)
+            return
+        essai.etape = 1
+        choisir(0, 0)
+        for (var i = 0; i < Math.min(3, modeleMessages.count); ++i) {
+            var l = vueMessages.itemAtIndex(i)
+            if (l)
+                console.log("scenario: message", i, "| rôle", l.Accessible.role === Accessible.ListItem,
+                            "| choisi", l.Accessible.selected, "|", l.Accessible.name)
+        }
+        for (var k = 0; k < Math.min(8, vueArborescence.count); ++k) {
+            var d = vueArborescence.itemAtIndex(k)
+            if (d)
+                console.log("scenario: arborescence", k, "| rôle", d.Accessible.role === Accessible.TreeItem,
+                            "| courant", d.Accessible.selected, "|", d.Accessible.name)
+        }
         Qt.quit()
     }
 

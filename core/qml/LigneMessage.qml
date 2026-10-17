@@ -20,6 +20,21 @@ ItemDelegate {
                                    ? fenetre.cleChoisie === fenetre.cleResultat(model.compte, model.chemin, model.uid)
                                    : fenetre.selection[model.uid] === true
     highlighted: choisi
+
+    // Lecteurs d'écran (Narrateur, Orca, TalkBack) : une entrée de liste qui
+    // dit ce que la ligne montre — expéditeur, objet, date, puis les marques —,
+    // et non un bouton muet.
+    Accessible.role: Accessible.ListItem
+    Accessible.name: [model.expediteur, model.sujet, fenetre.dateCourte(model.date),
+                      model.lu ? "" : qsTr("non lu"),
+                      model.importance > 0 ? qsTr("importance haute") : model.importance < 0 ? qsTr("importance basse") : "",
+                      model.pieces === true ? qsTr("pièce jointe") : "",
+                      model.reponduTous === true ? qsTr("répondu à tous") : model.repondu === true ? qsTr("répondu") : "",
+                      model.transfere === true ? qsTr("transféré") : "",
+                      model.suivi === true ? qsTr("suivi") : ""]
+                     .filter(function(x) { return x }).join(", ")
+    Accessible.selectable: true
+    Accessible.selected: choisi
     padding: 0
 
     // Bandeau des non-lus, comme Outlook ; sous une apparence de
@@ -240,6 +255,13 @@ ItemDelegate {
         onWidthChanged: requestPaint()
         onHeightChanged: requestPaint()
         onPaint: fenetre.dessinerDrapeau(getContext("2d"), width, height, encre, plein)
+        // Dessiné, donc muet sans ceci : une case « Suivi ».
+        Accessible.role: Accessible.CheckBox
+        Accessible.name: qsTr("Suivi")
+        Accessible.checkable: true
+        Accessible.checked: model.suivi === true
+        Accessible.onPressAction: fenetre.basculerSuivi([model.uid], model.suivi !== true)
+        Accessible.onToggleAction: fenetre.basculerSuivi([model.uid], model.suivi !== true)
         MouseArea {
             id: survolDrapeau
             anchors.fill: parent
@@ -273,6 +295,9 @@ ItemDelegate {
         ToolTip.visible: survolCorbeille.containsMouse
         ToolTip.delay: 600
         ToolTip.text: qsTr("Mettre à la corbeille")
+        Accessible.role: Accessible.Button
+        Accessible.name: qsTr("Mettre à la corbeille")
+        Accessible.onPressAction: fenetre.supprimerLigne(index)
         MouseArea {
             id: survolCorbeille
             anchors.fill: parent

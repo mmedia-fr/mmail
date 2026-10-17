@@ -25,6 +25,14 @@ ItemDelegate {
     // Vrai pendant qu'un glisser-déposer accepté survole la ligne.
     property bool survol: false
     highlighted: estCourant
+
+    // Lecteurs d'écran : un élément d'arborescence, nommé comme à l'écran,
+    // avec ses non-lus.
+    Accessible.role: Accessible.TreeItem
+    Accessible.name: fenetre.libelleLigne(model)
+                     + (model.nonLus > 0 ? ", " + qsTr("%1 non lus").arg(model.nonLus) : "")
+    Accessible.selectable: estDossier
+    Accessible.selected: estCourant
     hoverEnabled: true
 
     function cliquer() {

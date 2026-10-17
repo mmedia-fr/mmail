@@ -15,6 +15,8 @@ import fr.mmedia.mmail.natif
 // Nombre de non-lus en pastille rouge, chiffre blanc.
 Rectangle {
     id: cn
+    // Le nombre est déjà dit par la ligne ou le bouton qui porte la pastille.
+    Accessible.ignored: true
     property int nombre: 0
     property real taille: fenetre.tailleArborescence
     radius: height / 2

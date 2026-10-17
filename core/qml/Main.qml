@@ -481,27 +481,6 @@ ApplicationWindow {
         SiMarque { target: ba; property: "rightPadding"; value: 14 }
     }
 
-    // Nombre de non-lus en pastille rouge, chiffre blanc.
-    component CompteurNonLus: Rectangle {
-        id: cn
-        property int nombre: 0
-        property real taille: fenetre.tailleArborescence
-        radius: height / 2
-        color: fenetre.couleurAlerte
-        implicitHeight: chiffreCompteur.implicitHeight + 2
-        implicitWidth: Math.max(implicitHeight, chiffreCompteur.implicitWidth + 10)
-        width: implicitWidth
-        height: implicitHeight
-        Label {
-            id: chiffreCompteur
-            anchors.centerIn: parent
-            text: cn.nombre
-            color: "#ffffff"
-            font.bold: true
-            font.pointSize: cn.taille * 0.88
-        }
-    }
-
     // Surcharges conditionnelles plutôt qu'affectations directes : quand
     // « when » redevient faux, RestoreBindingOrValue rend la valeur d'origine —
     // c'est ce qui permet de revenir à l'apparence du bureau sans redémarrer.
@@ -3058,29 +3037,6 @@ ApplicationWindow {
             boite.retirerCompte(compteId)
             fenetre.viderListe()
         }
-    }
-
-    // Pictogramme d'avertissement (triangle ambre « ! »), dessiné pour ne
-    // dépendre d'aucune police d'émojis. Réutilisé par les dialogues de vidage.
-    /// Pastille de la liste des messages : « RE », « RE TOUS », « TR ».
-    component MarqueSuite: Rectangle {
-        property alias texte: libelleMarque.text
-        property string infobulle: ""
-        implicitWidth: libelleMarque.implicitWidth + 10
-        implicitHeight: libelleMarque.implicitHeight + 2
-        radius: 3
-        border.color: "white"
-        Label {
-            id: libelleMarque
-            anchors.centerIn: parent
-            font.bold: true
-            font.pointSize: fenetre.tailleListe * 0.75
-            color: "white"
-        }
-        HoverHandler { id: survolMarque }
-        ToolTip.visible: survolMarque.hovered && infobulle.length > 0
-        ToolTip.text: infobulle
-        ToolTip.delay: 500
     }
 
     component Avertissement: Canvas {

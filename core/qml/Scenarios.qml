@@ -735,7 +735,9 @@ QtObject {
             function() { saisir("menu") },
             function() { menuPlus.close(); choisir(0, 0) },
             function() { saisir("message") },
-            function() { console.log("scenario: tactile fin | tactile", tactile, "| compact", compact); Qt.quit() }
+            // Retour à la liste d’abord : depuis le message, la fermeture (et Qt.quit)
+            // est le retour arrière d’Android, qui ramène à la liste sans quitter.
+            function() { console.log("scenario: tactile fin | tactile", tactile, "| compact", compact); vue = 1; Qt.quit() }
         ]
         var i = 0
         var t = Qt.createQmlObject("import QtQuick; Timer { interval: 700; repeat: true }", fenetre)

@@ -498,7 +498,8 @@ installeur Windows, AppImage, APK — sont produits par l'intégration continue
 (`.github/workflows/socle.yml`).
 
 L'interface est en QML, dans `core/qml/` : `Main.qml` porte la fenêtre, ses
-trois volets et les actions ; chaque élément qui s'en isole a son fichier — la
+réglages, ses raccourcis et ses actions ; chaque élément a son fichier — les trois
+volets (`VoletArborescence.qml`, `VoletListe.qml`, `VoletLecture.qml`), la
 rédaction (`Redaction.qml`), les lignes de la liste et de l'arborescence, les
 dialogues et menus, les réactions aux signaux du noyau (`ReactionsNoyau.qml`),
 l'agenda (`Agenda.qml`). Les scénarios d'essai de `Scenarios.qml` pilotent

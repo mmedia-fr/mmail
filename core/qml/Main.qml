@@ -172,6 +172,11 @@ ApplicationWindow {
     // Un seul volet à la fois sous cette largeur : 0 arborescence, 1 liste,
     // 2 message.
     readonly property bool compact: width < 760
+    // Vue tactile (décision 32) : celle d'Android, qui suit les usages du
+    // système — menus au point d'appui, ni raccourcis clavier ni agenda. À
+    // distinguer de la vue compacte, qui ne dit que la largeur : une fenêtre
+    // étroite sur le bureau reste à la souris et au clavier.
+    readonly property bool tactile: Qt.platform.os === "android" || identifiantsEssai.tactile === true
     property int vue: 0
     // « courrier » ou « agenda » : ce qu'occupe la fenêtre sous la barre
     // d'outils.
@@ -614,7 +619,7 @@ ApplicationWindow {
             // Courrier ou agenda : deux boutons, un seul qui bascule sur un
             // écran étroit.
             BoutonEntete {
-                visible: fenetre.compact
+                visible: fenetre.compact && !fenetre.tactile
                 text: fenetre.module === "agenda" ? qsTr("Courrier") : qsTr("Agenda")
                 onClicked: fenetre.module = fenetre.module === "agenda" ? "courrier" : "agenda"
             }
@@ -1319,7 +1324,7 @@ ApplicationWindow {
         id: menuAide
         onAboutToShow: width = fenetre.largeurMenu(menuAide)
         MenuItem {
-            text: qsTr("Aide (F1)")
+            text: fenetre.tactile ? qsTr("Aide") : qsTr("Aide (F1)")
             onTriggered: dlgAide.open()
         }
         MenuItem {
@@ -3537,6 +3542,14 @@ ApplicationWindow {
     }
 
     Component.onCompleted: {
+        if (identifiantsEssai.taille) {
+            var taille = identifiantsEssai.taille.split("x")
+            width = parseInt(taille[0])
+            height = parseInt(taille[1])
+        }
+        // L'agenda relève, sous Android, de l'application du téléphone.
+        if (tactile)
+            module = "courrier"
         if (typeof modeControle !== "undefined" && modeControle)
             return
         if (!boite.ouvrirProfil(cheminProfil))

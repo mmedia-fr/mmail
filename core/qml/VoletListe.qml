@@ -38,7 +38,7 @@ ColumnLayout {
         TextField {
             id: champRecherche
             Layout.fillWidth: true
-            placeholderText: qsTr("Rechercher (Ctrl+E)")
+            placeholderText: fenetre.tactile ? qsTr("Rechercher") : qsTr("Rechercher (Ctrl+E)")
             selectByMouse: true
             // Mis en valeur (demande de Manu, 08/10) : une loupe, un
             // cadre de la couleur d'accent sur un fond teinté ; le cadre

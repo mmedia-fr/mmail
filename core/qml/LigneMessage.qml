@@ -212,16 +212,19 @@ ItemDelegate {
             if (souris.button === Qt.RightButton) {
                 if (!ligne.choisi)
                     fenetre.choisir(index, 0)
-                menuMessage.popup()
+                menuMessage.popup(zone, souris.x, souris.y)
                 return
             }
             if (!choisieAuPress)
                 fenetre.choisir(index, souris.modifiers)
         }
-        onPressAndHold: {
+        // Le menu s'ouvre au point d'appui : sans position, Qt le place sous
+        // le pointeur, que le doigt ne déplace pas (au milieu de l'écran sous
+        // Android, retour de Manu du 12/10).
+        onPressAndHold: function(souris) {
             if (!ligne.choisi)
                 fenetre.choisir(index, 0)
-            menuMessage.popup()
+            menuMessage.popup(zone, souris.x, souris.y)
         }
         onDoubleClicked: function(souris) {
             if (souris.button === Qt.LeftButton)

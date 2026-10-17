@@ -231,6 +231,11 @@ int main(int argc, char* argv[])
     essai.insert(QStringLiteral("dossier"), QString::fromUtf8(qgetenv("MMAIL_DOSSIER")));
     // Serveur d'envoi du premier compte, pour le scénario « envoi-fond ».
     essai.insert(QStringLiteral("hoteEnvoi"), QString::fromUtf8(qgetenv("MMAIL_HOTE_ENVOI")));
+    // Vue tactile d'Android imposée sur le bureau (MMAIL_TACTILE=1) et taille
+    // de la fenêtre (MMAIL_TAILLE=412x915) : la vue du téléphone en image,
+    // sans téléphone.
+    essai.insert(QStringLiteral("tactile"), qgetenv("MMAIL_TACTILE") == "1");
+    essai.insert(QStringLiteral("taille"), QString::fromUtf8(qgetenv("MMAIL_TAILLE")));
     essai.insert(QStringLiteral("sortie"),
                  QUrl::fromLocalFile(QString::fromUtf8(qgetenv("MMAIL_SORTIE"))).toString());
   }

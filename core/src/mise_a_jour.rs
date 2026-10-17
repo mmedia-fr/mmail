@@ -490,29 +490,36 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "télécharge le fichier des empreintes et le paquet Windows de la 0.5.7 sur GitHub"]
+    #[ignore = "télécharge le fichier des empreintes et le paquet Windows de la 0.5.16 sur GitHub"]
     fn paquet_publie_telecharge_et_controle() {
         let dossier = std::env::temp_dir().join(format!("mmail-maj-reel-{}", std::process::id()));
-        let destination = dossier.join("MMail-0.5.7-setup.exe");
+        let destination = dossier.join("MMail-0.5.16-setup.exe");
         let mut etapes = Vec::new();
-        telecharger_paquet("0.5.7", "setup", &destination, &mut |p| etapes.push(p)).unwrap();
+        telecharger_paquet("0.5.16", "setup", &destination, &mut |p| etapes.push(p)).unwrap();
         assert_eq!(etapes.last(), Some(&100));
         assert_eq!(
             empreinte_du_fichier(&destination).as_deref(),
-            Some("43b157b96a4a34adba6948c723648bd169a8cba6728d782642c35cbf2251bec9")
+            Some("6a3ac8c555f47df57de2c52f0b62b171b812d761933b36e7e7d9b19d2dad9499")
         );
-        assert!(!chemin_partiel(&destination, "MMail-0.5.7-setup.exe").exists());
+        assert!(!chemin_partiel(&destination, "MMail-0.5.16-setup.exe").exists());
         // Déjà là, intact : rien n'est téléchargé de nouveau.
         let mut encore = Vec::new();
-        telecharger_paquet("0.5.7", "setup", &destination, &mut |p| encore.push(p)).unwrap();
+        telecharger_paquet("0.5.16", "setup", &destination, &mut |p| encore.push(p)).unwrap();
         assert_eq!(encore, vec![100]);
         // Altéré : remplacé par le paquet publié.
         fs::write(&destination, b"altere").unwrap();
-        telecharger_paquet("0.5.7", "setup", &destination, &mut |_| {}).unwrap();
+        telecharger_paquet("0.5.16", "setup", &destination, &mut |_| {}).unwrap();
         assert_eq!(
             empreinte_du_fichier(&destination).as_deref(),
-            Some("43b157b96a4a34adba6948c723648bd169a8cba6728d782642c35cbf2251bec9")
+            Some("6a3ac8c555f47df57de2c52f0b62b171b812d761933b36e7e7d9b19d2dad9499")
         );
+        // Publication sans signature des empreintes (0.5.7, d'avant la 0.5.17) :
+        // refusée avant tout téléchargement.
+        let ancienne = dossier.join("MMail-0.5.7-setup.exe");
+        let refus = telecharger_paquet("0.5.7", "setup", &ancienne, &mut |_| {}).unwrap_err();
+        println!("publication non signée : {refus}");
+        assert!(refus.contains("signature"), "{refus}");
+        assert!(!ancienne.exists());
         // Version sans publication : échec lisible, rien d'écrit.
         let absente = dossier.join("MMail-9.9.9-setup.exe");
         let erreur = telecharger_paquet("9.9.9", "setup", &absente, &mut |_| {}).unwrap_err();

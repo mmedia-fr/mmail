@@ -1847,169 +1847,7 @@ ApplicationWindow {
         onActivated: fenetre.toutChoisir()
     }
 
-    // ----------------------------------------------------------- dialogues
-    // Trois usages : ajouter un compte, redemander un mot de passe, ou
-    // modifier un compte présent (`modification`) — serveurs, mot de passe,
-    // et, de là, nom et signature.
-    Dialog {
-        id: dlgCompte
-        property int compteId: 0
-        property bool modification: false
-        // Compte à jetons en modification — « microsoft » ou « google » : ni
-        // serveur ni mot de passe à saisir, la connexion se refait chez le
-        // service. Vide pour un compte à mot de passe.
-        property string service: ""
-        readonly property bool microsoft: service === "microsoft"
-        readonly property bool oauth: service.length > 0
-        // Serveurs du compte à l'ouverture : ce qui a changé se compare à eux.
-        property string ancienHote: ""
-        property string ancienHoteEnvoi: ""
-        title: modification ? qsTr("Modifier le compte")
-                            : compteId > 0 ? qsTr("Mot de passe du compte") : qsTr("Ajouter un compte")
-        modal: true
-        anchors.centerIn: Overlay.overlay
-        width: Math.min(460, fenetre.width - 24)
-        standardButtons: Dialog.Ok | Dialog.Cancel
-        // Vrai dès que la personne a touché au serveur : la configuration
-        // automatique ne réécrit plus ce champ.
-        property bool hoteSaisi: false
-        property string infoServeur: ""
-        onAccepted: fenetre.validerCompte()
-        onRejected: fenetre.demandeSuivante()
-        onOpened: (dlgCompte.oauth ? boutonReconnexion : dlgCompte.modification ? champHote
-                   : champAdresse.text.length > 0 ? champMotDePasse : champAdresse).forceActiveFocus()
-
-        GridLayout {
-            anchors.fill: parent
-            columns: 2
-            columnSpacing: 8
-            rowSpacing: 6
-
-            Label {
-                id: noteCompte
-                Layout.columnSpan: 2
-                Layout.fillWidth: true
-                visible: text.length > 0
-                wrapMode: Text.Wrap
-                color: "#b00020"
-            }
-            Label { text: qsTr("Adresse :") }
-            TextField {
-                id: champAdresse
-                placeholderText: "nom@exemple.fr"
-                enabled: dlgCompte.compteId === 0
-                inputMethodHints: Qt.ImhEmailCharactersOnly | Qt.ImhNoAutoUppercase
-                Layout.fillWidth: true
-                onEditingFinished: fenetre.chercherServeur()
-            }
-            Label { text: qsTr("Serveur IMAP :"); visible: !dlgCompte.oauth }
-            TextField {
-                id: champHote
-                visible: !dlgCompte.oauth
-                placeholderText: "mail.exemple.fr"
-                enabled: dlgCompte.compteId === 0 || dlgCompte.modification
-                inputMethodHints: Qt.ImhUrlCharactersOnly | Qt.ImhNoAutoUppercase
-                Layout.fillWidth: true
-                onTextEdited: dlgCompte.hoteSaisi = text.length > 0
-            }
-            Label {
-                Layout.columnSpan: 2
-                Layout.fillWidth: true
-                visible: text.length > 0 && !dlgCompte.oauth
-                wrapMode: Text.Wrap
-                opacity: 0.75
-                font.pixelSize: 11
-                text: dlgCompte.infoServeur
-            }
-            // Facultatif : la plupart des serveurs reçoivent l'envoi sur le
-            // nom de la lecture ; Orange, Free, SFR ont un serveur à part.
-            Label { text: qsTr("Serveur d'envoi :"); visible: !dlgCompte.oauth }
-            TextField {
-                id: champHoteEnvoi
-                visible: !dlgCompte.oauth
-                placeholderText: qsTr("identique au serveur IMAP")
-                enabled: dlgCompte.compteId === 0 || dlgCompte.modification
-                inputMethodHints: Qt.ImhUrlCharactersOnly | Qt.ImhNoAutoUppercase
-                Layout.fillWidth: true
-            }
-            Label { text: qsTr("Mot de passe :"); visible: !dlgCompte.oauth }
-            TextField {
-                id: champMotDePasse
-                visible: !dlgCompte.oauth
-                echoMode: TextInput.Password
-                // Vide : le mot de passe ne change pas.
-                placeholderText: dlgCompte.modification ? qsTr("inchangé") : ""
-                Layout.fillWidth: true
-                onAccepted: dlgCompte.accept()
-            }
-            CheckBox {
-                id: caseMemoriser
-                Layout.columnSpan: 2
-                visible: !dlgCompte.oauth
-                checked: reglages.memoriser
-                text: qsTr("Mémoriser le mot de passe dans le coffre du système")
-            }
-            // Office 365 n'accepte plus de mot de passe : la connexion se fait
-            // chez Microsoft, dans le navigateur.
-            Button {
-                Layout.columnSpan: 2
-                visible: dlgCompte.compteId === 0 && boite.microsoftDisponible()
-                text: qsTr("Compte Microsoft (Office 365, Outlook.com)…")
-                onClicked: {
-                    dlgCompte.close()
-                    fenetre.connecterMicrosoft("")
-                }
-            }
-            // Gmail : la connexion se fait chez Google, dans le navigateur.
-            Button {
-                Layout.columnSpan: 2
-                visible: dlgCompte.compteId === 0 && boite.googleAjoutOuvert()
-                text: qsTr("Compte Google (Gmail)…")
-                onClicked: {
-                    dlgCompte.close()
-                    fenetre.connecterGoogle("")
-                }
-            }
-            Button {
-                id: boutonReconnexion
-                Layout.columnSpan: 2
-                visible: dlgCompte.oauth
-                text: dlgCompte.service === "google" ? qsTr("Se reconnecter à Google…")
-                                                     : qsTr("Se reconnecter à Microsoft…")
-                onClicked: {
-                    var adresse = champAdresse.text
-                    var service = dlgCompte.service
-                    dlgCompte.close()
-                    if (service === "google")
-                        fenetre.connecterGoogle(adresse)
-                    else
-                        fenetre.connecterMicrosoft(adresse)
-                }
-            }
-            Button {
-                Layout.columnSpan: 2
-                visible: dlgCompte.modification
-                text: qsTr("Nom et signature…")
-                onClicked: {
-                    var id = dlgCompte.compteId
-                    dlgCompte.close()
-                    dlgIdentite.ouvrir(id)
-                }
-            }
-            Label {
-                Layout.columnSpan: 2
-                Layout.fillWidth: true
-                wrapMode: Text.Wrap
-                opacity: 0.75
-                font.pixelSize: 11
-                text: dlgCompte.microsoft
-                      ? qsTr("Compte Microsoft : la connexion se fait chez Microsoft, dans votre navigateur ; MMail ne voit jamais le mot de passe. Il garde, dans le coffre du système, le jeton que Microsoft lui délivre. Lecture en IMAPS (outlook.office365.com), envoi par Microsoft Graph.")
-                      : dlgCompte.service === "google"
-                      ? qsTr("Compte Google : la connexion se fait chez Google, dans votre navigateur ; MMail ne voit jamais le mot de passe. Il garde, dans le coffre du système, le jeton que Google lui délivre. Lecture en IMAPS (imap.gmail.com), envoi en SMTP sur TLS (smtp.gmail.com).")
-                      : qsTr("Le mot de passe n'est jamais écrit par MMail : il est confié au coffre du système (Gestionnaire d'identifiants sous Windows, Secret Service ou KWallet sous Linux, Keystore sous Android). Connexion en IMAPS, port 993 ; envoi en SMTP sur TLS, port 465.")
-            }
-        }
-    }
+    DialogueCompte { id: dlgCompte }
 
     // Refus de consentement : l'organisation veut que son administrateur
     // autorise MMail, une fois pour tous ses utilisateurs, par un lien.
@@ -2618,13 +2456,13 @@ ApplicationWindow {
         dlgCompte.service = dlgCompte.modification && compteOAuth(compte.auth) ? compte.auth : ""
         dlgCompte.ancienHote = compte ? compte.hote : ""
         dlgCompte.ancienHoteEnvoi = compte && compte.hoteEnvoi ? compte.hoteEnvoi : ""
-        champAdresse.text = compte ? compte.adresse : ""
-        champHote.text = compte ? compte.hote : ""
-        champHoteEnvoi.text = compte && compte.hoteEnvoi ? compte.hoteEnvoi : ""
-        champMotDePasse.text = ""
-        caseMemoriser.checked = reglages.memoriser
-        noteCompte.text = note
-        dlgCompte.hoteSaisi = champHote.text.length > 0
+        dlgCompte.champAdresse.text = compte ? compte.adresse : ""
+        dlgCompte.champHote.text = compte ? compte.hote : ""
+        dlgCompte.champHoteEnvoi.text = compte && compte.hoteEnvoi ? compte.hoteEnvoi : ""
+        dlgCompte.champMotDePasse.text = ""
+        dlgCompte.caseMemoriser.checked = reglages.memoriser
+        dlgCompte.noteCompte.text = note
+        dlgCompte.hoteSaisi = dlgCompte.champHote.text.length > 0
         dlgCompte.infoServeur = ""
         dlgCompte.open()
     }
@@ -2639,7 +2477,7 @@ ApplicationWindow {
     /// Configuration automatique : le serveur se déduit de l'adresse, tant que
     /// la personne ne l'a pas saisi elle-même.
     function chercherServeur() {
-        var adresse = champAdresse.text.trim()
+        var adresse = dlgCompte.champAdresse.text.trim()
         if (dlgCompte.compteId > 0 || dlgCompte.hoteSaisi || adresse.indexOf("@") < 1)
             return
         dlgCompte.infoServeur = qsTr("Recherche du serveur…")
@@ -2648,10 +2486,10 @@ ApplicationWindow {
 
     function serveurDecouvert(adresse, hote) {
         // Réponse tardive : l'adresse a changé, ou le serveur a été saisi.
-        if (!dlgCompte.visible || dlgCompte.hoteSaisi || champAdresse.text.trim() !== adresse)
+        if (!dlgCompte.visible || dlgCompte.hoteSaisi || dlgCompte.champAdresse.text.trim() !== adresse)
             return
         if (hote.length > 0) {
-            champHote.text = hote
+            dlgCompte.champHote.text = hote
             dlgCompte.infoServeur = qsTr("Serveur trouvé automatiquement.")
         } else {
             dlgCompte.infoServeur = qsTr("Serveur introuvable automatiquement : saisissez-le.")
@@ -2729,18 +2567,18 @@ ApplicationWindow {
     }
 
     function validerCompte() {
-        var adresse = champAdresse.text.trim()
-        var hote = champHote.text.trim()
-        var hoteEnvoi = champHoteEnvoi.text.trim()
+        var adresse = dlgCompte.champAdresse.text.trim()
+        var hote = dlgCompte.champHote.text.trim()
+        var hoteEnvoi = dlgCompte.champHoteEnvoi.text.trim()
         var nouveau = dlgCompte.compteId === 0
-        var motDePasse = champMotDePasse.text
-        champMotDePasse.text = ""
+        var motDePasse = dlgCompte.champMotDePasse.text
+        dlgCompte.champMotDePasse.text = ""
         if (dlgCompte.oauth) {
             // Rien à appliquer ici : la reconnexion passe par son bouton.
             demandeSuivante()
             return
         }
-        reglages.memoriser = caseMemoriser.checked
+        reglages.memoriser = dlgCompte.caseMemoriser.checked
         if (dlgCompte.modification) {
             appliquerModification(dlgCompte.compteId, adresse, dlgCompte.ancienHote, hote.toLowerCase(),
                                   dlgCompte.ancienHoteEnvoi, hoteEnvoi.toLowerCase(), motDePasse)
@@ -2748,7 +2586,7 @@ ApplicationWindow {
             return
         }
         dernierDemande = { id: dlgCompte.compteId, adresse: adresse, hote: hote }
-        if (caseMemoriser.checked)
+        if (dlgCompte.caseMemoriser.checked)
             secretsAConserver[adresse] = { cle: cle(adresse, hote), motDePasse: motDePasse }
         else
             coffre.effacer(cle(adresse, hote))
@@ -4370,11 +4208,11 @@ ApplicationWindow {
                     console.log("scenario: compte", ms ? ms.adresse : "aucun", "| auth", ms ? ms.auth : "")
                     modifierCompte(ms.id)
                     console.log("scenario: modification", dlgCompte.visible, dlgCompte.title, "| microsoft", dlgCompte.microsoft,
-                                "| serveur", champHote.visible, "| mot de passe", champMotDePasse.visible,
-                                "| reconnexion", boutonReconnexion.visible)
+                                "| serveur", dlgCompte.champHote.visible, "| mot de passe", dlgCompte.champMotDePasse.visible,
+                                "| reconnexion", dlgCompte.boutonReconnexion.visible)
                     dlgCompte.close()
                     demanderCompte(compteParId(ms.id), "jeton refusé")
-                    console.log("scenario: redemande", dlgCompte.modification, dlgCompte.microsoft, "| note", noteCompte.text)
+                    console.log("scenario: redemande", dlgCompte.modification, dlgCompte.microsoft, "| note", dlgCompte.noteCompte.text)
                     dlgCompte.close()
                     console.log("scenario: disponible", boite.microsoftDisponible())
                     var url = boite.connecterMicrosoft(ms.adresse)
@@ -4400,11 +4238,11 @@ ApplicationWindow {
                     console.log("scenario: compte", g ? g.adresse : "aucun", "| auth", g ? g.auth : "")
                     modifierCompte(g.id)
                     console.log("scenario: modification", dlgCompte.visible, dlgCompte.title, "| service", dlgCompte.service,
-                                "| serveur", champHote.visible, "| mot de passe", champMotDePasse.visible,
-                                "| reconnexion", boutonReconnexion.visible, "«" + boutonReconnexion.text + "»")
+                                "| serveur", dlgCompte.champHote.visible, "| mot de passe", dlgCompte.champMotDePasse.visible,
+                                "| reconnexion", dlgCompte.boutonReconnexion.visible, "«" + dlgCompte.boutonReconnexion.text + "»")
                     dlgCompte.close()
                     demanderCompte(compteParId(g.id), "jeton refusé")
-                    console.log("scenario: redemande", dlgCompte.modification, dlgCompte.service, "| note", noteCompte.text)
+                    console.log("scenario: redemande", dlgCompte.modification, dlgCompte.service, "| note", dlgCompte.noteCompte.text)
                     dlgCompte.close()
                     console.log("scenario: disponible", boite.googleDisponible(), "| ajout ouvert", boite.googleAjoutOuvert())
                     var url = boite.connecterGoogle(g.adresse)
@@ -4430,9 +4268,9 @@ ApplicationWindow {
                     return listeComptes().filter(function(c) { return c.id === suivi.id })[0] || {}
                 }
                 var valider = function(hote, envoi, mdp) {
-                    champHote.text = hote
-                    champHoteEnvoi.text = envoi
-                    champMotDePasse.text = mdp
+                    dlgCompte.champHote.text = hote
+                    dlgCompte.champHoteEnvoi.text = envoi
+                    dlgCompte.champMotDePasse.text = mdp
                     dlgCompte.accept()
                 }
                 tic.triggered.connect(function() {
@@ -4441,8 +4279,8 @@ ApplicationWindow {
                         suivi.id = comptesConnus[0].compte
                         suivi.hote = comptesConnus[0].hote
                         modifierCompte(suivi.id)
-                        console.log("scenario: fenêtre", dlgCompte.visible, dlgCompte.title, "| serveur", champHote.text,
-                                    "| adresse modifiable", champAdresse.enabled, "| serveur modifiable", champHote.enabled)
+                        console.log("scenario: fenêtre", dlgCompte.visible, dlgCompte.title, "| serveur", dlgCompte.champHote.text,
+                                    "| adresse modifiable", dlgCompte.champAdresse.enabled, "| serveur modifiable", dlgCompte.champHote.enabled)
                         valider(suivi.hote, "smtp.essai.invalid", "")
                         console.log("scenario: envoi posé", present().hoteEnvoi, "| état", messageEtat.texte)
                         modifierCompte(suivi.id)
@@ -4453,7 +4291,7 @@ ApplicationWindow {
                         console.log("scenario: lecture vers hors-ligne.invalid | index", present().hote)
                     } else if (suivi.n === 20) {
                         console.log("scenario: fenêtre revenue", dlgCompte.visible, "| modification", dlgCompte.modification,
-                                    "| serveur", champHote.text, "| motif", noteCompte.text)
+                                    "| serveur", dlgCompte.champHote.text, "| motif", dlgCompte.noteCompte.text)
                         valider(suivi.hote, "", identifiantsEssai.motDePasse)
                     } else if (suivi.n === 30) {
                         tic.stop()

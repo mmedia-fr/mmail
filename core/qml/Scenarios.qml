@@ -673,6 +673,44 @@ QtObject {
         Qt.quit()
     }
 
+    // Scénario « dialogues » : chaque dialogue et menu s'ouvre puis se referme,
+    // l'un après l'autre, sans rien valider — leurs liaisons sont évaluées, une
+    // référence cassée paraît sur la console. Sert à comparer deux versions.
+    function etapeScenarioDialogues() {
+        var a = listeComptes()[0]
+        if (!a || a.etat !== "pret" || essai.etape || boite.dossierCourant !== "INBOX" || modeleMessages.count < 1)
+            return
+        essai.etape = 1
+        choisir(0, 0)
+        var cibles = [["dlgIdentite", dlgIdentite], ["dlgAide", dlgAide], ["dlgDeplacer", dlgDeplacer],
+                      ["dlgRestauration", dlgRestauration], ["dlgAPropos", dlgAPropos], ["dlgCompte", dlgCompte],
+                      ["dlgNouveauDossier", dlgNouveauDossier], ["dlgConsentement", dlgConsentement],
+                      ["dlgOuvrirAvec", dlgOuvrirAvec], ["dlgLogiciels", dlgLogiciels], ["dlgReprise", dlgReprise],
+                      ["dlgLien", dlgLien], ["dlgViderDossier", dlgViderDossier], ["popupRappels", popupRappels],
+                      ["menuComptes", menuComptes], ["menuAffichage", menuAffichage], ["menuPiece", menuPiece],
+                      ["menuMessage", menuMessage], ["menuDossier", menuDossier], ["menuCompte", menuCompte]]
+        var i = 0
+        var t = Qt.createQmlObject("import QtQuick; Timer { interval: 400; repeat: true }", fenetre)
+        t.triggered.connect(function() {
+            if (i > 0)
+                cibles[i - 1][1].close()
+            if (i >= cibles.length) {
+                t.stop()
+                console.log("scenario: dialogues et menus parcourus :", cibles.length)
+                Qt.quit()
+                return
+            }
+            var c = cibles[i]
+            if (typeof c[1].popup === "function")
+                c[1].popup()
+            else
+                c[1].open()
+            console.log("scenario: ouvert", c[0], c[1].opened === true)
+            i += 1
+        })
+        t.start()
+    }
+
     function etapeScenarioCorbeille() {
         var a = listeComptes()[0]
         if (!a || a.etat !== "pret")

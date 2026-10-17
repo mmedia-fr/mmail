@@ -218,6 +218,8 @@ Connections {
             scenarios.etapeScenarioCorbeille()
         if (fenetre.essai && fenetre.essai.scenario === "en-tete")
             scenarios.etapeScenarioEnTete()
+        if (fenetre.essai && fenetre.essai.scenario === "dialogues")
+            scenarios.etapeScenarioDialogues()
         if (fenetre.essai && fenetre.essai.scenario === "accessibilite")
             scenarios.etapeScenarioAccessibilite()
         if (fenetre.essai && fenetre.essai.scenario === "chevron")

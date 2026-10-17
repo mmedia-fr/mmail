@@ -1417,52 +1417,7 @@ ApplicationWindow {
 
     MenuDossier { id: menuDossier }
 
-    Menu {
-        id: menuCompte
-        font.pointSize: fenetre.tailleColonne("arborescence")
-        onAboutToShow: width = fenetre.largeurMenu(menuCompte)
-        property int compte: 0
-        property string adresse: ""
-        property string hote: ""
-        property string etat: ""
-        function ouvrir(c, a, h, e) {
-            compte = c; adresse = a; hote = h; etat = e
-            popup()
-        }
-        MenuItem {
-            text: qsTr("Modifier ce compte…")
-            onTriggered: fenetre.modifierCompte(menuCompte.compte)
-        }
-        MenuItem {
-            text: menuCompte.etat === "pret" ? qsTr("Se déconnecter") : qsTr("Se connecter…")
-            onTriggered: {
-                if (menuCompte.etat === "pret")
-                    boite.deconnecter(menuCompte.compte)
-                else
-                    fenetre.connecterCompte({ id: menuCompte.compte, adresse: menuCompte.adresse,
-                                              hote: menuCompte.hote })
-            }
-        }
-        MenuItem {
-            text: qsTr("Oublier le mot de passe")
-            onTriggered: coffre.effacer(fenetre.cle(menuCompte.adresse, menuCompte.hote))
-        }
-        MenuSeparator {}
-        // L'ordre des comptes se règle aussi en glissant leur en-tête.
-        MenuItem {
-            text: qsTr("Monter ce compte")
-            onTriggered: boite.decalerCompte(menuCompte.compte, -1)
-        }
-        MenuItem {
-            text: qsTr("Descendre ce compte")
-            onTriggered: boite.decalerCompte(menuCompte.compte, 1)
-        }
-        MenuSeparator {}
-        MenuItem {
-            text: qsTr("Retirer ce compte de MMail…")
-            onTriggered: dlgRetrait.ouvrir(menuCompte.compte, menuCompte.adresse, menuCompte.hote)
-        }
-    }
+    MenuCompte { id: menuCompte }
 
     Shortcut {
         sequences: [StandardKey.Delete]

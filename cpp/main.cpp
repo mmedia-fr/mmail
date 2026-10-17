@@ -321,8 +321,8 @@ int main(int argc, char* argv[])
 
 #ifndef Q_OS_ANDROID
   // Position de la fenêtre retenue d'une session à l'autre — sauf pour les
-  // contrôles et les captures, qui veulent une fenêtre à la taille de départ.
-  if (!smoke && capture.isEmpty() && !engine.rootObjects().isEmpty()) {
+  // contrôles, les captures et les essais à taille imposée (MMAIL_TAILLE).
+  if (!smoke && capture.isEmpty() && qgetenv("MMAIL_TAILLE").isEmpty() && !engine.rootObjects().isEmpty()) {
     if (auto* principale = qobject_cast<QQuickWindow*>(engine.rootObjects().first())) {
       fenetre::suivre(principale);
       if (ramener)

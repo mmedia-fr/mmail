@@ -746,6 +746,65 @@ QtObject {
         t.start()
     }
 
+    // Scénario « glisser-ligne » : une ligne glissée vers la corbeille, puis
+    // annulée — elle revient ; glissée de nouveau et laissée partir — elle est
+    // dans la corbeille ; ramenée enfin en boîte de réception.
+    function etapeScenarioGlisserLigne() {
+        var a = listeComptes()[0]
+        if (!a || a.etat !== "pret")
+            return
+        if (essai.etape === 0 && boite.dossierCourant === "INBOX" && modeleMessages.count >= 2) {
+            essai.etape = 1
+            essai.sujet = modeleMessages.get(1).sujet
+            var avant = modeleMessages.count
+            glisserLigne(1, "corbeille")
+            console.log("scenario: glissée", avant, "->", modeleMessages.count, "| bandeau", bandeauGlissement.opened,
+                        "|", bandeauGlissement.texte, "|", essai.sujet)
+            annulerGlissement()
+            var revenue = -1
+            for (var i = 0; i < modeleMessages.count; ++i) {
+                if (modeleMessages.get(i).sujet === essai.sujet)
+                    revenue = i
+            }
+            console.log(revenue >= 0 && modeleMessages.count === avant && !bandeauGlissement.opened
+                        ? "scenario: OK annulée, ligne revenue au rang " + revenue
+                        : "scenario: ECHEC annulation " + modeleMessages.count + " / " + avant)
+            glisserLigne(revenue, "corbeille")
+            console.log("scenario: glissée de nouveau, en attente", Object.keys(enAttente).length)
+        } else if (essai.etape === 1 && glissement === null && deplacementsEnVol === 0) {
+            essai.etape = 2
+            var corbeille = ""
+            var parcourir = function(noeuds) {
+                for (var i = 0; i < noeuds.length && !corbeille; ++i) {
+                    if (noeuds[i].compte === a.id && noeuds[i].role === "Trash")
+                        corbeille = noeuds[i].chemin
+                    else if (noeuds[i].enfants)
+                        parcourir(noeuds[i].enfants)
+                }
+            }
+            parcourir(JSON.parse(boite.arborescence(true)))
+            essai.corbeille = corbeille
+            ouvrirDossier(a.id, corbeille)
+        } else if (essai.etape === 2 && boite.dossierCourant === essai.corbeille) {
+            for (var j = 0; j < modeleMessages.count; ++j) {
+                if (modeleMessages.get(j).sujet === essai.sujet) {
+                    essai.etape = 3
+                    console.log("scenario: OK message dans la corbeille")
+                    choisir(j, 0)
+                    deplacerVers(a.id, "INBOX")
+                    return
+                }
+            }
+            console.log("scenario: ECHEC message absent de la corbeille")
+            essai.etape = 9
+            Qt.quit()
+        } else if (essai.etape === 3 && deplacementsEnVol === 0) {
+            essai.etape = 9
+            console.log("scenario: message ramene en boite de reception")
+            Qt.quit()
+        }
+    }
+
     function etapeScenarioCorbeille() {
         var a = listeComptes()[0]
         if (!a || a.etat !== "pret")

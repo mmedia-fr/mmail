@@ -828,6 +828,33 @@ ApplicationWindow {
         }
     }
 
+    // Bandeau du glisser d'une ligne : ce qui vient d'être fait, et « Annuler ».
+    Popup {
+        id: bandeauGlissement
+        property string texte: ""
+        x: Math.round((parent.width - width) / 2)
+        y: parent.height - height - 90
+        width: Math.min(parent.width - 24, 420)
+        closePolicy: Popup.NoAutoClose
+        padding: 6
+        RowLayout {
+            anchors.fill: parent
+            spacing: 8
+            Label {
+                text: bandeauGlissement.texte
+                elide: Text.ElideRight
+                Layout.fillWidth: true
+                Layout.leftMargin: 8
+            }
+            Button {
+                flat: true
+                text: qsTr("Annuler")
+                font.bold: true
+                onClicked: fenetre.annulerGlissement()
+            }
+        }
+    }
+
     // Vue tactile : « Nouveau message » en bouton flottant, en bas à droite de
     // la liste — l'usage d'Android.
     RoundButton {
@@ -2645,7 +2672,7 @@ ApplicationWindow {
         for (var a = 0; a < c.ajoutes.length; ++a) {
             var n = c.ajoutes[a]
             delete absents[n.uid]
-            if (fenetre.enDeplacement[cleDeplacement(n.uid)] === true || rangExact(n.h, n.uid) >= 0)
+            if (fenetre.masquee(cleDeplacement(n.uid)) || rangExact(n.h, n.uid) >= 0)
                 continue
             modeleMessages.insert(rangInsertion(n.h, n.uid), n)
         }
@@ -2669,7 +2696,7 @@ ApplicationWindow {
     function poserListe(liste, suite) {
         arreterSuite()
         var messages = liste.filter(function(m) {
-            return fenetre.enDeplacement[cleDeplacement(m.uid)] !== true
+            return !fenetre.masquee(cleDeplacement(m.uid))
         })
         var enHaut = listeEnHaut()
         var position = colonneListe.vueMessages.contentY
@@ -2738,7 +2765,7 @@ ApplicationWindow {
         if (!r.suite)
             minuteurSuite.stop()
         var lignes = r.lignes.filter(function(m) {
-            return fenetre.enDeplacement[cleDeplacement(m.uid)] !== true
+            return !fenetre.masquee(cleDeplacement(m.uid))
         })
         if (lignes.length > 0)
             modeleMessages.append(lignes)
@@ -3006,7 +3033,7 @@ ApplicationWindow {
             delete r.segments
             return r
         }).filter(function(r) {
-            return fenetre.enDeplacement[r.compte + "|" + r.chemin + "|" + r.uid] !== true
+            return !fenetre.masquee(r.compte + "|" + r.chemin + "|" + r.uid)
         })
         var cle = function(m) { return fenetre.cleResultat(m.compte, m.chemin, m.uid) }
         var voulues = {}
@@ -3501,6 +3528,93 @@ ApplicationWindow {
         return boite.compteCourant + "|" + boite.dossierCourant + "|" + uid
     }
 
+    // Ligne retirée de la liste : en cours de déplacement, ou glissée et en
+    // attente derrière le bandeau « Annuler ».
+    function masquee(cle) {
+        return enDeplacement[cle] === true || enAttente[cle] === true
+    }
+
+    // Glisser d'une ligne (vue tactile) : la ligne quitte la liste d'emblée,
+    // l'action attend 5 s derrière le bandeau « Annuler », puis part comme
+    // celle de la corbeille de la ligne. Une seule action attend : la suivante
+    // envoie la précédente.
+    property var glissement: null
+    property var enAttente: ({})
+    function glisserLigne(index, genre) {
+        if (index < 0 || index >= modeleMessages.count)
+            return
+        validerGlissement()
+        var r = modeleMessages.get(index)
+        var compte = listeMulti ? r.compte : boite.compteCourant
+        var chemin = listeMulti ? r.chemin : boite.dossierCourant
+        var role = listeMulti ? (r.role || "") : roleCourant
+        var cle = compte + "|" + chemin + "|" + r.uid
+        glissement = { cle: cle, compte: compte, chemin: chemin, uid: r.uid, genre: genre }
+        var attente = {}
+        for (var k in enAttente)
+            attente[k] = true
+        attente[cle] = true
+        enAttente = attente
+        modeleMessages.remove(index)
+        if (!listeMulti && uidCourant === r.uid) {
+            uidCourant = 0
+            colonneLecture.sujetAffiche.text = ""
+            colonneLecture.auteurAffiche.text = ""
+            adresseAffichee = ""
+            afficherTexte(qsTr("Aucun message sélectionné."))
+        }
+        bandeauGlissement.texte = genre === "corbeille" ? qsTr("Message mis à la corbeille.")
+                                 : role === "Junk" ? qsTr("Message remis en boîte de réception.")
+                                 : qsTr("Message classé indésirable.")
+        bandeauGlissement.open()
+        minuterieGlissement.restart()
+    }
+    function retirerDeLAttente(cle) {
+        var attente = {}
+        for (var k in enAttente) {
+            if (k !== cle)
+                attente[k] = true
+        }
+        enAttente = attente
+    }
+    function validerGlissement() {
+        if (!glissement)
+            return
+        minuterieGlissement.stop()
+        bandeauGlissement.close()
+        var g = glissement
+        glissement = null
+        var ok = g.genre === "corbeille" ? boite.supprimerDans(g.compte, g.chemin, String(g.uid))
+                                         : boite.signalerIndesirableDans(g.compte, g.chemin, String(g.uid))
+        retirerDeLAttente(g.cle)
+        if (ok) {
+            var retires = {}
+            for (var u in enDeplacement)
+                retires[u] = true
+            retires[g.cle] = true
+            enDeplacement = retires
+            deplacementsEnVol += 1
+        } else {
+            messageEtat.texte = boite.erreur
+            rafraichirListe(true)
+        }
+    }
+    function annulerGlissement() {
+        if (!glissement)
+            return
+        minuterieGlissement.stop()
+        bandeauGlissement.close()
+        var g = glissement
+        glissement = null
+        retirerDeLAttente(g.cle)
+        rafraichirListe(true)
+    }
+    Timer {
+        id: minuterieGlissement
+        interval: 5000
+        onTriggered: fenetre.validerGlissement()
+    }
+
     function retirerDeLaListe(uids) {
         var retires = {}
         for (var u in enDeplacement)
@@ -3682,6 +3796,7 @@ ApplicationWindow {
         // Vue tactile : le retour arrière d'Android ferme le tiroir, ramène
         // du message à la liste, puis quitte — la liste est l'écran d'accueil.
         if (tactile) {
+            validerGlissement()
             if (tiroir.opened) {
                 fermeture.accepted = false
                 tiroir.close()

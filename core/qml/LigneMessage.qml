@@ -13,7 +13,7 @@ import Qt.labs.settings
 import fr.mmedia.mmail
 import fr.mmedia.mmail.natif
 
-ItemDelegate {
+SwipeDelegate {
     id: ligne
     width: ListView.view.width
     readonly property bool choisi: fenetre.listeMulti
@@ -36,6 +36,68 @@ ItemDelegate {
     Accessible.selectable: true
     Accessible.selected: choisi
     padding: 0
+
+    // Vue tactile : glisser la ligne (demande de Manu du 14/10) — vers la
+    // gauche, la corbeille ; vers la droite, les indésirables (« Pas
+    // indésirable » depuis ce dossier). Le fond qui se découvre a les deux
+    // tiers de la largeur : lâchée passé le tiers, la ligne part. L'action
+    // attend derrière le bandeau « Annuler » (cf. fenetre.glisserLigne).
+    readonly property string roleLigne: fenetre.listeMulti ? (model.role || "") : fenetre.roleCourant
+    swipe.enabled: fenetre.tactile
+    swipe.left: roleLigne === "Trash" ? null : fondIndesirable
+    swipe.right: roleLigne === "Trash" ? null : fondCorbeille
+    swipe.onCompleted: fenetre.glisserLigne(index, swipe.position > 0 ? "indesirable" : "corbeille")
+    Component {
+        id: fondIndesirable
+        Rectangle {
+            width: ligne.width * 2 / 3
+            height: ligne.height
+            color: "#d35400"
+            Label {
+                anchors.left: parent.left
+                anchors.leftMargin: 18
+                anchors.verticalCenter: parent.verticalCenter
+                text: ligne.roleLigne === "Junk" ? qsTr("Pas indésirable") : qsTr("Indésirable")
+                color: "#ffffff"
+                font.bold: true
+            }
+        }
+    }
+    Component {
+        id: fondCorbeille
+        Rectangle {
+            width: ligne.width * 2 / 3
+            height: ligne.height
+            color: "#c0392b"
+            RowLayout {
+                anchors.right: parent.right
+                anchors.rightMargin: 18
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: 8
+                Label {
+                    text: qsTr("Corbeille")
+                    color: "#ffffff"
+                    font.bold: true
+                }
+                Canvas {
+                    Layout.preferredHeight: 18
+                    Layout.preferredWidth: 15
+                    onPaint: fenetre.dessinerCorbeille(getContext("2d"), width, height, "#ffffff")
+                }
+            }
+        }
+    }
+    // Au doigt (vue tactile), la ligne répond elle-même : la zone de la
+    // souris lui laisserait sinon le geste.
+    onClicked: if (fenetre.tactile) fenetre.choisir(index, 0)
+    onPressAndHold: {
+        if (!fenetre.tactile)
+            return
+        if (!ligne.choisi)
+            fenetre.choisir(index, 0)
+        menuMessage.popup(ligne, ligne.pressX, ligne.pressY)
+    }
+    onDoubleClicked: if (fenetre.tactile) fenetre.rediger(fenetre.dossierDeReprise ? "brouillon" : "repondre")
 
     // Bandeau des non-lus, comme Outlook ; sous une apparence de
     // marque, le message choisi porte aussi un filet, pétrole s'il est lu.
@@ -184,6 +246,7 @@ ItemDelegate {
     MouseArea {
         id: zone
         anchors.fill: parent
+        enabled: !fenetre.tactile
         acceptedButtons: Qt.LeftButton | Qt.RightButton
         // Au doigt — téléphone, ou écran tactile —, glisser fait défiler
         // la liste : pas de glisser-déposer (le tri passe par l'appui

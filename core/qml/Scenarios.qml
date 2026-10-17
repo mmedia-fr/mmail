@@ -711,6 +711,41 @@ QtObject {
         t.start()
     }
 
+    // Scénario « tactile » : la vue du téléphone en images, sans téléphone
+    // (MMAIL_TACTILE=1, MMAIL_TAILLE=412x915) — liste, tiroir, menu ⋮, message.
+    function etapeScenarioTactile() {
+        var a = listeComptes()[0]
+        if (!a || a.etat !== "pret" || essai.etape || boite.dossierCourant !== "INBOX" || modeleMessages.count < 1)
+            return
+        essai.etape = 1
+        var racine = fenetre.contentItem
+        while (racine.parent)
+            racine = racine.parent
+        function saisir(nom) {
+            var chemin = lanceur.chemin(identifiantsEssai.sortie + "/tactile-" + nom + ".png")
+            racine.grabToImage(function(r) { r.saveToFile(chemin) })
+            console.log("scenario: tactile", nom, "| vue", vue, "| tiroir", tiroir.opened,
+                        "| menu", menuPlus.opened, "| titre", boite.dossierCourant)
+        }
+        var etapes = [
+            function() { saisir("liste") },
+            function() { tiroir.open() },
+            function() { saisir("tiroir") },
+            function() { tiroir.close(); menuPlus.popup(fenetre.width - 10, 0) },
+            function() { saisir("menu") },
+            function() { menuPlus.close(); choisir(0, 0) },
+            function() { saisir("message") },
+            function() { console.log("scenario: tactile fin | tactile", tactile, "| compact", compact); Qt.quit() }
+        ]
+        var i = 0
+        var t = Qt.createQmlObject("import QtQuick; Timer { interval: 700; repeat: true }", fenetre)
+        t.triggered.connect(function() {
+            if (i < etapes.length)
+                etapes[i++]()
+        })
+        t.start()
+    }
+
     function etapeScenarioCorbeille() {
         var a = listeComptes()[0]
         if (!a || a.etat !== "pret")

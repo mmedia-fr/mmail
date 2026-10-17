@@ -31,7 +31,11 @@ ColumnLayout {
     // Recherche, comme dans Outlook : dans le dossier ouvert (objet,
     // expéditeur, puis texte entier par le serveur), ou dans toutes les
     // boîtes (index local).
+    // Vue tactile : la recherche se montre par la loupe de la barre
+    // d'application, et se range une fois vide et quittée.
+    property bool rechercheOuverte: false
     RowLayout {
+        visible: !fenetre.tactile || colonneListe.rechercheOuverte || champRecherche.text.length > 0
         Layout.fillWidth: true
         Layout.margins: 4
         spacing: 4
@@ -67,7 +71,12 @@ ColumnLayout {
             // La frappe ne cherche plus : elle propose les dernières
             // recherches, que l'on choisit ; Entrée lance la recherche
             // (demande de Manu, 09/10).
-            onActiveFocusChanged: if (activeFocus) fenetre.proposerHistorique()
+            onActiveFocusChanged: {
+                if (activeFocus)
+                    fenetre.proposerHistorique()
+                else if (text.length === 0)
+                    colonneListe.rechercheOuverte = false
+            }
             onTextEdited: fenetre.proposerHistorique()
             onAccepted: {
                 if (panneauHistorique.opened && vueHistorique.currentIndex >= 0)

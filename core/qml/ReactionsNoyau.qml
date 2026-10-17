@@ -220,6 +220,8 @@ Connections {
             scenarios.etapeScenarioEnTete()
         if (fenetre.essai && fenetre.essai.scenario === "dialogues")
             scenarios.etapeScenarioDialogues()
+        if (fenetre.essai && fenetre.essai.scenario === "tactile")
+            scenarios.etapeScenarioTactile()
         if (fenetre.essai && fenetre.essai.scenario === "accessibilite")
             scenarios.etapeScenarioAccessibilite()
         if (fenetre.essai && fenetre.essai.scenario === "chevron")

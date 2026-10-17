@@ -583,7 +583,73 @@ ApplicationWindow {
         SiMarque { target: entete; property: "topPadding"; value: 4 }
         SiMarque { target: entete; property: "bottomPadding"; value: 7 }
 
+        // Vue tactile (décision 32) : la barre d'application d'Android —
+        // ☰ ouvre l'arborescence en tiroir (‹ revient du message à la liste),
+        // le nom du dossier, la loupe, ⋮ pour le reste.
         RowLayout {
+            visible: fenetre.tactile
+            anchors.fill: parent
+            anchors.leftMargin: 2
+            anchors.rightMargin: 2
+            spacing: 2
+            BoutonEntete {
+                text: fenetre.vue === 2 ? "‹" : "☰"
+                font.pixelSize: 22
+                Layout.preferredWidth: 44
+                Accessible.name: fenetre.vue === 2 ? qsTr("Retour à la liste") : qsTr("Dossiers")
+                onClicked: {
+                    if (fenetre.vue === 2)
+                        fenetre.vue = 1
+                    else
+                        tiroir.open()
+                }
+            }
+            Label {
+                text: fenetre.vueUnifiee ? qsTr("Toutes les BàL")
+                      : boite.dossierCourant.length > 0 ? fenetre.libelleCourant() : "MMail"
+                color: fenetre.marque ? fenetre.marque.texteBandeau : fenetre.palette.windowText
+                elide: Text.ElideRight
+                font.bold: true
+                font.pointSize: fenetre.tailleBase * 1.15
+                Layout.fillWidth: true
+                Layout.leftMargin: 4
+            }
+            BusyIndicator {
+                running: boite.occupe
+                visible: running
+                Layout.preferredHeight: 26
+                Layout.preferredWidth: 26
+            }
+            BoutonEntete {
+                Layout.preferredWidth: 44
+                Accessible.name: qsTr("Rechercher")
+                onClicked: {
+                    fenetre.vue = 1
+                    colonneListe.rechercheOuverte = true
+                    colonneListe.champRecherche.forceActiveFocus()
+                }
+                Canvas {
+                    anchors.centerIn: parent
+                    width: 20
+                    height: 20
+                    property color encre: fenetre.marque ? fenetre.marque.texteBandeau : fenetre.palette.windowText
+                    onEncreChanged: requestPaint()
+                    onPaint: fenetre.dessinerLoupe(getContext("2d"), width, height, encre)
+                }
+            }
+            BoutonEntete {
+                id: boutonPlus
+                text: "⋮"
+                font.pixelSize: 22
+                font.bold: true
+                Layout.preferredWidth: 44
+                Accessible.name: qsTr("Plus d'options")
+                onClicked: menuPlus.popup(boutonPlus, boutonPlus.width - menuPlus.width, boutonPlus.height)
+            }
+        }
+
+        RowLayout {
+            visible: !fenetre.tactile
             anchors.fill: parent
             anchors.leftMargin: 6
             anchors.rightMargin: 6
@@ -732,6 +798,87 @@ ApplicationWindow {
     }
 
     BandeauVersion { id: bandeauVersion }
+
+    // Vue tactile : l'arborescence dans un tiroir, tiré du bord gauche ou
+    // ouvert par ☰ ; « Toutes les BàL » en tête, comme les applications de
+    // messagerie d'Android. Le volet de l'arborescence des volets n'y sert pas.
+    Drawer {
+        id: tiroir
+        edge: Qt.LeftEdge
+        interactive: fenetre.tactile
+        width: Math.min(fenetre.width * 0.85, 360)
+        height: fenetre.height
+        ColumnLayout {
+            anchors.fill: parent
+            spacing: 0
+            ItemDelegate {
+                Layout.fillWidth: true
+                text: qsTr("Toutes les BàL")
+                      + (fenetre.nonLusReceptions > 0 ? "  (" + fenetre.nonLusReceptions + ")" : "")
+                font.bold: fenetre.nonLusReceptions > 0
+                highlighted: fenetre.vueUnifiee
+                onClicked: fenetre.ouvrirBoitesUnifiees()
+            }
+            VoletArborescence {
+                id: arborescenceTiroir
+                visible: true
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+            }
+        }
+    }
+
+    // Vue tactile : « Nouveau message » en bouton flottant, en bas à droite de
+    // la liste — l'usage d'Android.
+    RoundButton {
+        visible: fenetre.tactile && fenetre.vue === 1 && fenetre.module === "courrier"
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        anchors.margins: 16
+        z: 10
+        width: 58
+        height: 58
+        text: "+"
+        font.pixelSize: 30
+        highlighted: true
+        Accessible.name: qsTr("Nouveau message")
+        onClicked: fenetre.rediger("nouveau")
+    }
+
+    // Vue tactile : le menu ⋮ — les menus « Comptes » et « Affichage » y
+    // entrent en sous-menus, puis ce que la barre de bureau montre en boutons.
+    Menu {
+        id: menuPlus
+        onAboutToShow: width = fenetre.largeurMenu(menuPlus)
+        Component.onCompleted: {
+            if (fenetre.tactile) {
+                menuPlus.insertMenu(0, menuComptes)
+                menuPlus.insertMenu(1, menuAffichage)
+            }
+        }
+        MenuItem {
+            text: qsTr("Actualiser")
+            onTriggered: boite.actualiser()
+        }
+        MenuItem {
+            text: qsTr("Dossiers masqués")
+            checkable: true
+            checked: reglages.afficherMasques
+            onTriggered: {
+                reglages.afficherMasques = checked
+                fenetre.rafraichirArborescence()
+            }
+        }
+        MenuSeparator {}
+        MenuItem {
+            text: qsTr("Aide")
+            onTriggered: dlgAide.open()
+        }
+        MenuItem {
+            text: qsTr("À propos de MMail…")
+            onTriggered: dlgAPropos.open()
+        }
+    }
 
     // ------------------------------------------------------------- volets
     Agenda {
@@ -2413,6 +2560,7 @@ ApplicationWindow {
     // ---- liste des messages
 
     function ouvrirDossier(compte, chemin) {
+        tiroir.close()
         // Un dossier choisi dans l'arborescence met fin à une recherche dans
         // toutes les boîtes, même s'il est celui du dernier résultat lu.
         var sortieGlobale = rechercheGlobale || vueUnifiee
@@ -2831,6 +2979,7 @@ ApplicationWindow {
 
     /// Boîte de réception unifiée : les réceptions de tous les comptes.
     function ouvrirBoitesUnifiees() {
+        tiroir.close()
         if (rechercheGlobale)
             sortirRechercheGlobale()
         recherche = ""
@@ -3530,6 +3679,18 @@ ApplicationWindow {
     }
 
     onClosing: function(fermeture) {
+        // Vue tactile : le retour arrière d'Android ferme le tiroir, ramène
+        // du message à la liste, puis quitte — la liste est l'écran d'accueil.
+        if (tactile) {
+            if (tiroir.opened) {
+                fermeture.accepted = false
+                tiroir.close()
+            } else if (vue === 2) {
+                fermeture.accepted = false
+                vue = 1
+            }
+            return
+        }
         // Sur téléphone, le retour arrière ramène de l'agenda au courrier, puis
         // remonte d'un volet avant de quitter.
         if (compact && module === "agenda") {
@@ -3547,9 +3708,17 @@ ApplicationWindow {
             width = parseInt(taille[0])
             height = parseInt(taille[1])
         }
-        // L'agenda relève, sous Android, de l'application du téléphone.
-        if (tactile)
+        // L'agenda relève, sous Android, de l'application du téléphone ; la
+        // liste est l'écran d'accueil, le tiroir s'ouvre tant qu'aucun dossier
+        // n'est choisi.
+        if (tactile) {
             module = "courrier"
+            vue = 1
+            Qt.callLater(function() {
+                if (boite.dossierCourant.length === 0 && !vueUnifiee)
+                    tiroir.open()
+            })
+        }
         if (typeof modeControle !== "undefined" && modeControle)
             return
         if (!boite.ouvrirProfil(cheminProfil))

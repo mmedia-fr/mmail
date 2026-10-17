@@ -15,6 +15,7 @@ import fr.mmedia.mmail.natif
 
 Menu {
     id: menuAffichage
+    title: qsTr("Affichage")
     onAboutToShow: width = fenetre.largeurMenu(menuAffichage)
     Repeater {
         model: fenetre.nomsApparence

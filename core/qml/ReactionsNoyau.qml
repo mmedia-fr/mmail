@@ -133,7 +133,7 @@ Connections {
         // INBOX, une fois le dossier synchronisé.
         if (fenetre.essai && fenetre.essai.scenario === "recherche" && !fenetre.essai.cherche) {
             fenetre.essai.cherche = true
-            champRecherche.text = identifiantsEssai.dossier
+            colonneListe.champRecherche.text = identifiantsEssai.dossier
             fenetre.lancerRecherche()
             console.log("scenario: l'index trouve", modeleMessages.count, "message(s)")
             return
@@ -144,8 +144,8 @@ Connections {
         // dossiers jamais ouverts (suite dans onResultatsPartout).
         if (fenetre.essai && fenetre.essai.scenario === "recherche-serveur" && !fenetre.essai.cherche) {
             fenetre.essai.cherche = true
-            porteeRecherche.currentIndex = 1
-            champRecherche.text = identifiantsEssai.dossier
+            colonneListe.porteeRecherche.currentIndex = 1
+            colonneListe.champRecherche.text = identifiantsEssai.dossier
             fenetre.lancerRecherche()
             console.log("scenario: l'index trouve", modeleMessages.count, "message(s) | dossiers à interroger",
                         fenetre.dossiersPartout)
@@ -188,13 +188,13 @@ Connections {
             fenetre.essai.cherche = true
             for (var h = 12; h >= 1; --h)
                 fenetre.noterRecherche(qsTr("recherche passée %1").arg(h))
-            champRecherche.forceActiveFocus()
+            colonneListe.champRecherche.forceActiveFocus()
             fenetre.proposerHistorique()
-            if (!panneauHistorique.opened) {
-                panneauHistorique.entrees = fenetre.historiqueRecherches()
-                panneauHistorique.open()
+            if (!colonneListe.panneauHistorique.opened) {
+                colonneListe.panneauHistorique.entrees = fenetre.historiqueRecherches()
+                colonneListe.panneauHistorique.open()
             }
-            console.log("scenario: historique proposé", panneauHistorique.entrees.length, "| ouvert", panneauHistorique.opened)
+            console.log("scenario: historique proposé", colonneListe.panneauHistorique.entrees.length, "| ouvert", colonneListe.panneauHistorique.opened)
         }
         if (fenetre.essai && fenetre.essai.scenario === "recherche-partout" && fenetre.essai.etape < 3) {
             scenarios.etapeScenarioRecherchePartout(compte, chemin)
@@ -265,9 +265,9 @@ Connections {
         fenetre.corpsHtml = html
         fenetre.htmlAffiche = html ? texte : ""
         fenetre.imagesBloquees = bloquees
-        vueCorps.text = html ? fenetre.htmlAuZoom(texte) : texte
+        colonneLecture.vueCorps.text = html ? fenetre.htmlAuZoom(texte) : texte
         fenetre.bornerImages()
-        vueCorps.cursorPosition = 0
+        colonneLecture.vueCorps.cursorPosition = 0
         if (!brut) {
             fenetre.confirmationDemandee = confirmation
             fenetre.pieces = JSON.parse(pieces)

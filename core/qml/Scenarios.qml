@@ -196,8 +196,8 @@ QtObject {
             ouvrirDossier(compte, "INBOX")
         } else if (essai.etape === 2 && chemin === "INBOX") {
             essai.etape = 3
-            porteeRecherche.currentIndex = 1
-            champRecherche.text = identifiantsEssai.dossier
+            colonneListe.porteeRecherche.currentIndex = 1
+            colonneListe.champRecherche.text = identifiantsEssai.dossier
             lancerRecherche()
             var dossiers = {}
             var autre = -1
@@ -216,7 +216,7 @@ QtObject {
             var suite = Qt.createQmlObject('import QtQuick; Timer { interval: 3000 }', fenetre)
             suite.triggered.connect(function() {
                 console.log("scenario: choisi", modeleMessages.get(autre).sujet, "| noyau sur", boite.dossierCourant,
-                            "| affiché", sujetAffiche.text, "| liste", modeleMessages.count, "| globale", rechercheGlobale)
+                            "| affiché", colonneLecture.sujetAffiche.text, "| liste", modeleMessages.count, "| globale", rechercheGlobale)
                 quitterRecherche()
                 var fin = Qt.createQmlObject('import QtQuick; Timer { interval: 2000 }', fenetre)
                 fin.triggered.connect(function() {
@@ -255,9 +255,9 @@ QtObject {
             choisir(0, 0)
         var attente = Qt.createQmlObject('import QtQuick; Timer { interval: 1500 }', fenetre)
         attente.triggered.connect(function() {
-            console.log("scenario: affiché :", sujetAffiche.text, "| html :", corpsHtml, "|",
-                        vueCorps.text.length, "caractères",
-                        vueCorps.text.indexOf("Chargement") === 0 || vueCorps.text.length < 20 ? "ECHEC" : "OK")
+            console.log("scenario: affiché :", colonneLecture.sujetAffiche.text, "| html :", corpsHtml, "|",
+                        colonneLecture.vueCorps.text.length, "caractères",
+                        colonneLecture.vueCorps.text.indexOf("Chargement") === 0 || colonneLecture.vueCorps.text.length < 20 ? "ECHEC" : "OK")
         })
         attente.start()
     }
@@ -268,15 +268,15 @@ QtObject {
     function etapeScenarioMesureRecherche() {
         var c = comptesConnus[0]
         ouvrirDossier(c.compte, "INBOX")
-        champRecherche.text = "Correspondant 12"
+        colonneListe.champRecherche.text = "Correspondant 12"
         var t = Date.now()
         lancerRecherche()
         console.log("mesure: recherche dans le dossier,", modeleMessages.count, "résultats,", Date.now() - t, "ms")
         t = Date.now()
         quitterRecherche()
         console.log("mesure: sortie de recherche,", modeleMessages.count, "messages,", Date.now() - t, "ms")
-        porteeRecherche.currentIndex = 1
-        champRecherche.text = "dossier 39"
+        colonneListe.porteeRecherche.currentIndex = 1
+        colonneListe.champRecherche.text = "dossier 39"
         t = Date.now()
         lancerRecherche()
         console.log("mesure: recherche dans toutes les boîtes,", modeleMessages.count, "résultats,",
@@ -377,15 +377,15 @@ QtObject {
         if (essai.scenario === "favoris-fixes") {
             var attente = Qt.createQmlObject('import QtQuick; Timer { interval: 1000 }', fenetre)
             attente.triggered.connect(function() {
-                var v = vueArborescence
+                var v = colonneArborescence.vueArborescence
                 v.contentY = Math.max(v.originY, v.originY + v.contentHeight - v.height)
-                console.log("scenario: comptes défilés à", v.contentY, "; Favoris visibles :", vueFavoris.visible, vueFavoris.count, "lignes")
+                console.log("scenario: comptes défilés à", v.contentY, "; Favoris visibles :", colonneArborescence.vueFavoris.visible, colonneArborescence.vueFavoris.count, "lignes")
             })
             attente.start()
             return
         }
         Qt.callLater(function() {
-            var v = vueArborescence
+            var v = colonneArborescence.vueArborescence
             v.contentY = Math.max(v.originY, v.originY + v.contentHeight - v.height)
             var avant = v.contentY
             var sonde = Qt.createQmlObject('import QtQuick; Rectangle { width: 40; height: 16 }', fenetre.contentItem)
@@ -459,7 +459,7 @@ QtObject {
         }
         var cible = cibles[essai.etapeChevron]
         var i = present(cible)
-        var ligne = i >= 0 ? vueArborescence.itemAtIndex(i) : null
+        var ligne = i >= 0 ? colonneArborescence.vueArborescence.itemAtIndex(i) : null
         // Un clic au milieu de la place du chevron, où le doigt se pose :
         // retrait du dossier plus la moitié de la largeur du chevron.
         var x = ligne ? ligne.leftPadding + modeleArborescence.get(i).profondeur * 14 + 7 : -1
@@ -625,17 +625,17 @@ QtObject {
         essai.etape = 1
         choisir(0, 0)
         var ligne = modeleMessages.get(0)
-        sujetAffiche.selectAll()
-        console.log("scenario: objet sélectionnable", sujetAffiche.selectByMouse && sujetAffiche.readOnly,
-                    "| sélection = objet", sujetAffiche.selectedText === ligne.sujet)
-        menuEnTete.texteChoisi = sujetAffiche.selectedText
+        colonneLecture.sujetAffiche.selectAll()
+        console.log("scenario: objet sélectionnable", colonneLecture.sujetAffiche.selectByMouse && colonneLecture.sujetAffiche.readOnly,
+                    "| sélection = objet", colonneLecture.sujetAffiche.selectedText === ligne.sujet)
+        menuEnTete.texteChoisi = colonneLecture.sujetAffiche.selectedText
         copierTexte(menuEnTete.texteChoisi, "message")
         console.log("scenario: copie de l'objet", pressePapier.texte === ligne.sujet)
         copierTexte(adresseAffichee, "message")
         console.log("scenario: copie de l'adresse", adresseAffichee.length > 0 && pressePapier.texte === ligne.adresse,
                     "|", adresseAffichee)
-        auteurAffiche.selectAll()
-        console.log("scenario: expéditeur sélectionnable", auteurAffiche.selectedText.indexOf(ligne.adresse) >= 0)
+        colonneLecture.auteurAffiche.selectAll()
+        console.log("scenario: expéditeur sélectionnable", colonneLecture.auteurAffiche.selectedText.indexOf(ligne.adresse) >= 0)
         reglagesPieces.dernierDossier = ""
         var d1 = dossierEnregistrement()
         reglagesPieces.dernierDossier = "file:///tmp"
@@ -659,13 +659,13 @@ QtObject {
         essai.etape = 1
         choisir(0, 0)
         for (var i = 0; i < Math.min(3, modeleMessages.count); ++i) {
-            var l = vueMessages.itemAtIndex(i)
+            var l = colonneListe.vueMessages.itemAtIndex(i)
             if (l)
                 console.log("scenario: message", i, "| rôle", l.Accessible.role === Accessible.ListItem,
                             "| choisi", l.Accessible.selected, "|", l.Accessible.name)
         }
-        for (var k = 0; k < Math.min(8, vueArborescence.count); ++k) {
-            var d = vueArborescence.itemAtIndex(k)
+        for (var k = 0; k < Math.min(8, colonneArborescence.vueArborescence.count); ++k) {
+            var d = colonneArborescence.vueArborescence.itemAtIndex(k)
             if (d)
                 console.log("scenario: arborescence", k, "| rôle", d.Accessible.role === Accessible.TreeItem,
                             "| courant", d.Accessible.selected, "|", d.Accessible.name)

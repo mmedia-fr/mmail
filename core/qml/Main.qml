@@ -1351,42 +1351,7 @@ ApplicationWindow {
         onAccepted: dlgOuvrirAvec.ouvrir(piece, selectedFile.toString(), sansLogiciel)
     }
 
-    Dialog {
-        id: dlgOuvrirAvec
-        property var piece: null
-        property string programme: ""
-        readonly property string extension: piece ? fenetre.extensionDe(piece.nom) : ""
-        function ouvrir(p, prog, toujours) {
-            piece = p
-            programme = prog
-            toujoursAvec.checked = toujours === true
-            open()
-        }
-        title: qsTr("Ouvrir avec %1").arg(lanceur.nom(programme))
-        modal: true
-        anchors.centerIn: Overlay.overlay
-        width: Math.min(480, fenetre.width - 24)
-        standardButtons: Dialog.Ok | Dialog.Cancel
-        ColumnLayout {
-            width: dlgOuvrirAvec.availableWidth
-            Label {
-                Layout.fillWidth: true
-                wrapMode: Text.Wrap
-                text: qsTr("Ouvrir « %1 » avec %2.").arg(dlgOuvrirAvec.piece ? dlgOuvrirAvec.piece.nom : "")
-                      .arg(lanceur.nom(dlgOuvrirAvec.programme))
-            }
-            CheckBox {
-                id: toujoursAvec
-                visible: dlgOuvrirAvec.extension.length > 0
-                text: qsTr("Toujours ouvrir les fichiers .%1 avec ce logiciel").arg(dlgOuvrirAvec.extension)
-            }
-        }
-        onAccepted: {
-            if (toujoursAvec.checked && extension.length > 0)
-                fenetre.retenirLogiciel(extension, programme)
-            fenetre.ouvrirPiece(piece, programme)
-        }
-    }
+    DialogueOuvrirAvec { id: dlgOuvrirAvec }
 
     // Les logiciels retenus, par extension, sur ce poste ; « Retirer » rend le
     // type au logiciel du système.

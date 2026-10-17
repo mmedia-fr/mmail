@@ -397,13 +397,6 @@ ApplicationWindow {
     // repli, plus large, en reste à la taille des autres apparences.
     readonly property bool titresEtroits: marque !== null && policeTitres === marque.titres[0]
 
-    // Surcharge qui ne vaut que sous une apparence de marque : hors d'elle,
-    // la propriété retrouve sa valeur d'origine, celle du style.
-    component SiMarque: Binding {
-        when: fenetre.marque !== null
-        restoreMode: Binding.RestoreBindingOrValue
-    }
-
     // Bouton de l'en-tête. Sous une apparence de marque, une pastille sur le
     // bandeau, comme les onglets du site : pleine en cyan pour le module
     // affiché et l'action principale, cernée pour les autres boutons à

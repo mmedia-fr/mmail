@@ -1415,39 +1415,7 @@ ApplicationWindow {
 
     MenuMessage { id: menuMessage }
 
-    Menu {
-        id: menuDossier
-        font.pointSize: fenetre.tailleColonne("arborescence")
-        onAboutToShow: width = fenetre.largeurMenu(menuDossier)
-        property int compte: 0
-        property string chemin: ""
-        property bool favori: false
-        property bool masque: false
-        property string nom: ""
-        property bool selectionnable: true
-        function ouvrir(c, ch, f, m, n, sel) {
-            compte = c; chemin = ch; favori = f; masque = m; nom = n; selectionnable = sel
-            popup()
-        }
-        MenuItem {
-            text: menuDossier.favori ? qsTr("Retirer des favoris") : qsTr("Ajouter aux favoris")
-            onTriggered: boite.epinglerDossier(menuDossier.compte, menuDossier.chemin, !menuDossier.favori)
-        }
-        MenuItem {
-            text: menuDossier.masque ? qsTr("Réafficher ce dossier") : qsTr("Masquer ce dossier")
-            onTriggered: boite.masquerDossier(menuDossier.compte, menuDossier.chemin, !menuDossier.masque)
-        }
-        MenuSeparator {}
-        MenuItem {
-            text: qsTr("Nouveau sous-dossier…")
-            onTriggered: dlgNouveauDossier.ouvrir(menuDossier.compte, menuDossier.chemin, menuDossier.nom)
-        }
-        MenuItem {
-            text: qsTr("Vider ce dossier…")
-            enabled: menuDossier.selectionnable
-            onTriggered: dlgViderDossier.ouvrir(menuDossier.compte, menuDossier.chemin, menuDossier.nom)
-        }
-    }
+    MenuDossier { id: menuDossier }
 
     Menu {
         id: menuCompte

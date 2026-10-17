@@ -157,10 +157,10 @@ Connections {
         if (fenetre.essai && fenetre.essai.scenario === "sous-dossier" && !fenetre.essai.cree) {
             fenetre.essai.cree = true
             dlgNouveauDossier.ouvrir(compte, "INBOX", qsTr("Boîte de réception"))
-            champNouveauDossier.text = "a/b"
+            dlgNouveauDossier.champNouveauDossier.text = "a/b"
             dlgNouveauDossier.creer()
             console.log("scenario: refus de « a/b » :", dlgNouveauDossier.motif, "| dialogue ouvert :", dlgNouveauDossier.visible)
-            champNouveauDossier.text = identifiantsEssai.dossier
+            dlgNouveauDossier.champNouveauDossier.text = identifiantsEssai.dossier
             dlgNouveauDossier.creer()
             console.log("scenario: demande partie :", dlgNouveauDossier.motif === "", "| dialogue ouvert :", dlgNouveauDossier.visible)
             return
@@ -568,7 +568,7 @@ Connections {
                 console.log("scenario: créé", chemin, "| dans l'arborescence :", ligne !== null,
                             ligne ? "| nom : " + ligne.nom + " | profondeur : " + ligne.profondeur : "")
                 dlgNouveauDossier.ouvrir(compte, "INBOX", qsTr("Boîte de réception"))
-                champNouveauDossier.text = nom
+                dlgNouveauDossier.champNouveauDossier.text = nom
                 dlgNouveauDossier.creer()
                 console.log("scenario: second essai du même nom :", dlgNouveauDossier.motif)
                 Qt.quit()

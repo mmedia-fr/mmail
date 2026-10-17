@@ -516,6 +516,10 @@ l'environnement, cf. `core/src/essais_serveur.rs`) :
 cargo test --manifest-path core/Cargo.toml -- --ignored --test-threads=1
 ```
 
+L'intégration continue les passe sous Linux contre un Dovecot monté pour
+l'occasion — deux comptes jetables, certificat signé par une autorité d'essai
+posée dans le magasin du système —, hors envoi SMTP et agenda.
+
 ## Licence
 
 GNU General Public License version 3 ou ultérieure — texte intégral dans

@@ -1328,44 +1328,7 @@ ApplicationWindow {
         }
     }
 
-    Menu {
-        id: menuAffichage
-        onAboutToShow: width = fenetre.largeurMenu(menuAffichage)
-        Repeater {
-            model: fenetre.nomsApparence
-            MenuItem {
-                required property string modelData
-                text: fenetre.jeuxApparence[modelData].libelle
-                checkable: true
-                checked: fenetre.apparence === modelData
-                onTriggered: fenetre.choisirApparence(modelData)
-            }
-        }
-        MenuSeparator {}
-        MenuItem {
-            text: qsTr("Logiciels d'ouverture des pièces jointes…")
-            visible: Qt.platform.os !== "android"
-            height: visible ? implicitHeight : 0
-            onTriggered: dlgLogiciels.open()
-        }
-        MenuSeparator {}
-        MenuItem {
-            text: qsTr("Agrandir la colonne survolée (Ctrl +)")
-            onTriggered: fenetre.zoomer(fenetre.colonneActive, 1.1)
-        }
-        MenuItem {
-            text: qsTr("Réduire la colonne survolée (Ctrl −)")
-            onTriggered: fenetre.zoomer(fenetre.colonneActive, 1 / 1.1)
-        }
-        MenuItem {
-            text: qsTr("Taille normale partout")
-            onTriggered: {
-                fenetre.poserZoom("arborescence", 1)
-                fenetre.poserZoom("liste", 1)
-                fenetre.poserZoom("message", 1)
-            }
-        }
-    }
+    MenuAffichage { id: menuAffichage }
 
     Menu {
         id: menuPiece

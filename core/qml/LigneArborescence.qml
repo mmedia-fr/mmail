@@ -30,7 +30,7 @@ ItemDelegate {
     // avec ses non-lus.
     Accessible.role: Accessible.TreeItem
     Accessible.name: fenetre.libelleLigne(model)
-                     + (model.nonLus > 0 ? ", " + qsTr("%1 non lus").arg(model.nonLus) : "")
+                     + (model.nonLus > 0 ? ", " + fenetre.accord(model.nonLus, qsTr("non lu"), qsTr("non lus")) : "")
     Accessible.selectable: estDossier
     Accessible.selected: estCourant
     hoverEnabled: true

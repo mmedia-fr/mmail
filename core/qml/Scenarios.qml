@@ -931,6 +931,41 @@ QtObject {
         t.start()
     }
 
+    // Scénario « notification » (0.6.2) : un message à soi-même, d'objet
+    // unique ; à son arrivée dans la boîte de réception, le noyau le signale
+    // (nouveauCourrier) ; il est ensuite mis à la corbeille.
+    function lancerScenarioNotification() {
+        var c = comptesConnus[0]
+        var n = ouvrirRedaction(c.compte)
+        n.pret()
+        essai.sujet = "Essai notification " + Date.now()
+        n.remplir({ a: identifiantsEssai.utilisateur, objet: essai.sujet, mode: "nouveau", texte: "Arrivée signalée." })
+        n.envoyer(false)
+        console.log("scenario: message envoyé à soi-même")
+    }
+    function etapeScenarioNotification(nombre, expediteur, sujet, montrer, faite) {
+        console.log("scenario: nouveau courrier", nombre, "|", expediteur, "|", sujet,
+                    "| notification", montrer ? (faite ? "montrée" : "demandée, sans service de notification") : "non demandée (fenêtre au premier plan)")
+        if (sujet !== essai.sujet || essai.etape)
+            return
+        essai.etape = 1
+        console.log("scenario: OK arrivée signalée")
+        var t = Qt.createQmlObject("import QtQuick; Timer { interval: 3000 }", fenetre)
+        t.triggered.connect(function() {
+            for (var i = 0; i < modeleMessages.count; ++i) {
+                if (modeleMessages.get(i).sujet === essai.sujet) {
+                    supprimerLigne(i)
+                    console.log("scenario: message d'essai mis à la corbeille")
+                    break
+                }
+            }
+            var fin = Qt.createQmlObject("import QtQuick; Timer { interval: 4000 }", fenetre)
+            fin.triggered.connect(function() { Qt.quit() })
+            fin.start()
+        })
+        t.start()
+    }
+
     function etapeScenarioCorbeille() {
         var a = listeComptes()[0]
         if (!a || a.etat !== "pret")

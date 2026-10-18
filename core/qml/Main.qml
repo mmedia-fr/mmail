@@ -106,6 +106,18 @@ ApplicationWindow {
     PressePapier { id: pressePapier }
     Lanceur { id: lanceur }
     Pastille { id: pastille }
+    // Notification du nouveau courrier (0.6.2 ; Windows et Linux) : un clic
+    // ramène la fenêtre au premier plan, sur « Toutes les BàL ».
+    Notifieur {
+        id: notifieur
+        onActive: {
+            if (fenetre.visibility === Window.Minimized || !fenetre.visible)
+                fenetre.showNormal()
+            fenetre.raise()
+            fenetre.requestActivate()
+            fenetre.ouvrirBoitesUnifiees()
+        }
+    }
     // Non-lus des boîtes de réception de tous les comptes : la pastille de
     // l'icône de la barre des tâches, le bouton « Toutes les BàL ».
     property int nonLusReceptions: 0
@@ -329,6 +341,8 @@ ApplicationWindow {
         property real zoomMessage: 1
         // Dernières recherches, la plus récente d'abord (JSON).
         property string historiqueRecherches: "[]"
+        // Notification du nouveau courrier, fenêtre au second plan (0.6.2).
+        property bool notifications: true
     }
 
     // ---------------------------------------------------------- apparences
@@ -4383,6 +4397,11 @@ ApplicationWindow {
                     ouvrirDossier(c.compte, "Archive")
                 })
                 attenteEnvoi.start()
+            }
+            if (essai.scenario === "notification") {
+                var attenteNotif = Qt.createQmlObject('import QtQuick; Timer { interval: 8000 }', fenetre)
+                attenteNotif.triggered.connect(scenarios.lancerScenarioNotification)
+                attenteNotif.start()
             }
             if (essai.scenario === "coller-image") {
                 var attenteImage = Qt.createQmlObject('import QtQuick; Timer { interval: 6000 }', fenetre)

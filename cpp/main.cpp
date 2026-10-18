@@ -37,6 +37,7 @@
 #include "installeur.h"
 #include "lanceur.h"
 #include "pastille.h"
+#include "notifieur.h"
 #include "presse_papier.h"
 #include "mise_en_forme.h"
 
@@ -205,6 +206,7 @@ int main(int argc, char* argv[])
   qmlRegisterType<Lanceur>("fr.mmedia.mmail.natif", 1, 0, "Lanceur");
   // Nombre de non-lus des boîtes de réception sur l'icône de la barre des tâches.
   qmlRegisterType<Pastille>("fr.mmedia.mmail.natif", 1, 0, "Pastille");
+  qmlRegisterType<Notifieur>("fr.mmedia.mmail.natif", 1, 0, "Notifieur");
   // Installation d'une mise à jour à la fermeture (cf. core/src/mise_a_jour.rs).
   qmlRegisterType<Installeur>("fr.mmedia.mmail.natif", 1, 0, "Installeur");
   // Mise en forme du message en cours de rédaction (gras, listes, liens…).

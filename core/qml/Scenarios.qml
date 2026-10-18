@@ -783,17 +783,27 @@ QtObject {
                         ? "scenario: OK annulée, ligne revenue au rang " + revenue
                         : "scenario: ECHEC annulation " + modeleMessages.count + " / " + avant)
             // Retour de Manu du 18/10 : après un glisser, d'autres lignes
-            // restaient décalées. Aucune ligne affichée ne doit l'être.
-            var decalees = []
-            for (var d = 0; d < Math.min(15, modeleMessages.count); ++d) {
-                var l = colonneListe.vueMessages.itemAtIndex(d)
-                if (l && l.swipe.position !== 0)
-                    decalees.push(d + ":" + l.swipe.position)
-            }
-            console.log(decalees.length === 0 ? "scenario: OK aucune ligne décalée après l'annulation"
-                                               : "scenario: ECHEC lignes décalées " + decalees.join(" "))
-            glisserLigne(revenue, "corbeille")
-            console.log("scenario: glissée de nouveau, en attente", Object.keys(enAttente).length)
+            // restaient décalées. Une fois la liste redessinée, aucune ligne
+            // affichée ne doit l'être.
+            var controle = Qt.createQmlObject("import QtQuick; Timer { interval: 600 }", fenetre)
+            controle.triggered.connect(function() {
+                var decalees = []
+                for (var d = 0; d < Math.min(15, modeleMessages.count); ++d) {
+                    var l = colonneListe.vueMessages.itemAtIndex(d)
+                    if (l && l.swipe.position !== 0)
+                        decalees.push(d + ":" + l.swipe.position)
+                }
+                console.log(decalees.length === 0 ? "scenario: OK aucune ligne décalée après l'annulation"
+                                                   : "scenario: ECHEC lignes décalées " + decalees.join(" "))
+                var rang = -1
+                for (var i = 0; i < modeleMessages.count; ++i) {
+                    if (modeleMessages.get(i).sujet === essai.sujet)
+                        rang = i
+                }
+                glisserLigne(rang, "corbeille")
+                console.log("scenario: glissée de nouveau, en attente", Object.keys(enAttente).length)
+            })
+            controle.start()
         } else if (essai.etape === 1 && glissement === null && deplacementsEnVol === 0) {
             essai.etape = 2
             var corbeille = ""

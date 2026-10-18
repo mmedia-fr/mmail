@@ -1831,6 +1831,25 @@ ApplicationWindow {
 
     DialogueFiltres { id: dlgFiltres }
 
+    // Sous Android : la page de connexion Microsoft intégrée (cf.
+    // ConnexionIntegree.qml, absente du module ailleurs).
+    Loader {
+        id: chargeurConnexion
+        active: Qt.platform.os === "android"
+        source: active ? "ConnexionIntegree.qml" : ""
+    }
+    Connections {
+        target: chargeurConnexion.item
+        ignoreUnknownSignals: true
+        function onRetour(url) {
+            if (!boite.terminerMicrosoft(url))
+                messageEtat.texte = qsTr("Retour de connexion inattendu : relancez « Ajouter un compte Microsoft… ».")
+        }
+        function onAbandon() {
+            messageEtat.texte = qsTr("Connexion à Microsoft abandonnée.")
+        }
+    }
+
     // « Créer un filtre… » sur un message : un filtre sur son expéditeur, pour
     // son compte, à compléter dans le dialogue des filtres.
     function creerFiltre() {
@@ -2668,6 +2687,13 @@ ApplicationWindow {
         var url = boite.connecterMicrosoft(indice)
         if (url.length === 0) {
             messageEtat.texte = qsTr("Connexion à Microsoft impossible : %1").arg(boite.erreur)
+            return
+        }
+        // Sous Android, dans la page intégrée : le navigateur du système
+        // laisserait MMail gelé en arrière-plan (retour de Manu du 18/10).
+        if (chargeurConnexion.item) {
+            chargeurConnexion.item.ouvrir(url)
+            messageEtat.texte = qsTr("Connexion à Microsoft…")
             return
         }
         Qt.openUrlExternally(url)

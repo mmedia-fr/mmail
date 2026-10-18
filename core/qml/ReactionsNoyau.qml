@@ -549,16 +549,6 @@ Connections {
         }
     }
 
-    // Sous Android, le navigateur rouvre MMail par l'adresse de retour de la
-    // connexion Microsoft (cf. retour.h) : le noyau termine la connexion.
-    property var retourDeConnexion: Connections {
-        target: retourConnexion
-        function onRecu(url) {
-            if (!boite.terminerMicrosoft(url))
-                messageEtat.texte = qsTr("Retour de connexion inattendu : relancez « Ajouter un compte Microsoft… ».")
-        }
-    }
-
     // Des filtres ont agi : leurs déplacements, lancés par le noyau, rendront
     // chacun « deplacementTermine », comme ceux de l'interface.
     function onFiltresAppliques(compte, touches, deplacements) {

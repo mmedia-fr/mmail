@@ -122,9 +122,9 @@ pub mod qobject {
         #[cxx_name = "connecterMicrosoft"]
         fn connecter_microsoft(self: Pin<&mut Boite>, indice: &QString) -> QString;
 
-        /// Sous Android : l'adresse par laquelle le navigateur a rouvert MMail
-        /// après la connexion Microsoft. Rend faux si elle n'est pas celle
-        /// attendue. Issue : `microsoftConnecte`, ou `microsoftRefuse`.
+        /// Sous Android : l'adresse de retour que la page de connexion intégrée
+        /// a interceptée après la connexion Microsoft. Rend faux si elle n'est
+        /// pas celle attendue. Issue : `microsoftConnecte`, ou `microsoftRefuse`.
         #[qinvokable]
         #[cxx_name = "terminerMicrosoft"]
         fn terminer_microsoft(self: Pin<&mut Boite>, url: &QString) -> bool;
@@ -1972,8 +1972,8 @@ impl qobject::Boite {
         let indice = indice.to_string();
         // Sous Android, MMail est gelé en arrière-plan pendant que le navigateur
         // montre la connexion : l'écoute locale ne répond pas (retour de Manu
-        // du 18/10). Microsoft rend la main par l'adresse propre à MMail, qui
-        // rouvre l'application (cf. terminer_microsoft).
+        // du 18/10). La connexion se fait dans une page intégrée à MMail, qui
+        // intercepte le retour et le remet à terminer_microsoft.
         if cfg!(target_os = "android") {
             let pkce = ms::pkce();
             let etat = ms::etat();

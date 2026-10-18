@@ -122,6 +122,13 @@ pub mod qobject {
         #[cxx_name = "connecterMicrosoft"]
         fn connecter_microsoft(self: Pin<&mut Boite>, indice: &QString) -> QString;
 
+        /// Sous Android : l'adresse par laquelle le navigateur a rouvert MMail
+        /// après la connexion Microsoft. Rend faux si elle n'est pas celle
+        /// attendue. Issue : `microsoftConnecte`, ou `microsoftRefuse`.
+        #[qinvokable]
+        #[cxx_name = "terminerMicrosoft"]
+        fn terminer_microsoft(self: Pin<&mut Boite>, url: &QString) -> bool;
+
         /// Vrai si MMail a un client Google : sans lui, pas de compte Google.
         #[qinvokable]
         #[cxx_name = "googleDisponible"]
@@ -1172,6 +1179,9 @@ impl Etat {
 pub struct BoiteRust {
     occupe: bool,
     erreur: QString,
+    /// Connexion Microsoft lancée sous Android, en attente de l'adresse de
+    /// retour : (client, state, vérificateur PKCE, adresse).
+    attente_microsoft: Option<(String, String, String, String)>,
     revision: i32,
     compte_courant: i32,
     dossier_courant: QString,
@@ -1221,6 +1231,7 @@ impl Default for BoiteRust {
         Self {
             occupe: false,
             erreur: QString::from(""),
+            attente_microsoft: None,
             revision: 0,
             compte_courant: 0,
             dossier_courant: QString::from(""),
@@ -1958,6 +1969,19 @@ impl qobject::Boite {
             ));
             return QString::default();
         }
+        let indice = indice.to_string();
+        // Sous Android, MMail est gelé en arrière-plan pendant que le navigateur
+        // montre la connexion : l'écoute locale ne répond pas (retour de Manu
+        // du 18/10). Microsoft rend la main par l'adresse propre à MMail, qui
+        // rouvre l'application (cf. terminer_microsoft).
+        if cfg!(target_os = "android") {
+            let pkce = ms::pkce();
+            let etat = ms::etat();
+            let url = ms::url_autorisation(&client, ms::REDIRECTION_ANDROID, &pkce.defi, &etat, &indice);
+            self.as_mut().rust_mut().attente_microsoft = Some((client, etat, pkce.verificateur, indice));
+            self.as_mut().set_erreur(QString::from(""));
+            return QString::from(&url);
+        }
         let ecoute = match ms::ecouter() {
             Ok(e) => e,
             Err(e) => {
@@ -1967,7 +1991,6 @@ impl qobject::Boite {
         };
         let pkce = ms::pkce();
         let etat = ms::etat();
-        let indice = indice.to_string();
         let url = ms::url_autorisation(&client, &ecoute.redirection, &pkce.defi, &etat, &indice);
         let fil = self.qt_thread();
         let lance = thread::Builder::new().name("mmail-microsoft".into()).spawn(move || {
@@ -1982,6 +2005,30 @@ impl qobject::Boite {
         }
         self.as_mut().set_erreur(QString::from(""));
         QString::from(&url)
+    }
+
+    pub fn terminer_microsoft(mut self: Pin<&mut Self>, url: &QString) -> bool {
+        let url = url.to_string();
+        let Some((client, etat, verificateur, adresse)) = self.attente_microsoft.clone() else {
+            return false;
+        };
+        let code = match crate::oauth::lire_retour(&url, &etat) {
+            None => return false,
+            Some(Ok(code)) => code,
+            Some(Err(e)) => {
+                self.as_mut().rust_mut().attente_microsoft = None;
+                self.as_mut().accueillir_microsoft(Err(e));
+                return true;
+            }
+        };
+        self.as_mut().rust_mut().attente_microsoft = None;
+        let fil = self.qt_thread();
+        let lance = thread::Builder::new().name("mmail-microsoft".into()).spawn(move || {
+            let issue = crate::microsoft::echanger_code(&client, &code, &verificateur, crate::microsoft::REDIRECTION_ANDROID, &adresse)
+                .and_then(|r| connexion_aboutie(r, "Microsoft"));
+            let _ = fil.queue(move |boite: Pin<&mut qobject::Boite>| boite.accueillir_microsoft(issue));
+        });
+        lance.is_ok()
     }
 
     /// Issue de la connexion Microsoft, sur le fil Qt : le compte est

@@ -126,7 +126,7 @@ endif()
 # — sans quoi l'explorateur et les raccourcis affichent une icône générique.
 # Le .h figure dans les sources pour qu'AUTOMOC le traite : sans cela, la classe
 # QObject qu'il declare n'a pas de metaobjet et l'edition de liens echoue.
-set(MMAIL_SOURCES cpp/main.cpp cpp/coffre.h cpp/fenetre.h cpp/installeur.h cpp/lanceur.h cpp/pastille.h cpp/presse_papier.h
+set(MMAIL_SOURCES cpp/main.cpp cpp/coffre.h cpp/fenetre.h cpp/installeur.h cpp/lanceur.h cpp/pastille.h cpp/retour.h cpp/presse_papier.h
                   cpp/mise_en_forme.h)
 if(WIN32)
   list(APPEND MMAIL_SOURCES build/mmail.rc)
@@ -174,6 +174,7 @@ set_target_properties(mmail PROPERTIES
   MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}
   MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION}
   QT_ANDROID_PACKAGE_NAME fr.mmedia.mmail
+  QT_ANDROID_PACKAGE_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/android
   QT_ANDROID_APP_NAME MMail
   QT_ANDROID_VERSION_NAME ${PROJECT_VERSION})
 

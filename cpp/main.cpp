@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include <QDesktopServices>
 #include <QtCore/QCoreApplication>
 #include <QtCore/QCryptographicHash>
 #include <QtCore/QDir>
@@ -33,6 +34,7 @@
 #include "installeur.h"
 #include "lanceur.h"
 #include "pastille.h"
+#include "retour.h"
 #include "presse_papier.h"
 #include "mise_en_forme.h"
 
@@ -214,6 +216,10 @@ int main(int argc, char* argv[])
   // Version de Qt réellement chargée, pour « À propos » : elle diffère d'une
   // cible à l'autre, et c'est la première chose à demander sur un défaut
   // d'affichage.
+  // Retour de la connexion Microsoft sous Android (cf. retour.h).
+  auto* retourConnexion = new RetourConnexion(&app);
+  QDesktopServices::setUrlHandler(QStringLiteral("fr.mmedia.mmail"), retourConnexion, "recevoir");
+  engine.rootContext()->setContextProperty(QStringLiteral("retourConnexion"), retourConnexion);
   engine.rootContext()->setContextProperty(QStringLiteral("versionQt"),
                                            QString::fromLatin1(qVersion()));
   // Commodité de développement : des variables d'environnement ouvrent une ou
@@ -381,6 +387,7 @@ int main(int argc, char* argv[])
                    [](QSessionManager&) { Installeur::sessionFinie(); });
 #endif
   const int code = app.exec();
+  QDesktopServices::unsetUrlHandler(QStringLiteral("fr.mmedia.mmail"));
   // Mise à jour retenue pour la fermeture : son installeur part maintenant, et
   // attend la fin de ce processus pour remplacer les fichiers.
   Installeur::executer();

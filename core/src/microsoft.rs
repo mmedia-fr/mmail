@@ -64,6 +64,10 @@ pub fn partager(rafraichissement: &str) -> Partage {
 /// personnels : le rafraîchissement des jetons, et la connexion sans adresse.
 const AUTORITE: &str = "https://login.microsoftonline.com/common/oauth2/v2.0";
 
+/// Adresse de retour de la connexion sous Android : elle rouvre MMail (cf. le
+/// manifeste d'Android), déclarée dans l'application Entra « MMail ».
+pub const REDIRECTION_ANDROID: &str = "fr.mmedia.mmail://oauth";
+
 /// Domaines des comptes personnels de Microsoft (Outlook.com).
 const PARTICULIERS: [&str; 5] = ["outlook", "hotmail", "live", "msn", "passport"];
 

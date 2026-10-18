@@ -47,6 +47,11 @@ SwipeDelegate {
     swipe.left: roleLigne === "Trash" ? null : fondIndesirable
     swipe.right: roleLigne === "Trash" ? null : fondCorbeille
     swipe.onCompleted: fenetre.glisserLigne(index, swipe.position > 0 ? "indesirable" : "corbeille")
+    // La liste recycle ses lignes (reuseItems) : une ligne glissée, rangée
+    // puis reprise pour un autre message, gardait son décalage — d'autres
+    // messages paraissaient glissés (retour de Manu du 18/10).
+    ListView.onPooled: swipe.close()
+    ListView.onReused: swipe.close()
     Component {
         id: fondIndesirable
         Rectangle {

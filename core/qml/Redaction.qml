@@ -728,56 +728,59 @@ Page {
                     if (ev.matches(StandardKey.Paste) && redac.collerImage())
                         ev.accepted = true
                 }
+                // Au doigt, l'appui long choisit le mot touché ; Android pose
+                // ensuite ses poignées pour étendre le choix (retour de Manu du
+                // 18/10 : le texte ne se sélectionnait pas).
+                TapHandler {
+                    enabled: fenetre.tactile
+                    acceptedDevices: PointerDevice.TouchScreen
+                    onLongPressed: {
+                        corpsRedaction.forceActiveFocus()
+                        corpsRedaction.cursorPosition = corpsRedaction.positionAt(point.position.x, point.position.y)
+                        corpsRedaction.selectWord()
+                    }
+                }
+            }
+            // Zoom au pincement, celui du corps des messages (retour de Manu
+            // du 18/10) — comme le volet de lecture.
+            PinchHandler {
+                target: null
+                property real depart: 1
+                onActiveChanged: if (active) depart = reglages.zoomMessage
+                onActiveScaleChanged: if (active) fenetre.poserZoom("message", depart * activeScale)
             }
         }
 
-        // Vue tactile (décision 32, point 6) : la mise en forme en pastilles
-        // bascules, au bas de la rédaction — donc juste au-dessus du clavier,
-        // qui réduit la fenêtre. Contour arrondi, pleine quand l'option est
-        // active : l'aspect des marques RE / TR, mais en commandes.
+        // Vue tactile (décision 32, point 6) : la mise en forme au bas de la
+        // rédaction — donc juste au-dessus du clavier, qui réduit la fenêtre —,
+        // en boutons classiques, lisibles (retour de Manu du 18/10, plutôt
+        // que des pastilles) ; enfoncés quand l'option est active.
         Flow {
             visible: fenetre.tactile && redac.miseEnForme
             Layout.fillWidth: true
             Layout.topMargin: 4
             Layout.bottomMargin: 4
-            spacing: 6
-            PastilleMef { text: "G"; font.bold: true; checkable: true; checked: mef.gras
-                          Accessible.name: qsTr("Gras"); onClicked: mef.basculerGras() }
-            PastilleMef { text: "I"; font.italic: true; checkable: true; checked: mef.italique
-                          Accessible.name: qsTr("Italique"); onClicked: mef.basculerItalique() }
-            PastilleMef { text: "S"; font.underline: true; checkable: true; checked: mef.souligne
-                          Accessible.name: qsTr("Souligné"); onClicked: mef.basculerSouligne() }
-            PastilleMef { text: qsTr("• Liste"); checkable: true; checked: mef.puces
-                          Accessible.name: qsTr("Liste à puces"); onClicked: mef.basculerListe(false) }
-            PastilleMef { text: qsTr("Lien"); Accessible.name: qsTr("Lien"); onClicked: dlgAdresseLien.open() }
-            PastilleMef { text: qsTr("Image"); Accessible.name: qsTr("Insérer une image"); onClicked: choixImages.open() }
+            spacing: 4
+            Button { text: "G"; font.bold: true; font.pointSize: fenetre.tailleBase * 1.15
+                     checkable: true; checked: mef.gras; highlighted: checked; focusPolicy: Qt.NoFocus
+                     Accessible.name: qsTr("Gras"); onClicked: mef.basculerGras() }
+            Button { text: "I"; font.italic: true; font.pointSize: fenetre.tailleBase * 1.15
+                     checkable: true; checked: mef.italique; highlighted: checked; focusPolicy: Qt.NoFocus
+                     Accessible.name: qsTr("Italique"); onClicked: mef.basculerItalique() }
+            Button { text: "S"; font.underline: true; font.pointSize: fenetre.tailleBase * 1.15
+                     checkable: true; checked: mef.souligne; highlighted: checked; focusPolicy: Qt.NoFocus
+                     Accessible.name: qsTr("Souligné"); onClicked: mef.basculerSouligne() }
+            Button { text: qsTr("• Liste"); font.pointSize: fenetre.tailleBase * 1.15
+                     checkable: true; checked: mef.puces; highlighted: checked; focusPolicy: Qt.NoFocus
+                     Accessible.name: qsTr("Liste à puces"); onClicked: mef.basculerListe(false) }
+            Button { text: qsTr("Lien…"); font.pointSize: fenetre.tailleBase * 1.15; focusPolicy: Qt.NoFocus
+                     onClicked: dlgAdresseLien.open() }
+            Button { text: qsTr("Image…"); font.pointSize: fenetre.tailleBase * 1.15; focusPolicy: Qt.NoFocus
+                     Accessible.name: qsTr("Insérer une image"); onClicked: choixImages.open() }
         }
     }
 
-    // Pastille de la barre de mise en forme tactile.
-    component PastilleMef: AbstractButton {
-        id: pm
-        focusPolicy: Qt.NoFocus
-        implicitHeight: 36
-        implicitWidth: Math.max(44, etiquettePastille.implicitWidth + 26)
-        background: Rectangle {
-            radius: height / 2
-            color: pm.checked ? fenetre.accent : "transparent"
-            border.width: 1.5
-            border.color: fenetre.accent
-            opacity: pm.pressed ? 0.7 : 1
-        }
-        contentItem: Label {
-            id: etiquettePastille
-            text: pm.text
-            font: pm.font
-            color: pm.checked ? fenetre.texteAccent : fenetre.accent
-            horizontalAlignment: Text.AlignHCenter
-            verticalAlignment: Text.AlignVCenter
-        }
-    }
-
-    // Images choisies pour le corps (pastille « Image ») : copiées parmi les
+    // Images choisies pour le corps (bouton « Image… ») : copiées parmi les
     // images collées du profil, comme une image glissée ou collée.
     FileDialog {
         id: choixImages

@@ -600,7 +600,7 @@ ApplicationWindow {
             anchors.rightMargin: 2
             spacing: 2
             BoutonEntete {
-                text: fenetre.vue === 2 ? "‹" : "☰"
+                text: fenetre.vue === 2 ? "‹" : ""
                 font.pixelSize: 22
                 Layout.preferredWidth: 48
                 Layout.fillHeight: true
@@ -610,6 +610,21 @@ ApplicationWindow {
                         fenetre.vue = 1
                     else
                         tiroir.open()
+                }
+                Canvas {
+                    visible: fenetre.vue !== 2
+                    anchors.centerIn: parent
+                    width: 22
+                    height: 18
+                    property color encre: fenetre.marque ? fenetre.marque.texteBandeau : fenetre.palette.windowText
+                    onEncreChanged: requestPaint()
+                    onPaint: {
+                        var c = getContext("2d")
+                        c.reset()
+                        c.fillStyle = encre
+                        for (var i = 0; i < 3; ++i)
+                            c.fillRect(0, i * 7.5, width, 3)
+                    }
                 }
             }
             Label {
@@ -665,9 +680,23 @@ ApplicationWindow {
             }
             BoutonEntete {
                 id: boutonPlus
-                text: "⋮"
-                font.pixelSize: 22
-                font.bold: true
+                Canvas {
+                    anchors.centerIn: parent
+                    width: 6
+                    height: 22
+                    property color encre: fenetre.marque ? fenetre.marque.texteBandeau : fenetre.palette.windowText
+                    onEncreChanged: requestPaint()
+                    onPaint: {
+                        var c = getContext("2d")
+                        c.reset()
+                        c.fillStyle = encre
+                        for (var i = 0; i < 3; ++i) {
+                            c.beginPath()
+                            c.arc(3, 3 + i * 8, 2.6, 0, 2 * Math.PI)
+                            c.fill()
+                        }
+                    }
+                }
                 Layout.preferredWidth: 48
                 Layout.fillHeight: true
                 Accessible.name: qsTr("Plus d'options")

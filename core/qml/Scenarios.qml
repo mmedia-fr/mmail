@@ -973,8 +973,7 @@ QtObject {
             return
         essai.etape = 1
         var chemin = lanceur.chemin(identifiantsEssai.sortie + "/message.pdf")
-        var ok = impression.enregistrerPdf(colonneLecture.vueCorps.textDocument, enteteImpression(), sujetCourant(),
-                                           "file://" + chemin)
+        var ok = impression.enregistrerPdf(colonneLecture.vueCorps.textDocument, enteteImpression(), sujetCourant(), chemin)
         console.log("scenario: impression disponible", impression.disponible, "| PDF", ok, "|", sujetCourant())
         Qt.quit()
     }

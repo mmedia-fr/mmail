@@ -129,7 +129,9 @@ endif()
 set(MMAIL_SOURCES cpp/main.cpp cpp/coffre.h cpp/fenetre.h cpp/installeur.h cpp/lanceur.h cpp/pastille.h cpp/notifieur.h cpp/impression.h cpp/presse_papier.h
                   cpp/mise_en_forme.h)
 if(WIN32)
-  list(APPEND MMAIL_SOURCES build/mmail.rc)
+  # Icône et informations de version de l'exécutable (cf. build/mmail.rc.in).
+  configure_file(build/mmail.rc.in ${CMAKE_CURRENT_BINARY_DIR}/mmail.rc @ONLY)
+  list(APPEND MMAIL_SOURCES ${CMAKE_CURRENT_BINARY_DIR}/mmail.rc)
 endif()
 
 qt_add_executable(mmail ${MMAIL_SOURCES})

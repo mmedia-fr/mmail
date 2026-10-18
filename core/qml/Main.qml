@@ -1755,7 +1755,7 @@ ApplicationWindow {
         defaultSuffix: "pdf"
         onAccepted: {
             var ok = impression.enregistrerPdf(colonneLecture.vueCorps.textDocument, fenetre.enteteImpression(),
-                                               fenetre.sujetCourant(), selectedFile)
+                                               fenetre.sujetCourant(), selectedFile.toString())
             messageEtat.texte = ok ? qsTr("Message enregistré en PDF.") : qsTr("Le PDF n'a pas pu être écrit.")
         }
     }

@@ -83,14 +83,18 @@ public:
     return QUrl::fromLocalFile(QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation));
   }
 
-  /// Enregistre le message en PDF (A4) dans le fichier `cible`.
+  /// Enregistre le message en PDF (A4) dans le fichier `cible` : une adresse
+  /// file:// (celle de la boîte d'enregistrement) ou un chemin (essais). Un
+  /// chemin Windows (C:\…) passé pour une adresse se lisait « file://C:\… »,
+  /// et le PDF restait vide (essai sur le banc du 18/10).
   Q_INVOKABLE bool enregistrerPdf(QQuickTextDocument* corps, const QString& entete, const QString& titre,
-                                  const QUrl& cible)
+                                  const QString& cible)
   {
     auto document = composer(corps, entete);
     if (!document)
       return false;
-    const QString chemin = cible.isLocalFile() ? cible.toLocalFile() : cible.toString();
+    const QUrl adresse(cible);
+    const QString chemin = adresse.isLocalFile() ? adresse.toLocalFile() : cible;
     {
       QPdfWriter pdf(chemin);
       pdf.setTitle(titre);
@@ -100,7 +104,7 @@ public:
       pdf.setPageMargins(QMarginsF(15, 15, 15, 15), QPageLayout::Millimeter);
       document->print(&pdf);
     }
-    return !cible.isLocalFile() || QFileInfo(chemin).size() > 0;
+    return chemin.startsWith(QStringLiteral("content:")) || QFileInfo(chemin).size() > 0;
   }
 
 private:

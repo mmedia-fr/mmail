@@ -60,6 +60,11 @@ Menu {
         }
     }
     MenuItem {
+        text: qsTr("Filtres du courrier…")
+        enabled: fenetre.comptesConnus.length > 0
+        onTriggered: dlgFiltres.ouvrir(null)
+    }
+    MenuItem {
         text: qsTr("Nom et signature…")
         enabled: fenetre.comptesConnus.length > 0
         onTriggered: dlgIdentite.ouvrir(boite.compteCourant)

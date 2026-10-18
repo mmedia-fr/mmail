@@ -1829,6 +1829,35 @@ ApplicationWindow {
 
     DialogueAPropos { id: dlgAPropos }
 
+    DialogueFiltres { id: dlgFiltres }
+
+    // « Créer un filtre… » sur un message : un filtre sur son expéditeur, pour
+    // son compte, à compléter dans le dialogue des filtres.
+    function creerFiltre() {
+        var uids = uidsChoisis()
+        if (uids.length === 0)
+            return
+        var r = null
+        for (var i = 0; i < modeleMessages.count; ++i) {
+            var m = modeleMessages.get(i)
+            if (m.uid === uids[0] && (!listeMulti || cleResultat(m.compte, m.chemin, m.uid) === cleChoisie)) {
+                r = m
+                break
+            }
+        }
+        if (!r)
+            return
+        var compte = listeMulti ? r.compte : boite.compteCourant
+        var adresse = ""
+        for (var c = 0; c < comptesConnus.length; ++c) {
+            if (comptesConnus[c].compte === compte)
+                adresse = comptesConnus[c].adresse
+        }
+        dlgFiltres.ouvrir({ nom: r.expediteur || r.adresse, actif: true, compte: adresse, tout: true,
+                            conditions: [{ champ: "expediteur", operateur: "est", valeur: r.adresse }],
+                            lu: false, suivi: false, destination: "dossier", dossier: "", arreter: false })
+    }
+
     Dialog {
         id: dlgRetrait
         property int compteId: 0

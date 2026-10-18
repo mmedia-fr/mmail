@@ -766,6 +766,10 @@ QtObject {
             essai.etape = 1
             essai.sujet = modeleMessages.get(1).sujet
             var avant = modeleMessages.count
+            // Comme au doigt : la ligne est d'abord glissée (ouverte).
+            var glissee = colonneListe.vueMessages.itemAtIndex(1)
+            if (glissee)
+                glissee.swipe.open(SwipeDelegate.Right)
             glisserLigne(1, "corbeille")
             console.log("scenario: glissée", avant, "->", modeleMessages.count, "| bandeau", bandeauGlissement.opened,
                         "|", bandeauGlissement.texte, "|", essai.sujet)
@@ -778,6 +782,16 @@ QtObject {
             console.log(revenue >= 0 && modeleMessages.count === avant && !bandeauGlissement.opened
                         ? "scenario: OK annulée, ligne revenue au rang " + revenue
                         : "scenario: ECHEC annulation " + modeleMessages.count + " / " + avant)
+            // Retour de Manu du 18/10 : après un glisser, d'autres lignes
+            // restaient décalées. Aucune ligne affichée ne doit l'être.
+            var decalees = []
+            for (var d = 0; d < Math.min(15, modeleMessages.count); ++d) {
+                var l = colonneListe.vueMessages.itemAtIndex(d)
+                if (l && l.swipe.position !== 0)
+                    decalees.push(d + ":" + l.swipe.position)
+            }
+            console.log(decalees.length === 0 ? "scenario: OK aucune ligne décalée après l'annulation"
+                                               : "scenario: ECHEC lignes décalées " + decalees.join(" "))
             glisserLigne(revenue, "corbeille")
             console.log("scenario: glissée de nouveau, en attente", Object.keys(enAttente).length)
         } else if (essai.etape === 1 && glissement === null && deplacementsEnVol === 0) {

@@ -3,6 +3,7 @@
 #ifdef __ANDROID__
 #include <QtWebView/QtWebView>
 #endif
+#include <cstddef>
 #include <QtCore/QCoreApplication>
 #include <QtCore/QCryptographicHash>
 #include <QtCore/QDir>
@@ -15,6 +16,7 @@
 #include <QtCore/QStringList>
 #include <QtCore/QSysInfo>
 #include <QtCore/QTimer>
+#include <QtCore/QTranslator>
 #include <QtCore/QUrl>
 #include <QtCore/QVariant>
 #include <QtCore/QVariantMap>
@@ -40,6 +42,11 @@
 #include "installeur.h"
 #include "lanceur.h"
 #include "pastille.h"
+
+// Traductions françaises de Qt, embarquées (cf. CMakeLists.txt).
+struct TraductionQt { const unsigned char* donnees; std::size_t taille; };
+extern const TraductionQt traductionsQt[];
+extern const std::size_t nombreTraductionsQt;
 #include "impression.h"
 #include "notifieur.h"
 #include "presse_papier.h"
@@ -138,6 +145,14 @@ int main(int argc, char* argv[])
   QGuiApplication app(argc, argv);
 #endif
   QCoreApplication::setApplicationName(QStringLiteral("MMail"));
+  // Les boutons standard des dialogues (« OK », « Annuler »…) et les boîtes
+  // de Qt en français, quelle que soit la langue du système : MMail est en
+  // français.
+  for (std::size_t i = 0; i < nombreTraductionsQt; ++i) {
+    auto* traduction = new QTranslator(&app);
+    if (traduction->load(traductionsQt[i].donnees, int(traductionsQt[i].taille)))
+      QCoreApplication::installTranslator(traduction);
+  }
   QCoreApplication::setOrganizationName(QStringLiteral("M-Media"));
   QCoreApplication::setOrganizationDomain(QStringLiteral("mmedia.fr"));
   QCoreApplication::setApplicationVersion(QStringLiteral(MMAIL_VERSION));

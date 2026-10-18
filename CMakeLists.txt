@@ -134,6 +134,44 @@ if(WIN32)
   list(APPEND MMAIL_SOURCES ${CMAKE_CURRENT_BINARY_DIR}/mmail.rc)
 endif()
 
+# Traductions françaises de Qt lui-même — boutons standard des dialogues
+# (« OK », « Annuler », « Fermer »…), boîtes de fichiers —, embarquées dans
+# l'exécutable : sans elles, ces boutons restaient en anglais (constaté sous
+# Android le 18/10/2026, vrai partout). Lues dans les traductions de Qt de la
+# fabrication, ou du Qt hôte pour Android.
+set(MMAIL_QM_DIRS "${QT6_INSTALL_PREFIX}/${QT6_INSTALL_TRANSLATIONS}")
+if(QT_HOST_PATH)
+  list(APPEND MMAIL_QM_DIRS "${QT_HOST_PATH}/translations")
+endif()
+list(APPEND MMAIL_QM_DIRS /usr/share/qt6/translations)
+set(MMAIL_QM_CONTENU "// Généré par CMake (CMakeLists.txt) : traductions de Qt embarquées.\n#include <cstddef>\n")
+set(MMAIL_QM_LISTE "")
+foreach(nom qtbase_fr qtdeclarative_fr)
+  set(trouve "")
+  foreach(d IN LISTS MMAIL_QM_DIRS)
+    if(NOT trouve AND EXISTS "${d}/${nom}.qm")
+      set(trouve "${d}/${nom}.qm")
+    endif()
+  endforeach()
+  if(trouve)
+    file(READ "${trouve}" octets HEX)
+    string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," octets "${octets}")
+    string(APPEND MMAIL_QM_CONTENU "static const unsigned char ${nom}[] = {${octets}};\n")
+    list(APPEND MMAIL_QM_LISTE "{${nom}, sizeof(${nom})}")
+    message(STATUS "Traduction de Qt embarquée : ${trouve}")
+  else()
+    message(WARNING "Traduction de Qt introuvable : ${nom}.qm (boutons standard en anglais)")
+  endif()
+endforeach()
+list(LENGTH MMAIL_QM_LISTE MMAIL_QM_NOMBRE)
+list(APPEND MMAIL_QM_LISTE "{nullptr, 0}")
+list(JOIN MMAIL_QM_LISTE ", " MMAIL_QM_LISTE)
+string(APPEND MMAIL_QM_CONTENU "struct TraductionQt { const unsigned char* donnees; std::size_t taille; };\n"
+  "extern const TraductionQt traductionsQt[] = {${MMAIL_QM_LISTE}};\n"
+  "extern const std::size_t nombreTraductionsQt = ${MMAIL_QM_NOMBRE};\n")
+file(CONFIGURE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/traductions_qt.cpp" CONTENT "${MMAIL_QM_CONTENU}" @ONLY)
+list(APPEND MMAIL_SOURCES "${CMAKE_CURRENT_BINARY_DIR}/traductions_qt.cpp")
+
 qt_add_executable(mmail ${MMAIL_SOURCES})
 # Pas de ressource Qt sous Android : le rcc de l'hote compresse en zstd, absent
 # du Qt officiel pour Android, et l'edition de liens s'arrete sur « undefined

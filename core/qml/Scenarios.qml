@@ -789,6 +789,9 @@ QtObject {
             var controle = Qt.createQmlObject("import QtQuick; Timer { interval: 600 }", fenetre)
             controle.triggered.connect(function() {
                 var decalees = []
+                // La ligne glissée elle-même, rangée puis reprise par la liste.
+                if (glissee && glissee.swipe.position !== 0)
+                    decalees.push("glissée:" + glissee.swipe.position)
                 for (var d = 0; d < Math.min(15, modeleMessages.count); ++d) {
                     var l = colonneListe.vueMessages.itemAtIndex(d)
                     if (l && l.swipe.position !== 0)

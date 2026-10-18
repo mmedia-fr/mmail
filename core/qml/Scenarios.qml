@@ -725,7 +725,8 @@ QtObject {
             var chemin = lanceur.chemin(identifiantsEssai.sortie + "/tactile-" + nom + ".png")
             racine.grabToImage(function(r) { r.saveToFile(chemin) })
             console.log("scenario: tactile", nom, "| vue", vue, "| tiroir", tiroir.opened,
-                        "| menu", menuPlus.opened, "| titre", boite.dossierCourant)
+                        "| menu", menuPlus.opened || menuComptes.opened, "| titre", boite.dossierCourant,
+                        "| barre", entete.height)
         }
         var etapes = [
             function() { saisir("liste") },
@@ -733,7 +734,9 @@ QtObject {
             function() { saisir("tiroir") },
             function() { tiroir.close(); menuPlus.popup(fenetre.width - 10, 0) },
             function() { saisir("menu") },
-            function() { menuPlus.close(); choisir(0, 0) },
+            function() { menuPlus.close(); menuComptes.popup(boutonPlus, boutonPlus.width - 260, boutonPlus.height) },
+            function() { saisir("comptes") },
+            function() { menuComptes.close(); choisir(0, 0) },
             function() { saisir("message") },
             function() { vue = 1; rediger("nouveau") },
             function() { saisir("redaction") },

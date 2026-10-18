@@ -558,6 +558,12 @@ ApplicationWindow {
     // ------------------------------------------------------------- en-tête
     header: ToolBar {
         id: entete
+        // Deux barres, une seule visible : la hauteur se donne ici — avec deux
+        // enfants, la barre ne la tire plus d'elle-même et s'écrasait
+        // (constaté par Manu sur le téléphone le 18/10, et vrai sur le bureau).
+        // Au doigt, 48 au moins : la hauteur d'une barre d'application d'Android.
+        contentHeight: fenetre.tactile ? Math.max(48, barreTactile.implicitHeight)
+                                       : barreBureau.implicitHeight
         // Sous une apparence de marque : bandeau nuit, filet cyan dessous qui
         // s'éteint vers la droite, comme l'en-tête du site.
         Rectangle {
@@ -587,6 +593,7 @@ ApplicationWindow {
         // ☰ ouvre l'arborescence en tiroir (‹ revient du message à la liste),
         // le nom du dossier, la loupe, ⋮ pour le reste.
         RowLayout {
+            id: barreTactile
             visible: fenetre.tactile
             anchors.fill: parent
             anchors.leftMargin: 2
@@ -595,7 +602,8 @@ ApplicationWindow {
             BoutonEntete {
                 text: fenetre.vue === 2 ? "‹" : "☰"
                 font.pixelSize: 22
-                Layout.preferredWidth: 44
+                Layout.preferredWidth: 48
+                Layout.fillHeight: true
                 Accessible.name: fenetre.vue === 2 ? qsTr("Retour à la liste") : qsTr("Dossiers")
                 onClicked: {
                     if (fenetre.vue === 2)
@@ -621,7 +629,8 @@ ApplicationWindow {
                 Layout.preferredWidth: 26
             }
             BoutonEntete {
-                Layout.preferredWidth: 44
+                Layout.preferredWidth: 48
+                Layout.fillHeight: true
                 Accessible.name: qsTr("Rechercher")
                 onClicked: {
                     fenetre.vue = 1
@@ -642,13 +651,15 @@ ApplicationWindow {
                 text: "⋮"
                 font.pixelSize: 22
                 font.bold: true
-                Layout.preferredWidth: 44
+                Layout.preferredWidth: 48
+                Layout.fillHeight: true
                 Accessible.name: qsTr("Plus d'options")
                 onClicked: menuPlus.popup(boutonPlus, boutonPlus.width - menuPlus.width, boutonPlus.height)
             }
         }
 
         RowLayout {
+            id: barreBureau
             visible: !fenetre.tactile
             anchors.fill: parent
             anchors.leftMargin: 6
@@ -872,17 +883,25 @@ ApplicationWindow {
         onClicked: fenetre.rediger("nouveau")
     }
 
-    // Vue tactile : le menu ⋮ — les menus « Comptes » et « Affichage » y
-    // entrent en sous-menus, puis ce que la barre de bureau montre en boutons.
+    // Vue tactile : le menu ⋮ — « Comptes… » et « Affichage… » ouvrent leurs
+    // menus à part (des sous-menus se choisissaient mal au doigt), puis ce que
+    // la barre de bureau montre en boutons.
     Menu {
         id: menuPlus
         onAboutToShow: width = fenetre.largeurMenu(menuPlus)
-        Component.onCompleted: {
-            if (fenetre.tactile) {
-                menuPlus.insertMenu(0, menuComptes)
-                menuPlus.insertMenu(1, menuAffichage)
-            }
+        MenuItem {
+            text: qsTr("Comptes…")
+            onTriggered: Qt.callLater(function() {
+                menuComptes.popup(boutonPlus, boutonPlus.width - Math.max(menuComptes.width, 200), boutonPlus.height)
+            })
         }
+        MenuItem {
+            text: qsTr("Affichage…")
+            onTriggered: Qt.callLater(function() {
+                menuAffichage.popup(boutonPlus, boutonPlus.width - Math.max(menuAffichage.width, 200), boutonPlus.height)
+            })
+        }
+        MenuSeparator {}
         MenuItem {
             text: qsTr("Actualiser")
             onTriggered: boite.actualiser()

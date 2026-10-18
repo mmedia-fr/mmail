@@ -622,6 +622,23 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 Layout.leftMargin: 4
             }
+            // « Toutes les BàL » reste à portée de pouce (retour de Manu du
+            // 18/10), avec ses non-lus.
+            BoutonEntete {
+                cerne: true
+                compteur: fenetre.nonLusReceptions
+                text: qsTr("BàL") + (fenetre.marque === null && fenetre.nonLusReceptions > 0
+                                     ? " (" + fenetre.nonLusReceptions + ")" : "")
+                font.bold: fenetre.nonLusReceptions > 0
+                checkable: true
+                checked: fenetre.vueUnifiee
+                Layout.fillHeight: true
+                Accessible.name: qsTr("Toutes les boîtes de réception")
+                onClicked: {
+                    checked = Qt.binding(function() { return fenetre.vueUnifiee })
+                    fenetre.ouvrirBoitesUnifiees()
+                }
+            }
             BusyIndicator {
                 running: boite.occupe
                 visible: running
@@ -845,23 +862,58 @@ ApplicationWindow {
         property string texte: ""
         x: Math.round((parent.width - width) / 2)
         y: parent.height - height - 90
-        width: Math.min(parent.width - 24, 420)
+        width: Math.min(parent.width - 24, 460)
         closePolicy: Popup.NoAutoClose
-        padding: 6
+        padding: 8
+        // Sombre sur tout fond, comme le bandeau d'Android : il se voit.
+        background: Rectangle {
+            color: "#2b2b2b"
+            radius: 12
+        }
         RowLayout {
             anchors.fill: parent
-            spacing: 8
+            spacing: 10
             Label {
                 text: bandeauGlissement.texte
-                elide: Text.ElideRight
+                color: "#ffffff"
+                wrapMode: Text.Wrap
+                font.pointSize: fenetre.tailleBase * 1.15
                 Layout.fillWidth: true
                 Layout.leftMargin: 8
             }
-            Button {
-                flat: true
-                text: qsTr("Annuler")
-                font.bold: true
+            // Un gros rond, une flèche de retour : la cible du pouce.
+            RoundButton {
+                id: boutonAnnuler
+                Layout.preferredWidth: 56
+                Layout.preferredHeight: 56
+                highlighted: true
+                Accessible.name: qsTr("Annuler")
+                ToolTip.visible: hovered
+                ToolTip.text: qsTr("Annuler")
                 onClicked: fenetre.annulerGlissement()
+                contentItem: Canvas {
+                    property color encre: "#ffffff"
+                    onPaint: {
+                        var c = getContext("2d")
+                        c.reset()
+                        var w = width, h = height
+                        var cx = w * 0.53, cy = h * 0.56, r = w * 0.22
+                        c.strokeStyle = encre
+                        c.fillStyle = encre
+                        c.lineWidth = Math.max(2, w * 0.08)
+                        c.lineCap = "round"
+                        c.beginPath()
+                        c.arc(cx, cy, r, Math.PI, Math.PI * 2.3, false)
+                        c.stroke()
+                        var ax = cx - r, ay = cy
+                        c.beginPath()
+                        c.moveTo(ax - w * 0.12, ay - h * 0.03)
+                        c.lineTo(ax + w * 0.12, ay - h * 0.03)
+                        c.lineTo(ax, ay + h * 0.15)
+                        c.closePath()
+                        c.fill()
+                    }
+                }
             }
         }
     }
@@ -889,6 +941,16 @@ ApplicationWindow {
     Menu {
         id: menuPlus
         onAboutToShow: width = fenetre.largeurMenu(menuPlus)
+        MenuItem {
+            text: qsTr("Nouveau message")
+            onTriggered: fenetre.rediger("nouveau")
+        }
+        MenuItem {
+            text: qsTr("Toutes les BàL")
+                  + (fenetre.nonLusReceptions > 0 ? "  (" + fenetre.nonLusReceptions + ")" : "")
+            onTriggered: fenetre.ouvrirBoitesUnifiees()
+        }
+        MenuSeparator {}
         MenuItem {
             text: qsTr("Comptes…")
             onTriggered: Qt.callLater(function() {

@@ -785,6 +785,7 @@ QtObject {
             // Retour de Manu du 18/10 : après un glisser, d'autres lignes
             // restaient décalées. Une fois la liste redessinée, aucune ligne
             // affichée ne doit l'être.
+            essai.etape = 5  // en attente du contrôle : les autres étapes se taisent
             var controle = Qt.createQmlObject("import QtQuick; Timer { interval: 600 }", fenetre)
             controle.triggered.connect(function() {
                 var decalees = []
@@ -801,6 +802,7 @@ QtObject {
                         rang = i
                 }
                 glisserLigne(rang, "corbeille")
+                essai.etape = 1
                 console.log("scenario: glissée de nouveau, en attente", Object.keys(enAttente).length)
             })
             controle.start()

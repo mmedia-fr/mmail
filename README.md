@@ -123,6 +123,9 @@ de projet interne.
   d'après les en-têtes (`multipart/mixed`, ou corps entier qui n'est pas du
   texte ; mot-clé `$HasAttachment` du serveur s'il existe), puis constaté à
   l'ouverture du message ;
+- **destinataires dans les éléments envoyés** : la liste y nomme les
+  destinataires (« À : Nom; Nom », ceux de la copie à défaut), comme
+  Outlook, au lieu de l'expéditeur, partout soi-même ;
 - **menus contextuels et « Déplacer vers… » au zoom de la colonne** d'où ils
   sont ouverts ;
 - **déplacement par glisser-déposer ou par clic droit**, vers un dossier de la

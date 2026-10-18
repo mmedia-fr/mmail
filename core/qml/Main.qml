@@ -1193,7 +1193,7 @@ ApplicationWindow {
         // toutes les boîtes (dossier de chaque message) sont donc
         // déclarés d'avance, puis la ligne est retirée.
         ListElement {
-            uid: 0; h: 0; expediteur: ""; adresse: ""; sujet: ""; date: ""; taille: 0
+            uid: 0; h: 0; expediteur: ""; adresse: ""; destinataires: ""; sujet: ""; date: ""; taille: 0
             lu: false; repondu: false; reponduTous: false; transfere: false; pieces: false
             suivi: false; importance: 0
             compte: 0; chemin: ""; dossier: ""; role: ""; cheminAffiche: ""
@@ -4569,6 +4569,14 @@ ApplicationWindow {
                 var attente = Qt.createQmlObject('import QtQuick; Timer { interval: 1500 }', fenetre)
                 attente.triggered.connect(scenarios.etapeScenarioHorsLigne)
                 attente.start()
+                return
+            }
+            // Scénario « envoyes » : aucune connexion ; la liste des envoyés
+            // nomme les destinataires.
+            if (essai.scenario === "envoyes") {
+                var attenteEnvoyes = Qt.createQmlObject('import QtQuick; Timer { interval: 1500 }', fenetre)
+                attenteEnvoyes.triggered.connect(scenarios.etapeScenarioEnvoyes)
+                attenteEnvoyes.start()
                 return
             }
             if (identifiantsEssai.utilisateur2)

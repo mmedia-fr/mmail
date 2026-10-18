@@ -538,7 +538,7 @@ cargo test --manifest-path core/Cargo.toml -- --ignored --test-threads=1
 
 L'intégration continue les passe sous Linux contre un Dovecot monté pour
 l'occasion — deux comptes jetables, certificat signé par une autorité d'essai
-posée dans le magasin du système —, hors envoi SMTP et agenda.
+posée dans le magasin du système —, hors envoi SMTP, agenda et carnet d’adresses.
 
 ## Licence
 

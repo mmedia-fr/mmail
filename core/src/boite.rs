@@ -1967,11 +1967,12 @@ impl qobject::Boite {
         };
         let pkce = ms::pkce();
         let etat = ms::etat();
-        let url = ms::url_autorisation(&client, &ecoute.redirection, &pkce.defi, &etat, &indice.to_string());
+        let indice = indice.to_string();
+        let url = ms::url_autorisation(&client, &ecoute.redirection, &pkce.defi, &etat, &indice);
         let fil = self.qt_thread();
         let lance = thread::Builder::new().name("mmail-microsoft".into()).spawn(move || {
             let issue = ms::attendre_code(&ecoute, &etat, ms::DELAI_CONNEXION)
-                .and_then(|code| ms::echanger_code(&client, &code, &pkce.verificateur, &ecoute.redirection))
+                .and_then(|code| ms::echanger_code(&client, &code, &pkce.verificateur, &ecoute.redirection, &indice))
                 .and_then(|r| connexion_aboutie(r, "Microsoft"));
             let _ = fil.queue(move |boite: Pin<&mut qobject::Boite>| boite.accueillir_microsoft(issue));
         });

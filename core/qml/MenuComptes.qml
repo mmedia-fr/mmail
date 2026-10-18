@@ -24,7 +24,7 @@ Menu {
     }
     MenuItem {
         text: qsTr("Ajouter un compte Microsoft (Office 365, Outlook.com)…")
-        onTriggered: fenetre.connecterMicrosoft("")
+        onTriggered: fenetre.ajouterMicrosoft("")
     }
     MenuItem {
         text: qsTr("Ajouter un compte Google (Gmail)…")

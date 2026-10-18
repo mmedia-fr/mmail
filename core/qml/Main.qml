@@ -2614,6 +2614,49 @@ ApplicationWindow {
         messageEtat.texte = qsTr("Connexion à Google dans votre navigateur : MMail attend son retour…")
     }
 
+    /// Ajout d'un compte Microsoft : l'adresse d'abord — elle mène à la
+    /// connexion de son organisation, ou à celle des comptes personnels pour
+    /// Outlook.com, sans passer par un compte déjà connecté dans le navigateur
+    /// (retour de Manu du 18/10).
+    function ajouterMicrosoft(adresse) {
+        if (adresse.indexOf("@") > 0) {
+            connecterMicrosoft(adresse)
+            return
+        }
+        dlgAdresseMicrosoft.open()
+    }
+    Dialog {
+        id: dlgAdresseMicrosoft
+        title: qsTr("Compte Microsoft")
+        modal: true
+        anchors.centerIn: Overlay.overlay
+        width: Math.min(460, fenetre.width - 24)
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        onOpened: {
+            champAdresseMicrosoft.text = ""
+            champAdresseMicrosoft.forceActiveFocus()
+        }
+        onAccepted: {
+            if (champAdresseMicrosoft.text.indexOf("@") > 0)
+                fenetre.connecterMicrosoft(champAdresseMicrosoft.text.trim())
+        }
+        ColumnLayout {
+            width: parent.width
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                text: qsTr("Adresse du compte (Office 365 de l'entreprise, ou Outlook.com) :")
+            }
+            TextField {
+                id: champAdresseMicrosoft
+                Layout.fillWidth: true
+                placeholderText: qsTr("prenom.nom@entreprise.fr")
+                inputMethodHints: Qt.ImhEmailCharactersOnly | Qt.ImhNoAutoUppercase
+                onAccepted: dlgAdresseMicrosoft.accept()
+            }
+        }
+    }
+
     /// Connexion d'un compte Microsoft : la page de Microsoft s'ouvre dans le
     /// navigateur ; la suite revient par `microsoftConnecte` ou
     /// `microsoftRefuse`. `indice` : l'adresse d'un compte à reconnecter.

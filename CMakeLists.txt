@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # MMail — noyau Rust (core/), interface Qt 6 / QML, coffre des mots de passe natif.
 cmake_minimum_required(VERSION 3.24)
-project(mmail VERSION 0.6.2 LANGUAGES CXX)
+project(mmail VERSION 0.6.3 LANGUAGES CXX)
 
 if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
   set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreadedDLL")
@@ -126,7 +126,7 @@ endif()
 # — sans quoi l'explorateur et les raccourcis affichent une icône générique.
 # Le .h figure dans les sources pour qu'AUTOMOC le traite : sans cela, la classe
 # QObject qu'il declare n'a pas de metaobjet et l'edition de liens echoue.
-set(MMAIL_SOURCES cpp/main.cpp cpp/coffre.h cpp/fenetre.h cpp/installeur.h cpp/lanceur.h cpp/pastille.h cpp/notifieur.h cpp/presse_papier.h
+set(MMAIL_SOURCES cpp/main.cpp cpp/coffre.h cpp/fenetre.h cpp/installeur.h cpp/lanceur.h cpp/pastille.h cpp/notifieur.h cpp/impression.h cpp/presse_papier.h
                   cpp/mise_en_forme.h)
 if(WIN32)
   list(APPEND MMAIL_SOURCES build/mmail.rc)
@@ -190,6 +190,12 @@ endif()
 if(ANDROID)
   find_package(Qt6 REQUIRED COMPONENTS WebView)
   target_link_libraries(mmail PRIVATE Qt6::WebView)
+else()
+  # Impression d'un message (cf. cpp/impression.h) : la boîte d'impression du
+  # système, qui demande QtWidgets.
+  find_package(Qt6 REQUIRED COMPONENTS Widgets PrintSupport)
+  target_link_libraries(mmail PRIVATE Qt6::Widgets Qt6::PrintSupport)
+  target_compile_definitions(mmail PRIVATE MMAIL_IMPRESSION)
 endif()
 
 if(ANDROID AND COMMAND qt_add_android_permission)

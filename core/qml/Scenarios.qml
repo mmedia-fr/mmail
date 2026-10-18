@@ -966,6 +966,19 @@ QtObject {
         t.start()
     }
 
+    // Scénario « impression » (0.6.3) : le premier message de la boîte de
+    // réception, affiché, est enregistré en PDF dans le dossier de l'essai.
+    function etapeScenarioImpression() {
+        if (essai.etape || uidCourant <= 0 || colonneLecture.vueCorps.text === qsTr("Chargement…"))
+            return
+        essai.etape = 1
+        var chemin = lanceur.chemin(identifiantsEssai.sortie + "/message.pdf")
+        var ok = impression.enregistrerPdf(colonneLecture.vueCorps.textDocument, enteteImpression(), sujetCourant(),
+                                           "file://" + chemin)
+        console.log("scenario: impression disponible", impression.disponible, "| PDF", ok, "|", sujetCourant())
+        Qt.quit()
+    }
+
     function etapeScenarioCorbeille() {
         var a = listeComptes()[0]
         if (!a || a.etat !== "pret")

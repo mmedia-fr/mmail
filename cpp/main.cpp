@@ -20,6 +20,9 @@
 #include <QtCore/QVariantMap>
 #include <QtGui/QFont>
 #include <QtGui/QGuiApplication>
+#ifdef MMAIL_IMPRESSION
+#include <QtWidgets/QApplication>
+#endif
 #include <QtGui/QIcon>
 #if QT_CONFIG(sessionmanager)
 #  include <QtGui/QSessionManager>
@@ -37,6 +40,7 @@
 #include "installeur.h"
 #include "lanceur.h"
 #include "pastille.h"
+#include "impression.h"
 #include "notifieur.h"
 #include "presse_papier.h"
 #include "mise_en_forme.h"
@@ -126,7 +130,13 @@ int main(int argc, char* argv[])
   // Connexion Microsoft dans une page intégrée (cf. ConnexionIntegree.qml).
   QtWebView::initialize();
 #endif
+#ifdef MMAIL_IMPRESSION
+  // La boîte d'impression du système (QtPrintSupport) demande une
+  // QApplication (cf. impression.h).
+  QApplication app(argc, argv);
+#else
   QGuiApplication app(argc, argv);
+#endif
   QCoreApplication::setApplicationName(QStringLiteral("MMail"));
   QCoreApplication::setOrganizationName(QStringLiteral("M-Media"));
   QCoreApplication::setOrganizationDomain(QStringLiteral("mmedia.fr"));
@@ -207,6 +217,7 @@ int main(int argc, char* argv[])
   // Nombre de non-lus des boîtes de réception sur l'icône de la barre des tâches.
   qmlRegisterType<Pastille>("fr.mmedia.mmail.natif", 1, 0, "Pastille");
   qmlRegisterType<Notifieur>("fr.mmedia.mmail.natif", 1, 0, "Notifieur");
+  qmlRegisterType<Impression>("fr.mmedia.mmail.natif", 1, 0, "Impression");
   // Installation d'une mise à jour à la fermeture (cf. core/src/mise_a_jour.rs).
   qmlRegisterType<Installeur>("fr.mmedia.mmail.natif", 1, 0, "Installeur");
   // Mise en forme du message en cours de rédaction (gras, listes, liens…).

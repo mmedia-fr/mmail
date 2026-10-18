@@ -1726,6 +1726,52 @@ ApplicationWindow {
 
     MenuCompte { id: menuCompte }
 
+    // Impression du message affiché (0.6.3) : en-tête, puis le message tel
+    // que le volet le montre ; ou enregistrement en PDF.
+    Impression { id: impression }
+    function enteteImpression() {
+        var e = function(t) { return String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;") }
+        var h = "<p style='font-size:13pt'><b>" + e(sujetCourant()) + "</b></p>"
+              + "<p>" + e(colonneLecture.auteurAffiche.text) + "</p>"
+        if (pieces.length > 0)
+            h += "<p>" + e(qsTr("Pièces jointes : %1").arg(pieces.map(function(p) { return p.nom }).join(", "))) + "</p>"
+        return h
+    }
+    function imprimerMessage() {
+        if (uidCourant <= 0)
+            return
+        if (impression.imprimer(colonneLecture.vueCorps.textDocument, enteteImpression(), sujetCourant()))
+            messageEtat.texte = qsTr("Message envoyé à l'imprimante.")
+    }
+    function nomDeFichier(texte) {
+        var nom = String(texte).replace(/[\\/:*?"<>|\u0000-\u001f]+/g, " ").replace(/\s+/g, " ").trim()
+        return (nom.length > 0 ? nom.substring(0, 80) : qsTr("Message")) + ".pdf"
+    }
+    FileDialog {
+        id: choixPdf
+        title: qsTr("Enregistrer le message en PDF")
+        fileMode: FileDialog.SaveFile
+        nameFilters: [qsTr("Documents PDF (*.pdf)")]
+        defaultSuffix: "pdf"
+        onAccepted: {
+            var ok = impression.enregistrerPdf(colonneLecture.vueCorps.textDocument, fenetre.enteteImpression(),
+                                               fenetre.sujetCourant(), selectedFile)
+            messageEtat.texte = ok ? qsTr("Message enregistré en PDF.") : qsTr("Le PDF n'a pas pu être écrit.")
+        }
+    }
+    function enregistrerPdf() {
+        if (uidCourant <= 0)
+            return
+        choixPdf.currentFolder = impression.dossierDocuments()
+        choixPdf.selectedFile = choixPdf.currentFolder + "/" + nomDeFichier(sujetCourant())
+        choixPdf.open()
+    }
+    Shortcut {
+        sequences: [StandardKey.Print]
+        enabled: !fenetre.dialogueOuvert() && fenetre.uidCourant > 0 && impression.disponible
+        onActivated: fenetre.imprimerMessage()
+    }
+
     Shortcut {
         sequences: [StandardKey.Delete]
         enabled: !fenetre.dialogueOuvert() && Object.keys(fenetre.selection).length > 0
@@ -4397,6 +4443,11 @@ ApplicationWindow {
                     ouvrirDossier(c.compte, "Archive")
                 })
                 attenteEnvoi.start()
+            }
+            if (essai.scenario === "impression") {
+                var attenteImpression = Qt.createQmlObject('import QtQuick; Timer { interval: 8000 }', fenetre)
+                attenteImpression.triggered.connect(function() { choisir(0, 0) })
+                attenteImpression.start()
             }
             if (essai.scenario === "notification") {
                 var attenteNotif = Qt.createQmlObject('import QtQuick; Timer { interval: 8000 }', fenetre)

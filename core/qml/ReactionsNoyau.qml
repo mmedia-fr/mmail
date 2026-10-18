@@ -292,6 +292,8 @@ Connections {
         }
         if (fenetre.essai && fenetre.essai.scenario === "pieces")
             scenarios.etapeScenarioPieces()
+        if (fenetre.essai && fenetre.essai.scenario === "impression" && !brut)
+            Qt.callLater(scenarios.etapeScenarioImpression)
         if (fenetre.essai && fenetre.essai.scenario === "ouvrir-avec")
             scenarios.etapeScenarioOuvrirAvec()
         // Scénario « joindre » : la première pièce du message affiché,

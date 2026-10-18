@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-#ifdef Q_OS_ANDROID
-#include <QtWebView>
+// Q_OS_ANDROID n’est pas encore défini ici, avant les en-têtes de Qt.
+#ifdef __ANDROID__
+#include <QtWebView/QtWebView>
 #endif
 #include <QtCore/QCoreApplication>
 #include <QtCore/QCryptographicHash>

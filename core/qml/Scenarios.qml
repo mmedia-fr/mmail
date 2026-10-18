@@ -786,27 +786,36 @@ QtObject {
             // restaient décalées. Une fois la liste redessinée, aucune ligne
             // affichée ne doit l'être.
             essai.etape = 5  // en attente du contrôle : les autres étapes se taisent
-            var controle = Qt.createQmlObject("import QtQuick; Timer { interval: 600 }", fenetre)
+            // La liste recycle ses lignes : faire défiler jusqu'au bout et
+            // revenir reprend les lignes rangées, dont la ligne glissée.
+            var vue = colonneListe.vueMessages
+            var etapesControle = [
+                function() { vue.positionViewAtEnd() },
+                function() { vue.positionViewAtBeginning() },
+                function() {
+                    var decalees = []
+                    for (var d = 0; d < modeleMessages.count; ++d) {
+                        var l = vue.itemAtIndex(d)
+                        if (l && l.visible && l.swipe.position !== 0)
+                            decalees.push(d + ":" + l.swipe.position)
+                    }
+                    console.log(decalees.length === 0 ? "scenario: OK aucune ligne décalée après l'annulation"
+                                                       : "scenario: ECHEC lignes décalées " + decalees.join(" "))
+                    var rang = -1
+                    for (var i = 0; i < modeleMessages.count; ++i) {
+                        if (modeleMessages.get(i).sujet === essai.sujet)
+                            rang = i
+                    }
+                    glisserLigne(rang, "corbeille")
+                    essai.etape = 1
+                    console.log("scenario: glissée de nouveau, en attente", Object.keys(enAttente).length)
+                }
+            ]
+            var controle = Qt.createQmlObject("import QtQuick; Timer { interval: 600; repeat: true }", fenetre)
             controle.triggered.connect(function() {
-                var decalees = []
-                // La ligne glissée elle-même, rangée puis reprise par la liste.
-                if (glissee && glissee.swipe.position !== 0)
-                    decalees.push("glissée:" + glissee.swipe.position)
-                for (var d = 0; d < Math.min(15, modeleMessages.count); ++d) {
-                    var l = colonneListe.vueMessages.itemAtIndex(d)
-                    if (l && l.swipe.position !== 0)
-                        decalees.push(d + ":" + l.swipe.position)
-                }
-                console.log(decalees.length === 0 ? "scenario: OK aucune ligne décalée après l'annulation"
-                                                   : "scenario: ECHEC lignes décalées " + decalees.join(" "))
-                var rang = -1
-                for (var i = 0; i < modeleMessages.count; ++i) {
-                    if (modeleMessages.get(i).sujet === essai.sujet)
-                        rang = i
-                }
-                glisserLigne(rang, "corbeille")
-                essai.etape = 1
-                console.log("scenario: glissée de nouveau, en attente", Object.keys(enAttente).length)
+                etapesControle.shift()()
+                if (etapesControle.length === 0)
+                    controle.stop()
             })
             controle.start()
         } else if (essai.etape === 1 && glissement === null && deplacementsEnVol === 0) {

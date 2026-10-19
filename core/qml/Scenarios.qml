@@ -285,6 +285,17 @@ QtObject {
         attente.start()
     }
 
+    /// Scénario d'essai « suggestion » : sans connexion, l'entrée du menu « ? »
+    /// ouvre une rédaction adressée à `adresseSuggestions`, version et système
+    /// dans l'objet.
+    function etapeScenarioSuggestion() {
+        var r = envoyerSuggestion()
+        var a = r ? r.contenu().a : ""
+        var objet = r ? r.contenu().objet : ""
+        console.log("scenario: suggestion,", a, "|", objet,
+                    a === adresseSuggestions && objet.indexOf(Qt.application.version) > 0 ? "OK" : "ECHEC")
+    }
+
     /// Scénario « mesure-recherche » : temps d'une recherche dans le dossier
     /// ouvert (index seul, hors connexion), du retour à la liste entière, et
     /// d'une recherche dans toutes les boîtes.

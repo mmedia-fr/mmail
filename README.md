@@ -116,7 +116,9 @@ de projet interne.
   l'adresse quand le domaine publie sa configuration —, en ajouter un ou
   plusieurs par un **lien de configuration**, ou en retirer un (voir
   « Configuration d'un compte ») ;
-- **menu « ? »** : aide (F1) et « À propos » — versions de MMail, du noyau et
+- **menu « ? »** : aide (F1), « Envoyer une suggestion… » (rédaction adressée
+  à l'équipe de MMail, version et système dans l'objet ; sans compte, par la
+  messagerie du poste) et « À propos » — versions de MMail, du noyau et
   de Qt ;
 - **ascenseurs toujours visibles** dès qu'une colonne a de quoi défiler ;
 - **trombone** dans la liste pour un message à pièces jointes : supposé

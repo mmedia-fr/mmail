@@ -259,7 +259,7 @@ ApplicationWindow {
     property string versionNouvelle: ""
     property string pageVersion: ""
     // Destinataire de « Envoyer une suggestion… » (menu « ? »).
-    readonly property string adresseSuggestions: "suggestions@exemple.invalid"
+    readonly property string adresseSuggestions: "suggestions.mmail@mmedia.fr"
     // Bandeau de mise à jour : "" (caché), "proposee", "telechargement",
     // "prete" ou "echec".
     property string etatMiseAJour: ""

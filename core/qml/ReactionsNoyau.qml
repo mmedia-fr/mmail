@@ -445,6 +445,12 @@ Connections {
         fenetre.majInfoDossier()
     }
 
+    function onMarquageLuDiffere(uid, secondes) {
+        minuterieLu.uid = uid
+        minuterieLu.interval = secondes * 1000
+        minuterieLu.restart()
+    }
+
     function onPieceAJoindre(url) {
         var r = fenetre.redactions[fenetre.pieceCible]
         if (!r) {

@@ -1205,9 +1205,21 @@ QtObject {
                 choisir(indexDe(suivi.a), 0)
             } else if (suivi.n === 31) {
                 bilan("A : « À l'affichage », lu aussitôt", suivi.a, true)
+                // Le serveur : un autre dossier, puis la boîte de réception
+                // relue — ses drapeaux reviennent du serveur.
+                fenetre.selection = ({})
+                uidCourant = 0
+                ouvrirDossier(c.compte, "Essais")
+            } else if (suivi.n === 33) {
+                ouvrirDossier(c.compte, "INBOX")
+            } else if (suivi.n === 35) {
+                boite.actualiser()
+            } else if (suivi.n === 40) {
+                bilan("serveur : A lu", suivi.a, true)
+                bilan("serveur : B non lu", suivi.b, false)
                 console.log("scenario: lu-differe, " + (suivi.echecs === 0 ? "tout OK" : suivi.echecs + " échec(s)"))
-                suivi.n = 39
-            } else if (suivi.n >= 40) {
+                suivi.n = 44
+            } else if (suivi.n >= 45) {
                 tic.stop()
                 Qt.quit()
             }

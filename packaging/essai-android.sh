@@ -221,42 +221,51 @@ for n in re.findall(r"<node [^>]*>", open(sys.argv[1], encoding="utf-8").read())
         break
 ' ui.xml "$1"
 }
+# toucher <texte> : touche l'élément une fois sa place stable — le clavier qui
+# se retire fait encore glisser la fenêtre d'ajout de compte.
 toucher() {
-  local xy
-  xy=$(trouver "$1")
+  local xy avant="" i
+  for i in 1 2 3 4 5; do
+    xy=$(trouver "$1")
+    [ -n "$xy" ] && [ "$xy" = "$avant" ] && break
+    avant=$xy
+    sleep 2
+  done
+  cp ui.xml "ui-$2.xml" 2>/dev/null || true
+  echo "$1 : ${xy:-introuvable}"
   [ -n "$xy" ] || return 1
   # shellcheck disable=SC2086
   adb shell input tap $xy
 }
 adb shell input keyevent KEYCODE_BACK
-sleep 3
-if ! toucher "Compte Microsoft"; then
+sleep 5
+if ! toucher "Compte Microsoft" 1-compte; then
   echo "::warning::Connexion Microsoft non essayée : bouton introuvable dans l'arbre d'accessibilité"
 else
+  # Adresse demandée, puis Entrée : la page de Microsoft s'ouvre.
   sleep 3
   adb shell input text "essai.mmail@outlook.com"
   sleep 1
-  toucher "=OK" || adb shell input keyevent KEYCODE_ENTER
+  adb shell input keyevent KEYCODE_ENTER
   sleep 10
   adb exec-out screencap -p > connexion-1-ouverte.png
   if [ -z "$(trouver "=Connexion à Microsoft")" ]; then
+    cp ui.xml ui-2-ouverte.xml 2>/dev/null || true
     echo "Connexion Microsoft : la page intégrée ne s'est pas ouverte" >&2
-    echec=1
+    exit 1
   fi
   adb shell input keyevent KEYCODE_BACK
   sleep 5
   adb exec-out screencap -p > connexion-2-retour.png
   if [ -n "$(trouver "=Connexion à Microsoft")" ]; then
     echo "Connexion Microsoft : Retour n'a pas abandonné la connexion" >&2
-    echec=1
+    exit 1
   elif [ -z "$(adb shell pidof "$PAQUET" || true)" ]; then
     echo "Connexion Microsoft : Retour a fermé MMail au lieu d'abandonner la connexion" >&2
-    echec=1
-  else
-    echo "Connexion Microsoft : page ouverte, puis abandonnée par Retour"
+    exit 1
   fi
+  echo "Connexion Microsoft : page ouverte, puis abandonnée par Retour"
 fi
-[ "$echec" = 0 ] || exit 1
 
 # Touche Retour (0.6.11). Le 21/10, Manu retrouve MMail sur un écran blanc après
 # un appui sur Retour, sans autre issue que de le fermer. Chaque appui ferme ce

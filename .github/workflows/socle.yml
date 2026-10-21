@@ -504,12 +504,16 @@ jobs:
           disable-animations: true
           # Une seule ligne : l'action exécute chaque ligne dans un shell distinct.
           script: bash packaging/essai-android.sh
+      # Toujours déposé : les captures de l'essai de veille (0.6.10) se
+      # regardent aussi quand il passe.
       - name: Journal de l'émulateur
-        if: matrix.emulateur && failure()
+        if: matrix.emulateur && always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: mmail-android-logcat
-          path: logcat.txt
+          path: |
+            logcat.txt
+            veille-*.png
           if-no-files-found: ignore
       - name: Dépôt de l'APK
         if: matrix.abi == 'arm64_v8a'

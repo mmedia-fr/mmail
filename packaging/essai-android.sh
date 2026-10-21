@@ -87,3 +87,69 @@ if [ -z "$pid" ]; then
 fi
 
 echo "MMail tourne (pid $pid)"
+
+# Veille puis réveil (0.6.10). Le 21/10, Manu retrouve MMail sur un écran blanc
+# après une mise en veille du téléphone, sans autre issue que de le fermer.
+# L'écran est capturé avant la veille, puis au réveil : MMail disparu, une
+# application qui ne répond plus (ANR), ou un écran devenu presque tout blanc
+# alors qu'il ne l'était pas avant, échouent. Les captures et le journal
+# d'Android partent avec les artefacts du travail.
+mesurer() {
+  # Part des pixels presque blancs d'une capture brute (screencap sans -p :
+  # largeur, hauteur, format, parfois l'espace colorimétrique, puis RGBA).
+  python3 -I -c '
+import struct, sys
+d = open(sys.argv[1], "rb").read()
+l, h = struct.unpack("<II", d[:8])
+px = d[len(d) - l * h * 4:]
+n = blancs = 0
+for i in range(0, len(px), 4 * 97):
+    n += 1
+    if px[i] > 240 and px[i + 1] > 240 and px[i + 2] > 240:
+        blancs += 1
+print(round(100 * blancs / max(n, 1)))
+' "$1"
+}
+capturer() {
+  adb exec-out screencap > "$1.raw"
+  adb exec-out screencap -p > "$1.png"
+}
+sleep 5
+capturer veille-avant
+avant=$(mesurer veille-avant.raw)
+echo "Avant la veille : ${avant} % de blanc"
+adb logcat -c
+adb shell input keyevent KEYCODE_SLEEP
+sleep 30
+adb shell input keyevent KEYCODE_WAKEUP
+sleep 2
+adb shell wm dismiss-keyguard || true
+sleep 10
+capturer veille-apres
+apres=$(mesurer veille-apres.raw)
+echo "Au réveil : ${apres} % de blanc"
+adb logcat -d > logcat-veille.txt
+cat logcat-veille.txt >> logcat.txt
+grep -iE 'mmail|qt\b|libEGL|OpenGLRenderer|ANR in|surface' logcat-veille.txt | tail -60 || true
+adb shell dumpsys window | grep -E 'mCurrentFocus|mFocusedApp' || true
+
+echec=0
+pid2=$(adb shell pidof "$PAQUET" || true)
+if [ -z "$pid2" ]; then
+  echo "MMail ne tourne plus au réveil" >&2
+  echec=1
+elif [ "$pid2" != "$pid" ]; then
+  echo "MMail a été relancé pendant la veille (pid $pid, puis $pid2)" >&2
+fi
+if grep -q "ANR in $PAQUET" logcat-veille.txt; then
+  echo "MMail ne répond plus au réveil (ANR)" >&2
+  echec=1
+fi
+if [ "$avant" -lt 97 ] && [ "$apres" -ge 97 ]; then
+  echo "Écran blanc au réveil : ${avant} % de blanc avant la veille, ${apres} % après" >&2
+  echec=1
+elif [ "$avant" -ge 97 ]; then
+  echo "Écran déjà presque blanc avant la veille : contrôle de l'écran blanc indéterminé" >&2
+fi
+[ "$echec" = 0 ] || exit 1
+echo "Réveil après veille : MMail toujours affiché"

@@ -209,7 +209,7 @@ echo "Réveil après veille : MMail toujours affiché"
 trouver() {
   adb shell uiautomator dump /sdcard/ui.xml > /dev/null 2>&1 || return 0
   adb exec-out cat /sdcard/ui.xml > ui.xml 2>/dev/null || return 0
-  python3 -I -c '
+  python3 -I -X utf8 -c '
 import html, re, sys
 for n in re.findall(r"<node [^>]*>", open(sys.argv[1], encoding="utf-8").read()):
     a = dict((k, html.unescape(v)) for k, v in re.findall(r" ([\w-]+)=\"([^\"]*)\"", n))
@@ -239,6 +239,12 @@ toucher() {
 }
 adb shell input keyevent KEYCODE_BACK
 sleep 5
+# Le tiroir des dossiers, ouvert au lancement, recouvre le bouton : refermé
+# d'un glissement vers la gauche.
+if [ -n "$(trouver "Toutes les BàL")" ]; then
+  adb shell input swipe 250 330 10 330 300
+  sleep 3
+fi
 if ! toucher "Compte Microsoft" 1-compte; then
   echo "::warning::Connexion Microsoft non essayée : bouton introuvable dans l'arbre d'accessibilité"
 else

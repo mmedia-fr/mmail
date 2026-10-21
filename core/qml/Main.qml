@@ -376,6 +376,8 @@ ApplicationWindow {
         // Marquage « lu » d'un message affiché : 0 à l'affichage, N secondes
         // après, -1 jamais (0.6.9, cf. Boite.delaiLu).
         property int delaiLu: 0
+        // Majuscule en début de phrase dans la rédaction (0.6.12).
+        property bool majusculeAuto: true
     }
 
     // ---------------------------------------------------------- apparences
@@ -4721,6 +4723,10 @@ ApplicationWindow {
             // garde la position de lecture.
             if (essai.scenario === "defilement-lecture")
                 scenarios.lancerScenarioDefilementLecture()
+            if (essai.scenario === "recherche-effacee")
+                scenarios.lancerScenarioRechercheEffacee()
+            if (essai.scenario === "majuscule")
+                scenarios.lancerScenarioMajuscule()
             // Scénario « partagees » (0.6.8) : une boîte partagée par le
             // serveur, proposée dans « De ».
             if (essai.scenario === "partagees")

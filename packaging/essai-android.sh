@@ -198,6 +198,66 @@ controler veille-profonde "$profonde"
 [ "$echec" = 0 ] || exit 1
 echo "Réveil après veille : MMail toujours affiché"
 
+# Connexion Microsoft intégrée (0.6.11) : sa page n'est plus chargée qu'au
+# moment d'une connexion. Elle s'ouvre depuis la fenêtre d'ajout de compte,
+# Retour l'abandonne sans fermer MMail, et l'essai de la touche Retour qui suit
+# vérifie qu'elle ne retient plus MMail une fois fermée. Les boutons se trouvent
+# par l'arbre d'accessibilité d'Android ; s'il ne les montre pas, l'étape est
+# signalée et sautée.
+# trouver <début du texte> (ou =<texte exact>) : centre du premier élément
+# affiché qui porte ce texte, vide s'il n'y en a pas.
+trouver() {
+  adb shell uiautomator dump /sdcard/ui.xml > /dev/null 2>&1 || return 0
+  adb exec-out cat /sdcard/ui.xml > ui.xml 2>/dev/null || return 0
+  python3 -I -c '
+import html, re, sys
+for n in re.findall(r"<node [^>]*>", open(sys.argv[1], encoding="utf-8").read()):
+    a = dict((k, html.unescape(v)) for k, v in re.findall(r" ([\w-]+)=\"([^\"]*)\"", n))
+    b = re.match(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]", a.get("bounds", ""))
+    t = a.get("text") or a.get("content-desc") or ""
+    if b and (t == sys.argv[2][1:] if sys.argv[2][:1] == "=" else t.startswith(sys.argv[2])):
+        x1, y1, x2, y2 = map(int, b.groups())
+        print((x1 + x2) // 2, (y1 + y2) // 2)
+        break
+' ui.xml "$1"
+}
+toucher() {
+  local xy
+  xy=$(trouver "$1")
+  [ -n "$xy" ] || return 1
+  # shellcheck disable=SC2086
+  adb shell input tap $xy
+}
+adb shell input keyevent KEYCODE_BACK
+sleep 3
+if ! toucher "Compte Microsoft"; then
+  echo "::warning::Connexion Microsoft non essayée : bouton introuvable dans l'arbre d'accessibilité"
+else
+  sleep 3
+  adb shell input text "essai.mmail@outlook.com"
+  sleep 1
+  toucher "=OK" || adb shell input keyevent KEYCODE_ENTER
+  sleep 10
+  adb exec-out screencap -p > connexion-1-ouverte.png
+  if [ -z "$(trouver "=Connexion à Microsoft")" ]; then
+    echo "Connexion Microsoft : la page intégrée ne s'est pas ouverte" >&2
+    echec=1
+  fi
+  adb shell input keyevent KEYCODE_BACK
+  sleep 5
+  adb exec-out screencap -p > connexion-2-retour.png
+  if [ -n "$(trouver "=Connexion à Microsoft")" ]; then
+    echo "Connexion Microsoft : Retour n'a pas abandonné la connexion" >&2
+    echec=1
+  elif [ -z "$(adb shell pidof "$PAQUET" || true)" ]; then
+    echo "Connexion Microsoft : Retour a fermé MMail au lieu d'abandonner la connexion" >&2
+    echec=1
+  else
+    echo "Connexion Microsoft : page ouverte, puis abandonnée par Retour"
+  fi
+fi
+[ "$echec" = 0 ] || exit 1
+
 # Touche Retour (0.6.11). Le 21/10, Manu retrouve MMail sur un écran blanc après
 # un appui sur Retour, sans autre issue que de le fermer. Chaque appui ferme ce
 # qui est ouvert (clavier, fenêtre d'ajout de compte, tiroir) ; sur la liste, la
@@ -226,7 +286,7 @@ done
 pid2=$(adb shell pidof "$PAQUET" || true)
 adb logcat -d > logcat-retour.txt
 cat logcat-retour.txt >> logcat.txt
-grep -E "main\(\) returned|diag:|Surface|ActivityTaskManager.*$PAQUET" logcat-retour.txt | tail -60 || true
+grep -E "main\(\) returned|ActivityTaskManager.*$PAQUET" logcat-retour.txt | tail -20 || true
 case "$(premier_plan)" in
   *"$PAQUET"*)
     if [ "$u" -ge 98 ]; then

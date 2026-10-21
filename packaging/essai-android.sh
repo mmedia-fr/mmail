@@ -90,10 +90,12 @@ echo "MMail tourne (pid $pid)"
 
 # Veille puis réveil (0.6.10). Le 21/10, Manu retrouve MMail sur un écran blanc
 # après une mise en veille du téléphone, sans autre issue que de le fermer.
-# L'écran est capturé avant la veille, puis au réveil : MMail disparu, une
-# application qui ne répond plus (ANR), ou un écran devenu presque tout blanc
-# alors qu'il ne l'était pas avant, échouent. Les captures et le journal
-# d'Android partent avec les artefacts du travail.
+# MMail doit d'abord s'afficher (sur l'émulateur, son interface met plus d'une
+# minute à se charger, sur un écran blanc) ; vient alors une veille courte, puis
+# une veille profonde : Doze forcé et mémoire réclamée à l'application, comme
+# après une longue nuit. Au réveil, MMail disparu, une application qui ne
+# répond plus (ANR), ou un écran resté presque tout blanc échouent. Captures et
+# journal d'Android partent avec les artefacts du travail.
 mesurer() {
   # Part des pixels presque blancs d'une capture brute (screencap sans -p :
   # largeur, hauteur, format, parfois l'espace colorimétrique, puis RGBA).
@@ -110,46 +112,77 @@ for i in range(0, len(px), 4 * 97):
 print(round(100 * blancs / max(n, 1)))
 ' "$1"
 }
-capturer() {
-  adb exec-out screencap > "$1.raw"
+# attendre <nom> <secondes> : capture jusqu'à ce que l'écran ne soit plus
+# presque blanc, ou que le délai soit passé ; la dernière capture est gardée.
+attendre() {
+  local fin=$((SECONDS + $2)) b=100
+  while :; do
+    adb exec-out screencap > "$1.raw"
+    b=$(mesurer "$1.raw")
+    [ "$b" -lt 97 ] || [ "$SECONDS" -ge "$fin" ] && break
+    sleep 3
+  done
   adb exec-out screencap -p > "$1.png"
+  echo "$b"
 }
-sleep 5
-capturer veille-avant
-avant=$(mesurer veille-avant.raw)
-echo "Avant la veille : ${avant} % de blanc"
+reveiller() {
+  adb shell input keyevent KEYCODE_WAKEUP
+  sleep 2
+  adb shell wm dismiss-keyguard || true
+}
+echec=0
+controler() {
+  # controler <étape> <part de blanc> : MMail toujours là, sans ANR, affiché.
+  local pid2
+  pid2=$(adb shell pidof "$PAQUET" || true)
+  adb logcat -d > "logcat-$1.txt"
+  cat "logcat-$1.txt" >> logcat.txt
+  adb shell dumpsys window | grep -E 'mCurrentFocus' || true
+  if [ -z "$pid2" ]; then
+    echo "$1 : MMail ne tourne plus" >&2
+    echec=1
+  elif [ "$pid2" != "$pid" ]; then
+    echo "$1 : MMail a été relancé (pid $pid, puis $pid2)" >&2
+  fi
+  if grep -q "ANR in $PAQUET" "logcat-$1.txt"; then
+    echo "$1 : MMail ne répond plus (ANR)" >&2
+    echec=1
+  fi
+  if [ "$2" -ge 97 ]; then
+    echo "$1 : écran blanc 60 s après le réveil (${2} % de blanc)" >&2
+    echec=1
+  fi
+}
+
+avant=$(attendre veille-0-avant 240)
+echo "MMail affiché avant la veille : ${avant} % de blanc"
+if [ "$avant" -ge 97 ]; then
+  echo "MMail ne s'est pas affiché en 4 minutes : essai de veille impossible" >&2
+  exit 1
+fi
+
 adb logcat -c
 adb shell input keyevent KEYCODE_SLEEP
 sleep 30
-adb shell input keyevent KEYCODE_WAKEUP
-sleep 2
-adb shell wm dismiss-keyguard || true
-sleep 10
-capturer veille-apres
-apres=$(mesurer veille-apres.raw)
-echo "Au réveil : ${apres} % de blanc"
-adb logcat -d > logcat-veille.txt
-cat logcat-veille.txt >> logcat.txt
-grep -iE 'mmail|qt\b|libEGL|OpenGLRenderer|ANR in|surface' logcat-veille.txt | tail -60 || true
-adb shell dumpsys window | grep -E 'mCurrentFocus|mFocusedApp' || true
+reveiller
+courte=$(attendre veille-1-courte 60)
+echo "Veille courte (30 s) : ${courte} % de blanc au réveil"
+controler veille-courte "$courte"
 
-echec=0
-pid2=$(adb shell pidof "$PAQUET" || true)
-if [ -z "$pid2" ]; then
-  echo "MMail ne tourne plus au réveil" >&2
-  echec=1
-elif [ "$pid2" != "$pid" ]; then
-  echo "MMail a été relancé pendant la veille (pid $pid, puis $pid2)" >&2
-fi
-if grep -q "ANR in $PAQUET" logcat-veille.txt; then
-  echo "MMail ne répond plus au réveil (ANR)" >&2
-  echec=1
-fi
-if [ "$avant" -lt 97 ] && [ "$apres" -ge 97 ]; then
-  echo "Écran blanc au réveil : ${avant} % de blanc avant la veille, ${apres} % après" >&2
-  echec=1
-elif [ "$avant" -ge 97 ]; then
-  echo "Écran déjà presque blanc avant la veille : contrôle de l'écran blanc indéterminé" >&2
-fi
+adb logcat -c
+adb shell input keyevent KEYCODE_SLEEP
+sleep 5
+# Doze n'entre pas sur secteur : l'émulateur se dit débranché le temps de l'essai.
+adb shell dumpsys battery unplug || true
+adb shell dumpsys deviceidle force-idle || true
+adb shell am send-trim-memory "$PAQUET" COMPLETE || true
+sleep 60
+adb shell dumpsys deviceidle unforce || true
+adb shell dumpsys battery reset || true
+reveiller
+profonde=$(attendre veille-2-profonde 60)
+echo "Veille profonde (Doze, mémoire réclamée) : ${profonde} % de blanc au réveil"
+controler veille-profonde "$profonde"
+
 [ "$echec" = 0 ] || exit 1
 echo "Réveil après veille : MMail toujours affiché"

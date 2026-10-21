@@ -491,6 +491,18 @@ jobs:
                       /usr/local/lib/android/sdk/ndk/2[0-5].* 2>/dev/null || true
           df -h / | tail -1
 
+      # Sans accès à /dev/kvm, l'émulateur tourne sans accélération : l'interface
+      # de MMail y mettait deux minutes et demie à se charger (21/10), assez pour
+      # fausser l'essai de veille. La règle udev ouvre /dev/kvm au runner.
+      - name: Accélération de l'émulateur
+        if: matrix.emulateur
+        shell: bash
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules > /dev/null
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -l /dev/kvm || echo "pas de /dev/kvm : émulateur sans accélération"
       - name: Lancement sur émulateur
         if: matrix.emulateur
         uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2

@@ -283,6 +283,9 @@ static bool reserverProfil(const QString& dossier, QString* motif)
 int main(int argc, char* argv[])
 {
 #ifdef Q_OS_ANDROID
+  // diag 0.6.11, à retirer : ce qui retient MMail après la touche Retour.
+  struct Diag { const char* n; ~Diag() { qWarning("diag: %s detruit", n); } };
+  Diag diagApp{ "app" };
   // Connexion Microsoft dans une page intégrée (cf. ConnexionIntegree.qml).
   QtWebView::initialize();
 #endif
@@ -394,6 +397,9 @@ int main(int argc, char* argv[])
   // Mise en forme du message en cours de rédaction (gras, listes, liens…).
   qmlRegisterType<MiseEnForme>("fr.mmedia.mmail.natif", 1, 0, "MiseEnForme");
 
+#ifdef Q_OS_ANDROID
+  Diag diagEngine{ "engine" };
+#endif
   QQmlApplicationEngine engine;
   // En contrôle de fabrication, l'interface ne touche ni au coffre ni au réseau
   // de sa propre initiative.
@@ -544,6 +550,24 @@ int main(int argc, char* argv[])
 #ifdef Q_OS_WIN
   fenetre::poserListeRaccourcis();
 #endif
+#ifdef Q_OS_ANDROID
+  QObject::connect(&app, &QGuiApplication::lastWindowClosed, [] { qWarning("diag: lastWindowClosed"); });
+  QObject::connect(&app, &QCoreApplication::aboutToQuit, [] { qWarning("diag: aboutToQuit"); });
+  if (!engine.rootObjects().isEmpty()) {
+    if (auto* principale = qobject_cast<QQuickWindow*>(engine.rootObjects().first())) {
+      QObject::connect(principale, &QWindow::visibleChanged, &app, [](bool visible) {
+        qWarning("diag: principale visible=%d", int(visible));
+        QTimer::singleShot(0, [] {
+          for (QWindow* w : QGuiApplication::topLevelWindows())
+            qWarning("diag: fenetre %s '%s' visible=%d type=0x%x flags=0x%x transient=%d handle=%d",
+                     w->metaObject()->className(), qPrintable(w->objectName()), int(w->isVisible()),
+                     int(w->type()), int(w->flags()), int(w->transientParent() != nullptr),
+                     int(w->handle() != nullptr));
+        });
+      });
+    }
+  }
+#endif
 
   if (smoke) {
     // Contrôle de fabrication : la fenêtre existe, le noyau Rust répond, et
@@ -592,8 +616,14 @@ int main(int argc, char* argv[])
                    [](QSessionManager&) { Installeur::sessionFinie(); });
 #endif
   const int code = app.exec();
+#ifdef Q_OS_ANDROID
+  qWarning("diag: exec rendu %d", code);
+#endif
   // Mise à jour retenue pour la fermeture : son installeur part maintenant, et
   // attend la fin de ce processus pour remplacer les fichiers.
   Installeur::executer();
+#ifdef Q_OS_ANDROID
+  qWarning("diag: installeur fait");
+#endif
   return code;
 }

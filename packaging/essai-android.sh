@@ -226,7 +226,7 @@ done
 pid2=$(adb shell pidof "$PAQUET" || true)
 adb logcat -d > logcat-retour.txt
 cat logcat-retour.txt >> logcat.txt
-grep -E "main\(\) returned|lastWindowClosed|$PAQUET|libMMail" logcat-retour.txt | tail -40 || true
+grep -E "main\(\) returned|diag:|Surface|ActivityTaskManager.*$PAQUET" logcat-retour.txt | tail -60 || true
 case "$(premier_plan)" in
   *"$PAQUET"*)
     if [ "$u" -ge 98 ]; then

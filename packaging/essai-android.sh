@@ -153,7 +153,7 @@ controler() {
     echec=1
   fi
   if [ "$2" -ge 98 ]; then
-    echo "$1 : fenêtre d'une seule couleur 60 s après le réveil (${2} %)" >&2
+    echo "$1 : fenêtre d'une seule couleur (${2} %)" >&2
     echec=1
   fi
 }
@@ -197,3 +197,57 @@ controler veille-profonde "$profonde"
 
 [ "$echec" = 0 ] || exit 1
 echo "Réveil après veille : MMail toujours affiché"
+
+# Touche Retour (0.6.11). Le 21/10, Manu retrouve MMail sur un écran blanc après
+# un appui sur Retour, sans autre issue que de le fermer. Chaque appui ferme ce
+# qui est ouvert (clavier, fenêtre d'ajout de compte, tiroir) ; sur la liste, la
+# fenêtre se ferme et MMail doit quitter : main() rendu, processus fini, retour
+# au lanceur. MMail resté au premier plan sur une fenêtre d'une seule couleur, ou
+# qui ne quitte pas, échoue ; relancé ensuite, il doit de nouveau s'afficher.
+adb logcat -c
+premier_plan() {
+  adb shell dumpsys window | grep -m 1 'mCurrentFocus' | tr -d '\r' || true
+}
+u=0
+for n in 1 2 3 4 5 6; do
+  adb shell input keyevent KEYCODE_BACK
+  sleep 5
+  adb exec-out screencap > "retour-$n.raw"
+  adb exec-out screencap -p > "retour-$n.png"
+  u=$(uni "retour-$n.raw")
+  focus=$(premier_plan)
+  echo "Retour $n : couleur dominante ${u} %, pid $(adb shell pidof "$PAQUET" || echo aucun), ${focus}"
+  case "$focus" in *"$PAQUET"*) ;; *) break ;; esac
+done
+for i in $(seq 1 10); do
+  [ -z "$(adb shell pidof "$PAQUET" || true)" ] && break
+  sleep 2
+done
+pid2=$(adb shell pidof "$PAQUET" || true)
+adb logcat -d > logcat-retour.txt
+cat logcat-retour.txt >> logcat.txt
+grep -E "main\(\) returned|lastWindowClosed|$PAQUET|libMMail" logcat-retour.txt | tail -40 || true
+case "$(premier_plan)" in
+  *"$PAQUET"*)
+    if [ "$u" -ge 98 ]; then
+      echo "Retour : MMail au premier plan sur une fenêtre d'une seule couleur (${u} %)" >&2
+    else
+      echo "Retour : MMail toujours au premier plan après $n appuis" >&2
+    fi
+    echec=1 ;;
+esac
+if [ -n "$pid2" ]; then
+  echo "Retour : le processus de MMail tourne encore 20 s après la fermeture (pid $pid2)" >&2
+  grep -q "main() returned" logcat-retour.txt || echo "Retour : main() n'a pas rendu la main" >&2
+  echec=1
+fi
+
+adb logcat -c
+adb shell am start -W -n "$composant" || true
+relance=$(attendre retour-relance 120)
+echo "Relance après Retour : couleur dominante ${relance} %"
+pid=$(adb shell pidof "$PAQUET" || true)
+controler retour-relance "$relance"
+
+[ "$echec" = 0 ] || exit 1
+echo "Retour : MMail quitte, puis se relance affiché"

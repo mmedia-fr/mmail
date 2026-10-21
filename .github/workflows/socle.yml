@@ -529,6 +529,7 @@ jobs:
             retour-*.png
             connexion-*.png
             ui*.xml
+            vues-*.txt
           if-no-files-found: ignore
       - name: Dépôt de l'APK
         if: matrix.abi == 'arm64_v8a'

@@ -168,9 +168,15 @@ fn categories_sur_boite_partagee() {
     let resultat = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mut a = session();
         let (magasin, ca, cb) = index(&mut a, Some(&mut b));
-        let partagee = magasin.dossiers(ca).unwrap().into_iter()
+        // La boîte de réception partagée : « Shared/<B>/INBOX » chez Mailcow
+        // (`mail_shared_explicit_inbox`), « Shared/<B> » sinon (CI).
+        let dossiers: Vec<String> = magasin.dossiers(ca).unwrap().into_iter()
+            .filter(|d| d.selectionnable && d.chemin.starts_with("Shared/"))
             .map(|d| d.chemin)
-            .find(|c| c.ends_with("/INBOX") && c.starts_with("Shared/"))
+            .collect();
+        let partagee = dossiers.iter().find(|c| c.ends_with("/INBOX"))
+            .or_else(|| dossiers.iter().find(|c| !c["Shared/".len()..].contains('/')))
+            .cloned()
             .expect("boîte partagée vue par A");
         let mot_cle = format!("epreuve_{uid_b}");
         let categorie = Categorie { mot_cle: mot_cle.clone(), nom: "Épreuve à faire".into(), couleur: "#0B8043".into() };

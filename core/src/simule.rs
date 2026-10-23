@@ -21,7 +21,7 @@ pub struct Echange {
     pub reponses: String,
     pub fin: String,
     /// Réponses qui se font attendre (0.6.16) : chacune après autant de
-    /// lectures sans rien — une tranche d'attente chacune, cf. `lente`.
+    /// millisecondes, cf. `lente`.
     pub retenues: Vec<(usize, String)>,
 }
 
@@ -31,8 +31,10 @@ pub fn echange(attendu: &str, reponses: &str, fin: &str) -> Echange {
 }
 
 /// Une commande à laquelle le serveur répond lentement : chaque morceau
-/// `(n, texte)` arrive après `n` lectures restées sans rien (`WouldBlock`,
-/// 1 ms chacune), la fin juste après le dernier. `usize::MAX` : jamais.
+/// `(n, texte)` arrive `n` millisecondes après le précédent — d'ici là, la
+/// lecture rend `WouldBlock` —, la fin juste après le dernier. `usize::MAX` :
+/// jamais. Mesuré en temps et non en lectures : une pause d'une milliseconde
+/// en dure quinze sous Windows.
 pub fn lente(attendu: &str, morceaux: &[(usize, &str)], fin: &str) -> Echange {
     Echange {
         retenues: morceaux.iter().map(|(n, t)| (*n, t.to_string())).collect(),
@@ -64,9 +66,10 @@ struct FluxSimule {
     /// Étiquette de la commande `IDLE` en cours : `DONE`, qui n'en porte pas,
     /// la termine.
     idle: Option<String>,
-    /// Réponses retenues (`lente`) : lectures sans rien qu'il reste à rendre
-    /// avant chacune.
+    /// Réponses retenues (`lente`) : millisecondes d'attente avant chacune,
+    /// comptées depuis `depuis`.
     retenues: VecDeque<(usize, Vec<u8>)>,
+    depuis: Option<std::time::Instant>,
 }
 
 impl FluxSimule {
@@ -147,6 +150,7 @@ impl FluxSimule {
         self.sortie.extend(echange.reponses.as_bytes());
         let fin = (!echange.fin.is_empty()).then(|| format!("{etiquette} {}\r\n", echange.fin).into_bytes());
         if !echange.retenues.is_empty() {
+            self.depuis = Some(std::time::Instant::now());
             self.retenues.extend(echange.retenues.into_iter().map(|(n, t)| (n, t.into_bytes())));
             if let Some(fin) = fin {
                 self.retenues.push_back((0, fin));
@@ -174,16 +178,17 @@ impl Read for FluxSimule {
         if self.sortie.is_empty() && self.idle.is_some() {
             return Err(io::Error::from(io::ErrorKind::WouldBlock));
         }
-        // Réponse retenue : une tranche d'attente, en accéléré.
+        // Réponse retenue : rien tant que son attente n'est pas écoulée.
         if self.sortie.is_empty() {
-            if let Some((reste, _)) = self.retenues.front_mut() {
-                if *reste > 0 {
-                    *reste -= 1;
+            if let Some((attente, _)) = self.retenues.front() {
+                let debut = *self.depuis.get_or_insert_with(std::time::Instant::now);
+                if *attente == usize::MAX || debut.elapsed() < std::time::Duration::from_millis(*attente as u64) {
                     std::thread::sleep(std::time::Duration::from_millis(1));
                     return Err(io::Error::from(io::ErrorKind::WouldBlock));
                 }
                 let (_, octets) = self.retenues.pop_front().expect("réponse retenue");
                 self.sortie.extend(octets);
+                self.depuis = Some(std::time::Instant::now());
             }
         }
         // Rien à lire : le serveur « ferme », ce que le client prend pour une
@@ -249,6 +254,7 @@ fn connexion(attendus: VecDeque<Echange>) -> (Client, Journal) {
         litteral: None,
         idle: None,
         retenues: VecDeque::new(),
+        depuis: None,
     };
     (Client::sur(Box::new(flux)).expect("salutation"), journal)
 }

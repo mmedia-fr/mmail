@@ -1262,8 +1262,8 @@ mod tests {
     #[test]
     fn recherche_patiente_attend_le_serveur() {
         use crate::simule::lente;
-        // Le serveur se tait une vingtaine de tranches, puis répond : la
-        // session reste ouverte et sert encore (0.6.16).
+        // Le serveur se tait 20 ms, puis répond : la session reste ouverte
+        // et sert encore (0.6.16).
         let (mut client, journal) = session(
             DOVECOT,
             vec![
@@ -1290,16 +1290,23 @@ mod tests {
     #[test]
     fn recherche_patiente_prolongee_par_les_signes_de_vie() {
         use crate::simule::lente;
-        // Dovecot qui indexe : une ligne de progression toutes les trente
-        // tranches, la réponse au bout de cent cinquante — bien au-delà de
-        // l'attente de 60, que chaque ligne repousse.
+        // Dovecot qui indexe : une ligne de progression toutes les 40 ms, la
+        // réponse au bout de 240 — bien au-delà de l'attente de 150 ms, que
+        // chaque ligne repousse.
         let progression = "* OK Indexed 20% of the mailbox, ETA 0:40\r\n";
-        let morceaux = [(30, progression), (30, progression), (30, progression), (30, progression), (30, "* SEARCH 5\r\n")];
+        let morceaux = [
+            (40, progression),
+            (40, progression),
+            (40, progression),
+            (40, progression),
+            (40, progression),
+            (40, "* SEARCH 5\r\n"),
+        ];
         let (mut client, _) = session(DOVECOT, vec![lente("UID SEARCH", &morceaux, "OK Search completed")]);
-        assert_eq!(client.chercher_patiemment("devis", &[], attente(60, true, true)).unwrap(), vec![5]);
+        assert_eq!(client.chercher_patiemment("devis", &[], attente(150, true, true)).unwrap(), vec![5]);
         // Sans prolongation, la même réponse arrive trop tard.
         let (mut client, _) = session(DOVECOT, vec![lente("UID SEARCH", &morceaux, "OK Search completed")]);
-        assert!(matches!(client.chercher_patiemment("devis", &[], attente(60, false, true)), Err(Erreur::Delai)));
+        assert!(matches!(client.chercher_patiemment("devis", &[], attente(150, false, true)), Err(Erreur::Delai)));
     }
 
     #[test]

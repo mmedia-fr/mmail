@@ -511,6 +511,7 @@ jobs:
           aapt2=$(ls -d "$ANDROID_SDK_ROOT"/build-tools/* | sort -V | tail -n 1)/aapt2
           "$aapt2" dump badging "$apk" | grep -E "^application(-icon-[0-9]+)?:" | tee badging.txt
           grep -q "icon='res/" badging.txt || { echo "l'APK n'a pas d'icône" >&2; exit 1; }
+          grep -q "label='MMail'" badging.txt || { echo "l'APK ne s'affiche pas sous le nom MMail" >&2; exit 1; }
       - name: Place pour l'émulateur
         if: matrix.emulateur
         shell: bash

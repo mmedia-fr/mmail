@@ -3,6 +3,8 @@
      (qtbase/src/android/templates/AndroidManifest.xml), plus l'icône du lanceur
      (android:icon, android:roundIcon ; ressources dans res/mipmap-*). Sans
      manifeste propre, Qt n'en pose aucune et Android affiche son icône générique.
+     Nom sous l'icône écrit en dur (android:label) : Qt 6.8.3 ignore
+     QT_ANDROID_APP_NAME et mettait le nom du binaire, en minuscules.
      Les marqueurs « %%INSERT_… » sont remplis à la fabrication par androiddeployqt.
      À un changement de version de Qt, comparer avec le nouveau modèle. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
@@ -22,7 +24,7 @@
         android:hardwareAccelerated="true"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher"
-        android:label="-- %%INSERT_APP_NAME%% --"
+        android:label="MMail"
         android:requestLegacyExternalStorage="true"
         android:allowBackup="true"
         android:fullBackupOnly="false">

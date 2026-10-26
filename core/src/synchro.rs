@@ -25,7 +25,9 @@ use crate::imap::{self, Client};
 use crate::index::ligne_index;
 use crate::magasin::{self, Magasin, MessageLocal};
 use crate::categories::{self, Catalogue, Changement};
-use crate::protocole::{adresses_partagees, boites_partagees, ensemble_uid, EtatDossier};
+use crate::protocole::{
+    adresses_partagees, boites_partagees, chemin_apres_renommage, dans_espace_partage, ensemble_uid, EtatDossier,
+};
 
 /// Échec d'une opération qui touche à la fois le serveur et l'index.
 #[derive(Debug)]
@@ -105,6 +107,48 @@ pub fn arborescence(client: &mut Client, magasin: &Magasin, compte: i64) -> Resu
         change |= relire_catalogue(client, magasin, compte, &boite)?;
     }
     Ok(change)
+}
+
+/// Renomme sur le serveur le dossier `ancien` du compte d'adresse `adresse`
+/// en `nouveau`, ses sous-dossiers avec lui, puis le reporte dans l'index
+/// avant d'en relire l'arborescence (cf. `Magasin::renommer_dossiers`). Les
+/// abonnements suivent.
+///
+/// Un dossier de l'espace partagé est refusé : son nom est aussi celui que
+/// voient les autres boîtes, et en changer a cassé des partages chez un
+/// client. L'interface le refuse déjà quand elle reconnaît la boîte ; ce
+/// contrôle-ci, d'après `NAMESPACE`, vaut pour toutes.
+pub fn renommer_dossier(
+    client: &mut Client,
+    magasin: &Magasin,
+    compte: i64,
+    adresse: &str,
+    ancien: &str,
+    nouveau: &str,
+    separateur: &str,
+) -> Result<(), Echec> {
+    if dans_espace_partage(ancien, &client.espaces_autres()?) {
+        return Err(Echec::Imap(imap::Erreur::Refuse("un dossier partagé ne se renomme pas depuis MMail".into())));
+    }
+    // LSUB refusé : chaque dossier renommé que l'index connaît sera abonné.
+    let abonnes = match client.abonnements() {
+        Ok(chemins) => chemins,
+        Err(imap::Erreur::Refuse(_) | imap::Erreur::Protocole(_)) => {
+            magasin.dossiers(compte)?.into_iter().map(|d| d.chemin).collect()
+        }
+        Err(e) => return Err(e.into()),
+    };
+    client.renommer(ancien, nouveau)?;
+    magasin.renommer_dossiers(compte, adresse, ancien, nouveau, separateur)?;
+    for chemin in abonnes {
+        if let Some(apres) = chemin_apres_renommage(&chemin, ancien, nouveau, separateur) {
+            // Commodité pour les autres logiciels : un refus n'annule rien.
+            let _ = client.desabonner(&chemin);
+            let _ = client.abonner(&apres);
+        }
+    }
+    arborescence(client, magasin, compte)?;
+    Ok(())
 }
 
 /// Relit le catalogue de catégories d'une boîte sur le serveur, s'il sait le

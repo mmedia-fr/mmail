@@ -1026,6 +1026,75 @@ impl Magasin {
         Ok(())
     }
 
+    /// Reporte dans l'index le renommage, sur le serveur, du dossier `ancien`
+    /// du compte en `nouveau`, sous-dossiers compris : leur chemin change en
+    /// place. Messages, favoris, masquage et repli restent ainsi attachés au
+    /// dossier, que la relecture de l'arborescence aurait sinon retirés comme
+    /// disparus ; les filtres du compte (`adresse`) qui y rangeaient suivent.
+    pub fn renommer_dossiers(&self, compte: i64, adresse: &str, ancien: &str, nouveau: &str, separateur: &str) -> Resultat<()> {
+        let renomme = |chemin: &str| crate::protocole::chemin_apres_renommage(chemin, ancien, nouveau, separateur);
+        let transaction = self.base.unchecked_transaction()?;
+        let dossiers: Vec<(i64, String)> = {
+            let mut requete = transaction.prepare("SELECT id, chemin FROM folders WHERE account_id = ?1")?;
+            let lignes = requete.query_map(params![compte], |l| Ok((l.get(0)?, l.get(1)?)))?;
+            lignes.collect::<Result<Vec<_>, _>>()?
+        };
+        let a_renommer: Vec<(i64, String)> =
+            dossiers.iter().filter_map(|(id, chemin)| renomme(chemin).map(|c| (*id, c))).collect();
+        for (id, chemin) in &a_renommer {
+            // Une ligne déjà au nouveau chemin ne peut être qu'un reste : le
+            // serveur vient d'accepter le renommage, rien n'y était.
+            transaction.execute(
+                "DELETE FROM folders WHERE account_id = ?1 AND chemin = ?2 AND id != ?3",
+                params![compte, chemin, id],
+            )?;
+            transaction.execute("UPDATE folders SET chemin = ?2 WHERE id = ?1", params![id, chemin])?;
+        }
+        let etats: Vec<String> = {
+            let mut requete = transaction.prepare("SELECT chemin FROM filtres_etat WHERE account_id = ?1")?;
+            let lignes = requete.query_map(params![compte], |l| l.get(0))?;
+            lignes.collect::<Result<Vec<_>, _>>()?
+        };
+        for chemin in etats {
+            if let Some(nouveau_chemin) = renomme(&chemin) {
+                transaction.execute(
+                    "UPDATE OR REPLACE filtres_etat SET chemin = ?3 WHERE account_id = ?1 AND chemin = ?2",
+                    params![compte, chemin, nouveau_chemin],
+                )?;
+            }
+        }
+        let filtres: Option<String> = transaction
+            .query_row("SELECT valeur FROM filtres WHERE cle = 'liste'", [], |l| l.get(0))
+            .optional()?;
+        if let Some(json) = filtres.and_then(|j| crate::filtres::suivre_renommage(&j, adresse, ancien, nouveau, separateur)) {
+            transaction.execute("UPDATE filtres SET valeur = ?1 WHERE cle = 'liste'", [json])?;
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// Déplacements en attente qui partent du dossier `chemin` du compte, ou
+    /// de l'un de ses sous-dossiers, ou qui y vont.
+    pub fn deplacements_en_attente(&self, compte: i64, chemin: &str, separateur: &str) -> Resultat<usize> {
+        let mut requete = self
+            .base
+            .prepare("SELECT compte_source, chemin_source, compte_cible, chemin_cible FROM pending_ops")?;
+        let lignes = requete.query_map([], |l| {
+            Ok((l.get::<_, i64>(0)?, l.get::<_, String>(1)?, l.get::<_, i64>(2)?, l.get::<_, String>(3)?))
+        })?;
+        let dans = |c: i64, ch: &str| {
+            c == compte && crate::protocole::chemin_apres_renommage(ch, chemin, chemin, separateur).is_some()
+        };
+        let mut nombre = 0;
+        for ligne in lignes {
+            let (cs, source, cc, cible) = ligne?;
+            if dans(cs, &source) || dans(cc, &cible) {
+                nombre += 1;
+            }
+        }
+        Ok(nombre)
+    }
+
     /// Note les compteurs que le serveur annonce pour les dossiers d'un compte.
     pub fn poser_compteurs(&self, compte: i64, statuts: &[Statut]) -> Resultat<()> {
         let transaction = self.base.unchecked_transaction()?;
@@ -2600,6 +2669,73 @@ mod tests {
         assert!(m4.lu && m4.repondu);
         m.retirer(id, &[1]).unwrap();
         assert!(m.message(id, 1).unwrap().is_none());
+    }
+
+    #[test]
+    fn dossier_renomme_avec_ses_messages_favoris_et_filtres() {
+        let (m, compte, _) = boite();
+        let arbre = |noms: &[&str]| noms.iter().map(|n| dossier(n, &[])).collect::<Vec<_>>();
+        m.poser_dossiers(compte, &arbre(&["INBOX", "Clients", "Clients/Acme", "Clients2"])).unwrap();
+        let parent = m.dossier_id(compte, "Clients").unwrap();
+        let enfant = m.dossier_id(compte, "Clients/Acme").unwrap();
+        m.poser_messages(enfant, &[message(1, 1, false), message(2, 2, true)]).unwrap();
+        m.epingler(parent, true).unwrap();
+        m.masquer(enfant, true).unwrap();
+        m.poser_filtres_etat(compte, "Clients/Acme", 5, 2).unwrap();
+        let condition = r#"[{"champ":"expediteur","operateur":"contient","valeur":"acme"}]"#;
+        m.poser_filtres(&format!(
+            r#"[{{"nom":"a","compte":"A@B.fr","conditions":{condition},"destination":"dossier","dossier":"Clients/Acme"}},
+                {{"nom":"b","compte":"x@y.fr","conditions":{condition},"destination":"dossier","dossier":"Clients/Acme"}},
+                {{"nom":"c","compte":"a@b.fr","conditions":{condition},"destination":"dossier","dossier":"Clients2"}}]"#
+        ))
+        .unwrap();
+
+        m.renommer_dossiers(compte, "a@b.fr", "Clients", "Partenaires", "/").unwrap();
+        // Puis l'arborescence relue sur le serveur, comme après le RENAME.
+        m.poser_dossiers(compte, &arbre(&["INBOX", "Partenaires", "Partenaires/Acme", "Clients2"])).unwrap();
+
+        assert_eq!(m.dossier_id(compte, "Partenaires").unwrap(), parent);
+        assert_eq!(m.dossier_id(compte, "Partenaires/Acme").unwrap(), enfant);
+        assert!(m.dossier_id(compte, "Clients2").is_ok(), "« Clients2 » n'est pas sous « Clients »");
+        let p = m.dossier(parent).unwrap().unwrap();
+        assert_eq!(p.nom, "Partenaires");
+        assert!(p.favori.is_some(), "le favori suit");
+        assert!(m.dossier(enfant).unwrap().unwrap().masque, "le masquage suit");
+        assert_eq!(m.messages(enfant).unwrap().len(), 2, "les messages restent");
+        assert_eq!(m.filtres_etat(compte, "Partenaires/Acme").unwrap(), Some((5, 2)));
+        assert_eq!(m.filtres_etat(compte, "Clients/Acme").unwrap(), None);
+        let filtres = crate::filtres::lire(&m.filtres().unwrap()).unwrap();
+        let destinations: Vec<&str> = filtres.iter().map(|f| f.dossier.as_str()).collect();
+        // Seuls les filtres du compte suivent ; « Clients2 » n'en est pas.
+        assert_eq!(destinations, ["Partenaires/Acme", "Clients/Acme", "Clients2"]);
+    }
+
+    #[test]
+    fn deplacements_en_attente_d_un_dossier() {
+        let m = Magasin::en_memoire().unwrap();
+        let a = m.compte("a@b.fr", "h", 993, "a@b.fr").unwrap();
+        let b = m.compte("c@d.fr", "h", 993, "c@d.fr").unwrap();
+        let op = |source: &str, cible: &str| Operation {
+            id: 0,
+            compte_source: a,
+            chemin_source: source.into(),
+            validite_source: 7,
+            uid_source: 3,
+            compte_cible: b,
+            chemin_cible: cible.into(),
+            message_id: "<x@y>".into(),
+            drapeaux: String::new(),
+            date_interne: String::new(),
+            fichier: String::new(),
+            etape: Etape::Deposer,
+            erreur: String::new(),
+        };
+        m.inscrire_operation(&op("Clients/Acme", "Archives")).unwrap();
+        assert_eq!(m.deplacements_en_attente(a, "Clients", "/").unwrap(), 1);
+        assert_eq!(m.deplacements_en_attente(a, "Clients/Acme", "/").unwrap(), 1);
+        assert_eq!(m.deplacements_en_attente(a, "Client", "/").unwrap(), 0);
+        assert_eq!(m.deplacements_en_attente(a, "Archives", "/").unwrap(), 0, "« Archives » est la cible chez l'autre compte");
+        assert_eq!(m.deplacements_en_attente(b, "Archives", "/").unwrap(), 1);
     }
 
     #[test]

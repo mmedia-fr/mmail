@@ -130,6 +130,21 @@ pub fn lire(json: &str) -> Result<Vec<Filtre>, String> {
     Ok(filtres)
 }
 
+/// Liste de filtres (JSON) dont les destinations vers le dossier `ancien` du
+/// compte d'adresse `compte`, ou vers l'un de ses sous-dossiers, suivent son
+/// renommage en `nouveau` ; `None` si aucun filtre n'y menait.
+pub fn suivre_renommage(json: &str, compte: &str, ancien: &str, nouveau: &str, separateur: &str) -> Option<String> {
+    let mut filtres: Vec<Filtre> = serde_json::from_str(json).ok()?;
+    let mut change = false;
+    for f in filtres.iter_mut().filter(|f| f.destination == "dossier" && f.compte.eq_ignore_ascii_case(compte)) {
+        if let Some(chemin) = crate::protocole::chemin_apres_renommage(&f.dossier, ancien, nouveau, separateur) {
+            f.dossier = chemin;
+            change = true;
+        }
+    }
+    if change { serde_json::to_string(&filtres).ok() } else { None }
+}
+
 /// Comparaison sans égard aux majuscules ni aux espaces de bord.
 fn plier(texte: &str) -> String {
     texte.trim().to_lowercase()

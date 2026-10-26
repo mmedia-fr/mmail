@@ -449,6 +449,32 @@ impl Client {
         self.commande(&format!("SUBSCRIBE {}", citer(chemin))).map(|_| ())
     }
 
+    /// Désabonne la session d'un dossier.
+    pub fn desabonner(&mut self, chemin: &str) -> Resultat<()> {
+        self.commande(&format!("UNSUBSCRIBE {}", citer(chemin))).map(|_| ())
+    }
+
+    /// Dossiers auxquels la session est abonnée (`LSUB`, que IMAP4rev2 retire
+    /// mais que Dovecot, Gmail et Office 365 servent toujours).
+    pub fn abonnements(&mut self) -> Resultat<Vec<String>> {
+        let (texte, _) = self.commande("LSUB \"\" \"*\"")?;
+        Ok(texte
+            .lines()
+            .filter_map(|l| l.strip_prefix("* LSUB "))
+            .filter_map(|reste| protocole::analyser_list(&format!("* LIST {reste}")))
+            .map(|d| d.chemin)
+            .collect())
+    }
+
+    /// Renomme un dossier, ses sous-dossiers avec lui (RFC 3501 § 6.3.5). La
+    /// sélection en cours ne vaut plus : elle portait peut-être sur l'un d'eux,
+    /// le prochain usage sélectionnera de nouveau.
+    pub fn renommer(&mut self, ancien: &str, nouveau: &str) -> Resultat<()> {
+        self.commande(&format!("RENAME {} {}", citer(ancien), citer(nouveau)))?;
+        self.selection = None;
+        Ok(())
+    }
+
     /// Supprime un dossier : sert aux épreuves contre un vrai serveur, qui
     /// retirent ce qu'elles ont créé.
     #[cfg(test)]

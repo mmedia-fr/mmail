@@ -5705,7 +5705,7 @@ impl Travail {
                                 e.ouvert = Some(chemin);
                             }
                             if let Some((chemin, ..)) = e.dernier.as_mut() {
-                                if let Some(nouveau_chemin) = apres(chemin) {
+                                if let Some(nouveau_chemin) = apres(chemin.as_str()) {
                                     *chemin = nouveau_chemin;
                                 }
                             }

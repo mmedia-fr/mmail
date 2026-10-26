@@ -13,8 +13,20 @@ fn main() {
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("android") {
         qml.push("qml/ConnexionIntegree.qml");
     }
-    CxxQtBuilder::new_qml_module(QmlModule::new("fr.mmedia.mmail").qml_files(qml))
+    let constructeur = CxxQtBuilder::new_qml_module(QmlModule::new("fr.mmedia.mmail").qml_files(qml))
         .qt_module("Qml")
-        .files(["src/socle.rs", "src/boite.rs", "src/pont_presse_papier.rs", "src/pont_badge.rs", "src/configuration.rs", "src/mise_a_jour.rs"])
-        .build();
+        .files(["src/socle.rs", "src/boite.rs", "src/pont_presse_papier.rs", "src/pont_badge.rs", "src/configuration.rs", "src/mise_a_jour.rs"]);
+    // MSVC lit une source sans BOM dans la page de code du système (cp1252),
+    // y compris le C++ que qmlcachegen tire du QML : un « é » des chaînes
+    // compilées d'avance y devenait « Ã© » (« Deux Ã©tages », 0.6.20 sous
+    // Windows). /utf-8 : sources et chaînes en UTF-8.
+    // SAFETY : une option de compilation ajoutée, rien d'autre de changé.
+    let constructeur = unsafe {
+        constructeur.cc_builder(|cc| {
+            if cc.get_compiler().is_like_msvc() {
+                cc.flag("/utf-8");
+            }
+        })
+    };
+    constructeur.build();
 }

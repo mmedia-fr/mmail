@@ -5,6 +5,9 @@ project(mmail VERSION 0.6.20 LANGUAGES CXX)
 
 if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
   set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreadedDLL")
+  # Sources en UTF-8 (sans BOM) : sans /utf-8, MSVC les lit en cp1252 et les
+  # chaînes accentuées sortent cassées (cf. core/build.rs, même option).
+  add_compile_options(/utf-8)
 endif()
 
 set(CMAKE_AUTOMOC ON)

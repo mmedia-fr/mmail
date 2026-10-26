@@ -219,7 +219,9 @@ set_target_properties(mmail PROPERTIES
   MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION}
   QT_ANDROID_PACKAGE_NAME fr.mmedia.mmail
   QT_ANDROID_APP_NAME MMail
-  QT_ANDROID_VERSION_NAME ${PROJECT_VERSION})
+  QT_ANDROID_VERSION_NAME ${PROJECT_VERSION}
+  # Manifeste et icône du lanceur (cf. packaging/android/AndroidManifest.xml).
+  QT_ANDROID_PACKAGE_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/packaging/android)
 
 if(NOT ANDROID)
   qt_import_qml_plugins(mmail)

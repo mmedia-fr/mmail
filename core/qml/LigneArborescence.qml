@@ -31,6 +31,14 @@ ItemDelegate {
     Accessible.role: Accessible.TreeItem
     Accessible.name: fenetre.libelleLigne(model)
                      + (model.nonLus > 0 ? ", " + fenetre.accord(model.nonLus, qsTr("non lu"), qsTr("non lus")) : "")
+                     + (cumulVisible ? ", " + texteCumul : "")
+    // Ligne repliée d'un compte, ou d'un dossier qui a des sous-dossiers
+    // (0.6.21) : elle dit les non-lus qu'elle cache.
+    readonly property bool cumulVisible: model.replie === true && model.nonLusSous > 0
+            && (model.genre === "compte" || (model.genre === "dossier" && model.enfants))
+    readonly property string texteCumul: model.genre === "compte"
+            ? fenetre.accord(model.nonLusSous, qsTr("non lu dans ce compte"), qsTr("non lus dans ce compte"))
+            : fenetre.accord(model.nonLusSous, qsTr("non lu dans les sous-dossiers"), qsTr("non lus dans les sous-dossiers"))
     Accessible.selectable: estDossier
     Accessible.selected: estCourant
     hoverEnabled: true
@@ -257,6 +265,24 @@ ItemDelegate {
         CompteurNonLus {
             visible: ligne.estDossier && model.nonLus > 0 && fenetre.marque !== null
             nombre: model.nonLus
+            Layout.rightMargin: 2
+        }
+        // Les non-lus cachés par le repli : ceux d'un compte, comme ceux d'un
+        // dossier ; ceux des sous-dossiers, en retrait (« +N », sans gras),
+        // pour ne pas se confondre avec ceux du dossier lui-même.
+        Label {
+            visible: ligne.cumulVisible && (model.genre !== "compte" || fenetre.marque === null)
+            text: model.genre === "compte" ? model.nonLusSous : "+" + model.nonLusSous
+            font.bold: model.genre === "compte"
+            opacity: model.genre === "compte" ? 1 : 0.7
+            color: ligne.highlighted ? fenetre.palette.highlightedText : fenetre.texteAccent
+            HoverHandler { id: survolCumul }
+            ToolTip.visible: survolCumul.hovered
+            ToolTip.text: ligne.texteCumul
+        }
+        CompteurNonLus {
+            visible: ligne.cumulVisible && model.genre === "compte" && fenetre.marque !== null
+            nombre: model.nonLusSous
             Layout.rightMargin: 2
         }
     }

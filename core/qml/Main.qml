@@ -223,6 +223,10 @@ ApplicationWindow {
     property int uidCourant: 0
     /// Adresse de l'expéditeur du message affiché (« Copier l'adresse » de l'en-tête).
     property string adresseAffichee: ""
+    // En-tête complet du message affiché (0.6.21) : {de, a, cc, date}, chaque
+    // liste « Nom <adresse> ; … » (cf. `index::entete_affichable`). Vide tant
+    // que le message n'est pas arrivé ; le volet de lecture en tire À et Cc.
+    property var enteteCourant: ({})
     // Invitation, réponse ou annulation portée par le message affiché (cf.
     // `Boite.invitationRecue`) ; et la réponse en cours d'envoi.
     property var invitation: ({})
@@ -541,7 +545,10 @@ ApplicationWindow {
         return sombre && marque ? marque.texteBandeau : palette.windowText
     }
     function survolEntete(sombre) {
-        var e = encreEntete(sombre)
+        // Sous une apparence de marque, l'encre est une chaîne
+        // (marque.texteBandeau) : sans conversion, Qt.rgba() n'en lisait
+        // aucune composante, et le survol du bandeau tirait vers le noir.
+        var e = Qt.lighter(encreEntete(sombre), 1.0)
         return Qt.rgba(e.r, e.g, e.b, sombre && marque ? 0.14 : 0.08)
     }
 
@@ -1578,6 +1585,9 @@ ApplicationWindow {
     property bool passagerErreur: false
     property string infoDossier: ""
     property var derniereSynchro: null
+    // Dernière synchronisation de chaque dossier depuis le lancement
+    // (0.6.21, « Propriétés… ») : « compte \u0001 chemin » → Date.
+    property var synchrosDossiers: ({})
 
     Timer {
         id: minuteurPassager
@@ -2500,6 +2510,7 @@ ApplicationWindow {
     }
 
     DialogueViderDossier { id: dlgViderDossier }
+    DialogueProprietesDossier { id: dlgProprietesDossier }
 
     DialogueNouveauDossier { id: dlgNouveauDossier }
 
@@ -3564,6 +3575,9 @@ ApplicationWindow {
             selectionnable: l.selectionnable !== false,
             messages: l.messages || 0,
             nonLus: l.nonLus || 0,
+            // Non-lus d'un compte entier, ou des sous-dossiers d'un dossier
+            // (0.6.21) : montrés sur la ligne repliée.
+            nonLusSous: l.nonLusSous || 0,
             masque: l.masque === true,
             favori: l.favori === true,
             enfants: l.enfants === true,
@@ -4698,6 +4712,7 @@ ApplicationWindow {
         uidCourant = uid
         sourceVisible = false
         pieces = []
+        enteteCourant = ({})
         var i = rang !== undefined && rang >= 0 && rang < modeleMessages.count
                 && modeleMessages.get(rang).uid === uid ? rang : indexDe(uid)
         indexCourant = i
@@ -5669,6 +5684,10 @@ ApplicationWindow {
             // Le corps d'un long message à tableau, défilé aller-retour (0.6.20).
             if (essai.scenario === "corps-long")
                 scenarios.lancerScenarioCorpsLong()
+            // Lot 1 de la 0.6.21 : en-tête, liens, recherche, non-lus cumulés,
+            // propriétés d'un dossier (banc LOT1=1).
+            if (essai.scenario === "lot-1")
+                scenarios.lancerScenarioLot1()
             if (essai.scenario === "liste-categories" || essai.scenario === "menu-categories"
                     || essai.scenario === "gerer-categories")
                 scenarios.lancerScenarioCapturesCategories()

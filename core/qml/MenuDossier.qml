@@ -48,4 +48,9 @@ Menu {
         enabled: menuDossier.selectionnable
         onTriggered: dlgViderDossier.ouvrir(menuDossier.compte, menuDossier.chemin, menuDossier.nom)
     }
+    MenuSeparator {}
+    MenuItem {
+        text: qsTr("Propriétés…")
+        onTriggered: dlgProprietesDossier.ouvrir(menuDossier.compte, menuDossier.chemin)
+    }
 }

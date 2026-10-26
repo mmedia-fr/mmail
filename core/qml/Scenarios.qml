@@ -2630,4 +2630,161 @@ QtObject {
         })
         attente.start()
     }
+
+    /// Premier objet nommé `nom` sous `racine` (objectName), ou null.
+    function objetNomme(racine, nom) {
+        if (!racine)
+            return null
+        if (racine.objectName === nom)
+            return racine
+        var enfants = racine.children || []
+        for (var i = 0; i < enfants.length; ++i) {
+            var o = objetNomme(enfants[i], nom)
+            if (o)
+                return o
+        }
+        return null
+    }
+
+    /// Scénario « lot-1 » (0.6.21, banc LOT1=1) : À et Cc dans le volet de
+    /// lecture, repliés puis dépliés ; liens posés sur un texte brut et dans un
+    /// HTML ; recherche sans accents ; non-lus cumulés d'un dossier puis d'un
+    /// compte repliés ; propriétés d'un dossier ; encre du survol du bandeau.
+    /// Captures dans MMAIL_SORTIE (lot1-<étape>.png).
+    function lancerScenarioLot1() {
+        var tic = Qt.createQmlObject('import QtQuick; Timer { interval: 1000; repeat: true }', fenetre)
+        var suivi = { n: 0, echecs: 0, attendu: 0 }
+        var bilan = function(texte, bon) {
+            if (!bon)
+                suivi.echecs += 1
+            console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
+        }
+        // La suite seulement une fois l'image prise : la capture est
+        // asynchrone, et l'action suivante changerait ce qu'elle montre.
+        var capturer = function(item, nom, puis) {
+            if (!identifiantsEssai.sortie || !item) {
+                if (puis)
+                    puis()
+                return
+            }
+            var chemin = lanceur.chemin(identifiantsEssai.sortie + "/lot1-" + nom + ".png")
+            item.grabToImage(function(r) {
+                r.saveToFile(chemin)
+                if (puis)
+                    puis()
+            })
+        }
+        var montrer = function(sujet) {
+            for (var i = 0; i < modeleMessages.count; ++i)
+                if (modeleMessages.get(i).sujet === sujet) {
+                    choisir(i, 0)
+                    return true
+                }
+            bilan("message « " + sujet + " » absent (banc LOT1=1 ?)", false)
+            return false
+        }
+        var ligne = function(genre, compte, chemin) {
+            for (var i = 0; i < modeleArborescence.count; ++i) {
+                var l = modeleArborescence.get(i)
+                if (l.genre === genre && l.compte === compte && (genre === "compte" || l.chemin === chemin))
+                    return l
+            }
+            return null
+        }
+        tic.triggered.connect(function() {
+            suivi.n += 1
+            var c = comptesConnus[0]
+            var html = fenetre.htmlAffiche
+            if (suivi.n === 4) {
+                ouvrirDossier(c.compte, "INBOX")
+                // Survol du bandeau MMEDIA : une encre blanche, transparente.
+                var s = fenetre.survolEntete(true)
+                bilan("survol du bandeau (" + (fenetre.marque ? "marque" : "sans marque") + ") : rgba("
+                      + [s.r, s.g, s.b, s.a].map(function(x) { return Math.round(x * 100) / 100 }).join(", ") + ")",
+                      !isNaN(s.r) && (!fenetre.marque || (s.r === 1 && s.g === 1 && s.b === 1)))
+            } else if (suivi.n === 7) {
+                montrer("Destinataires nombreux")
+            } else if (suivi.n === 9) {
+                var la = objetNomme(colonneLecture, "destinatairesA")
+                var lcc = objetNomme(colonneLecture, "destinatairesCc")
+                bilan("À : " + (la ? la.noms.length : "?") + " destinataires, repliés sur 3 + « et 3 autres »",
+                      la && la.visible && la.noms.length === 6 && la.repliable && !la.deplie)
+                bilan("Cc : " + (lcc ? lcc.liste : "?"), lcc && lcc.visible && lcc.noms.length === 2 && !lcc.repliable)
+                capturer(colonneLecture, "entete-replie")
+            } else if (suivi.n === 10) {
+                objetNomme(colonneLecture, "destinatairesA").deplie = true
+            } else if (suivi.n === 11) {
+                capturer(colonneLecture, "entete-deplie")
+            } else if (suivi.n === 12) {
+                montrer("Liens en clair")
+            } else if (suivi.n === 14) {
+                var la2 = objetNomme(colonneLecture, "destinatairesA")
+                bilan("message suivant : À replié de nouveau, Cc caché",
+                      la2 && !la2.deplie && !objetNomme(colonneLecture, "destinatairesCc").visible)
+                bilan("texte brut : liens posés (" + html.length + " caractères)", fenetre.corpsHtml
+                      && html.indexOf('<a href="https://exemple.test/a?b=1&amp;c=2">') >= 0
+                      && html.indexOf('<a href="http://www.exemple.test/doc">www.exemple.test/doc</a>.') >= 0
+                      && html.indexOf('<a href="mailto:contact@exemple.test">') >= 0
+                      && html.indexOf('&lt;<a href="mailto:support@exemple.test">support@exemple.test</a>&gt;') >= 0)
+                capturer(colonneLecture, "liens-texte", function() { montrer("Liens HTML") })
+            } else if (suivi.n === 16) {
+                bilan("HTML : liens posés sur le texte, lien sans protocole complété", fenetre.corpsHtml
+                      && html.indexOf('<a href="http://www.exemple.test">www.exemple.test</a>') >= 0
+                      && html.indexOf('<a href="mailto:jean@exemple.test">') >= 0
+                      && html.indexOf('<a href="http://www.lien.test">') >= 0
+                      && html.split('href="https://exemple.test/x"').length === 2)
+                capturer(colonneLecture, "liens-html", function() { montrer("Essai 1") })
+            } else if (suivi.n === 18) {
+                bilan("texte brut sans adresse : reste du texte simple", !fenetre.corpsHtml)
+                colonneListe.porteeRecherche.currentIndex = 0
+                colonneListe.champRecherche.text = "reunion EQUIPE"
+                lancerRecherche()
+            } else if (suivi.n === 20) {
+                bilan("recherche « reunion EQUIPE » : « " + (modeleMessages.count > 0 ? modeleMessages.get(0).sujet : "") + " »",
+                      modeleMessages.count === 1 && modeleMessages.get(0).sujet === "Réunion d'équipe")
+                capturer(colonneListe, "recherche", function() {
+                    colonneListe.champRecherche.text = ""
+                    colonneListe.champRecherche.textEdited()
+                    boite.replierDossier(c.compte, "Essais", true)
+                })
+            } else if (suivi.n === 22) {
+                var e = ligne("dossier", c.compte, "Essais")
+                bilan("« Essais » replié : " + (e ? e.nonLus + " non lu, +" + e.nonLusSous + " dans ses sous-dossiers" : "absent"),
+                      e && e.replie && e.nonLus === 1 && e.nonLusSous === 2)
+                capturer(colonneArborescence, "arborescence-dossier-replie",
+                         function() { boite.replierDossier(c.compte, "Essais", false) })
+            } else if (suivi.n === 24) {
+                // Non-lus attendus : ceux des dossiers du compte, ni corbeille
+                // ni indésirables.
+                suivi.attendu = 0
+                for (var i = 0; i < modeleArborescence.count; ++i) {
+                    var l = modeleArborescence.get(i)
+                    if (l.genre === "dossier" && l.compte === c.compte && l.selectionnable
+                            && l.role !== "Trash" && l.role !== "Junk")
+                        suivi.attendu += l.nonLus
+                }
+                boite.replierCompte(c.compte, true)
+            } else if (suivi.n === 26) {
+                var co = ligne("compte", c.compte, "")
+                bilan("compte replié : " + (co ? co.nonLusSous : "?") + " non lus (attendu " + suivi.attendu + ")",
+                      co && co.replie && co.nonLusSous === suivi.attendu && suivi.attendu > 0)
+                capturer(colonneArborescence, "arborescence-compte-replie",
+                         function() { boite.replierCompte(c.compte, false) })
+            } else if (suivi.n === 28) {
+                dlgProprietesDossier.ouvrir(c.compte, "INBOX")
+            } else if (suivi.n === 29) {
+                var p = dlgProprietesDossier
+                bilan("propriétés de la boîte de réception : " + JSON.stringify(p.index) + ", " + p.texteSynchro,
+                      p.visible && p.index.messages >= 7 && p.ligne.libelle === "Boîte de réception"
+                      && p.texteSynchro.indexOf("pas encore") < 0)
+                capturer(fenetre.contentItem.parent, "proprietes")
+            } else if (suivi.n === 30) {
+                dlgProprietesDossier.close()
+                tic.stop()
+                console.log("scenario: lot-1 " + (suivi.echecs === 0 ? "OK" : "ECHEC (" + suivi.echecs + ")"))
+                Qt.quit()
+            }
+        })
+        tic.start()
+    }
 }

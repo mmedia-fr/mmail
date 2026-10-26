@@ -42,6 +42,44 @@ ColumnLayout {
         flick.contentY = y
     }
 
+    /// Ligne « À : » ou « Cc : » de l'en-tête (0.6.21). Au-delà de
+    /// `premiers` destinataires, la liste se replie sur les premiers et
+    /// « et N autres », qui la déplie ; elle se replie au message suivant.
+    component LigneDestinataires: RowLayout {
+        id: ld
+        property string etiquette
+        property string liste
+        property bool deplie: false
+        readonly property int premiers: 3
+        readonly property var noms: liste.length > 0 ? liste.split("; ") : []
+        readonly property bool repliable: noms.length > premiers + 1
+        onListeChanged: deplie = false
+        visible: noms.length > 0
+        Layout.fillWidth: true
+        spacing: 4
+        opacity: 0.8
+        Label {
+            text: ld.etiquette
+            font.pointSize: fenetre.tailleMessage
+            Layout.alignment: Qt.AlignTop
+        }
+        EnTeteSelectionnable {
+            Layout.fillWidth: true
+            text: ld.repliable && !ld.deplie ? ld.noms.slice(0, ld.premiers).join("; ") : ld.liste
+        }
+        Label {
+            visible: ld.repliable
+            // Replié, il en reste au moins deux (cf. repliable).
+            text: ld.deplie ? qsTr("replier") : qsTr("et %1 autres").arg(ld.noms.length - ld.premiers)
+            color: fenetre.palette.link
+            font.pointSize: fenetre.tailleMessage
+            font.underline: zoneDeplier.hovered
+            Layout.alignment: Qt.AlignTop
+            HoverHandler { id: zoneDeplier; cursorShape: Qt.PointingHandCursor }
+            TapHandler { onTapped: ld.deplie = !ld.deplie }
+        }
+    }
+
     HoverHandler { onHoveredChanged: if (hovered) fenetre.colonneActive = "message" }
 
     ToolBar {
@@ -130,6 +168,18 @@ ColumnLayout {
                 id: auteurAffiche
                 opacity: 0.8
                 Layout.fillWidth: true
+            }
+            // Destinataires et copie (0.6.21), comme dans la fenêtre du
+            // message : ils arrivent avec le corps.
+            LigneDestinataires {
+                objectName: "destinatairesA"
+                etiquette: qsTr("À :")
+                liste: fenetre.uidCourant > 0 ? (fenetre.enteteCourant.a || "") : ""
+            }
+            LigneDestinataires {
+                objectName: "destinatairesCc"
+                etiquette: qsTr("Cc :")
+                liste: fenetre.uidCourant > 0 ? (fenetre.enteteCourant.cc || "") : ""
             }
             Label {
                 visible: fenetre.uidCourant > 0 && fenetre.importanceCourante !== 0

@@ -180,6 +180,13 @@ pub mod qobject {
         #[cxx_name = "arborescence"]
         fn arborescence(&self, masques: bool) -> QString;
 
+        /// Ce que l'index sait d'un dossier (0.6.21, « Propriétés… »), en
+        /// JSON : `{"messages":…,"nonLus":…,"taille":…}` ; `{}` s'il n'y est
+        /// pas.
+        #[qinvokable]
+        #[cxx_name = "proprietesDossier"]
+        fn proprietes_dossier(&self, compte: i32, chemin: &QString) -> QString;
+
         /// Dossiers pouvant recevoir un message, tous comptes connectés
         /// confondus, en JSON : la liste du dialogue « Déplacer vers… ».
         #[qinvokable]
@@ -2600,7 +2607,7 @@ impl qobject::Boite {
         }
         for d in &favoris {
             let adresse = adresses.get(&d.compte_id).cloned().unwrap_or_default();
-            lignes.push(json_dossier("favori", d, &adresse, 0, false));
+            lignes.push(json_dossier("favori", d, &adresse, 0, false, 0));
         }
         for c in &comptes {
             let motif = if self.etat(c.id).code() == "erreur" {
@@ -2609,23 +2616,30 @@ impl qobject::Boite {
                 String::new()
             };
             let partagees: Vec<String> = c.partagees.iter().map(|a| texte_json(a)).collect();
+            let tous = magasin.dossiers(c.id).unwrap_or_default();
+            let visibles = if masques { tous } else { sans_masques(tous) };
+            // Non-lus du compte entier (0.6.21) : l'interface les montre sur
+            // la ligne du compte replié.
+            let total = non_lus_cumules(visibles.iter());
             lignes.push(format!(
-                r#"{{"genre":"compte","compte":{},"adresse":{},"hote":{},"etat":{},"replie":{},"motif":{},"partagees":[{}]}}"#,
+                r#"{{"genre":"compte","compte":{},"adresse":{},"hote":{},"etat":{},"replie":{},"motif":{},"nonLusSous":{},"partagees":[{}]}}"#,
                 c.id,
                 texte_json(&c.adresse),
                 texte_json(&c.hote),
                 texte_json(self.etat(c.id).code()),
                 c.replie,
                 texte_json(&motif),
+                total,
                 partagees.join(",")
             ));
             if c.replie {
                 continue;
             }
-            let tous = magasin.dossiers(c.id).unwrap_or_default();
-            let visibles = if masques { tous } else { sans_masques(tous) };
             for (d, enfants) in arbre_visible(&visibles) {
-                lignes.push(json_dossier("dossier", d, &c.adresse, d.profondeur, enfants));
+                // Non-lus des sous-dossiers (0.6.21), montrés sur un dossier
+                // parent replié, à côté des siens.
+                let sous = if enfants { non_lus_cumules(visibles.iter().filter(|e| est_sous(d, e))) } else { 0 };
+                lignes.push(json_dossier("dossier", d, &c.adresse, d.profondeur, enfants, sous));
             }
         }
         QString::from(&format!("[{}]", lignes.join(",")))
@@ -2644,7 +2658,7 @@ impl qobject::Boite {
                 if !d.selectionnable {
                     continue;
                 }
-                lignes.push(json_dossier("cible", &d, &c.adresse, d.profondeur, false));
+                lignes.push(json_dossier("cible", &d, &c.adresse, d.profondeur, false, 0));
             }
         }
         QString::from(&format!("[{}]", lignes.join(",")))
@@ -2669,6 +2683,19 @@ impl qobject::Boite {
             let _ = magasin.replier_compte(compte as i64, replie);
         }
         self.as_mut().reviser();
+    }
+
+    pub fn proprietes_dossier(&self, compte: i32, chemin: &QString) -> QString {
+        let statistiques = self.magasin.as_ref().and_then(|magasin| {
+            let id = magasin.dossier_id(compte as i64, &chemin.to_string()).ok()?;
+            magasin.statistiques_dossier(id).ok()
+        });
+        QString::from(&match statistiques {
+            Some((messages, non_lus, taille)) => {
+                format!(r#"{{"messages":{messages},"nonLus":{non_lus},"taille":{taille}}}"#)
+            }
+            None => "{}".to_string(),
+        })
     }
 
     pub fn replier_dossier(mut self: Pin<&mut Self>, compte: i32, chemin: &QString, replie: bool) {
@@ -6448,6 +6475,12 @@ fn rendre_si_actuel(
         return Some(lu);
     } else {
         lu.texte = crate::index::corps_affichable(octets);
+        // Ses adresses écrites en clair deviennent cliquables (0.6.21) : il
+        // passe alors en HTML, sans images.
+        if let Some(html) = crate::rendu::texte_en_html(&lu.texte) {
+            lu.texte = html;
+            lu.html = true;
+        }
     }
     actuel().then_some(lu)
 }
@@ -6972,9 +7005,20 @@ fn arbre_visible(dossiers: &[DossierLocal]) -> Vec<(&DossierLocal, bool)> {
     sortie
 }
 
-fn json_dossier(genre: &str, d: &DossierLocal, adresse: &str, profondeur: u32, enfants: bool) -> String {
+/// Non-lus cumulés de `dossiers`, pour un compte ou un dossier parent : ni la
+/// corbeille ni les indésirables n'y comptent, comme dans Outlook.
+fn non_lus_cumules<'a>(dossiers: impl Iterator<Item = &'a DossierLocal>) -> u32 {
+    dossiers
+        .filter(|d| d.selectionnable && d.role != "Trash" && d.role != "Junk")
+        .map(|d| d.non_lus)
+        .sum()
+}
+
+/// Ligne d'un dossier pour l'arborescence ; `sous` : non-lus de ses
+/// sous-dossiers.
+fn json_dossier(genre: &str, d: &DossierLocal, adresse: &str, profondeur: u32, enfants: bool, sous: u32) -> String {
     format!(
-        r#"{{"genre":{},"compte":{},"adresse":{},"chemin":{},"nom":{},"separateur":{},"profondeur":{},"role":{},"selectionnable":{},"messages":{},"nonLus":{},"masque":{},"favori":{},"enfants":{},"replie":{}}}"#,
+        r#"{{"genre":{},"compte":{},"adresse":{},"chemin":{},"nom":{},"separateur":{},"profondeur":{},"role":{},"selectionnable":{},"messages":{},"nonLus":{},"nonLusSous":{},"masque":{},"favori":{},"enfants":{},"replie":{}}}"#,
         texte_json(genre),
         d.compte_id,
         texte_json(adresse),
@@ -6986,6 +7030,7 @@ fn json_dossier(genre: &str, d: &DossierLocal, adresse: &str, profondeur: u32, e
         d.selectionnable,
         d.messages,
         d.non_lus,
+        sous,
         d.masque,
         d.favori.is_some(),
         enfants,
@@ -7493,6 +7538,33 @@ mod tests {
     }
 
     #[test]
+    fn non_lus_cumules_sans_corbeille_ni_indesirables() {
+        let d = |chemin: &str, role: &str, non_lus, selectionnable| DossierLocal {
+            chemin: chemin.into(),
+            nom: chemin.rsplit('/').next().unwrap_or("").into(),
+            separateur: "/".into(),
+            role: role.into(),
+            non_lus,
+            selectionnable,
+            ..Default::default()
+        };
+        let dossiers = vec![
+            d("INBOX", "", 3, true),
+            d("INBOX/clients", "", 2, true),
+            d("INBOX/clients/2026", "", 1, true),
+            d("Trash", "Trash", 5, true),
+            d("Junk", "Junk", 4, true),
+            d("Projets", "", 0, false),
+            d("Projets/a", "", 6, true),
+        ];
+        assert_eq!(non_lus_cumules(dossiers.iter()), 12);
+        let sous = |i: usize| non_lus_cumules(dossiers.iter().filter(|e| est_sous(&dossiers[i], e)));
+        assert_eq!(sous(0), 3);
+        assert_eq!(sous(1), 1);
+        assert_eq!(sous(5), 6);
+    }
+
+    #[test]
     fn dossier_serialise() {
         let json = json_dossier(
             "dossier",
@@ -7512,11 +7584,13 @@ mod tests {
             "a@b.fr",
             1,
             true,
+            7,
         );
         assert!(json.starts_with('{') && json.ends_with('}'));
         assert!(json.contains(r#""enfants":true"#));
         assert!(json.contains(r#""nom":"Factures""#));
         assert!(json.contains(r#""nonLus":2"#));
+        assert!(json.contains(r#""nonLusSous":7"#));
         assert!(json.contains(r#""compte":2"#));
         assert!(json.contains(r#""favori":true"#));
     }

@@ -131,6 +131,7 @@ Connections {
 
     function onDossierOuvert(compte, chemin, veille) {
         fenetre.derniereSynchro = new Date()
+        fenetre.synchrosDossiers[compte + "\u0001" + chemin] = fenetre.derniereSynchro
         if (compte !== boite.compteCourant || chemin !== boite.dossierCourant)
             return
         if (fenetre.essai && fenetre.essai.scenario === "envoi-fond" && fenetre.essai.depart && chemin !== "INBOX")
@@ -337,6 +338,7 @@ Connections {
         colonneLecture.vueCorps.cursorPosition = 0
         if (!brut) {
             fenetre.confirmationDemandee = confirmation
+            try { fenetre.enteteCourant = JSON.parse(entete) } catch (e) { fenetre.enteteCourant = ({}) }
             fenetre.pieces = JSON.parse(pieces)
             // Le message entier dit s'il porte des pièces : la ligne suit.
             var i = fenetre.rangDe(uid)

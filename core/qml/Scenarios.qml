@@ -773,7 +773,8 @@ QtObject {
         choisir(0, 0)
         var cibles = [["dlgIdentite", dlgIdentite], ["dlgAide", dlgAide], ["dlgDeplacer", dlgDeplacer],
                       ["dlgRestauration", dlgRestauration], ["dlgAPropos", dlgAPropos], ["dlgCompte", dlgCompte],
-                      ["dlgNouveauDossier", dlgNouveauDossier], ["dlgConsentement", dlgConsentement],
+                      ["dlgNouveauDossier", dlgNouveauDossier], ["dlgRenommerDossier", dlgRenommerDossier],
+                      ["dlgConsentement", dlgConsentement],
                       ["dlgOuvrirAvec", dlgOuvrirAvec], ["dlgLogiciels", dlgLogiciels], ["dlgReprise", dlgReprise],
                       ["dlgLien", dlgLien], ["dlgViderDossier", dlgViderDossier], ["popupRappels", popupRappels],
                       ["menuComptes", menuComptes], ["menuReglages", menuReglages], ["menuAffichage", menuAffichage], ["menuPiece", menuPiece],

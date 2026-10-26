@@ -218,6 +218,16 @@ Connections {
             console.log("scenario: demande partie :", dlgNouveauDossier.motif === "", "| dialogue ouvert :", dlgNouveauDossier.visible)
             return
         }
+        // Scénario « renommer-dossier » : le sous-dossier MMAIL_DOSSIER de la
+        // boîte de réception, créé ici, renommé en « MMAIL_DOSSIER bis » avec
+        // son propre sous-dossier (suite dans onDossierCree).
+        if (fenetre.essai && fenetre.essai.scenario === "renommer-dossier" && !fenetre.essai.cree) {
+            fenetre.essai.cree = true
+            dlgNouveauDossier.ouvrir(compte, "INBOX", qsTr("Boîte de réception"))
+            dlgNouveauDossier.champNouveauDossier.text = identifiantsEssai.dossier
+            dlgNouveauDossier.creer()
+            return
+        }
         // Scénario « vidage » : « Vider les corbeilles et indésirables… »,
         // confirmé dans son dialogue, comme au clic. MMAIL_DOSSIER donne
         // l'attente en secondes après l'ouverture de la boîte de réception
@@ -706,6 +716,53 @@ Connections {
                 dlgNouveauDossier.champNouveauDossier.text = nom
                 dlgNouveauDossier.creer()
                 console.log("scenario: second essai du même nom :", dlgNouveauDossier.motif)
+                Qt.quit()
+            })
+        }
+        // Scénario « renommer-dossier » : le dossier d'essai reçoit un
+        // sous-dossier, devient favori et s'ouvre, puis les refus sont
+        // éprouvés avant le renommage lui-même (suite dans onDossierRenomme).
+        if (fenetre.essai && fenetre.essai.scenario === "renommer-dossier") {
+            Qt.callLater(function() {
+                if (!fenetre.essai.enfant) {
+                    fenetre.essai.enfant = true
+                    fenetre.essai.parent = chemin
+                    dlgNouveauDossier.ouvrir(compte, chemin, nom)
+                    dlgNouveauDossier.champNouveauDossier.text = "Sous-dossier"
+                    dlgNouveauDossier.creer()
+                    return
+                }
+                boite.epinglerDossier(compte, fenetre.essai.parent, true)
+                fenetre.ouvrirDossier(compte, chemin)
+                console.log("scenario: refus pour INBOX :", boite.motifRenommage(compte, "INBOX"))
+                console.log("scenario: motif pour le dossier d'essai :", JSON.stringify(boite.motifRenommage(compte, fenetre.essai.parent)))
+                dlgRenommerDossier.ouvrir(compte, fenetre.essai.parent, identifiantsEssai.dossier)
+                dlgRenommerDossier.champNom.text = "a/b"
+                dlgRenommerDossier.renommer()
+                console.log("scenario: refus de « a/b » :", dlgRenommerDossier.motif)
+                dlgRenommerDossier.champNom.text = identifiantsEssai.dossier
+                dlgRenommerDossier.renommer()
+                console.log("scenario: refus du même nom :", dlgRenommerDossier.motif)
+                dlgRenommerDossier.champNom.text = identifiantsEssai.dossier + " bis"
+                dlgRenommerDossier.renommer()
+                console.log("scenario: demande partie :", dlgRenommerDossier.motif === "", "| dialogue ouvert :", dlgRenommerDossier.visible)
+            })
+        }
+    }
+
+    function onDossierRenomme(compte, ancien, nouveau, nom) {
+        messageEtat.texte = qsTr("Dossier renommé en « %1 ».").arg(nom)
+        if (fenetre.essai && fenetre.essai.scenario === "renommer-dossier") {
+            Qt.callLater(function() {
+                var lignes = []
+                for (var i = 0; i < modeleArborescence.count; ++i) {
+                    var l = modeleArborescence.get(i)
+                    if (l.genre === "dossier" && l.compte === compte
+                            && (l.chemin === nouveau || l.chemin.indexOf(nouveau) === 0 || l.chemin.indexOf(ancien) === 0))
+                        lignes.push(l.chemin + " (" + l.nom + ", favori : " + l.favori + ")")
+                }
+                console.log("scenario: renommé", ancien, "→", nouveau, "| arborescence :", lignes.join(" ; "))
+                console.log("scenario: dossier ouvert :", boite.dossierCourant)
                 Qt.quit()
             })
         }

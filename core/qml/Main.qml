@@ -2514,6 +2514,8 @@ ApplicationWindow {
 
     DialogueNouveauDossier { id: dlgNouveauDossier }
 
+    DialogueRenommerDossier { id: dlgRenommerDossier }
+
     DialogueCategorie { id: dlgCategorie }
 
     DialogueCategories { id: dlgCategories }

@@ -23,8 +23,11 @@ Menu {
     property bool masque: false
     property string nom: ""
     property bool selectionnable: true
+    // Vide si le dossier se renomme ; sinon pourquoi « Renommer… » est grisé.
+    property string motifRenommage: ""
     function ouvrir(c, ch, f, m, n, sel, item, x, y) {
         compte = c; chemin = ch; favori = f; masque = m; nom = n; selectionnable = sel
+        motifRenommage = boite.motifRenommage(c, ch)
         if (item)
             popup(item, x, y)
         else
@@ -49,6 +52,11 @@ Menu {
         onTriggered: dlgViderDossier.ouvrir(menuDossier.compte, menuDossier.chemin, menuDossier.nom)
     }
     MenuSeparator {}
+    MenuItem {
+        text: qsTr("Renommer…")
+        enabled: menuDossier.motifRenommage.length === 0
+        onTriggered: dlgRenommerDossier.ouvrir(menuDossier.compte, menuDossier.chemin, menuDossier.nom)
+    }
     MenuItem {
         text: qsTr("Propriétés…")
         onTriggered: dlgProprietesDossier.ouvrir(menuDossier.compte, menuDossier.chemin)

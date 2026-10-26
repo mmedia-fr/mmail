@@ -5666,6 +5666,9 @@ ApplicationWindow {
             // Scénario de la 0.6.20 : le carnet d'adresses modifiable.
             if (essai.scenario === "carnet" || essai.scenario === "carnet-fiche" || essai.scenario === "carnet-nettoyage")
                 scenarios.lancerScenarioCarnet()
+            // Le corps d'un long message à tableau, défilé aller-retour (0.6.20).
+            if (essai.scenario === "corps-long")
+                scenarios.lancerScenarioCorpsLong()
             if (essai.scenario === "liste-categories" || essai.scenario === "menu-categories"
                     || essai.scenario === "gerer-categories")
                 scenarios.lancerScenarioCapturesCategories()

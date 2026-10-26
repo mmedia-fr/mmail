@@ -897,6 +897,9 @@ Page {
                     miseEnForme: mef
                     fond: fenetre.palette.base
                 }
+                // Même blanc que la lecture sur une longue réponse qui cite un
+                // message à tableau (cf. cpp/rendu_complet.h).
+                RenduComplet { zone: corpsRedaction }
                 Keys.onPressed: function(ev) {
                     if (ev.matches(StandardKey.Paste) && redac.collerImage())
                         ev.accepted = true

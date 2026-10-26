@@ -2257,6 +2257,72 @@ QtObject {
         tic.start()
     }
 
+    /// Scénario « corps-long » (0.6.20) : un long message HTML à tableau (banc
+    /// LONG=1), descendu jusqu'en bas par pas de 40 px puis remonté. À chaque
+    /// pas, le corps visible est capturé dans MMAIL_SORTIE
+    /// (corps-<rang>-<sens>-<position>.png) : il restait blanc en remontant
+    /// (cf. cpp/rendu_complet.h). Les captures blanches se comptent hors de MMail.
+    function lancerScenarioCorpsLong() {
+        if (!identifiantsEssai.sortie) {
+            console.log("scenario: ECHEC corps-long : MMAIL_SORTIE absent")
+            Qt.quit()
+            return
+        }
+        var tic = Qt.createQmlObject('import QtQuick; Timer { interval: 1000; repeat: true }', fenetre)
+        var suivi = { n: 0, index: -1, pas: [], rang: 0 }
+        var cadre = colonneLecture.cadreCorps.contentItem
+        var suivant = function() {
+            if (suivi.rang >= suivi.pas.length) {
+                console.log("scenario: corps-long " + suivi.pas.length + " captures")
+                Qt.quit()
+                return
+            }
+            var p = suivi.pas[suivi.rang]
+            cadre.contentY = p.y
+            // Une image rendue avant la capture : le défilement a eu lieu.
+            Qt.callLater(function() {
+                var chemin = lanceur.chemin(identifiantsEssai.sortie + "/corps-" + ("00" + suivi.rang).slice(-3)
+                                            + "-" + p.sens + "-" + Math.round(p.y) + ".png")
+                colonneLecture.cadreCorps.grabToImage(function(r) {
+                    r.saveToFile(chemin)
+                    suivi.rang += 1
+                    suivant()
+                })
+            })
+        }
+        tic.triggered.connect(function() {
+            suivi.n += 1
+            var c = comptesConnus[0]
+            if (suivi.n === 4) {
+                ouvrirDossier(c.compte, "INBOX")
+            } else if (suivi.n === 7) {
+                for (var i = 0; i < modeleMessages.count; ++i)
+                    if (modeleMessages.get(i).sujet === "Corps long")
+                        suivi.index = i
+                if (suivi.index < 0) {
+                    tic.stop()
+                    console.log("scenario: ECHEC message « Corps long » absent (banc LONG=1 ?)")
+                    Qt.quit()
+                    return
+                }
+                choisir(suivi.index, 0)
+            } else if (suivi.n === 10) {
+                tic.stop()
+                var course = cadre.contentHeight - cadre.height
+                console.log("scenario: corps-long " + colonneLecture.vueCorps.text.length + " caractères, course "
+                            + Math.round(course) + " px")
+                var ys = []
+                for (var y = 0; y < course; y += 40)
+                    ys.push(y)
+                ys.push(course)
+                ys.forEach(function(y) { suivi.pas.push({ sens: "bas", y: y }) })
+                ys.slice().reverse().forEach(function(y) { suivi.pas.push({ sens: "haut", y: y }) })
+                suivant()
+            }
+        })
+        tic.start()
+    }
+
     /// Scénario « bibliotheque-signatures » (0.6.18) : la bibliothèque de signatures. Une
     /// identité posée à l'ancienne y est rangée ; « Nom et signature… » en
     /// crée une autre, choisie pour les réponses, en duplique et en supprime ;

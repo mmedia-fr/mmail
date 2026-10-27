@@ -3232,7 +3232,7 @@ ApplicationWindow {
         return dlgCompte.visible || dlgConsentement.visible || dlgDeplacer.visible || dlgRetrait.visible
             || dlgAide.visible || dlgAPropos.visible || dlgLien.visible || dlgIdentite.visible
             || dlgNouveauDossier.visible || dlgCategorie.visible || dlgCategories.visible
-            || dlgFiche.visible || dlgNettoyage.visible
+            || dlgFiche.visible || dlgNettoyage.visible || dlgAvantGoogle.visible
             // Sur téléphone, la rédaction couvre la fenêtre principale.
             || (compact && Object.keys(redactions).length > 0)
     }
@@ -3673,12 +3673,66 @@ ApplicationWindow {
     }
 
     /// Connexion d'un compte Google (Gmail) : comme `connecterMicrosoft` ;
-    /// la suite revient par `googleConnecte` ou `googleRefuse`.
+    /// la suite revient par `googleConnecte` ou `googleRefuse`. La page de
+    /// Google ne s'ouvre qu'après `dlgAvantGoogle`.
     function connecterGoogle(indice) {
         if (!boite.googleDisponible()) {
             messageEtat.texte = qsTr("Comptes Google indisponibles dans cette version de MMail.")
             return
         }
+        dlgAvantGoogle.indice = indice
+        dlgAvantGoogle.open()
+    }
+
+    /// Avant la page de Google : son texte d'autorisation, imposé par Google
+    /// pour l'accès IMAP et SMTP à Gmail (`https://mail.google.com/`), annonce
+    /// la suppression définitive de tout le courrier ; ce dialogue dit ce que
+    /// MMail en fait (retour de Nicolas, transmis par Manu le 27/10).
+    Dialog {
+        id: dlgAvantGoogle
+        property string indice: ""
+        title: qsTr("Connexion à Google")
+        modal: true
+        anchors.centerIn: Overlay.overlay
+        width: Math.min(520, fenetre.width - 24)
+        ColumnLayout {
+            width: parent.width
+            spacing: 8
+            Label {
+                id: texteAvantGoogle
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                text: qsTr("Google va vous demander d'autoriser MMail à lire, rédiger, envoyer et supprimer définitivement tous vos e-mails Gmail. Ce texte est celui de Google : c'est le même pour toute application qui lit Gmail en IMAP, et MMail ne peut pas le changer.")
+            }
+            Label {
+                id: suppressionAvantGoogle
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                text: qsTr("MMail ne supprime définitivement que les messages que vous lui demandez d'effacer : « Supprimer » met un message dans la corbeille de Gmail, et seul « Vider », après confirmation, l'efface pour de bon.")
+            }
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                opacity: 0.75
+                font.pixelSize: 11
+                text: qsTr("Sur la page de Google, cochez la case de l'accès à Gmail si elle ne l'est pas : sans elle, MMail ne peut rien lire.")
+            }
+        }
+        footer: DialogButtonBox {
+            Button {
+                text: qsTr("Continuer chez Google")
+                DialogButtonBox.buttonRole: DialogButtonBox.AcceptRole
+            }
+            Button {
+                text: qsTr("Annuler")
+                DialogButtonBox.buttonRole: DialogButtonBox.RejectRole
+            }
+        }
+        onAccepted: fenetre.ouvrirGoogle(indice)
+    }
+
+    /// La page de Google, dans le navigateur.
+    function ouvrirGoogle(indice) {
         var url = boite.connecterGoogle(indice)
         if (url.length === 0) {
             messageEtat.texte = qsTr("Connexion à Google impossible : %1").arg(boite.erreur)
@@ -5632,6 +5686,17 @@ ApplicationWindow {
                     console.log("scenario: redemande", dlgCompte.modification, dlgCompte.service, "| note", dlgCompte.noteCompte.text)
                     dlgCompte.close()
                     console.log("scenario: disponible", boite.googleDisponible(), "| ajout ouvert", boite.googleAjoutOuvert())
+                    // La page de Google attend « Continuer chez Google » ;
+                    // MMAIL_DOSSIER « garder » laisse le dialogue ouvert, pour
+                    // une capture.
+                    connecterGoogle(g.adresse)
+                    console.log("scenario: avant Google", dlgAvantGoogle.visible, "«" + dlgAvantGoogle.title + "»",
+                                "| indice", dlgAvantGoogle.indice === g.adresse,
+                                "| texte", texteAvantGoogle.text.indexOf("supprimer définitivement") > 0,
+                                "| corbeille", suppressionAvantGoogle.text.indexOf("corbeille de Gmail") > 0)
+                    if (identifiantsEssai.dossier === "garder")
+                        return
+                    dlgAvantGoogle.close()
                     var url = boite.connecterGoogle(g.adresse)
                     if (url.length === 0) {
                         console.log("scenario: sans client :", boite.erreur)

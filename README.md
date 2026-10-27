@@ -367,7 +367,15 @@ de rafraîchissement va au coffre du système, à la place du mot de passe.
   `MMAIL_GOOGLE_CLIENT_ID` et `MMAIL_GOOGLE_CLIENT_SECRET` remplacent ceux du
   programme (essais, autre inscription).
 - **Portée** : `https://mail.google.com/`, tout le courrier — lecture et envoi ;
-  `openid email` pour l'adresse du compte.
+  `openid email` pour l'adresse du compte. C'est la seule que Google accepte
+  pour IMAP et SMTP ; les portées plus étroites (`gmail.modify`…) ne valent que
+  pour l'API Gmail.
+- **Avant la page de Google**, un dialogue « Connexion à Google » prévient : Google
+  demandera d'autoriser MMail à « supprimer définitivement » tout le courrier —
+  son texte, pour toute application qui lit Gmail en IMAP —, alors que MMail
+  n'efface définitivement que ce qu'on lui demande d'effacer (« Supprimer » met
+  à la corbeille, seul « Vider », après confirmation, efface). La page ne s'ouvre
+  qu'à « Continuer chez Google » ; ajout comme reconnexion.
 - **Lecture** en IMAPS sur `imap.gmail.com` (`AUTHENTICATE XOAUTH2`) ; **envoi**
   en SMTP sur TLS, `smtp.gmail.com:465` (`AUTH XOAUTH2`). Gmail range lui-même
   la copie dans ses messages envoyés : MMail n'en dépose pas.

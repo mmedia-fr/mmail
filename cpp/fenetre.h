@@ -25,6 +25,7 @@
 
 #ifdef Q_OS_WIN
 #include <windows.h>
+#include <dwmapi.h>
 #include <propidl.h>
 #include <shobjidl.h>
 #endif
@@ -180,5 +181,71 @@ inline void poserListeRaccourcis() {
     CoUninitialize();
 }
 #endif
+
+// Matériau translucide de la fenêtre, dessiné par le compositeur de Windows
+// 11 : Mica prend le fond du bureau, Acrylique prend ce qui est derrière la
+// fenêtre. Rien à peindre côté application, donc aucun coût d'affichage ;
+// en contrepartie le matériau vaut pour la fenêtre entière et n'apparaît que
+// là où rien ne peint par-dessus — chez MMail, le bandeau de l'en-tête rendu
+// partiellement transparent, et les bords.
+//
+// Rend VRAI seulement si DWM relit la valeur qu'on vient de poser. Un appel
+// DwmSetWindowAttribute qui échoue est silencieux : sans relecture, on
+// croirait avoir posé le matériau sur un poste qui l'ignore. Faux sur
+// Windows 10, où l'attribut n'existe pas, et ailleurs que sous Windows.
+inline bool materiau(QQuickWindow* f, const QString& nom) {
+#ifdef Q_OS_WIN
+  if (!f)
+    return false;
+  int voulu = 0;
+  if (nom == QStringLiteral("mica"))
+    voulu = DWMSBT_MAINWINDOW;
+  else if (nom == QStringLiteral("acrylique"))
+    voulu = DWMSBT_TRANSIENTWINDOW;
+  if (voulu == 0)
+    return false;
+  // Transparence coupée dans les réglages, ou contraste élevé : DWM retient
+  // l'attribut et peint une couleur plate. La relecture ci-dessous le
+  // validerait quand même, et la fenêtre deviendrait transparente sur du
+  // vide. Ces deux cas se lisent AVANT de rien poser.
+  const QSettings perso(
+    QStringLiteral("HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize"),
+    QSettings::NativeFormat);
+  if (perso.value(QStringLiteral("EnableTransparency"), 1).toInt() == 0)
+    return false;
+  HIGHCONTRASTW contraste {sizeof(HIGHCONTRASTW), 0, nullptr};
+  if (SystemParametersInfoW(SPI_GETHIGHCONTRAST, sizeof(contraste), &contraste, 0)
+      && (contraste.dwFlags & HCF_HIGHCONTRASTON))
+    return false;
+  const HWND poignee = reinterpret_cast<HWND>(f->winId());
+  if (!poignee)
+    return false;
+  // Le cadre et la barre de titre suivent le bandeau sombre, sans quoi une
+  // barre claire surmonte une fenêtre nuit. Qt réécrit cet attribut sur un
+  // changement de palette, selon le thème du bureau et non selon le bandeau :
+  // sous un thème clair, le cadre repasse clair. Admis.
+  BOOL sombre = TRUE;
+  DwmSetWindowAttribute(poignee, DWMWA_USE_IMMERSIVE_DARK_MODE, &sombre, sizeof(sombre));
+  // DWMWA_REDIRECTIONBITMAP_ALPHA (39), SDK 10.0.26100 : sans lui, sur les
+  // builds récents, « the alpha is ignored and the redirection bitmap is
+  // treated as fully opaque » — le bitmap de redirection recouvre le
+  // matériau et un fond transparent sort NOIR. Échec admis : l'attribut
+  // n'existe pas sur un OS plus ancien, qui n'a pas le défaut.
+  BOOL alpha = TRUE;
+  DwmSetWindowAttribute(poignee, 39, &alpha, sizeof(alpha));
+  if (FAILED(DwmSetWindowAttribute(poignee, DWMWA_SYSTEMBACKDROP_TYPE, &voulu, sizeof(voulu))))
+    return false;
+  // La relecture dit que l'OS a ACCEPTÉ l'attribut, pas que le compositeur
+  // peint. Rien, dans l'API, ne le dit : la seule preuve est une capture.
+  int relu = 0;
+  if (FAILED(DwmGetWindowAttribute(poignee, DWMWA_SYSTEMBACKDROP_TYPE, &relu, sizeof(relu))))
+    return false;
+  return relu == voulu;
+#else
+  Q_UNUSED(f)
+  Q_UNUSED(nom)
+  return false;
+#endif
+}
 
 }  // namespace fenetre

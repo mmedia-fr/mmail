@@ -461,9 +461,39 @@ ApplicationWindow {
             bandeau: "#0b0d2e", texteBandeau: "#ffffff", accent: "#21abe3",
             texteAccent: "#0e6f9e", rubrique: "#276e8b", alerte: "#e61e29",
             titres: ["Saira Condensed", "Segoe UI", "Noto Sans", "DejaVu Sans", "Arial"]
+        },
+        // Apparence « Pomme », reprise de la charte du Hub Double Clic : fonds
+        // gris très clairs, surfaces blanches, bleu système pour la sélection
+        // et les repères, bandeau d'en-tête anthracite.
+        // Les rubriques prennent un gris de texte secondaire, ce qui garde la
+        // distinction des objets : bleu pour un message non lu, gris pour un
+        // message lu. Le rouge d'importance descend à #d70015, le #ff3b30 des
+        // palettes système n'atteignant que 3:1 sur blanc, trop peu pour du
+        // texte.
+        // Aucune police n'est fournie : absentes, la liste retombe sur Inter,
+        // puis sur Segoe UI. Seules les couleurs portent alors l'apparence,
+        // et elles suffisent.
+        "pomme": {
+            libelle: qsTr("Pomme"),
+            fond: "#f5f5f7", texte: "#1d1d1f", base: "#ffffff",
+            bouton: "#ffffff", surbrillance: "#0071e3", texteSurbrillance: "#ffffff",
+            police: ["SF Pro Text", "SF Pro Display", "Inter",
+                     "Segoe UI Variable Text", "Segoe UI", "Noto Sans",
+                     "DejaVu Sans", "Arial"], taille: 10,
+            mono: ["SF Mono", "Cascadia Mono", "Consolas", "DejaVu Sans Mono", "Courier New"],
+            bandeau: "#161617", texteBandeau: "#f5f5f7", accent: "#0071e3",
+            texteAccent: "#0071e3", rubrique: "#6e6e73", alerte: "#d70015",
+            titres: ["SF Pro Display", "SF Pro Text", "Inter Display", "Inter",
+                     "Segoe UI Variable Display", "Segoe UI", "Noto Sans",
+                     "DejaVu Sans", "Arial"],
+            // Clés facultatives, lues par valeurOu() : aucune des quatre
+            // autres apparences ne les porte, donc aucune ne bouge.
+            survolBandeau: 0.18, survolBande: 0.14, filetBandeau: 1,
+            survolLigne: 0.07, encreAccent: "#ffffff",
+            mouvement: true, materiau: "mica", opaciteBandeau: 0.8
         }
     })
-    readonly property var nomsApparence: ["classique", "moderne", "systeme", "mmedia"]
+    readonly property var nomsApparence: ["classique", "moderne", "systeme", "mmedia", "pomme"]
 
     // Nul pour « systeme » : c'est ce qui coupe les surcharges ci-dessous.
     readonly property var jeu: apparence === "systeme" || !jeuxApparence[apparence]
@@ -481,9 +511,40 @@ ApplicationWindow {
     readonly property color couleurRubrique: marque ? marque.rubrique : palette.highlight
     readonly property color couleurAlerte: marque ? marque.alerte : "#c42b1c"
     readonly property string policeTitres: marque ? premierePolice(marque.titres) : font.family
+    // Fond du bandeau. Sous 1, le matériau du système transparaît ; le
+    // détour par une propriété « color » convertit la chaîne de la table.
+    readonly property color couleurBandeau: marque ? marque.bandeau : "transparent"
+    // Encre posée SUR l'accent : pastille d'un bouton choisi, bouton
+    // principal. MMEDIA y met son bleu nuit, lisible sur son cyan. Sous
+    // Pomme, #161617 sur #0071e3 ne fait que 3,85:1, et 3,06:1 à l'appui,
+    // sous le seuil AA : l'apparence demande du blanc, qui donne 4,70:1.
+    readonly property color encreSurAccent: marque === null ? palette.highlightedText
+                                          : valeurOu("encreAccent", marque.bandeau)
+    readonly property color fondBandeau: marque === null ? "transparent"
+                                       : Qt.rgba(couleurBandeau.r, couleurBandeau.g,
+                                                 couleurBandeau.b, valeurOu("opaciteBandeau", 1.0))
     // Les titres en capitales étroites prennent un cran de plus ; la police de
     // repli, plus large, en reste à la taille des autres apparences.
     readonly property bool titresEtroits: marque !== null && policeTitres === marque.titres[0]
+
+    // Le mouvement demande DEUX accords : l'apparence l'autorise, et le poste
+    // ne l'interdit pas. Un « Behavior » dont « enabled » est faux ne retarde
+    // rien — la propriété saute à sa valeur, exactement comme avant. Aucune
+    // transition ne s'écrit sans ce garde.
+    readonly property bool anime: valeurOu("mouvement", false) === true && animationsSysteme
+    // Durées, nulles quand le mouvement est refusé. « enabled » à faux
+    // empêche un Behavior de DÉCLENCHER mais n'arrête pas une animation déjà
+    // lancée : sans ces durées, couper le mouvement en pleine transition la
+    // laisse finir son trajet (mesuré par Codex, 26/10).
+    readonly property int dureeAppui: anime ? 90 : 0
+    readonly property int dureeTeinte: anime ? 140 : 0
+    readonly property int dureeFilet: anime ? 220 : 0
+
+    // Matériau demandé par l'apparence, lu par cpp/main.cpp au démarrage :
+    // « mica », « acrylique », ou rien. Le C++ ne connaît pas la table des
+    // apparences, c'est elle qui décide, comme pour tout le reste.
+    readonly property string materiauVoulu: valeurOu("materiau", "aucun") === "aucun"
+                                            ? "" : valeurOu("materiau", "aucun")
 
     // Bouton de la barre tactile (et « ‹ » de la vue compacte). Sous une
     // apparence de marque, une pastille sur le bandeau, comme les onglets du
@@ -505,10 +566,27 @@ ApplicationWindow {
             anchors.topMargin: 3
             anchors.bottomMargin: 3
             radius: height / 2
+            // L'appui fait respirer la PASTILLE, pas le bouton : Qt teste le
+            // contact dans le repère transformé, un « scale » sur le contrôle
+            // rétrécit donc sa zone cliquable et perd un clic amorcé près du
+            // bord. Le visuel seul bouge.
+            scale: be.down && fenetre.anime ? 0.97 : 1
+            Behavior on scale {
+                enabled: fenetre.anime
+                NumberAnimation { duration: fenetre.dureeAppui; easing.type: Easing.OutQuad }
+            }
+            // Blanc, comme avant : seule l'opacité suit l'apparence. Passer
+            // par survolEntete() aurait changé la couleur sous MMEDIA, dont le
+            // survol sombre n'est pas blanc (cf. la fonction).
             color: be.actif ? fenetre.accent
-                 : be.hovered || be.down ? Qt.rgba(1, 1, 1, 0.14) : "transparent"
+                 : be.hovered || be.down ? Qt.rgba(1, 1, 1, fenetre.valeurOu("survolBandeau", 0.14))
+                 : "transparent"
             border.width: be.cerne && !be.actif ? 1 : 0
             border.color: Qt.rgba(1, 1, 1, 0.35)
+            Behavior on color {
+                enabled: fenetre.anime
+                ColorAnimation { duration: fenetre.dureeTeinte }
+            }
         }
         CompteurNonLus {
             id: compteurEntete
@@ -523,7 +601,7 @@ ApplicationWindow {
         SiMarque {
             target: be.contentItem
             property: "color"
-            value: fenetre.marque ? (be.actif ? fenetre.marque.bandeau : fenetre.marque.texteBandeau) : "black"
+            value: fenetre.marque ? (be.actif ? fenetre.encreSurAccent : fenetre.marque.texteBandeau) : "black"
         }
         // Plus serrées sur un écran étroit, où l'en-tête manque déjà de place.
         readonly property real marge: fenetre.compact ? 8 : 14
@@ -545,11 +623,21 @@ ApplicationWindow {
         return sombre && marque ? marque.texteBandeau : palette.windowText
     }
     function survolEntete(sombre) {
-        // Sous une apparence de marque, l'encre est une chaîne
-        // (marque.texteBandeau) : sans conversion, Qt.rgba() n'en lisait
-        // aucune composante, et le survol du bandeau tirait vers le noir.
-        var e = Qt.lighter(encreEntete(sombre), 1.0)
-        return Qt.rgba(e.r, e.g, e.b, sombre && marque ? 0.14 : 0.08)
+        // Sans clé d'apparence : le survol de la 0.6.21. Sous une apparence de
+        // marque, l'encre est une chaîne (marque.texteBandeau) : sans
+        // conversion, Qt.rgba() n'en lisait aucune composante, et le survol du
+        // bandeau tirait vers le noir. Le témoin « --smoke » de la PR #69 tient
+        // avant comme après : teinte neutre, 14 %.
+        var demande = sombre ? valeurOu("survolBandeau", 0) : valeurOu("survolBande", 0)
+        if (marque === null || demande <= 0) {
+            var e = Qt.lighter(encreEntete(sombre), 1.0)
+            return Qt.rgba(e.r, e.g, e.b, sombre && marque ? 0.14 : 0.08)
+        }
+        // Une apparence qui le demande : du blanc sur le bandeau, l'accent sur
+        // la bande claire de la disposition « etages », où un noir à 8 % se
+        // confondait avec l'ombre du bandeau (essai du 26/10).
+        return sombre ? Qt.rgba(1, 1, 1, demande)
+                      : Qt.rgba(accent.r, accent.g, accent.b, demande)
     }
 
     // Onglet : le texte seul ; la vue affichée en gras, soulignée.
@@ -571,17 +659,34 @@ ApplicationWindow {
             opacity: og.checked || og.hovered ? 1 : 0.72
             horizontalAlignment: Text.AlignHCenter
             verticalAlignment: Text.AlignVCenter
+            Behavior on opacity {
+                enabled: fenetre.anime
+                NumberAnimation { duration: fenetre.dureeTeinte; easing.type: Easing.OutQuad }
+            }
         }
         background: Rectangle {
             color: og.hovered && !og.checked ? fenetre.survolEntete(og.sombre)
                  : og.checked && og.sombre && fenetre.marque ? Qt.rgba(1, 1, 1, 0.08) : "transparent"
+            Behavior on color {
+                enabled: fenetre.anime
+                ColorAnimation { duration: fenetre.dureeTeinte }
+            }
+            // Le filet de l'onglet choisi s'ouvre depuis le centre au lieu
+            // d'apparaître, et celui qu'on quitte se referme. Ancré au centre
+            // plutôt qu'aux deux bords : l'état au repos est celui d'avant,
+            // seul le trajet est nouveau. Garde coupé, la largeur saute et le
+            // rendu redevient exactement l'ancien.
             Rectangle {
-                visible: og.checked
-                anchors.left: parent.left
-                anchors.right: parent.right
+                visible: width > 0
+                anchors.horizontalCenter: parent.horizontalCenter
                 anchors.bottom: parent.bottom
+                width: og.checked ? parent.width : 0
                 height: 3
                 color: fenetre.accent
+                Behavior on width {
+                    enabled: fenetre.anime
+                    NumberAnimation { duration: fenetre.dureeFilet; easing.type: Easing.OutCubic }
+                }
             }
         }
     }
@@ -594,7 +699,7 @@ ApplicationWindow {
         property bool sombre: fenetre.marque !== null
         property var dessin: null
         property bool iconeSeule: false
-        readonly property color encre: bo.principal ? (fenetre.marque ? fenetre.marque.bandeau : fenetre.palette.highlightedText)
+        readonly property color encre: bo.principal ? fenetre.encreSurAccent
                                                     : fenetre.encreEntete(bo.sombre)
         font.bold: bo.principal
         leftPadding: bo.iconeSeule ? 7 : 12
@@ -632,6 +737,16 @@ ApplicationWindow {
             border.width: bo.principal ? 0 : 1
             border.color: bo.sombre && fenetre.marque ? Qt.rgba(1, 1, 1, 0.45)
                         : Qt.rgba(fenetre.palette.windowText.r, fenetre.palette.windowText.g, fenetre.palette.windowText.b, 0.32)
+            Behavior on color {
+                enabled: fenetre.anime
+                ColorAnimation { duration: fenetre.dureeTeinte }
+            }
+            // Sur le fond, jamais sur le contrôle : cf. BoutonEntete.
+            scale: bo.down && fenetre.anime ? 0.97 : 1
+            Behavior on scale {
+                enabled: fenetre.anime
+                NumberAnimation { duration: fenetre.dureeAppui; easing.type: Easing.OutQuad }
+            }
         }
     }
 
@@ -664,7 +779,12 @@ ApplicationWindow {
                     y: 2
                     x: ie.checked ? rail.width - width - 2 : 2
                     color: "#ffffff"
-                    Behavior on x { NumberAnimation { duration: 120 } }
+                    // Sous le garde comme les autres : une animation qui
+                    // échappe au réglage du poste rend le garde mensonger.
+                    Behavior on x {
+                        enabled: fenetre.anime
+                        NumberAnimation { duration: fenetre.dureeTeinte }
+                    }
                 }
             }
             Label {
@@ -855,6 +975,14 @@ ApplicationWindow {
         return Array.isArray(v) ? premierePolice(v) : v
     }
 
+    // Clé FACULTATIVE de l'apparence : sa valeur si elle y est, le défaut
+    // sinon. C'est ce qui permet d'ajouter un comportement sans toucher aux
+    // apparences qui ne le demandent pas — elles n'ont pas la clé, elles
+    // gardent le défaut, et le défaut est leur comportement d'avant.
+    function valeurOu(clef, defaut) {
+        return jeu && jeu[clef] !== undefined ? jeu[clef] : defaut
+    }
+
     // --------------------------------------------------------------- zoom
     //
     // Chaque colonne a son zoom : Ctrl + molette sur elle, ou Ctrl + / Ctrl − /
@@ -917,12 +1045,19 @@ ApplicationWindow {
             visible: fenetre.marque !== null
             z: -1
             anchors.fill: parent
-            color: fenetre.marque ? fenetre.marque.bandeau : "transparent"
+            color: fenetre.fondBandeau
             Rectangle {
                 anchors.left: parent.left
                 anchors.right: parent.right
                 anchors.bottom: parent.bottom
-                height: 3
+                // Une apparence peut demander un filet plus fin : 3 points
+                // portent la charte de MMEDIA, un cheveu convient à un chrome
+                // sobre. Sans la clé, la hauteur d'avant. Nommé pour que le
+                // scénario mesure le RECTANGLE et non le défaut qu'il passe
+                // lui-même à valeurOu — cette assertion-là était vraie par
+                // construction (mutation jouée par Codex, 26/10).
+                id: filetEntete
+                height: fenetre.valeurOu("filetBandeau", 3)
                 gradient: Gradient {
                     orientation: Gradient.Horizontal
                     GradientStop { position: 0.0; color: fenetre.accent }
@@ -5926,6 +6061,69 @@ ApplicationWindow {
         // style, texte mis en valeur en cyan foncé…
         if (marque === null || entete.background.visible || texteAccent.toString() !== "#0e6f9e")
             return "repères de l'apparence MMEDIA non appliqués"
+        // Les clés facultatives sont absentes de MMEDIA : ses valeurs d'avant
+        // doivent sortir des mêmes fonctions. C'est le contrôle qui compte —
+        // le reste n'ajoute qu'une apparence, celui-ci garde les autres.
+        // La COULEUR entière, pas sa seule opacité : le survol sombre de
+        // MMEDIA n'est pas blanc, et une assertion sur l'alpha laissait
+        // passer un changement de teinte (trouvé par Codex, 26/10).
+        // Le cas CLAIR se dérive de palette.windowText, qui est une vraie
+        // couleur : l'attendu est exact et le reste.
+        var encreClaire = encreEntete(false)
+        var attenduClair = Qt.rgba(encreClaire.r, encreClaire.g, encreClaire.b, 0.08)
+        if (survolEntete(false).toString() !== attenduClair.toString())
+            return "survol clair MMEDIA modifié : " + survolEntete(false)
+        // Le cas SOMBRE ne peut pas se dériver de la même façon : son encre
+        // est marque.texteBandeau, une chaîne, et c'est justement ce que la
+        // 0.6.21 corrige (Qt.lighter(encreEntete(sombre), 1.0)). Un attendu
+        // écrit « noir à 14 % » tomberait sur la correction, et un attendu
+        // « blanc à 14 % » tombe sur la 0.6.20. Ce qu'un patch d'apparence
+        // ne doit JAMAIS changer, lui, vaut avant comme après : le survol
+        // reste l'encre du bandeau, donc une teinte NEUTRE, à 14 %. Une
+        // fuite des clés de Pomme se verrait quand même : 0,18 au lieu de
+        // 0,14 sur le bandeau, l'accent cyan au lieu du gris sur la bande.
+        var sv = survolEntete(true)
+        if (sv.a.toFixed(2) !== "0.14" || sv.r !== sv.g || sv.g !== sv.b)
+            return "survol sombre MMEDIA modifié : " + sv
+        // Sur le RECTANGLE, pas sur le défaut que le test passe lui-même :
+        // comparer valeurOu("filetBandeau", 3) à 3 était vrai par
+        // construction et restait vert si le rectangle perdait sa hauteur.
+        if (filetEntete.height !== 3)
+            return "filet MMEDIA modifié : " + filetEntete.height
+        // Le mouvement, deuxième des trois états : l'apparence refuse, donc
+        // rien ne s'anime, que le poste l'autorise ou non.
+        if (anime)
+            return "mouvement accordé à MMEDIA, qui ne le demande pas"
+        if (materiauVoulu !== "")
+            return "matériau demandé par MMEDIA : " + materiauVoulu
+        if (fondBandeau.a !== 1.0)
+            return "bandeau MMEDIA rendu translucide : " + fondBandeau.a
+        choisirApparence("pomme")
+        if (palette.window.toString() !== "#f5f5f7" || palette.highlight.toString() !== "#0071e3")
+            return "apparence Pomme non appliquée : " + palette.window
+        if (marque === null || texteAccent.toString() !== "#0071e3"
+                || couleurRubrique.toString() !== "#6e6e73")
+            return "repères de l'apparence Pomme non appliqués"
+        if (survolEntete(true).toString() !== Qt.rgba(1, 1, 1, 0.18).toString()
+                || survolEntete(false).toString() !== Qt.rgba(accent.r, accent.g,
+                                                              accent.b, 0.14).toString())
+            return "survol de l'apparence Pomme non appliqué : " +
+                   survolEntete(true) + " / " + survolEntete(false)
+        if (filetEntete.height !== 1 || fondBandeau.a.toFixed(1) !== "0.8")
+            return "bandeau de l'apparence Pomme non appliqué : " +
+                   filetEntete.height + " / " + fondBandeau.a
+        // L'encre sur l'accent : #161617 n'y fait que 3,85:1, sous le seuil AA
+        // (mesuré par Fable, 26/10) ; l'apparence demande du blanc.
+        if (encreSurAccent.toString() !== "#ffffff")
+            return "encre sur l'accent non appliquée : " + encreSurAccent
+        // Premier et TROISIÈME états du garde de mouvement. Le troisième est
+        // celui qu'on oublie : le poste refuse les animations, et alors
+        // l'apparence ne passe pas outre. MMAIL_ANIMATIONS=0 le joue.
+        if (anime !== (animationsSysteme === true))
+            return "garde de mouvement incohérent : anime=" + anime +
+                   " système=" + animationsSysteme
+        if (materiauVoulu !== "mica")
+            return "matériau de l'apparence Pomme non lu : " + materiauVoulu
         // … et rendus en la quittant : fond du style, couleur de sélection.
         choisirApparence("moderne")
         if (marque !== null || !entete.background.visible

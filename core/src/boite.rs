@@ -1388,6 +1388,10 @@ enum Commande {
     /// Garder sur le poste les messages récents d'un dossier (décision 17),
     /// par petits lots, après tout ce que l'utilisateur demande.
     Precharger { chemin: String },
+    /// Relire les boîtes de réception des boîtes partagées que ce compte
+    /// apporte à « Toutes les BàL » (0.6.25), sans les ouvrir : à la
+    /// connexion, puis après chaque veille. Émise par le fil lui-même.
+    RelevePartagees,
 }
 
 impl Commande {
@@ -1412,15 +1416,16 @@ impl Commande {
                 | (Arborescence, Arborescence)
                 | (EnvoyerDifferes { .. }, EnvoyerDifferes { .. })
                 | (Signale, Signale)
+                | (RelevePartagees, RelevePartagees)
         ) || (matches!(anterieure, Veille) && (self.comptee() || matches!(self, Veille)))
     }
 
     /// Ordre de passage dans la file : ce que l'utilisateur demande, puis le
-    /// préchargement. La recherche sur le serveur a sa propre connexion
-    /// (0.6.16, cf. `Recherche`).
+    /// préchargement et la relève des boîtes partagées. La recherche sur le
+    /// serveur a sa propre connexion (0.6.16, cf. `Recherche`).
     fn rang(&self) -> u8 {
         match self {
-            Commande::Precharger { .. } => 1,
+            Commande::Precharger { .. } | Commande::RelevePartagees => 1,
             _ => 0,
         }
     }
@@ -1430,7 +1435,11 @@ impl Commande {
         // Les tâches de fond ne font pas tourner l'indicateur d'activité.
         !matches!(
             self,
-            Commande::Veille | Commande::Signale | Commande::EnvoyerDifferes { .. } | Commande::Precharger { .. }
+            Commande::Veille
+                | Commande::Signale
+                | Commande::EnvoyerDifferes { .. }
+                | Commande::Precharger { .. }
+                | Commande::RelevePartagees
         )
     }
 }
@@ -2717,6 +2726,7 @@ impl qobject::Boite {
         let comptes = magasin.comptes().unwrap_or_default();
         let adresses: HashMap<i64, String> =
             comptes.iter().map(|c| (c.id, c.adresse.clone())).collect();
+        let partagees_de: HashMap<i64, Vec<String>> = comptes.iter().map(|c| (c.id, c.partagees.clone())).collect();
         let mut lignes: Vec<String> = Vec::new();
 
         // La rubrique Favoris est toujours là, même vide : c'est une cible de
@@ -2728,7 +2738,8 @@ impl qobject::Boite {
         }
         for d in &favoris {
             let adresse = adresses.get(&d.compte_id).cloned().unwrap_or_default();
-            lignes.push(json_dossier("favori", d, &adresse, 0, false, 0));
+            let partagees = partagees_de.get(&d.compte_id).map(Vec::as_slice).unwrap_or_default();
+            lignes.push(json_dossier("favori", d, &adresse, 0, false, 0, partagees));
         }
         for c in &comptes {
             let motif = if self.etat(c.id).code() == "erreur" {
@@ -2760,7 +2771,7 @@ impl qobject::Boite {
                 // Non-lus des sous-dossiers (0.6.21), montrés sur un dossier
                 // parent replié, à côté des siens.
                 let sous = if enfants { non_lus_cumules(visibles.iter().filter(|e| est_sous(d, e))) } else { 0 };
-                lignes.push(json_dossier("dossier", d, &c.adresse, d.profondeur, enfants, sous));
+                lignes.push(json_dossier("dossier", d, &c.adresse, d.profondeur, enfants, sous, &c.partagees));
             }
         }
         QString::from(&format!("[{}]", lignes.join(",")))
@@ -2779,7 +2790,7 @@ impl qobject::Boite {
                 if !d.selectionnable {
                     continue;
                 }
-                lignes.push(json_dossier("cible", &d, &c.adresse, d.profondeur, false, 0));
+                lignes.push(json_dossier("cible", &d, &c.adresse, d.profondeur, false, 0, &c.partagees));
             }
         }
         QString::from(&format!("[{}]", lignes.join(",")))
@@ -2955,7 +2966,7 @@ impl qobject::Boite {
             trouves
         };
         if partout {
-            return QString::from(&json_trouves(&chercher(None)));
+            return QString::from(&json_trouves(&chercher(None), &partagees_par_compte(magasin)));
         }
         let Some((_, _, id)) = self.courant.as_ref() else {
             return QString::from("[]");
@@ -3053,7 +3064,10 @@ impl qobject::Boite {
         let Ok(id) = magasin.dossier_id(compte as i64, &chemin.to_string()) else {
             return QString::from("[]");
         };
-        QString::from(&json_trouves(&magasin.trouves_par_uid(id, &lire_uids(uids)).unwrap_or_default()))
+        QString::from(&json_trouves(
+            &magasin.trouves_par_uid(id, &lire_uids(uids)).unwrap_or_default(),
+            &partagees_par_compte(magasin),
+        ))
     }
 
     pub fn messages_par_uid(&self, uids: &QString) -> QString {
@@ -4482,7 +4496,10 @@ impl qobject::Boite {
         let Some(magasin) = self.magasin.as_ref() else {
             return QString::from("[]");
         };
-        QString::from(&json_trouves(&magasin.boites_de_reception(UNIFIEE_MAX).unwrap_or_default()))
+        QString::from(&json_trouves(
+            &magasin.boites_de_reception(UNIFIEE_MAX).unwrap_or_default(),
+            &partagees_par_compte(magasin),
+        ))
     }
 
     pub fn dossier_images_collees(&self) -> QString {
@@ -5701,8 +5718,10 @@ impl Travail {
         // La boîte de réception s'indexe dès la connexion ouverte — même celle
         // d'un compte que l'on ne regarde pas : la boîte de réception unifiée
         // et la pastille de la barre en ont besoin — puis se précharge, pour se
-        // lire hors connexion.
-        let mut file: Vec<Commande> = vec![Commande::Signale, Commande::Precharger { chemin: "INBOX".into() }];
+        // lire hors connexion. Celles des boîtes partagées s'indexent ensuite
+        // (0.6.25), pour la boîte de réception unifiée.
+        let mut file: Vec<Commande> =
+            vec![Commande::Signale, Commande::RelevePartagees, Commande::Precharger { chemin: "INBOX".into() }];
         // Échéance fixe : les commandes reçues entre-temps ne la repoussent pas.
         // Mesurée en temps d'inactivité, la veille ne venait jamais — la
         // minuterie des envois différés écrit à chaque compte toutes les minutes.
@@ -5773,6 +5792,9 @@ impl Travail {
             if let (false, Some(chemin)) = (perdue, a_precharger) {
                 file.push(Commande::Precharger { chemin });
             }
+            if est_veille && !perdue {
+                file.push(Commande::RelevePartagees);
+            }
             if perdue {
                 // Les commandes en attente ne seront pas traitées : chacune
                 // rend son issue avant l'échec, qui ferme la session — après
@@ -5838,6 +5860,33 @@ impl Travail {
                 // relira sur le serveur.
                 Err(_) => Issue::Precharge { chemin, reste: false },
             }),
+            Commande::RelevePartagees => {
+                // Celles que ce compte apporte à la boîte de réception unifiée
+                // (cf. `Magasin::receptions_partagees`) ; celle qui est ouverte
+                // se relit déjà à chaque veille.
+                let chemins: Vec<String> = e
+                    .magasin
+                    .receptions_partagees()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|(c, d)| *c == compte && e.ouvert.as_deref() != Some(d.chemin.as_str()))
+                    .map(|(_, d)| d.chemin)
+                    .collect();
+                let mut change = false;
+                for chemin in chemins {
+                    match synchro::synchroniser(&mut e.client, &e.magasin, compte, &chemin) {
+                        Ok(bilan) => change |= bilan.change_la_liste(),
+                        Err(err) if err.reseau() => {
+                            return Some(echec("reseau", format!("boîte partagée {chemin} : {err}"), &err));
+                        }
+                        // Partage retiré, droit de lecture refusé : la boîte
+                        // suivante, sans rien signaler — la veille relit
+                        // l'arborescence.
+                        Err(_) => {}
+                    }
+                }
+                change.then_some(Issue::Arborescence)
+            }
             Commande::Corps { chemin, uid, brut, distantes, numero } => {
                 let atelier = dossier_affichage(&self.profil);
                 let cache = Cache::du_profil(&self.profil);
@@ -7469,11 +7518,34 @@ fn non_lus_cumules<'a>(dossiers: impl Iterator<Item = &'a DossierLocal>) -> u32 
         .sum()
 }
 
+/// Boîte partagée d'un dossier et, au premier niveau de cette boîte, rôle lu à
+/// son nom (0.6.25, cf. `protocole::boite_partagee`) : de quoi l'afficher
+/// « Boîte de réception — contact@exemple.fr » plutôt que « INBOX — » suivi de
+/// l'adresse du compte. Vides hors d'une boîte partagée.
+fn partage_du_dossier(chemin: &str, separateur: &str, nom: &str, partagees: &[String]) -> (String, &'static str) {
+    match crate::protocole::boite_partagee(chemin, separateur, partagees) {
+        Some((rang, adresse)) => {
+            let premier_niveau = chemin.split(separateur).count() == rang + 2;
+            (adresse, if premier_niveau { crate::protocole::role_partage(nom) } else { "" })
+        }
+        None => (String::new(), ""),
+    }
+}
+
 /// Ligne d'un dossier pour l'arborescence ; `sous` : non-lus de ses
-/// sous-dossiers.
-fn json_dossier(genre: &str, d: &DossierLocal, adresse: &str, profondeur: u32, enfants: bool, sous: u32) -> String {
+/// sous-dossiers ; `partagees` : adresses des boîtes partagées du compte.
+fn json_dossier(
+    genre: &str,
+    d: &DossierLocal,
+    adresse: &str,
+    profondeur: u32,
+    enfants: bool,
+    sous: u32,
+    partagees: &[String],
+) -> String {
+    let (proprietaire, role_partage) = partage_du_dossier(&d.chemin, &d.separateur, &d.nom, partagees);
     format!(
-        r#"{{"genre":{},"compte":{},"adresse":{},"chemin":{},"nom":{},"separateur":{},"profondeur":{},"role":{},"selectionnable":{},"messages":{},"nonLus":{},"nonLusSous":{},"masque":{},"favori":{},"enfants":{},"replie":{}}}"#,
+        r#"{{"genre":{},"compte":{},"adresse":{},"chemin":{},"nom":{},"separateur":{},"profondeur":{},"role":{},"selectionnable":{},"messages":{},"nonLus":{},"nonLusSous":{},"masque":{},"favori":{},"enfants":{},"replie":{},"proprietaire":{},"rolePartage":{}}}"#,
         texte_json(genre),
         d.compte_id,
         texte_json(adresse),
@@ -7489,7 +7561,9 @@ fn json_dossier(genre: &str, d: &DossierLocal, adresse: &str, profondeur: u32, e
         d.masque,
         d.favori.is_some(),
         enfants,
-        d.replie
+        d.replie,
+        texte_json(&proprietaire),
+        texte_json(role_partage)
     )
 }
 
@@ -7541,25 +7615,40 @@ fn segments_du_chemin(chemin: &str, separateur: &str) -> Vec<String> {
     }
 }
 
-fn json_trouves(trouves: &[crate::magasin::Trouve]) -> String {
+/// Messages trouvés, avec leur dossier ; `partagees` : adresses des boîtes
+/// partagées de chaque compte (cf. `partage_du_dossier`).
+fn json_trouves(trouves: &[crate::magasin::Trouve], partagees: &HashMap<i64, Vec<String>>) -> String {
     let corps: Vec<String> = trouves
         .iter()
         .map(|t| {
             let ligne = json_message(&t.message);
             let segments: Vec<String> =
                 segments_du_chemin(&t.chemin, &t.separateur).iter().map(|s| texte_json(s)).collect();
+            let (proprietaire, role_partage) = partage_du_dossier(
+                &t.chemin,
+                &t.separateur,
+                &t.nom_dossier,
+                partagees.get(&t.compte).map(Vec::as_slice).unwrap_or_default(),
+            );
             format!(
-                r#"{},"compte":{},"chemin":{},"dossier":{},"segments":[{}],"role":{}}}"#,
+                r#"{},"compte":{},"chemin":{},"dossier":{},"proprietaire":{},"rolePartage":{},"segments":[{}],"role":{}}}"#,
                 &ligne[..ligne.len() - 1],
                 t.compte,
                 texte_json(&t.chemin),
                 texte_json(&t.nom_dossier),
+                texte_json(&proprietaire),
+                texte_json(role_partage),
                 segments.join(","),
                 texte_json(&t.role)
             )
         })
         .collect();
     format!("[{}]", corps.join(","))
+}
+
+/// Adresses des boîtes partagées de chaque compte, pour `json_trouves`.
+fn partagees_par_compte(magasin: &Magasin) -> HashMap<i64, Vec<String>> {
+    magasin.comptes().unwrap_or_default().into_iter().map(|c| (c.id, c.partagees)).collect()
 }
 
 /// Sérialise une liste de messages pour l'interface.
@@ -7705,6 +7794,7 @@ mod tests {
                 Commande::Veille => "veille".into(),
                 Commande::Signale => "signale".into(),
                 Commande::Precharger { chemin } => format!("precharger {chemin}"),
+                Commande::RelevePartagees => "releve-partagees".into(),
                 Commande::Preparer { .. } => "preparer".into(),
                 Commande::Envoyer { .. } => "envoyer".into(),
                 Commande::ApresEnvoi { .. } => "apres-envoi".into(),
@@ -8116,6 +8206,7 @@ mod tests {
             1,
             true,
             7,
+            &[],
         );
         assert!(json.starts_with('{') && json.ends_with('}'));
         assert!(json.contains(r#""enfants":true"#));
@@ -8333,8 +8424,38 @@ mod tests {
             separateur: "/".into(),
             role: String::new(),
         };
-        let json = json_trouves(&[t]);
-        assert!(json.contains(r#""segments":["INBOX","Clients"],"role":""}]"#), "{json}");
+        let json = json_trouves(&[t.clone()], &HashMap::new());
+        assert!(json.contains(r#""proprietaire":"","rolePartage":"","segments":["INBOX","Clients"],"role":""}]"#), "{json}");
+        // Dans une boîte partagée (0.6.25) : son adresse, et le rôle lu au nom.
+        let partagee = crate::magasin::Trouve {
+            chemin: "Shared/admin@x.fr/INBOX".into(),
+            nom_dossier: "INBOX".into(),
+            ..t
+        };
+        let json = json_trouves(&[partagee], &HashMap::from([(2, vec!["admin@x.fr".to_string()])]));
+        assert!(json.contains(r#""proprietaire":"admin@x.fr","rolePartage":"Inbox","segments":["Shared","admin@x.fr","INBOX"]"#), "{json}");
+    }
+
+    #[test]
+    fn dossier_d_une_boite_partagee() {
+        // Capture du 27/10/2026 : trois favoris « INBOX — slalanne@… ».
+        let partagees = vec!["administratif@transportsboudot.fr".to_string()];
+        let d = |chemin: &str| DossierLocal {
+            chemin: chemin.into(),
+            nom: chemin.rsplit('/').next().unwrap_or(chemin).into(),
+            separateur: "/".into(),
+            selectionnable: true,
+            ..Default::default()
+        };
+        let json = json_dossier("favori", &d("Shared/administratif@transportsboudot.fr/INBOX"), "s@t.fr", 0, false, 0, &partagees);
+        assert!(json.contains(r#""proprietaire":"administratif@transportsboudot.fr","rolePartage":"Inbox""#), "{json}");
+        let json = json_dossier("dossier", &d("Shared/administratif@transportsboudot.fr/Sent"), "s@t.fr", 2, false, 0, &partagees);
+        assert!(json.contains(r#""rolePartage":"Sent""#), "{json}");
+        // Plus bas que le premier niveau, ou hors des boîtes partagées : aucun rôle.
+        let json = json_dossier("dossier", &d("Shared/administratif@transportsboudot.fr/INBOX/Trash"), "s@t.fr", 3, false, 0, &partagees);
+        assert!(json.contains(r#""proprietaire":"administratif@transportsboudot.fr","rolePartage":"""#), "{json}");
+        let json = json_dossier("dossier", &d("Trash"), "s@t.fr", 0, false, 0, &partagees);
+        assert!(json.contains(r#""proprietaire":"","rolePartage":"""#), "{json}");
     }
 
     #[test]

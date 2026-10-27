@@ -1700,25 +1700,66 @@ impl Magasin {
         Ok(trouves)
     }
 
-    /// Messages non lus des boîtes de réception de tous les comptes : la
-    /// pastille de la barre des tâches. Compteurs des dossiers — ceux du
-    /// serveur, puis de l'index une fois le dossier synchronisé.
+    /// Messages non lus des boîtes de réception de tous les comptes, et de
+    /// leurs boîtes partagées (0.6.25) : « Toutes les BàL » et la pastille de
+    /// la barre des tâches. Compteurs des dossiers — ceux du serveur, puis de
+    /// l'index une fois le dossier synchronisé.
     pub fn non_lus_receptions(&self) -> Resultat<u32> {
-        Ok(self.base.query_row(
+        let propres: u32 = self.base.query_row(
             "SELECT COALESCE(SUM(nb_non_lus), 0) FROM folders WHERE chemin = 'INBOX'",
             [],
             |l| l.get(0),
-        )?)
+        )?;
+        Ok(propres + self.receptions_partagees()?.iter().map(|(_, d)| d.non_lus).sum::<u32>())
     }
 
-    /// Messages des boîtes de réception de tous les comptes, du plus récent au
-    /// plus ancien : la boîte de réception unifiée (« toutes les BàL »).
+    /// Messages des boîtes de réception de tous les comptes et de leurs boîtes
+    /// partagées (0.6.25), du plus récent au plus ancien : la boîte de
+    /// réception unifiée (« toutes les BàL »).
     pub fn boites_de_reception(&self, limite: usize) -> Resultat<Vec<Trouve>> {
+        let partagees: Vec<String> = self.receptions_partagees()?.iter().map(|(_, d)| d.id.to_string()).collect();
+        let partagees =
+            if partagees.is_empty() { String::new() } else { format!(" OR f.id IN ({})", partagees.join(",")) };
         let mut requete = self.base.prepare(&format!(
-            "{SELECT_TROUVE} WHERE f.chemin = 'INBOX' ORDER BY m.horodatage DESC, m.uid DESC LIMIT {limite}"
+            "{SELECT_TROUVE} WHERE (f.chemin = 'INBOX'{partagees}) ORDER BY m.horodatage DESC, m.uid DESC LIMIT {limite}"
         ))?;
         let trouves = requete.query_map([], lire_trouve)?.collect::<Result<Vec<_>, _>>()?;
         Ok(trouves)
+    }
+
+    /// Boîtes de réception des boîtes partagées, une par boîte, avec le compte
+    /// qui les voit (0.6.25) : celle de « Shared/contact@exemple.fr/INBOX », ou
+    /// le dossier de la boîte lui-même quand le serveur la montre ainsi. Une
+    /// boîte vue par deux comptes revient au premier ; une boîte qui est
+    /// elle-même un compte de MMail, ou que l'on a masquée, n'en donne pas —
+    /// ses messages ne doivent pas venir deux fois.
+    pub fn receptions_partagees(&self) -> Resultat<Vec<(i64, DossierLocal)>> {
+        let comptes = self.comptes()?;
+        let mut vues: Vec<String> = comptes.iter().map(|c| c.adresse.to_lowercase()).collect();
+        let mut receptions = Vec::new();
+        for c in comptes.iter().filter(|c| !c.partagees.is_empty()) {
+            for d in self.dossiers(c.id)? {
+                if !d.selectionnable || d.masque {
+                    continue;
+                }
+                let Some((rang, adresse)) = crate::protocole::boite_partagee(&d.chemin, &d.separateur, &c.partagees)
+                else {
+                    continue;
+                };
+                let reste: Vec<&str> = d.chemin.split(d.separateur.as_str()).skip(rang + 1).collect();
+                let reception = match reste.as_slice() {
+                    [] => true,
+                    [nom] => nom.eq_ignore_ascii_case("INBOX"),
+                    _ => false,
+                };
+                let adresse = adresse.to_lowercase();
+                if reception && !vues.contains(&adresse) {
+                    vues.push(adresse);
+                    receptions.push((c.id, d));
+                }
+            }
+        }
+        Ok(receptions)
     }
 
     /// Messages d'un dossier désignés par leur UID, du plus récent au plus
@@ -3291,6 +3332,68 @@ mod tests {
         m.recompter(m.dossier_id(a, "Archives").unwrap()).unwrap();
         m.recompter(m.dossier_id(b, "INBOX").unwrap()).unwrap();
         assert_eq!(m.non_lus_receptions().unwrap(), 3);
+    }
+
+    #[test]
+    fn receptions_des_boites_partagees() {
+        // Capture du 27/10/2026 : « Toutes les BàL » ignorait les boîtes
+        // partagées de Stéphane LALANNE.
+        let m = Magasin::en_memoire().unwrap();
+        let a = m.compte("a@b.fr", "h", 993, "a@b.fr").unwrap();
+        let b = m.compte("c@d.fr", "h", 993, "c@d.fr").unwrap();
+        m.poser_dossiers(
+            a,
+            &[
+                dossier("INBOX", &[]),
+                dossier("Shared", &["\\Noselect"]),
+                dossier("Shared/admin@x.fr", &["\\Noselect"]),
+                dossier("Shared/admin@x.fr/INBOX", &[]),
+                dossier("Shared/admin@x.fr/Trash", &[]),
+                dossier("Shared/c@d.fr/INBOX", &[]),
+                dossier("Shared/masquee@x.fr/INBOX", &[]),
+            ],
+        )
+        .unwrap();
+        // Un autre Dovecot : la boîte de réception sous le nom de la boîte.
+        m.poser_dossiers(b, &[dossier("INBOX", &[]), dossier("Shared/admin@x.fr/INBOX", &[]), dossier("Shared/vente@x.fr", &[])])
+            .unwrap();
+        let partagees = |l: &[&str]| l.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        m.poser_partagees(a, &partagees(&["admin@x.fr", "c@d.fr", "masquee@x.fr"])).unwrap();
+        m.poser_partagees(b, &partagees(&["admin@x.fr", "vente@x.fr"])).unwrap();
+        m.masquer(m.dossier_id(a, "Shared/masquee@x.fr/INBOX").unwrap(), true).unwrap();
+        // admin@ au premier compte qui la voit ; c@d.fr est un compte de MMail,
+        // la boîte masquée reste à l'écart.
+        let vues: Vec<(i64, String)> =
+            m.receptions_partagees().unwrap().into_iter().map(|(c, d)| (c, d.chemin)).collect();
+        assert_eq!(vues, vec![(a, "Shared/admin@x.fr/INBOX".to_string()), (b, "Shared/vente@x.fr".to_string())]);
+
+        let ligne = |uid: u32, h: i64| MessageLocal { uid, horodatage: h, sujet: format!("m{uid}"), ..Default::default() };
+        m.poser_messages(m.dossier_id(a, "INBOX").unwrap(), &[ligne(1, 10)]).unwrap();
+        m.poser_messages(m.dossier_id(a, "Shared/admin@x.fr/INBOX").unwrap(), &[ligne(1, 30), ligne(2, 5)]).unwrap();
+        m.poser_messages(m.dossier_id(a, "Shared/admin@x.fr/Trash").unwrap(), &[ligne(1, 40)]).unwrap();
+        m.poser_messages(m.dossier_id(a, "Shared/c@d.fr/INBOX").unwrap(), &[ligne(1, 50)]).unwrap();
+        m.poser_messages(m.dossier_id(b, "Shared/admin@x.fr/INBOX").unwrap(), &[ligne(1, 60)]).unwrap();
+        m.poser_messages(m.dossier_id(b, "Shared/vente@x.fr").unwrap(), &[ligne(7, 20)]).unwrap();
+        let toutes: Vec<(i64, String, u32)> =
+            m.boites_de_reception(10).unwrap().into_iter().map(|t| (t.compte, t.chemin, t.message.uid)).collect();
+        assert_eq!(
+            toutes,
+            vec![
+                (a, "Shared/admin@x.fr/INBOX".to_string(), 1),
+                (b, "Shared/vente@x.fr".to_string(), 7),
+                (a, "INBOX".to_string(), 1),
+                (a, "Shared/admin@x.fr/INBOX".to_string(), 2),
+            ]
+        );
+        for chemin in ["INBOX", "Shared/admin@x.fr/INBOX", "Shared/admin@x.fr/Trash", "Shared/c@d.fr/INBOX"] {
+            m.recompter(m.dossier_id(a, chemin).unwrap()).unwrap();
+        }
+        for chemin in ["Shared/admin@x.fr/INBOX", "Shared/vente@x.fr"] {
+            m.recompter(m.dossier_id(b, chemin).unwrap()).unwrap();
+        }
+        // Réception de a (1), admin@ vue par a (2), vente@ (1) : ni la
+        // corbeille partagée, ni c@d.fr, ni admin@ vue une seconde fois par b.
+        assert_eq!(m.non_lus_receptions().unwrap(), 4);
     }
 
     #[test]

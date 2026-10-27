@@ -84,7 +84,11 @@ de projet interne.
   la fenêtre ; de même en sortant d'une recherche ;
 - **« Toutes les BàL »** : les boîtes de réception de tous les comptes en une
   seule liste (les 1 000 messages les plus récents), chacun avec son compte ;
-  un message s'y lit, s'y répond, s'y déplace comme ailleurs ;
+  un message s'y lit, s'y répond, s'y déplace comme ailleurs. Celles des
+  boîtes partagées y entrent aussi, messages et compteur (0.6.25) : relues en
+  arrière-plan à la connexion puis toutes les deux minutes, une seule fois
+  quand deux comptes voient la même boîte, et pas du tout quand la boîte est
+  elle-même un compte du profil ou qu'elle est masquée ;
 - **impression** (menu d'un message › « Imprimer… », ou Ctrl+P) : le message
   tel qu'il s'affiche — objet, expéditeur, date et pièces jointes en tête —, par
   la boîte d'impression du système (Windows, Linux) ; « Enregistrer en PDF… »
@@ -331,7 +335,11 @@ de Dovecot, `Shared/contact@exemple.fr` lui-même). Un dossier partagé seul n'e
 donne pas, ni une boîte qui est aussi un compte du profil. « Modifier le
 compte… » les rappelle. Voir une boîte et envoyer en son nom sont deux droits
 distincts : si le serveur refuse l'envoi, le message reste en rédaction avec le
-motif.
+motif. Leurs dossiers de premier niveau se nomment en français, d'après leur
+nom (`INBOX`, `Sent`, `Drafts`, `Trash`, `Junk`, `Archive` — l'espace partagé
+de Mailcow n'annonce pas leur rôle), sans rien renommer sur le serveur ; un
+favori pris dans une boîte partagée porte son adresse — « Boîte de réception —
+contact@exemple.fr » —, et non celle du compte (0.6.25).
 
 ### Comptes Microsoft (Office 365, Outlook.com)
 

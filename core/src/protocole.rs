@@ -302,6 +302,37 @@ pub fn boites_partagees(dossiers: &[Dossier], espaces: &[(String, String)]) -> V
     boites
 }
 
+/// Boîte partagée qui contient le dossier `chemin`, d'après les adresses des
+/// boîtes partagées du compte (`adresses_partagees`, relevées avec son
+/// arborescence) : rang du segment qui la nomme et son adresse —
+/// « Shared/contact@exemple.fr/Trash » donne 1 et contact@exemple.fr (0.6.25).
+/// Le premier segment, celui de l'espace partagé, n'en est jamais une.
+pub fn boite_partagee(chemin: &str, separateur: &str, partagees: &[String]) -> Option<(usize, String)> {
+    if separateur.is_empty() || partagees.is_empty() {
+        return None;
+    }
+    chemin.split(separateur).enumerate().skip(1).find_map(|(rang, segment)| {
+        let adresse = decoder_utf7(segment);
+        partagees.iter().find(|a| a.eq_ignore_ascii_case(&adresse)).map(|a| (rang, a.clone()))
+    })
+}
+
+/// Rôle d'un dossier de premier niveau d'une boîte partagée, lu à son nom
+/// (0.6.25) : l'espace partagé de Mailcow n'annonce pas SPECIAL-USE, et ses
+/// « INBOX », « Sent », « Trash »… restaient en anglais. Sert à l'affichage
+/// seulement : rien n'est rangé ni purgé d'après lui.
+pub fn role_partage(nom: &str) -> &'static str {
+    match nom.to_lowercase().as_str() {
+        "inbox" => "Inbox",
+        "sent" | "sent items" | "sent messages" => "Sent",
+        "drafts" => "Drafts",
+        "trash" | "deleted items" | "deleted messages" => "Trash",
+        "junk" | "junk e-mail" | "spam" => "Junk",
+        "archive" | "archives" => "Archive",
+        _ => "",
+    }
+}
+
 /// Valeur d'une entrée rendue par `GETMETADATA` (RFC 5464) :
 /// « * METADATA INBOX (/shared/… {n}) », le littéral étant remplacé par son
 /// marqueur ; ou une chaîne citée ; `None` pour `NIL` ou une entrée absente.
@@ -830,6 +861,29 @@ mod tests {
         let fermes = analyser_select("* OK [PERMANENTFLAGS (\\Seen \\Answered \\Flagged \\Deleted \\Draft $MDNSent)] Permanent flags\r\n");
         assert!(fermes.sans_mots_cles);
         assert!(!analyser_select("* 3 EXISTS\r\n").sans_mots_cles, "sans PERMANENTFLAGS : tout est permis");
+    }
+
+    #[test]
+    fn boite_partagee_d_un_dossier() {
+        let partagees = vec!["administratif@transportsboudot.fr".to_string(), "Contact@x.fr".to_string()];
+        assert_eq!(
+            boite_partagee("Shared/administratif@transportsboudot.fr/INBOX", "/", &partagees),
+            Some((1, "administratif@transportsboudot.fr".to_string()))
+        );
+        // L'adresse telle que relevée, quelle que soit la casse du chemin.
+        assert_eq!(boite_partagee("Shared/contact@x.fr/Trash/2025", "/", &partagees), Some((1, "Contact@x.fr".to_string())));
+        assert_eq!(boite_partagee("Shared/contact@x.fr", "/", &partagees), Some((1, "Contact@x.fr".to_string())));
+        // Un dossier du compte, l'espace lui-même, un séparateur inconnu : rien.
+        assert_eq!(boite_partagee("contact@x.fr/INBOX", "/", &partagees), None);
+        assert_eq!(boite_partagee("Shared", "/", &partagees), None);
+        assert_eq!(boite_partagee("Shared/contact@x.fr/INBOX", "", &partagees), None);
+        assert_eq!(boite_partagee("Shared/contact@x.fr/INBOX", "/", &[]), None);
+        assert_eq!(role_partage("INBOX"), "Inbox");
+        assert_eq!(role_partage("Sent"), "Sent");
+        assert_eq!(role_partage("Deleted Items"), "Trash");
+        assert_eq!(role_partage("Junk"), "Junk");
+        assert_eq!(role_partage("Archive"), "Archive");
+        assert_eq!(role_partage("Clients"), "");
     }
 
     #[test]

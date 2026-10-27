@@ -608,6 +608,45 @@ QtObject {
         }
     }
 
+    /// Scénario « images-confiance » (0.6.23) : premier message de la boîte de
+    /// réception (HTML à images distantes), « Toujours pour cet expéditeur » ;
+    /// deuxième message (même expéditeur, échec DMARC noté par le serveur) :
+    /// rien d'office ; retour au premier : images d'office ; la confiance est
+    /// retirée à la fin.
+    function etapeScenarioImagesConfiance(uid, html, bloquees, cle) {
+        var e = fenetre.enteteCourant
+        var office = fenetre.imagesAutoPour === cle
+        console.log("scenario: étape", essai.etape, "| uid", uid, "| html", html, "| bloquées", bloquees,
+                    "| expéditeur", e.expediteur, "| dmarcEchec", e.dmarcEchec,
+                    "| confiance", fenetre.expediteurDeConfiance(e.expediteur), "| d'office", office,
+                    "| bouton « Toujours »", fenetre.confianceProposee(e))
+        if (essai.etape === 0 && html && bloquees > 0) {
+            essai.etape = 1
+            essai.premier = uid
+            console.log("scenario: « Toujours pour cet expéditeur »")
+            fenetre.retenirExpediteurConfiance(e.expediteur, true)
+            fenetre.demanderImages()
+        } else if (essai.etape === 1 && uid === essai.premier) {
+            essai.etape = 2
+            console.log("scenario: liste", JSON.stringify(fenetre.expediteursConfiance()))
+            fenetre.choisir(1, 0)
+        } else if (essai.etape === 2 && uid !== essai.premier) {
+            essai.etape = 3
+            console.log(office ? "scenario: ECHEC, images d'office malgré l'échec DMARC"
+                               : "scenario: OK, rien d'office (DMARC)")
+            fenetre.choisir(0, 0)
+        } else if (essai.etape === 3 && uid === essai.premier) {
+            essai.etape = office ? 4 : 9
+            console.log(office ? "scenario: OK, images d'office au retour"
+                               : "scenario: ECHEC, pas d'images d'office au retour")
+        } else if (essai.etape === 4 && uid === essai.premier) {
+            essai.etape = 9
+            fenetre.retenirExpediteurConfiance(e.expediteur, false)
+            console.log("scenario: confiance retirée, liste", JSON.stringify(fenetre.expediteursConfiance()))
+            console.log("scenario: fin")
+        }
+    }
+
     /// Scénario d'essai « pieces » (MMAIL_SCENARIO) : dans la boîte de
     /// réception du premier compte, le premier message portant une pièce
     /// jointe est affiché, et sa première pièce enregistrée dans le dossier
@@ -775,7 +814,7 @@ QtObject {
                       ["dlgRestauration", dlgRestauration], ["dlgAPropos", dlgAPropos], ["dlgCompte", dlgCompte],
                       ["dlgNouveauDossier", dlgNouveauDossier], ["dlgRenommerDossier", dlgRenommerDossier],
                       ["dlgConsentement", dlgConsentement],
-                      ["dlgOuvrirAvec", dlgOuvrirAvec], ["dlgLogiciels", dlgLogiciels], ["dlgReprise", dlgReprise],
+                      ["dlgOuvrirAvec", dlgOuvrirAvec], ["dlgLogiciels", dlgLogiciels], ["dlgExpediteursConfiance", dlgExpediteursConfiance], ["dlgReprise", dlgReprise],
                       ["dlgLien", dlgLien], ["dlgViderDossier", dlgViderDossier], ["popupRappels", popupRappels],
                       ["menuComptes", menuComptes], ["menuReglages", menuReglages], ["menuAffichage", menuAffichage], ["menuPiece", menuPiece],
                       ["menuMessage", menuMessage], ["menuDossier", menuDossier], ["menuCompte", menuCompte]]

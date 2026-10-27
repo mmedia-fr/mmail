@@ -438,22 +438,33 @@ ColumnLayout {
         font.pointSize: fenetre.tailleMessage
         padding: 4
         background: Rectangle { color: "#e8f0fb" }
-        RowLayout {
+        // Au téléphone, les boutons passent sous le texte.
+        GridLayout {
             width: parent.width
+            columns: fenetre.tactile ? 1 : 3
+            columnSpacing: 6
             Label {
-                text: (fenetre.imagesBloquees > 1
-                       ? qsTr("%1 images distantes non téléchargées").arg(fenetre.imagesBloquees)
-                       : qsTr("1 image distante non téléchargée"))
-                      + qsTr(" : l'expéditeur saurait que vous avez ouvert le message.")
+                text: fenetre.texteImagesBloquees(fenetre.imagesBloquees, fenetre.enteteCourant)
                 color: "#1c1f24"
                 wrapMode: Text.Wrap
                 Layout.fillWidth: true
             }
             Button {
                 text: qsTr("Télécharger les images")
+                onClicked: fenetre.demanderImages()
+            }
+            // Expéditeur de confiance (0.6.23, demande de Guillaume LUDGER) :
+            // ses images se téléchargeront d'office. Absent quand le serveur a
+            // noté un échec DMARC.
+            Button {
+                text: qsTr("Toujours pour cet expéditeur")
+                visible: fenetre.confianceProposee(fenetre.enteteCourant)
+                ToolTip.visible: hovered
+                ToolTip.text: qsTr("Les images de %1 se téléchargeront d'office. Pour revenir en arrière : Réglages › « Expéditeurs de confiance… ».")
+                              .arg(fenetre.enteteCourant.expediteur || "")
                 onClicked: {
-                    messageEtat.texte = qsTr("Téléchargement des images…")
-                    boite.afficherImages(fenetre.uidCourant)
+                    fenetre.retenirExpediteurConfiance(fenetre.enteteCourant.expediteur, true)
+                    fenetre.demanderImages()
                 }
             }
         }

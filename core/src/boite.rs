@@ -327,6 +327,13 @@ pub mod qobject {
         #[cxx_name = "demanderDans"]
         fn demander_dans(self: Pin<&mut Boite>, compte: i32, chemin: &QString, uid: i32, brut: bool) -> bool;
 
+        /// Fenêtre d'un message (0.6.23) : son corps avec ses images
+        /// distantes, téléchargées à cette demande — bouton du bandeau, ou
+        /// expéditeur de confiance. Issue : `corpsRecu`.
+        #[qinvokable]
+        #[cxx_name = "afficherImagesDans"]
+        fn afficher_images_dans(self: Pin<&mut Boite>, compte: i32, chemin: &QString, uid: i32) -> bool;
+
         /// Comme `ouvrirPiece` et `enregistrerPiece`, pour un message de
         /// n'importe quel dossier (fenêtre d'un message, 0.6.16).
         #[qinvokable]
@@ -3000,7 +3007,17 @@ impl qobject::Boite {
         self.demander_piece(uid, indice, None, false)
     }
 
-    pub fn demander_dans(mut self: Pin<&mut Self>, compte: i32, chemin: &QString, uid: i32, brut: bool) -> bool {
+    pub fn demander_dans(self: Pin<&mut Self>, compte: i32, chemin: &QString, uid: i32, brut: bool) -> bool {
+        self.lire_dans(compte, chemin, uid, brut, false)
+    }
+
+    pub fn afficher_images_dans(self: Pin<&mut Self>, compte: i32, chemin: &QString, uid: i32) -> bool {
+        self.lire_dans(compte, chemin, uid, false, true)
+    }
+
+    /// Corps d'un message pour sa fenêtre ; `distantes` : avec ses images
+    /// distantes (0.6.23).
+    fn lire_dans(mut self: Pin<&mut Self>, compte: i32, chemin: &QString, uid: i32, brut: bool, distantes: bool) -> bool {
         let (compte, chemin) = (compte as i64, chemin.to_string());
         let Some(dossier) = self.magasin.as_ref().and_then(|m| m.dossier_id(compte, &chemin).ok()) else {
             return false;
@@ -3013,21 +3030,28 @@ impl qobject::Boite {
         // cette lecture n'interrompt pas (cf. `rendre_si_actuel`). `lu` vrai :
         // le marquage revient à la fenêtre.
         let local = Local { compte, chemin: chemin.clone(), dossier, uid, lu: true, brut, en_ligne: false };
-        let garde = self.magasin.as_ref().and_then(|m| m.garde_sur_le_poste(dossier, uid).ok().flatten());
+        // Ses images distantes : un compte connecté les fait chercher par son
+        // fil, comme au volet de lecture ; sinon, le poste les télécharge.
+        let en_ligne = self.sessions.contains_key(&compte);
+        let garde = if distantes && en_ligne {
+            None
+        } else {
+            self.magasin.as_ref().and_then(|m| m.garde_sur_le_poste(dossier, uid).ok().flatten())
+        };
         if let Some((id, _)) = garde {
             let profil = self.profil.clone();
             let fil = self.qt_thread();
             let lancement = thread::Builder::new().name("mmail-fenetre".into()).spawn(move || {
                 let preparation = Cache::du_profil(&profil)
                     .lire(id)
-                    .and_then(|octets| rendre_si_actuel(0, &octets, brut, false, compte, &dossier_affichage(&profil), false));
-                let _ = fil.queue(move |boite: Pin<&mut qobject::Boite>| boite.afficher_du_poste(local, preparation, 0, false));
+                    .and_then(|octets| rendre_si_actuel(0, &octets, brut, distantes, compte, &dossier_affichage(&profil), false));
+                let _ = fil.queue(move |boite: Pin<&mut qobject::Boite>| boite.afficher_du_poste(local, preparation, 0, distantes));
             });
             if lancement.is_ok() {
                 return true;
             }
         }
-        self.as_mut().envoyer(compte, Commande::Corps { chemin, uid, brut, distantes: false, numero: 0 })
+        self.as_mut().envoyer(compte, Commande::Corps { chemin, uid, brut, distantes, numero: 0 })
     }
 
     pub fn ouvrir_piece_dans(self: Pin<&mut Self>, compte: i32, chemin: &QString, uid: i32, indice: i32) -> bool {

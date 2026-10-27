@@ -313,6 +313,9 @@ ApplicationWindow {
     property string htmlAffiche: ""
     // Images distantes du message affiché laissées de côté.
     property int imagesBloquees: 0
+    // Message dont les images distantes sont déjà demandées pour cet
+    // affichage (« compte|dossier|uid ») : une seule demande d'office (0.6.23).
+    property string imagesAutoPour: ""
     // Lien survolé dans le message : son adresse s'affiche dans la barre
     // d'information, comme dans un navigateur — un lien trompeur s'y voit.
     property string lienSurvole: ""
@@ -401,6 +404,9 @@ ApplicationWindow {
         // « aucune », au ras du volet comme jusqu'ici, « etroites » ou
         // « larges » (cf. fenetre.margeMessage).
         property string margesMessage: "aucune"
+        // Expéditeurs dont les images distantes se téléchargent d'office
+        // (0.6.23) : adresses en minuscules, JSON. Suit la sauvegarde.
+        property string expediteursConfiance: "[]"
     }
 
     // ---------------------------------------------------------- apparences
@@ -2326,6 +2332,8 @@ ApplicationWindow {
 
     DialogueLogiciels { id: dlgLogiciels }
 
+    DialogueExpediteursConfiance { id: dlgExpediteursConfiance }
+
     FileDialog {
         id: dlgEnregistrerPiece
         property var piece: null
@@ -3490,6 +3498,68 @@ ApplicationWindow {
     function effacerDiscretement(c) {
         effacementsDiscrets[c] = true
         coffre.effacer(c)
+    }
+
+    // ---- images distantes : expéditeurs de confiance (0.6.23)
+
+    /// Adresses dont les images distantes se téléchargent d'office (réglage
+    /// « expediteursConfiance », JSON, en minuscules).
+    function expediteursConfiance() {
+        try {
+            var l = JSON.parse(reglages.expediteursConfiance)
+            return Array.isArray(l) ? l.filter(function(a) { return typeof a === "string" && a.length > 0 }) : []
+        } catch (e) {
+            return []
+        }
+    }
+
+    function expediteurDeConfiance(adresse) {
+        var a = String(adresse || "").trim().toLowerCase()
+        return a.length > 0 && expediteursConfiance().indexOf(a) >= 0
+    }
+
+    /// Ajoute (`retenu`) ou retire un expéditeur de confiance.
+    function retenirExpediteurConfiance(adresse, retenu) {
+        var a = String(adresse || "").trim().toLowerCase()
+        if (a.length === 0)
+            return
+        var l = expediteursConfiance().filter(function(x) { return x !== a })
+        if (retenu)
+            l.push(a)
+        l.sort()
+        reglages.expediteursConfiance = JSON.stringify(l)
+    }
+
+    /// Images distantes d'office : expéditeur de confiance, et aucun échec
+    /// DMARC noté par le serveur de réception — une adresse d'expéditeur se
+    /// falsifie.
+    function imagesDOffice(entete) {
+        return !!entete && !entete.dmarcEchec && expediteurDeConfiance(entete.expediteur)
+    }
+
+    /// « Toujours pour cet expéditeur » : proposé pour un expéditeur connu
+    /// par son adresse, pas encore de confiance, que le serveur n'a pas vu
+    /// échouer à DMARC.
+    function confianceProposee(entete) {
+        return !!entete && String(entete.expediteur || "").length > 0
+               && !entete.dmarcEchec && !expediteurDeConfiance(entete.expediteur)
+    }
+
+    /// Texte du bandeau des images distantes.
+    function texteImagesBloquees(n, entete) {
+        var debut = n > 1 ? qsTr("%1 images distantes non téléchargées").arg(n)
+                          : qsTr("1 image distante non téléchargée")
+        if (entete && entete.dmarcEchec && expediteurDeConfiance(entete.expediteur))
+            return debut + qsTr(" : expéditeur de confiance, mais le serveur n'a pas pu l'authentifier (DMARC) ; elles ne se téléchargent pas d'office.")
+        return debut + qsTr(" : l'expéditeur saurait que vous avez ouvert le message.")
+    }
+
+    /// Images distantes du message affiché au volet de lecture. Une seule
+    /// demande d'office par affichage (cf. ReactionsNoyau.onCorpsRecu).
+    function demanderImages() {
+        imagesAutoPour = boite.compteCourant + "|" + boite.dossierCourant + "|" + uidCourant
+        messageEtat.texte = qsTr("Téléchargement des images…")
+        boite.afficherImages(uidCourant)
     }
 
     // ---- sauvegarde de la configuration
@@ -5571,6 +5641,7 @@ ApplicationWindow {
                                        || identifiantsEssai.scenario === "pieces"
                                        || identifiantsEssai.scenario === "ouvrir-avec"
                                        || identifiantsEssai.scenario === "images"
+                                       || identifiantsEssai.scenario === "images-confiance"
                                        || identifiantsEssai.scenario === "invitation"
                                        || identifiantsEssai.scenario.indexOf("signature") === 0,
                       connecter2: null, scenario: identifiantsEssai.scenario || "",

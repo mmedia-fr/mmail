@@ -53,6 +53,9 @@ ApplicationWindow {
     property bool source: false
     property var pieces: []
     property var entete: ({})
+    // Images distantes laissées de côté, et déjà demandées (0.6.23).
+    property int bloquees: 0
+    property bool imagesDemandees: false
     readonly property var cible: ({ compte: compte, chemin: chemin, uid: uid })
     readonly property bool brouillon: role === "Drafts" || role === "Differe"
     readonly property var categories: fenetre.pastilles(compte, chemin, motsCles, boite.revisionCategories)
@@ -101,12 +104,17 @@ ApplicationWindow {
                     || cheminRecu !== fenetreMessage.chemin || brut !== fenetreMessage.source)
                 return
             fenetreMessage.html = estHtml && !brut
+            fenetreMessage.bloquees = estHtml && !brut ? bloquees : 0
             vueCorps.text = texte
             vueCorps.cursorPosition = 0
             if (!brut) {
                 fenetreMessage.pieces = JSON.parse(piecesRecues)
                 try { fenetreMessage.entete = JSON.parse(enteteRecu) } catch (e) { fenetreMessage.entete = {} }
             }
+            // Expéditeur de confiance (0.6.23) : images d'office, une fois.
+            if (!brut && estHtml && bloquees > 0 && !fenetreMessage.imagesDemandees
+                    && fenetre.imagesDOffice(fenetreMessage.entete))
+                fenetreMessage.telechargerImages()
             fenetreMessage.charge = true
             bornerImages()
             if (fenetre.essai && fenetre.essai.scenario === "double-clic")
@@ -119,7 +127,14 @@ ApplicationWindow {
             mef.bornerImages(Math.floor(vueCorps.width - vueCorps.leftPadding - vueCorps.rightPadding) - 2)
     }
 
+    /// Ses images distantes, téléchargées à cette demande (0.6.23).
+    function telechargerImages() {
+        imagesDemandees = true
+        boite.afficherImagesDans(compte, chemin, uid)
+    }
+
     function basculerSource() {
+        imagesDemandees = false
         source = !source
         charge = false
         html = false
@@ -399,6 +414,39 @@ ApplicationWindow {
                             couleur: modelData.couleur
                             taillePolice: fenetre.tailleMessage * 0.85
                         }
+                    }
+                }
+            }
+        }
+
+        // Images distantes (0.6.23), comme au volet de lecture : rien ne se
+        // télécharge sans le demander, sauf pour un expéditeur de confiance.
+        Pane {
+            Layout.fillWidth: true
+            visible: !fenetreMessage.source && fenetreMessage.html && fenetreMessage.bloquees > 0
+            font.pointSize: fenetre.tailleMessage
+            padding: 4
+            background: Rectangle { color: "#e8f0fb" }
+            GridLayout {
+                width: parent.width
+                columns: fenetre.tactile ? 1 : 3
+                columnSpacing: 6
+                Label {
+                    text: fenetre.texteImagesBloquees(fenetreMessage.bloquees, fenetreMessage.entete)
+                    color: "#1c1f24"
+                    wrapMode: Text.Wrap
+                    Layout.fillWidth: true
+                }
+                Button {
+                    text: qsTr("Télécharger les images")
+                    onClicked: fenetreMessage.telechargerImages()
+                }
+                Button {
+                    text: qsTr("Toujours pour cet expéditeur")
+                    visible: fenetre.confianceProposee(fenetreMessage.entete)
+                    onClicked: {
+                        fenetre.retenirExpediteurConfiance(fenetreMessage.entete.expediteur, true)
+                        fenetreMessage.telechargerImages()
                     }
                 }
             }

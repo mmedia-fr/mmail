@@ -355,6 +355,17 @@ Connections {
             if (i >= 0 && modeleMessages.get(i).pieces !== (fenetre.pieces.length > 0))
                 modeleMessages.setProperty(i, "pieces", fenetre.pieces.length > 0)
         }
+        // Expéditeur de confiance (0.6.23) : ses images distantes se
+        // téléchargent d'office, une fois par affichage du message — la source
+        // affichée, ou un autre message, rouvre la question.
+        var cle = compte + "|" + chemin + "|" + uid
+        if (brut || fenetre.imagesAutoPour !== cle)
+            fenetre.imagesAutoPour = ""
+        if (!brut && html && bloquees > 0 && fenetre.imagesAutoPour === ""
+                && fenetre.imagesDOffice(fenetre.enteteCourant))
+            fenetre.demanderImages()
+        if (fenetre.essai && fenetre.essai.scenario === "images-confiance" && !brut)
+            scenarios.etapeScenarioImagesConfiance(uid, html, bloquees, cle)
         if (fenetre.essai && fenetre.essai.scenario === "pieces")
             scenarios.etapeScenarioPieces()
         if (fenetre.essai && fenetre.essai.scenario === "impression" && !brut)

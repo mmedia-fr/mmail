@@ -30,6 +30,10 @@ Menu {
         enabled: fenetre.comptesConnus.length > 0
         onTriggered: dlgFiltres.ouvrir(null)
     }
+    MenuItem {
+        text: qsTr("Expéditeurs de confiance…")
+        onTriggered: dlgExpediteursConfiance.open()
+    }
     MenuSeparator {}
     MenuItem {
         text: qsTr("Carnet d'adresses…")

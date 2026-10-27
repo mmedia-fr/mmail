@@ -34,6 +34,9 @@ Page {
     property bool occupe: false
     property bool chargement: false
     property bool fermetureConfirmee: false
+    // Envoyée, fenêtre fermée en attendant l'issue (0.6.22) : elle se défait
+    // une fois le message parti, et revient, intacte, s'il n'a pas pu partir.
+    property bool enEnvoi: false
     property bool fermerApresEnregistrement: false
     property bool afficherCopies: false
     property bool miseEnForme: reglagesRedaction.miseEnForme
@@ -403,6 +406,16 @@ Page {
             envoiDiffere = 0
         occupe = true
         signaler(envoiDiffere > 0 ? qsTr("Mise en attente…") : qsTr("Envoi…"), false)
+        // La fenêtre se ferme tout de suite (0.6.22, remarque de Guillaume
+        // LUDGER) : on peut écrire le message suivant pendant que celui-ci
+        // part. Rien ne se perd — la rédaction reste en mémoire, et sur le
+        // poste si MMail se ferme avant l'issue — et rien ne repart seul :
+        // en échec, la fenêtre revient avec le motif, et c'est l'utilisateur
+        // qui renvoie.
+        enEnvoi = true
+        garder(true)
+        conteneur.cacherRedaction()
+        fenetre.majEnvois()
         if (!boite.envoyerMessage(c.compte, JSON.stringify(contenu())))
             echouer(boite.erreur.length > 0 ? boite.erreur : qsTr("Envoi impossible."))
     }
@@ -445,6 +458,15 @@ Page {
         occupe = false
         chargement = false
         fermerApresEnregistrement = false
+        if (enEnvoi) {
+            // Pas parti : la rédaction revient telle qu'envoyée, et MMail
+            // ne se ferme pas sans elle.
+            enEnvoi = false
+            fenetre.fermetureApresEnvoi = false
+            conteneur.montrerRedaction()
+            fenetre.majEnvois()
+            garder(true)
+        }
         if (enregistrementAuto) {
             // Hors ligne, serveur injoignable : la rédaction reste
             // gardée sur le poste, ce n'est pas une erreur à traiter.
@@ -466,12 +488,17 @@ Page {
     }
 
     /// Écrit l'état de la rédaction sur le poste, s'il a changé depuis
-    /// la dernière écriture.
-    function garder() {
-        if (!modifie || chargement || idGarde.length === 0)
+    /// la dernière écriture. `toujours` : même sans modification — une
+    /// réponse envoyée telle quelle doit survivre à une fermeture en plein
+    /// envoi.
+    function garder(toujours) {
+        if ((!modifie && toujours !== true) || chargement || idGarde.length === 0)
             return
         var c = compteChoisi()
-        var etat = JSON.stringify({ compte: c ? c.compte : 0, miseEnForme: miseEnForme, contenu: contenu() })
+        // `enEnvoi` : MMail fermé avant l'issue, la reprise prévient que le
+        // message a pu partir.
+        var etat = JSON.stringify({ compte: c ? c.compte : 0, miseEnForme: miseEnForme, enEnvoi: enEnvoi,
+                                    contenu: contenu() })
         if (etat !== etatGarde && boite.garderRedaction(idGarde, etat))
             etatGarde = etat
     }

@@ -539,6 +539,11 @@ ApplicationWindow {
     readonly property int dureeAppui: anime ? 90 : 0
     readonly property int dureeTeinte: anime ? 140 : 0
     readonly property int dureeFilet: anime ? 220 : 0
+    // Glissement du bouton d'un interrupteur (0.6.22, Manu, 27/10) : 120 ms
+    // sous les apparences qui ne portent pas la clé « mouvement », comme
+    // jusqu'à la 0.6.20 ; sous celles qui la portent (« Pomme »), la règle du
+    // mouvement, garde et réglage du poste compris.
+    readonly property int dureeInterrupteur: valeurOu("mouvement", false) === true ? dureeTeinte : 120
 
     // Matériau demandé par l'apparence, lu par cpp/main.cpp au démarrage :
     // « mica », « acrylique », ou rien. Le C++ ne connaît pas la table des
@@ -756,6 +761,8 @@ ApplicationWindow {
         id: ie
         property bool sombre: fenetre.marque !== null
         property int compteur: 0
+        // Le bouton qui glisse, lu par le scénario « lot-2 ».
+        readonly property alias bouton: boutonRail
         checkable: true
         leftPadding: 6
         rightPadding: 8
@@ -773,17 +780,18 @@ ApplicationWindow {
                 readonly property color eteint: fenetre.encreEntete(ie.sombre)
                 color: ie.checked ? fenetre.accent : Qt.rgba(rail.eteint.r, rail.eteint.g, rail.eteint.b, 0.3)
                 Rectangle {
+                    id: boutonRail
                     width: 12
                     height: 12
                     radius: 6
                     y: 2
                     x: ie.checked ? rail.width - width - 2 : 2
                     color: "#ffffff"
-                    // Sous le garde comme les autres : une animation qui
-                    // échappe au réglage du poste rend le garde mensonger.
+                    // Cf. « dureeInterrupteur » : sous « Pomme », le garde du
+                    // mouvement ; ailleurs, le glissement d'avant la 0.6.21.
                     Behavior on x {
-                        enabled: fenetre.anime
-                        NumberAnimation { duration: fenetre.dureeTeinte }
+                        enabled: fenetre.dureeInterrupteur > 0
+                        NumberAnimation { duration: fenetre.dureeInterrupteur }
                     }
                 }
             }
@@ -904,6 +912,7 @@ ApplicationWindow {
             ToolTip.text: qsTr("Les boîtes de réception de tous les comptes, en une liste")
         }
         InterrupteurEntete {
+            objectName: "interrupteurMasques"
             sombre: ae.sombre
             visible: (!fenetre.compact || fenetre.vue === 0) && fenetre.module === "courrier"
             checked: reglages.afficherMasques
@@ -1710,6 +1719,9 @@ ApplicationWindow {
             Label {
                 text: fenetre.etatSynchro()
                 opacity: 0.75
+                elide: Text.ElideMiddle
+                maximumLineCount: 1
+                Layout.maximumWidth: fenetre.width * 0.5
             }
         }
     }
@@ -1718,6 +1730,21 @@ ApplicationWindow {
     // longtemps pour une erreur.
     property string passager: ""
     property bool passagerErreur: false
+    // Ce que font les comptes (0.6.22) : compte, dossier, avancement, durée
+    // restante, relu à la seconde — au lieu d'un « Synchronisation… » muet.
+    property string activite: ""
+    Timer {
+        interval: 1000
+        repeat: true
+        running: true
+        onTriggered: fenetre.activite = boite.activiteEnCours()
+    }
+    // Rédactions fermées dès « Envoyer » dont l'envoi n'a pas encore
+    // abouti (0.6.22), cf. Redaction.envoyer.
+    property int envoisEnCours: 0
+    // Fenêtre principale fermée pendant un envoi : MMail se ferme dès qu'il
+    // a abouti (un second clic ferme tout de suite).
+    property bool fermetureApresEnvoi: false
     property string infoDossier: ""
     property var derniereSynchro: null
     // Dernière synchronisation de chaque dossier depuis le lancement
@@ -1852,6 +1879,11 @@ ApplicationWindow {
     }
 
     function etatSynchro() {
+        if (envoisEnCours > 0 && activite.length === 0)
+            return accord(envoisEnCours, qsTr("message en cours d'envoi"), qsTr("messages en cours d'envoi"))
+        if (activite.length > 0)
+            return (envoisEnCours > 0 ? accord(envoisEnCours, qsTr("message en cours d'envoi"),
+                                               qsTr("messages en cours d'envoi")) + "  ·  " : "") + activite
         if (boite.occupe)
             return qsTr("Synchronisation…")
         if (!derniereSynchro)
@@ -1876,6 +1908,7 @@ ApplicationWindow {
                     ? qsTr("recherche « %1 » : les 500 plus récents, précisez la recherche").arg(recherche)
                     : qsTr("recherche « %1 » : %2").arg(recherche)
                       .arg(accord(modeleMessages.count, qsTr("résultat"), qsTr("résultats"))))
+                    + (boite.rechercheApprochee() ? qsTr(", fautes de frappe tolérées") : "")
             return
         }
         if (boite.dossierCourant.length === 0) {
@@ -1898,6 +1931,8 @@ ApplicationWindow {
                     ? qsTr("recherche « %1 » : les 500 plus récents, précisez la recherche").arg(recherche)
                     : qsTr("recherche « %1 » : %2").arg(recherche)
                       .arg(accord(modeleMessages.count, qsTr("résultat"), qsTr("résultats"))))
+                    // Rien d'exact dans l'index (0.6.22).
+                    + (boite.rechercheApprochee() ? qsTr(", fautes de frappe tolérées") : "")
         } else {
             var total = ligne ? ligne.messages : modeleMessages.count
             texte += "  —  " + accord(total, qsTr("message"), qsTr("messages"))
@@ -2010,7 +2045,22 @@ ApplicationWindow {
             function fermerRedaction() {
                 redaction.fermetureConfirmee = true
                 redaction.oublierGarde()
-                fenetreRedaction.close()
+                if (fenetreRedaction.visible) {
+                    fenetreRedaction.close()
+                    return
+                }
+                // Cachée pendant l'envoi (0.6.22) : il ne reste qu'à la défaire.
+                fenetre.oublierRedaction(redaction ? redaction.jeton : "")
+                Qt.callLater(function() { fenetreRedaction.destroy() })
+            }
+            // Envoyée : cachée jusqu'à l'issue, sans être fermée (0.6.22).
+            function cacherRedaction() {
+                fenetreRedaction.visible = false
+            }
+            function montrerRedaction() {
+                fenetreRedaction.visible = true
+                fenetreRedaction.raise()
+                fenetreRedaction.requestActivate()
             }
             Loader {
                 id: chargeurFenetre
@@ -2172,7 +2222,20 @@ ApplicationWindow {
             function fermerRedaction() {
                 redaction.fermetureConfirmee = true
                 redaction.oublierGarde()
+                if (voletRedaction.opened) {
+                    voletRedaction.close()
+                    return
+                }
+                // Caché pendant l'envoi (0.6.22) : il ne reste qu'à le défaire.
+                fenetre.oublierRedaction(redaction ? redaction.jeton : "")
+                Qt.callLater(function() { voletRedaction.destroy() })
+            }
+            // Envoyé : caché jusqu'à l'issue, sans être défait (0.6.22).
+            function cacherRedaction() {
                 voletRedaction.close()
+            }
+            function montrerRedaction() {
+                voletRedaction.open()
             }
             Loader {
                 id: chargeurVolet
@@ -2181,6 +2244,8 @@ ApplicationWindow {
                 onLoaded: item.conteneur = voletRedaction
             }
             onClosed: {
+                if (redaction && redaction.enEnvoi)
+                    return
                 fenetre.oublierRedaction(redaction ? redaction.jeton : "")
                 Qt.callLater(function() { voletRedaction.destroy() })
             }
@@ -4054,7 +4119,8 @@ ApplicationWindow {
             // dossier, dans le texte des messages et jusque dans les dossiers
             // jamais ouverts sur ce poste.
             dossiersPartout = boite.chercherPartoutSurLeServeur(texte)
-            messageEtat.texte = etatRecherchePartout()
+            messageEtat.texte = (boite.rechercheApprochee() ? qsTr("Rien d'exact sur le poste : fautes de frappe tolérées. ") : "")
+                    + etatRecherchePartout()
             return
         }
         // De toutes les boîtes au dossier actif : celui d'où l'on était parti.
@@ -4070,8 +4136,17 @@ ApplicationWindow {
         recherche = texte
         uidsServeur = []
         poserResultats()
+        // Rien d'exact dans l'index : les résultats tolèrent des fautes de
+        // frappe (0.6.22), et la barre le dit.
+        var approchee = boite.rechercheApprochee()
         if (!boite.chercherSurLeServeur(texte))
-            messageEtat.texte = qsTr("Recherche dans l'index seulement (compte hors ligne).")
+            messageEtat.texte = approchee
+                    ? qsTr("Recherche « %1 » : rien d'exact ; %2 en tolérant des fautes de frappe (index seulement, compte hors ligne).")
+                      .arg(texte).arg(accord(modeleMessages.count, qsTr("résultat"), qsTr("résultats")))
+                    : qsTr("Recherche dans l'index seulement (compte hors ligne).")
+        else if (approchee)
+            messageEtat.texte = qsTr("Recherche « %1 » : rien d'exact ; %2 sur le poste en tolérant des fautes de frappe — le serveur cherche aussi dans le texte des messages…")
+                    .arg(texte).arg(accord(modeleMessages.count, qsTr("résultat"), qsTr("résultats")))
         else
             messageEtat.texte = qsTr("Recherche « %1 » : %2 sur le poste — le serveur cherche aussi dans le texte des messages…")
                     .arg(texte).arg(accord(modeleMessages.count, qsTr("résultat"), qsTr("résultats")))
@@ -4818,6 +4893,19 @@ ApplicationWindow {
             delete table[jeton]
             redactions = table
         }
+        majEnvois()
+    }
+
+    /// Recompte les rédactions envoyées dont l'issue n'est pas venue
+    /// (0.6.22) ; la dernière partie, MMail se ferme si on l'a demandé.
+    function majEnvois() {
+        var n = 0
+        for (var jeton in redactions)
+            if (redactions[jeton] && redactions[jeton].enEnvoi)
+                n += 1
+        envoisEnCours = n
+        if (n === 0 && fermetureApresEnvoi)
+            Qt.callLater(Qt.quit)
     }
 
     /// `mode` : « nouveau », « repondre », « repondre_tous », « transferer »
@@ -5343,7 +5431,7 @@ ApplicationWindow {
         target: Qt.application
         function onAboutToQuit() {
             for (var jeton in fenetre.redactions)
-                fenetre.redactions[jeton].garder()
+                fenetre.redactions[jeton].garder(fenetre.redactions[jeton].enEnvoi)
         }
     }
 
@@ -5375,6 +5463,13 @@ ApplicationWindow {
         } else if (compact && vue > 0) {
             fermeture.accepted = false
             vue = vue - 1
+        } else if (envoisEnCours > 0 && !fermetureApresEnvoi) {
+            // Un message part encore (0.6.22) : MMail attend son issue pour
+            // se fermer — un envoi coupé en plein vol laisse ignorer s'il est
+            // parti. Fermer une seconde fois ferme tout de suite.
+            fermeture.accepted = false
+            fermetureApresEnvoi = true
+            annoncer(qsTr("Un message part encore : MMail se fermera dès qu'il sera parti. Fermez de nouveau pour quitter tout de suite."), false)
         }
     }
 
@@ -5825,6 +5920,10 @@ ApplicationWindow {
             // propriétés d'un dossier (banc LOT1=1).
             if (essai.scenario === "lot-1")
                 scenarios.lancerScenarioLot1()
+            // Lot 2 de la 0.6.22 : barre d'état, interrupteur, envoi fermé
+            // aussitôt, recherche tolérante (banc LOT2=1).
+            if (essai.scenario === "lot-2")
+                scenarios.lancerScenarioLot2()
             if (essai.scenario === "liste-categories" || essai.scenario === "menu-categories"
                     || essai.scenario === "gerer-categories")
                 scenarios.lancerScenarioCapturesCategories()
@@ -6094,6 +6193,11 @@ ApplicationWindow {
         // rien ne s'anime, que le poste l'autorise ou non.
         if (anime)
             return "mouvement accordé à MMEDIA, qui ne le demande pas"
+        // Le bouton de l'interrupteur, lui, glisse en 120 ms sous MMEDIA comme
+        // jusqu'à la 0.6.20 (0.6.22, Manu) : la règle du mouvement ne vaut que
+        // pour une apparence qui le demande.
+        if (dureeInterrupteur !== 120)
+            return "glissement de l'interrupteur MMEDIA : " + dureeInterrupteur + " ms au lieu de 120"
         if (materiauVoulu !== "")
             return "matériau demandé par MMEDIA : " + materiauVoulu
         if (fondBandeau.a !== 1.0)
@@ -6122,6 +6226,10 @@ ApplicationWindow {
         if (anime !== (animationsSysteme === true))
             return "garde de mouvement incohérent : anime=" + anime +
                    " système=" + animationsSysteme
+        // Sous Pomme, l'interrupteur suit le garde : 140 ms, ou rien si le
+        // poste refuse les animations.
+        if (dureeInterrupteur !== (anime ? 140 : 0))
+            return "glissement de l'interrupteur Pomme hors du garde : " + dureeInterrupteur
         if (materiauVoulu !== "mica")
             return "matériau de l'apparence Pomme non lu : " + materiauVoulu
         // … et rendus en la quittant : fond du style, couleur de sélection.
@@ -6129,6 +6237,8 @@ ApplicationWindow {
         if (marque !== null || !entete.background.visible
                 || accent.toString() !== palette.highlight.toString())
             return "repères de l'apparence MMEDIA non rendus"
+        if (dureeInterrupteur !== 120)
+            return "glissement de l'interrupteur « moderne » : " + dureeInterrupteur + " ms au lieu de 120"
         choisirApparence("systeme")
         if (palette.window.toString() !== fondSysteme && apparenceAvant === "systeme")
             return "apparence système non rendue"

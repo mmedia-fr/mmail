@@ -2647,6 +2647,142 @@ QtObject {
         return null
     }
 
+    /// Scénario « lot-2 » (0.6.22, banc LOT2=1 : 3 000 messages de plus dans la
+    /// boîte de réception, « Réunion de chantier », un faux serveur d'envoi
+    /// qui refuse refus@essai.test et répond en 2 s ; MMAIL_ANIMATIONS=0) :
+    /// la barre d'état dit compte, dossier et avancement ; l'interrupteur
+    /// glisse en 120 ms sous l'apparence MMEDIA, et pas sous « Pomme » quand
+    /// le poste coupe les animations ; « Envoyer » ferme la rédaction, qui se
+    /// défait une fois le message parti et revient s'il est refusé ; une faute
+    /// de frappe dans la recherche trouve quand même.
+    function lancerScenarioLot2() {
+        var tic = Qt.createQmlObject('import QtQuick; Timer { interval: 1000; repeat: true }', fenetre)
+        var releve = Qt.createQmlObject('import QtQuick; Timer { interval: 50; repeat: true }', fenetre)
+        var suivi = { n: 0, echecs: 0, phrases: [], positions: [], envoi: "", refus: null }
+        var bilan = function(texte, bon) {
+            if (!bon)
+                suivi.echecs += 1
+            console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
+        }
+        // Barre d'état et bouton de l'interrupteur, relevés toutes les 50 ms.
+        releve.triggered.connect(function() {
+            var p = boite.activiteEnCours()
+            if (p.length > 0 && suivi.phrases.indexOf(p) < 0 && suivi.phrases.length < 40)
+                suivi.phrases.push(p)
+        })
+        var interrupteur = function() { return objetNomme(fenetre.contentItem.parent, "interrupteurMasques") }
+        // Bascule « Dossiers masqués » et relève la position du bouton toutes
+        // les 10 ms pendant 400 ms ; `puis` reçoit le nombre de positions
+        // intermédiaires vues (aucune : le bouton a sauté).
+        var glisser = function(puis) {
+            var ie = interrupteur()
+            if (!ie) {
+                bilan("interrupteur « Dossiers masqués » introuvable", false)
+                puis(-1)
+                return
+            }
+            var depart = ie.bouton.x
+            var vues = []
+            var echantillon = Qt.createQmlObject('import QtQuick; Timer { interval: 10; repeat: true }', fenetre)
+            var debut = Date.now()
+            echantillon.triggered.connect(function() {
+                vues.push(ie.bouton.x)
+                if (Date.now() - debut < 400)
+                    return
+                echantillon.stop()
+                var arrivee = ie.bouton.x
+                var entre = vues.filter(function(x) {
+                    return x > Math.min(depart, arrivee) + 0.5 && x < Math.max(depart, arrivee) - 0.5
+                }).length
+                reglages.afficherMasques = !reglages.afficherMasques
+                puis(arrivee !== depart ? entre : -1)
+            })
+            reglages.afficherMasques = !reglages.afficherMasques
+            echantillon.start()
+        }
+        var visible = function(r) {
+            return r && (fenetre.compact ? r.conteneur.opened : r.conteneur.visible)
+        }
+        tic.triggered.connect(function() {
+            suivi.n += 1
+            var c = comptesConnus[0]
+            if (suivi.n === 4) {
+                ouvrirDossier(c.compte, "INBOX")
+            } else if (suivi.n === 8) {
+                releve.stop()
+                console.log("scenario: phrases relevées :\n  " + suivi.phrases.slice(0, 8).join("\n  "))
+                bilan("barre d'état : compte et dossier nommés, avancement des en-têtes ou de la mise sur le poste",
+                      suivi.phrases.some(function(p) {
+                          return p.indexOf(c.adresse + " › Boîte de réception : ") === 0
+                              && (p.indexOf("en-têtes ") > 0 || p.indexOf("mise sur le poste") > 0)
+                      }))
+                bilan("apparence « " + fenetre.apparence + " » : glissement de l'interrupteur " + fenetre.dureeInterrupteur + " ms",
+                      fenetre.valeurOu("mouvement", false) !== true && fenetre.dureeInterrupteur === 120)
+                glisser(function(entre) {
+                    bilan("interrupteur sous « " + fenetre.apparence + " » : " + entre + " positions intermédiaires (il glisse)", entre > 0)
+                })
+            } else if (suivi.n === 10) {
+                suivi.apparenceAvant = fenetre.apparence
+                choisirApparence("pomme")
+            } else if (suivi.n === 11) {
+                bilan("« Pomme », animations coupées par le poste (MMAIL_ANIMATIONS=0) : durée " + fenetre.dureeInterrupteur,
+                      animationsSysteme || fenetre.dureeInterrupteur === 0)
+                glisser(function(entre) {
+                    bilan("interrupteur sous « Pomme » sans animations : " + entre + " positions intermédiaires (il saute)",
+                          animationsSysteme ? entre > 0 : entre === 0)
+                    choisirApparence(suivi.apparenceAvant)
+                })
+            } else if (suivi.n === 13) {
+                var r = ouvrirRedaction(c.compte)
+                r.pret()
+                r.remplir({ a: "deux@essai.test", objet: "Lot 2 : envoi", mode: "nouveau", texte: "Parti en fond." })
+                suivi.envoi = r.jeton
+                r.envoyer(false)
+                bilan("« Envoyer » : rédaction fermée aussitôt, " + envoisEnCours + " envoi en cours, barre « " + etatSynchro() + " »",
+                      !visible(r) && r.enEnvoi && envoisEnCours === 1 && etatSynchro().indexOf("en cours d'envoi") >= 0)
+            } else if (suivi.n === 14) {
+                var r2 = ouvrirRedaction(c.compte)
+                r2.pret()
+                r2.remplir({ a: "refus@essai.test", objet: "Lot 2 : refusé", mode: "nouveau", texte: "Ne partira pas." })
+                suivi.refus = r2
+                r2.envoyer(false)
+                bilan("second envoi : rédaction fermée aussitôt", !visible(r2) && r2.enEnvoi)
+            } else if (suivi.n === 16) {
+                var r3 = suivi.refus
+                bilan("refusé par le serveur : la rédaction revient avec le motif (« " + (r3 ? r3.note : "") + " »)",
+                      r3 && visible(r3) && !r3.enEnvoi && r3.noteErreur && r3.note.indexOf("550") >= 0
+                      && r3.titre === "Lot 2 : refusé")
+                if (r3)
+                    r3.conteneur.fermerRedaction()
+            } else if (suivi.n === 26) {
+                // Parti : la rédaction se défait une fois la copie rangée dans
+                // « Éléments envoyés » — après le lot de mise sur le poste en
+                // cours, sur ce banc chargé de 3 000 messages.
+                bilan("message parti : rédaction défaite, plus d'envoi en cours (" + envoisEnCours + ")",
+                      !redactions[suivi.envoi] && envoisEnCours === 0)
+                colonneListe.porteeRecherche.currentIndex = 0
+                colonneListe.champRecherche.text = "reunoin chantier"
+                lancerRecherche()
+            } else if (suivi.n === 28) {
+                bilan("recherche « reunoin chantier » : « " + (modeleMessages.count > 0 ? modeleMessages.get(0).sujet : "")
+                      + " », " + infoDossier + " / " + messageEtat.texte,
+                      modeleMessages.count === 1 && modeleMessages.get(0).sujet === "Réunion de chantier"
+                      && boite.rechercheApprochee() && infoDossier.indexOf("fautes de frappe tolérées") >= 0
+                      && messageEtat.texte.indexOf("fautes de frappe") >= 0)
+                colonneListe.champRecherche.text = "chantier"
+                lancerRecherche()
+            } else if (suivi.n === 30) {
+                bilan("recherche exacte « chantier » : rien d'approché", modeleMessages.count === 1 && !boite.rechercheApprochee()
+                      && infoDossier.indexOf("fautes de frappe") < 0)
+                tic.stop()
+                console.log("scenario: lot-2 " + (suivi.echecs === 0 ? "OK" : "ECHEC (" + suivi.echecs + ")"))
+                Qt.quit()
+            }
+        })
+        releve.start()
+        tic.start()
+    }
+
     /// Scénario « lot-1 » (0.6.21, banc LOT1=1) : À et Cc dans le volet de
     /// lecture, repliés puis dépliés ; liens posés sur un texte brut et dans un
     /// HTML ; recherche sans accents ; non-lus cumulés d'un dossier puis d'un

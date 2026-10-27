@@ -333,6 +333,18 @@ impl Magasin {
             rusqlite::functions::FunctionFlags::SQLITE_UTF8 | rusqlite::functions::FunctionFlags::SQLITE_DETERMINISTIC,
             |ctx| Ok(ctx.get::<Option<String>>(0)?.map(|t| replie(&t))),
         )?;
+        // Recherche tolérante aux fautes de frappe (0.6.22) : un mot replié
+        // qui commence, à une ou deux fautes près, l'un des mots du texte.
+        base.create_scalar_function(
+            "approche",
+            2,
+            rusqlite::functions::FunctionFlags::SQLITE_UTF8 | rusqlite::functions::FunctionFlags::SQLITE_DETERMINISTIC,
+            |ctx| {
+                let texte = ctx.get::<Option<String>>(0)?;
+                let mot = ctx.get::<Option<String>>(1)?;
+                Ok(matches!((texte, mot), (Some(t), Some(m)) if approche(&t, &m)))
+            },
+        )?;
         base.execute_batch(
             r#"
             CREATE TABLE IF NOT EXISTS accounts (
@@ -1610,24 +1622,61 @@ impl Magasin {
         categories: &[Vec<String>],
         limite: usize,
     ) -> Resultat<Vec<Trouve>> {
-        let mots: Vec<String> = texte
-            .split_whitespace()
-            .map(|m| format!("%{}%", replie(m).replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")))
-            .collect();
-        if mots.is_empty() && categories.is_empty() {
+        self.chercher_selon(dossier, texte, categories, limite, false)
+    }
+
+    /// Comme `chercher_avec` ; s'il ne trouve rien, cherche à nouveau en
+    /// tolérant les fautes de frappe (0.6.22) : « reunoin » trouve « Réunion ».
+    /// Rend aussi vrai si les résultats viennent de cette seconde recherche.
+    /// Seulement en second : un mot bien écrit ne ramène pas ses voisins.
+    pub fn chercher_tolerant(
+        &self,
+        dossier: Option<i64>,
+        texte: &str,
+        categories: &[Vec<String>],
+        limite: usize,
+    ) -> Resultat<(Vec<Trouve>, bool)> {
+        let exacts = self.chercher_selon(dossier, texte, categories, limite, false)?;
+        let tolerable = texte.split_whitespace().any(|m| tolerance(replie(m).chars().count()) > 0);
+        if !exacts.is_empty() || !tolerable {
+            return Ok((exacts, false));
+        }
+        let approches = self.chercher_selon(dossier, texte, categories, limite, true)?;
+        let approchee = !approches.is_empty();
+        Ok((approches, approchee))
+    }
+
+    fn chercher_selon(
+        &self,
+        dossier: Option<i64>,
+        texte: &str,
+        categories: &[Vec<String>],
+        limite: usize,
+        approche: bool,
+    ) -> Resultat<Vec<Trouve>> {
+        let replies: Vec<String> = texte.split_whitespace().map(replie).collect();
+        if replies.is_empty() && categories.is_empty() {
             return Ok(Vec::new());
         }
-        let mut conditions: Vec<String> = (0..mots.len())
-            .map(|i| {
-                let n = i + 2;
-                format!(
-                    "(replie(m.sujet) LIKE ?{n} ESCAPE '\\' OR replie(m.expediteur) LIKE ?{n} ESCAPE '\\' \
-                     OR m.adresse LIKE ?{n} ESCAPE '\\')"
-                )
-            })
-            .collect();
         let mut valeurs: Vec<rusqlite::types::Value> = vec![dossier.unwrap_or(0).into()];
-        valeurs.extend(mots.into_iter().map(rusqlite::types::Value::from));
+        let mut conditions: Vec<String> = Vec::new();
+        for mot in &replies {
+            valeurs.push(format!("%{}%", mot.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")).into());
+            let n = valeurs.len();
+            let mut condition = format!(
+                "replie(m.sujet) LIKE ?{n} ESCAPE '\\' OR replie(m.expediteur) LIKE ?{n} ESCAPE '\\' \
+                 OR m.adresse LIKE ?{n} ESCAPE '\\'"
+            );
+            if approche {
+                valeurs.push(mot.clone().into());
+                let k = valeurs.len();
+                condition.push_str(&format!(
+                    " OR approche(COALESCE(replie(m.sujet), '') || ' ' || COALESCE(replie(m.expediteur), '') \
+                     || ' ' || COALESCE(replie(m.adresse), ''), ?{k})"
+                ));
+            }
+            conditions.push(format!("({condition})"));
+        }
         // Mots-clés entourés d'espaces : « devis » ne trouve pas « devis_2 ».
         for critere in categories {
             let mut variantes = Vec::new();
@@ -1812,6 +1861,18 @@ impl Magasin {
             .query_map(params![dossier, depuis, nombre as i64, taille_max], |l| Ok((l.get(0)?, l.get(1)?)))?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(liste)
+    }
+
+    /// Nombre et volume des messages d'un dossier qui restent à garder sur le
+    /// poste (mêmes critères que `a_garder`) : ce que la barre d'état annonce
+    /// pendant le préchargement (0.6.22).
+    pub fn reste_a_garder(&self, dossier: i64, depuis: i64, taille_max: i64) -> Resultat<(u64, u64)> {
+        Ok(self.base.query_row(
+            "SELECT COUNT(*), COALESCE(SUM(taille), 0) FROM messages
+             WHERE folder_id = ?1 AND body_state = 'headers' AND horodatage >= ?2 AND taille <= ?3",
+            params![dossier, depuis, taille_max],
+            |l| Ok((l.get::<_, i64>(0)?.max(0) as u64, l.get::<_, i64>(1)?.max(0) as u64)),
+        )?)
     }
 
     /// Messages gardés sur le poste mais reçus avant `avant` : sortis de la
@@ -2342,6 +2403,56 @@ fn lire_dossier(l: &rusqlite::Row<'_>) -> rusqlite::Result<DossierLocal> {
 
 /// Un message avec son dossier : résultats d'une recherche dans toutes les
 /// boîtes, boîte de réception unifiée.
+/// Fautes tolérées dans un mot de `longueur` lettres : aucune jusqu'à quatre
+/// — « mars » ne doit pas trouver « mers » —, une jusqu'à huit, deux au-delà.
+pub(crate) fn tolerance(longueur: usize) -> usize {
+    match longueur {
+        0..=4 => 0,
+        5..=8 => 1,
+        _ => 2,
+    }
+}
+
+/// Distance d'édition entre `mot` et le début de `cible` qui lui ressemble le
+/// plus : lettre en trop, en moins, changée, ou deux lettres voisines
+/// interverties, comptent chacune une faute. « reunoin » est à une faute de
+/// « reunion », « factur » à aucune de « facture ».
+pub(crate) fn distance_debut(mot: &[char], cible: &[char]) -> usize {
+    let (m, n) = (mot.len(), cible.len());
+    let mut d = vec![vec![0usize; n + 1]; m + 1];
+    for (i, ligne) in d.iter_mut().enumerate() {
+        ligne[0] = i;
+    }
+    for j in 0..=n {
+        d[0][j] = j;
+    }
+    for i in 1..=m {
+        for j in 1..=n {
+            let cout = usize::from(mot[i - 1] != cible[j - 1]);
+            let mut v = (d[i - 1][j] + 1).min(d[i][j - 1] + 1).min(d[i - 1][j - 1] + cout);
+            if i > 1 && j > 1 && mot[i - 1] == cible[j - 2] && mot[i - 2] == cible[j - 1] {
+                v = v.min(d[i - 2][j - 2] + 1);
+            }
+            d[i][j] = v;
+        }
+    }
+    d[m].iter().copied().min().unwrap_or(m)
+}
+
+/// Vrai si `mot` (replié) commence l'un des mots de `texte` (replié), aux
+/// fautes tolérées près (cf. `tolerance`).
+pub(crate) fn approche(texte: &str, mot: &str) -> bool {
+    let mot: Vec<char> = mot.chars().collect();
+    let tolere = tolerance(mot.len());
+    if tolere == 0 {
+        return false;
+    }
+    texte
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|t| t.chars().count() + tolere >= mot.len())
+        .any(|t| distance_debut(&mot, &t.chars().collect::<Vec<_>>()) <= tolere)
+}
+
 /// Texte replié pour la recherche : minuscules, sans accents ni ligatures
 /// (« Œuvre » → « oeuvre »). Les lettres hors de l'alphabet latin restent.
 pub(crate) fn replie(texte: &str) -> String {
@@ -3311,6 +3422,53 @@ mod tests {
         let ailleurs = m.trouves_par_uid(archives, &[1, 9]).unwrap();
         assert_eq!(sujets(&ailleurs), vec!["Facture de février"]);
         assert_eq!((ailleurs[0].compte, ailleurs[0].chemin.as_str()), (compte, "Archives"));
+    }
+
+    /// Recherche tolérante aux fautes de frappe (0.6.22) : seulement quand la
+    /// recherche exacte ne trouve rien, et pas pour les mots courts.
+    #[test]
+    fn recherche_tolerante_aux_fautes() {
+        let c = |t: &str| t.chars().collect::<Vec<_>>();
+        assert_eq!(distance_debut(&c("reunoin"), &c("reunion")), 1, "interversion");
+        assert_eq!(distance_debut(&c("reunon"), &c("reunion")), 1, "lettre en moins");
+        assert_eq!(distance_debut(&c("factur"), &c("facture")), 0, "début du mot");
+        assert_eq!(distance_debut(&c("factrue"), &c("factures")), 1);
+        assert_eq!(distance_debut(&c("abcdef"), &c("xyz")), 6);
+        assert!(approche("facture de mars", "factrue"));
+        assert!(approche("reunion d'equipe", "equipee"));
+        assert!(!approche("facture de mars", "mers"), "mot court : aucune faute");
+        assert!(!approche("facture de mars", "fracas"));
+        assert!(approche("durand@exemple.fr", "durnad"));
+
+        let m = Magasin::en_memoire().unwrap();
+        let compte = m.compte("a@exemple.fr", "h", 993, "a@exemple.fr").unwrap();
+        m.poser_dossiers(compte, &[dossier("INBOX", &[])]).unwrap();
+        let inbox = m.dossier_id(compte, "INBOX").unwrap();
+        let recu = |uid, h, nom: &str, sujet: &str| MessageLocal {
+            uid,
+            horodatage: h,
+            expediteur: nom.into(),
+            adresse: format!("{}@exemple.fr", nom.to_lowercase()),
+            sujet: sujet.into(),
+            ..Default::default()
+        };
+        m.poser_messages(
+            inbox,
+            &[recu(1, 10, "Martin", "Facture de mars"), recu(2, 20, "Durand", "Réunion d'équipe"), recu(3, 30, "Promo", "Réunions")],
+        )
+        .unwrap();
+        let sujets = |t: &[Trouve]| t.iter().map(|x| x.message.sujet.clone()).collect::<Vec<_>>();
+        // Bien écrit : la recherche exacte seule.
+        let (t, approchee) = m.chercher_tolerant(Some(inbox), "réunion", &[], 50).unwrap();
+        assert_eq!((sujets(&t), approchee), (vec!["Réunions".to_string(), "Réunion d'équipe".into()], false));
+        // Une faute : trouvé quand même, et dit.
+        let (t, approchee) = m.chercher_tolerant(Some(inbox), "reunoin equipe", &[], 50).unwrap();
+        assert_eq!((sujets(&t), approchee), (vec!["Réunion d'équipe".to_string()], true));
+        let (t, approchee) = m.chercher_tolerant(None, "factrue martin", &[], 50).unwrap();
+        assert_eq!((sujets(&t), approchee), (vec!["Facture de mars".to_string()], true));
+        // Un mot court ne se corrige pas ; rien de proche : rien.
+        assert_eq!(m.chercher_tolerant(Some(inbox), "mers", &[], 50).unwrap(), (Vec::new(), false));
+        assert_eq!(m.chercher_tolerant(Some(inbox), "kangourou", &[], 50).unwrap(), (Vec::new(), false));
     }
 
     #[test]

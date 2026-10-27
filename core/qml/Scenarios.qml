@@ -236,6 +236,56 @@ QtObject {
         }
     }
 
+    /// Scénario « brouillon-compte » (0.6.23), deux comptes : un brouillon
+    /// enregistré sur le premier, puis « De » passé sur le second et le
+    /// brouillon réenregistré. Le second compte ne doit rien perdre de ses
+    /// brouillons ; celui du premier part à sa corbeille. Le contrôle des
+    /// boîtes se fait ensuite sur le serveur. Les compteurs des dossiers
+    /// Brouillons sont relevés à la fin.
+    function etapeScenarioBrouillonCompte(r, uid, compte, chemin) {
+        var comptes = fenetre.comptesConnus
+        if (essai.etape === 0) {
+            if (comptes.length < 2) {
+                var encore = Qt.createQmlObject('import QtQuick; Timer { interval: 2000 }', fenetre)
+                encore.triggered.connect(function() { etapeScenarioBrouillonCompte(null, 0, 0, "") })
+                encore.start()
+                return
+            }
+            essai.etape = 1
+            essai.un = comptes[0].compte
+            essai.deux = comptes[1].compte
+            var n = fenetre.ouvrirRedaction(essai.un)
+            n.pret()
+            n.remplir({ a: "destinataire@essai.test", objet: "Essai changement de compte",
+                        texte: "Brouillon commencé sur le premier compte.", mode: "brouillon" })
+            n.modifie = true
+            console.log("scenario: rédaction sur le compte", essai.un)
+            n.enregistrer(false)
+        } else if (essai.etape === 1) {
+            essai.etape = 2
+            console.log("scenario: 1er brouillon | uid", uid, "| compte", compte, "| dossier", chemin)
+            r.choisirCompte(essai.deux)
+            r.modifie = true
+            console.log("scenario: « De » passé sur le compte", r.compteChoisi().compte)
+            r.enregistrer(false)
+        } else if (essai.etape === 2) {
+            essai.etape = 3
+            console.log("scenario: 2e brouillon | uid", uid, "| compte", compte, "| dossier", chemin,
+                        "| porté par", r.brouillonCompte)
+            var fin = Qt.createQmlObject('import QtQuick; Timer { interval: 6000 }', fenetre)
+            fin.triggered.connect(function() {
+                for (var i = 0; i < modeleArborescence.count; ++i) {
+                    var l = modeleArborescence.get(i)
+                    if (l.genre === "dossier" && l.role === "Drafts")
+                        console.log("scenario: Brouillons du compte", l.compte, "| éléments", l.messages,
+                                    "| non lus", l.nonLus, "| affiché", l.messages > 0 ? "[" + l.messages + "]" : "")
+                }
+                console.log("scenario: fin")
+            })
+            fin.start()
+        }
+    }
+
     /// Scénario « recherche-partout » : « Éléments envoyés » puis la boîte de
     /// réception passent par l'index ; le texte de MMAIL_DOSSIER est cherché
     /// dans toutes les boîtes ; un résultat d'un autre dossier est choisi — le

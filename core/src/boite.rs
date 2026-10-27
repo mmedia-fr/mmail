@@ -1003,10 +1003,11 @@ pub mod qobject {
         #[cxx_name = "envoye"]
         fn envoye(self: Pin<&mut Boite>, jeton: &QString, avertissement: &QString);
 
-        /// Brouillon enregistré sous l'UID `uid` du dossier des brouillons.
+        /// Brouillon enregistré sous l'UID `uid` du dossier des brouillons
+        /// `chemin` du compte `compte`.
         #[qsignal]
         #[cxx_name = "brouillonEnregistre"]
-        fn brouillon_enregistre(self: Pin<&mut Boite>, jeton: &QString, uid: i32);
+        fn brouillon_enregistre(self: Pin<&mut Boite>, jeton: &QString, uid: i32, compte: i32, chemin: &QString);
 
         /// Message rangé dans « Envoi différé », pour partir à `echeance`
         /// (secondes Unix, en texte : QML n'a pas d'entier sur 64 bits).
@@ -1444,7 +1445,7 @@ enum Issue {
     /// Le fil d'envoi a fini : parti, ou `erreur`. Remise même si la session
     /// du compte a changé entre-temps — un message parti doit avoir sa suite.
     Parti { redaction: Redaction, copie: Vec<u8>, erreur: Option<String> },
-    BrouillonEnregistre { jeton: String, uid: u32 },
+    BrouillonEnregistre { jeton: String, uid: u32, compte: i64, chemin: String },
     Programme { jeton: String, echeance: i64 },
     DifferesEnvoyes { nombre: usize, erreurs: String },
     EchecRedaction { jeton: String, message: String },
@@ -4865,9 +4866,9 @@ impl qobject::Boite {
                     self.as_mut().envoye(&QString::from(&jeton), &QString::from(avertissement));
                 }
             }
-            Issue::BrouillonEnregistre { jeton, uid } => {
+            Issue::BrouillonEnregistre { jeton, uid, compte, chemin } => {
                 self.as_mut().reviser();
-                self.as_mut().brouillon_enregistre(&QString::from(&jeton), uid as i32);
+                self.as_mut().brouillon_enregistre(&QString::from(&jeton), uid as i32, compte as i32, &QString::from(&chemin));
             }
             Issue::EchecRedaction { jeton, message } => {
                 self.as_mut().echec_redaction(&QString::from(&jeton), &QString::from(&message));
@@ -5835,7 +5836,7 @@ impl Travail {
             Commande::Brouillon { redaction } => {
                 let jeton = redaction.jeton.clone();
                 Some(match self.enregistrer_brouillon(e, &redaction) {
-                    Ok(uid) => Issue::BrouillonEnregistre { jeton, uid },
+                    Ok((uid, chemin)) => Issue::BrouillonEnregistre { jeton, uid, compte: self.compte, chemin },
                     Err(message) => Issue::EchecRedaction { jeton, message },
                 })
             }
@@ -6155,8 +6156,14 @@ impl Travail {
 
     /// Retire définitivement un message repris (brouillon, envoi différé) :
     /// il est remplacé par ce qui vient d'être enregistré ou envoyé.
+    ///
+    /// Jamais dans un autre compte que celui du brouillon (0.6.23) : changer
+    /// l'expéditeur en rédaction gardait l'UID du brouillon du premier compte,
+    /// et ce numéro, purgé dans les brouillons du second, y aurait retiré un
+    /// autre message. Le brouillon du premier compte, lui, part à sa corbeille
+    /// par la fenêtre de rédaction.
     fn effacer_repris(&self, e: &mut Etabli, r: &Redaction) -> Result<(), String> {
-        if r.brouillon_uid == 0 {
+        if !brouillon_du_compte(r, self.compte) {
             return Ok(());
         }
         let chemin = if r.brouillon_chemin.is_empty() {
@@ -6377,6 +6384,7 @@ impl Travail {
         if mode == "brouillon" {
             p.brouillon_uid = uid;
             p.brouillon_chemin = chemin.to_string();
+            p.brouillon_compte = self.compte;
         } else {
             p.origine_chemin = chemin.to_string();
             p.origine_uid = uid;
@@ -6525,7 +6533,7 @@ impl Travail {
         avertissements.join(" ; ")
     }
 
-    fn enregistrer_brouillon(&self, e: &mut Etabli, r: &Redaction) -> Result<u32, String> {
+    fn enregistrer_brouillon(&self, e: &mut Etabli, r: &Redaction) -> Result<(u32, String), String> {
         let fichiers = lire_fichiers(&r.pieces)?;
         let (r_images, images) = self.avec_images(r);
         let f = redaction::fabriquer_avec_images(&r_images, maintenant(), &fichiers, &images)?;
@@ -6538,9 +6546,15 @@ impl Travail {
         // La version précédente s'efface une fois la nouvelle en place.
         let _ = self.effacer_repris(e, r);
         let _ = synchro::arborescence(&mut e.client, &e.magasin, self.compte);
-        Ok(uid.unwrap_or(0))
+        Ok((uid.unwrap_or(0), brouillons))
     }
 
+}
+
+/// Le brouillon que remplace `r` est-il porté par `compte` ? Compte inconnu
+/// (0, rédaction d'avant la 0.6.23) : celui de l'envoi, comme avant.
+fn brouillon_du_compte(r: &Redaction, compte: i64) -> bool {
+    r.brouillon_uid != 0 && (r.brouillon_compte == 0 || r.brouillon_compte == compte)
 }
 
 /// Lit les fichiers à joindre. Un fichier disparu entre-temps arrête tout : un
@@ -7682,6 +7696,17 @@ mod tests {
         let sans: Vec<_> = entetes.iter().filter(|e| e.uid != 14).cloned().collect();
         assert!(differes_interrompus(&sans, &mut vus, 9_000).is_empty());
         assert!(vus.is_empty());
+    }
+
+    #[test]
+    fn brouillon_purge_dans_son_seul_compte() {
+        let r: Redaction = serde_json::from_str(r#"{"brouillonUid":7,"brouillonChemin":"Drafts","brouillonCompte":1}"#).unwrap();
+        assert_eq!(r.brouillon_compte, 1);
+        assert!(brouillon_du_compte(&r, 1));
+        assert!(!brouillon_du_compte(&r, 2), "« De » changé : rien n'est purgé dans l'autre compte");
+        let ancien: Redaction = serde_json::from_str(r#"{"brouillonUid":7}"#).unwrap();
+        assert!(brouillon_du_compte(&ancien, 2), "compte inconnu : celui de l'envoi");
+        assert!(!brouillon_du_compte(&Redaction::default(), 1));
     }
 
     #[test]

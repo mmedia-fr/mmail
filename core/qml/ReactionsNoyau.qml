@@ -404,8 +404,11 @@ Connections {
             Qt.callLater(Qt.quit)
         }
         var r = fenetre.redactions[jeton]
-        if (r)
+        if (r) {
+            if (r.compteChoisi())
+                r.retirerAncienBrouillon(r.compteChoisi().compte)
             r.conteneur.fermerRedaction()
+        }
         messageEtat.texte = avertissement.length > 0
                 ? qsTr("Message envoyé — %1").arg(avertissement)
                 : qsTr("Message envoyé.")
@@ -414,8 +417,11 @@ Connections {
 
     function onProgramme(jeton, echeance) {
         var r = fenetre.redactions[jeton]
-        if (r)
+        if (r) {
+            if (r.compteChoisi())
+                r.retirerAncienBrouillon(r.compteChoisi().compte)
             r.conteneur.fermerRedaction()
+        }
         messageEtat.texte = qsTr("Message programmé pour %1, dans « Envoi différé ». Il partira si MMail est ouvert à ce moment-là.")
                             .arg(fenetre.heureEnvoi(Number(echeance)))
     }
@@ -429,11 +435,13 @@ Connections {
         fenetre.rafraichirListe()
     }
 
-    function onBrouillonEnregistre(jeton, uid) {
+    function onBrouillonEnregistre(jeton, uid, compte, chemin) {
         var r = fenetre.redactions[jeton]
         if (!r)
             return
-        r.brouillonEnregistre(uid)
+        r.brouillonEnregistre(uid, compte, chemin)
+        if (fenetre.essai && fenetre.essai.scenario === "brouillon-compte")
+            scenarios.etapeScenarioBrouillonCompte(r, uid, compte, chemin)
         if (fenetre.essai && fenetre.essai.scenario === "garde-serveur")
             console.log("scenario: brouillon enregistré", uid, "| modifiée", r.modifie,
                         "| gardées après", JSON.parse(boite.redactionsGardees()).length, "| note", r.note)

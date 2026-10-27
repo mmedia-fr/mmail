@@ -46,6 +46,9 @@ Page {
     readonly property alias animations: animationsRedaction
     readonly property alias boutonSignature: boutonSignature
     property string brouillonChemin: ""
+    // Compte qui porte le brouillon (0.6.23) : changer « De » le laisse là,
+    // d'où il part à la corbeille une fois le nouveau enregistré ou envoyé.
+    property int brouillonCompte: 0
     // Rédaction gardée sur le poste (noyau, garde.rs) : son
     // identifiant et le dernier état écrit ; empreinte du contenu au
     // dernier enregistrement sur le serveur.
@@ -228,6 +231,9 @@ Page {
         }
         brouillonUid = p.brouillonUid || 0
         brouillonChemin = p.brouillonChemin || ""
+        // Rédaction gardée par une version d'avant la 0.6.23 : le compte
+        // choisi, celui qui l'avait.
+        brouillonCompte = p.brouillonCompte || (brouillonUid > 0 && compteChoisi() ? compteChoisi().compte : 0)
         importance = p.importance || 0
         accuseRemise = p.accuseRemise === true
         confirmationLecture = p.confirmationLecture === true
@@ -266,7 +272,7 @@ Page {
             objet: champObjet.text, texte: mef.texte(), html: miseEnForme ? mef.html() : "",
             pieces: pieces.map(function(f) { return f.chemin }),
             enReponseA: enReponseA, references: references, brouillonUid: brouillonUid,
-            brouillonChemin: brouillonChemin,
+            brouillonChemin: brouillonChemin, brouillonCompte: brouillonCompte,
             origineChemin: origineChemin, origineUid: origineUid, origineMode: origineMode,
             importance: importance, accuseRemise: accuseRemise,
             confirmationLecture: confirmationLecture, envoiDiffere: Math.round(envoiDiffere)
@@ -435,8 +441,19 @@ Page {
             echouer(boite.erreur.length > 0 ? boite.erreur : qsTr("Enregistrement impossible."))
     }
 
-    function brouillonEnregistre(uid) {
+    /// Le brouillon laissé sur un autre compte par un changement de « De »
+    /// part à la corbeille de ce compte, une fois remplacé sur `compte` par un
+    /// brouillon ou un envoi (0.6.23).
+    function retirerAncienBrouillon(compte) {
+        if (brouillonUid > 0 && brouillonCompte > 0 && brouillonCompte !== compte && brouillonChemin.length > 0)
+            boite.supprimerDans(brouillonCompte, brouillonChemin, String(brouillonUid))
+    }
+
+    function brouillonEnregistre(uid, compte, chemin) {
+        retirerAncienBrouillon(compte)
         brouillonUid = uid
+        brouillonCompte = compte
+        brouillonChemin = chemin
         occupe = false
         enregistrementAuto = false
         // Ce qui a été tapé pendant l'enregistrement reste à enregistrer.
@@ -484,6 +501,7 @@ Page {
         delete c.jeton
         delete c.brouillonUid
         delete c.brouillonChemin
+        delete c.brouillonCompte
         return JSON.stringify(c)
     }
 

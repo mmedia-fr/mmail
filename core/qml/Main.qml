@@ -6130,6 +6130,11 @@ ApplicationWindow {
                 attenteImage.triggered.connect(scenarios.etapeScenarioCollerImage)
                 attenteImage.start()
             }
+            if (essai.scenario === "brouillon-compte") {
+                var attenteCompte = Qt.createQmlObject('import QtQuick; Timer { interval: 8000 }', fenetre)
+                attenteCompte.triggered.connect(function() { scenarios.etapeScenarioBrouillonCompte(null, 0, 0, "") })
+                attenteCompte.start()
+            }
             if (essai.scenario === "brouillon-auto") {
                 var attente = Qt.createQmlObject('import QtQuick; Timer { interval: 6000 }', fenetre)
                 attente.triggered.connect(function() { scenarios.etapeScenarioBrouillonAuto(null, 0) })

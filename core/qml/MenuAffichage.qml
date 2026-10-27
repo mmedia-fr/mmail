@@ -57,6 +57,27 @@ Menu {
             }
         }
     }
+    // Marges du corps d'un message (0.6.23), dans le volet de lecture comme
+    // dans la fenêtre d'un message : au ras par défaut, comme jusqu'ici.
+    Menu {
+        id: menuMarges
+        title: qsTr("Marges du message")
+        onAboutToShow: width = fenetre.largeurMenu(menuMarges)
+        Repeater {
+            model: [
+                { libelle: qsTr("Aucune"), valeur: "aucune" },
+                { libelle: qsTr("Étroites"), valeur: "etroites" },
+                { libelle: qsTr("Larges"), valeur: "larges" }
+            ]
+            MenuItem {
+                required property var modelData
+                text: modelData.libelle
+                checkable: true
+                checked: reglages.margesMessage === modelData.valeur
+                onTriggered: reglages.margesMessage = modelData.valeur
+            }
+        }
+    }
     MenuSeparator {}
     MenuItem {
         text: qsTr("Notifier le nouveau courrier")

@@ -167,6 +167,10 @@ de projet interne.
   laisse non lu ; « Affichage › Marquer comme lu » choisit quand, comme le volet
   de lecture d'Outlook (0.6.9) : à l'affichage, après 3 à 30 secondes — un
   message quitté avant reste non lu —, ou jamais, à la main seulement ;
+- **marges du message** (0.6.23) : « Affichage › Marges du message » écarte le
+  corps du message des bords, à gauche et à droite, dans le volet de lecture
+  comme dans la fenêtre d'un message — « Aucune » (par défaut, au ras du volet),
+  « Étroites » ou « Larges », en proportion de la taille du texte ;
 - **masquage local** des dossiers peu utilisés, réaffichage en un clic ;
 - affichage du **message brut** (bouton « Source ») ;
 - **copie automatique de la sélection**, comme dans MMdedit : un texte
@@ -367,7 +371,15 @@ de rafraîchissement va au coffre du système, à la place du mot de passe.
   `MMAIL_GOOGLE_CLIENT_ID` et `MMAIL_GOOGLE_CLIENT_SECRET` remplacent ceux du
   programme (essais, autre inscription).
 - **Portée** : `https://mail.google.com/`, tout le courrier — lecture et envoi ;
-  `openid email` pour l'adresse du compte.
+  `openid email` pour l'adresse du compte. C'est la seule que Google accepte
+  pour IMAP et SMTP ; les portées plus étroites (`gmail.modify`…) ne valent que
+  pour l'API Gmail.
+- **Avant la page de Google**, un dialogue « Connexion à Google » prévient : Google
+  demandera d'autoriser MMail à « supprimer définitivement » tout le courrier —
+  son texte, pour toute application qui lit Gmail en IMAP —, alors que MMail
+  n'efface définitivement que ce qu'on lui demande d'effacer (« Supprimer » met
+  à la corbeille, seul « Vider », après confirmation, efface). La page ne s'ouvre
+  qu'à « Continuer chez Google » ; ajout comme reconnexion.
 - **Lecture** en IMAPS sur `imap.gmail.com` (`AUTHENTICATE XOAUTH2`) ; **envoi**
   en SMTP sur TLS, `smtp.gmail.com:465` (`AUTH XOAUTH2`). Gmail range lui-même
   la copie dans ses messages envoyés : MMail n'en dépose pas.

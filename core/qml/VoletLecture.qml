@@ -499,6 +499,10 @@ ColumnLayout {
             background: Rectangle {
                 color: fenetre.corpsHtml && !fenetre.sourceVisible ? "#ffffff" : fenetre.palette.base
             }
+            // Les marges du style Fusion, plus celle d'« Affichage › Marges
+            // du message » (0.6.23), sur le fond du message.
+            leftPadding: padding + 4 + fenetre.margeMessage
+            rightPadding: padding + fenetre.margeMessage
             text: qsTr("Aucun message sélectionné.")
 
             onLinkActivated: function(lien) { fenetre.ouvrirLien(lien) }
@@ -520,6 +524,7 @@ ColumnLayout {
             // aller-retour (0.6.20, cf. cpp/rendu_complet.h).
             RenduComplet { zone: vueCorps }
             onWidthChanged: minuterieImages.restart()
+            onLeftPaddingChanged: minuterieImages.restart()
             Timer {
                 id: minuterieImages
                 interval: 120

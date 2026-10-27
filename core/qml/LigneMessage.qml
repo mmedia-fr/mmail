@@ -417,9 +417,11 @@ SwipeDelegate {
         onPaint: fenetre.dessinerCorbeille(getContext("2d"), width, height, encre)
         ToolTip.visible: survolCorbeille.containsMouse
         ToolTip.delay: 600
-        ToolTip.text: qsTr("Mettre à la corbeille")
+        // Indésirables (0.6.24) : plus de corbeille où aller, le message
+        // s'efface, après confirmation.
+        ToolTip.text: ligne.roleLigne === "Junk" ? qsTr("Effacer définitivement") : qsTr("Mettre à la corbeille")
         Accessible.role: Accessible.Button
-        Accessible.name: qsTr("Mettre à la corbeille")
+        Accessible.name: ToolTip.text
         Accessible.onPressAction: fenetre.supprimerLigne(index)
         MouseArea {
             id: survolCorbeille

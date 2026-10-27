@@ -501,10 +501,12 @@ fn premier_contact(adresses: &Address<'_>) -> (String, String) {
 
 /// En-tête d'un message pour sa fenêtre (0.6.16) : expéditeur, destinataires
 /// et copie — chacun « Nom <adresse> », séparés par « ; » —, et date (RFC
-/// 3339, vide si absente). JSON : `{"de":…,"a":…,"cc":…,"date":…}`.
+/// 3339, vide si absente) ; adresse seule de l'expéditeur, en minuscules, et échec DMARC noté
+/// par le serveur (0.6.24, images distantes d'un expéditeur de confiance). JSON :
+/// `{"de":…,"a":…,"cc":…,"date":…,"expediteur":…,"dmarcEchec":…}`.
 pub fn entete_affichable(brut: &[u8]) -> String {
     let Some(message) = MessageParser::default().parse(brut) else {
-        return r#"{"de":"","a":"","cc":"","date":""}"#.to_string();
+        return r#"{"de":"","a":"","cc":"","date":"","expediteur":"","dmarcEchec":false}"#.to_string();
     };
     let complets = |adresses: Option<&Address<'_>>| -> String {
         adresses
@@ -531,8 +533,67 @@ pub fn entete_affichable(brut: &[u8]) -> String {
         "a": complets(message.to()),
         "cc": complets(message.cc()),
         "date": message.date().map(|d| d.to_rfc3339()).unwrap_or_default(),
+        "expediteur": message.from().map(premier_contact).map(|(_, a)| a.trim().to_lowercase()).unwrap_or_default(),
+        "dmarcEchec": dmarc_echoue(brut),
     })
     .to_string()
+}
+
+/// Vrai si le serveur qui a reçu le message y a noté un échec DMARC : un
+/// en-tête `Authentication-Results` (RFC 8601) portant `dmarc=fail`. Seuls les
+/// en-têtes du message comptent, pas ceux d'un message joint ; un en-tête écrit
+/// par l'expéditeur lui-même ne peut qu'ajouter un échec, pas effacer celui que
+/// le serveur de réception a noté. Sert aux images distantes d'un expéditeur de
+/// confiance (0.6.24), qu'une adresse falsifiée ne doit pas déclencher.
+pub fn dmarc_echoue(brut: &[u8]) -> bool {
+    let fin = brut
+        .windows(4)
+        .position(|f| f == b"\r\n\r\n")
+        .into_iter()
+        .chain(brut.windows(2).position(|f| f == b"\n\n"))
+        .min()
+        .unwrap_or(brut.len());
+    let entetes = String::from_utf8_lossy(&brut[..fin]);
+    // Lignes repliées (RFC 5322 § 2.2.3) rassemblées.
+    let mut champs: Vec<String> = Vec::new();
+    for ligne in entetes.lines() {
+        if ligne.starts_with([' ', '\t']) {
+            if let Some(dernier) = champs.last_mut() {
+                dernier.push(' ');
+                dernier.push_str(ligne.trim());
+            }
+        } else {
+            champs.push(ligne.to_string());
+        }
+    }
+    champs.iter().any(|champ| {
+        let Some((nom, valeur)) = champ.split_once(':') else {
+            return false;
+        };
+        nom.trim().eq_ignore_ascii_case("authentication-results") && note_echec_dmarc(valeur)
+    })
+}
+
+/// `dmarc=fail` parmi les résultats d'un `Authentication-Results`, hors des
+/// commentaires entre parenthèses.
+fn note_echec_dmarc(valeur: &str) -> bool {
+    let mut sans_commentaires = String::with_capacity(valeur.len());
+    let mut profondeur = 0usize;
+    for c in valeur.chars() {
+        match c {
+            '(' => profondeur += 1,
+            ')' => profondeur = profondeur.saturating_sub(1),
+            _ if profondeur == 0 => sans_commentaires.push(c),
+            _ => {}
+        }
+    }
+    sans_commentaires.split(';').any(|resultat| {
+        let Some((methode, reste)) = resultat.split_once('=') else {
+            return false;
+        };
+        let issue: String = reste.trim_start().chars().take_while(|c| c.is_ascii_alphanumeric()).collect();
+        methode.trim().eq_ignore_ascii_case("dmarc") && issue.eq_ignore_ascii_case("fail")
+    })
 }
 
 /// Destinataires, nommés comme dans la liste d'Outlook (« Nom; Nom ») : ceux
@@ -563,6 +624,35 @@ fn destinataires(message: &Message<'_>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn echec_dmarc_note_par_le_serveur() {
+        let echec = b"Authentication-Results: mail.mmedia.fr;\r\n\tdkim=none;\r\n\tspf=softfail (mail.mmedia.fr: domain does not designate) smtp.mailfrom=x@banque.fr;\r\n\tdmarc=fail reason=\"No valid SPF, No valid DKIM\" header.from=banque.fr (policy=reject)\r\nFrom: Banque <x@banque.fr>\r\nSubject: s\r\n\r\ncorps\r\n";
+        assert!(dmarc_echoue(echec));
+        let reussi = b"Authentication-Results: mx.google.com; dkim=pass header.i=@banque.fr; dmarc=pass (p=REJECT) header.from=banque.fr\nFrom: x@banque.fr\n\ncorps\n";
+        assert!(!dmarc_echoue(reussi));
+        // Espaces autour du signe égal, casse quelconque.
+        assert!(dmarc_echoue(b"Authentication-Results: mx; DMARC = Fail header.from=a.fr\n\n"));
+        // Un échec cité dans un commentaire n'en est pas un.
+        assert!(!dmarc_echoue(b"Authentication-Results: mx; dkim=pass (dmarc=fail plus haut ?)\n\n"));
+        // Ni l'en-tête d'un message joint, après la ligne vide.
+        assert!(!dmarc_echoue(b"From: a@b.fr\n\nAuthentication-Results: mx; dmarc=fail\n"));
+        // Sans en-tête, rien n'est noté.
+        assert!(!dmarc_echoue(b"From: a@b.fr\r\nSubject: s\r\n\r\ncorps\r\n"));
+        // Un résultat qui commence par « fail » sans l'être.
+        assert!(!dmarc_echoue(b"Authentication-Results: mx; dmarc=failsafe\n\n"));
+    }
+
+    #[test]
+    fn entete_expediteur_et_dmarc() {
+        let brut = b"Authentication-Results: mx; dmarc=fail header.from=b.fr\r\nFrom: Jean <Jean.Dupont@B.fr>\r\nTo: moi@a.fr\r\nSubject: s\r\n\r\ncorps\r\n";
+        let e: serde_json::Value = serde_json::from_str(&entete_affichable(brut)).unwrap();
+        assert_eq!(e["expediteur"], "jean.dupont@b.fr");
+        assert_eq!(e["dmarcEchec"], true);
+        let sans: serde_json::Value = serde_json::from_str(&entete_affichable(b"From: a@b.fr\r\n\r\nx\r\n")).unwrap();
+        assert_eq!(sans["expediteur"], "a@b.fr");
+        assert_eq!(sans["dmarcEchec"], false);
+    }
 
     fn entete(brut: &str) -> Entete {
         Entete {

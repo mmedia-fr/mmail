@@ -45,6 +45,9 @@ pub struct Redaction {
     /// le dossier qui le porte (vide : celui des brouillons).
     pub brouillon_uid: u32,
     pub brouillon_chemin: String,
+    /// Compte qui porte ce brouillon (0 : inconnu, celui de l'envoi). Changer
+    /// l'expéditeur en rédaction le laisse sur son compte d'origine (0.6.24).
+    pub brouillon_compte: i64,
     /// Importance : 1 haute, 0 normale, -1 basse.
     pub importance: i8,
     /// Accusé de remise, demandé au serveur (DSN).
@@ -390,6 +393,8 @@ pub struct Preparation {
     pub images: Vec<(String, Vec<u8>)>,
     pub brouillon_uid: u32,
     pub brouillon_chemin: String,
+    /// Compte qui porte le brouillon repris (0.6.24).
+    pub brouillon_compte: i64,
     pub origine_chemin: String,
     pub origine_uid: u32,
     pub origine_mode: String,

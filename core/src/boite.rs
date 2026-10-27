@@ -327,6 +327,13 @@ pub mod qobject {
         #[cxx_name = "demanderDans"]
         fn demander_dans(self: Pin<&mut Boite>, compte: i32, chemin: &QString, uid: i32, brut: bool) -> bool;
 
+        /// Fenêtre d'un message (0.6.24) : son corps avec ses images
+        /// distantes, téléchargées à cette demande — bouton du bandeau, ou
+        /// expéditeur de confiance. Issue : `corpsRecu`.
+        #[qinvokable]
+        #[cxx_name = "afficherImagesDans"]
+        fn afficher_images_dans(self: Pin<&mut Boite>, compte: i32, chemin: &QString, uid: i32) -> bool;
+
         /// Comme `ouvrirPiece` et `enregistrerPiece`, pour un message de
         /// n'importe quel dossier (fenêtre d'un message, 0.6.16).
         #[qinvokable]
@@ -505,6 +512,20 @@ pub mod qobject {
         #[cxx_name = "supprimerDans"]
         fn supprimer_dans(self: Pin<&mut Boite>, compte: i32, chemin: &QString, uids: &QString) -> bool;
 
+        /// Vrai si le dossier est la corbeille ou les indésirables du compte
+        /// (0.6.24) : un message n'a plus de corbeille où aller, « Supprimer »
+        /// l'y efface pour de bon après confirmation, et le dossier se vide en
+        /// partie (`preparerPurge`).
+        #[qinvokable]
+        fn effacable(&self, compte: i32, chemin: &QString) -> bool;
+
+        /// Efface pour de bon des messages de la corbeille ou des indésirables
+        /// d'un compte (0.6.24), que l'interface a fait confirmer ; refusé
+        /// dans tout autre dossier. Issue : `messagesEffaces`.
+        #[qinvokable]
+        #[cxx_name = "effacerDans"]
+        fn effacer_dans(self: Pin<&mut Boite>, compte: i32, chemin: &QString, uids: &QString) -> bool;
+
         /// Signale des messages du dossier ouvert comme indésirables : ils vont
         /// dans le dossier d'indésirables de leur compte, et le filtre du
         /// serveur l'apprend (Mailcow : Rspamd, par IMAPSieve). Depuis ce
@@ -621,6 +642,21 @@ pub mod qobject {
         #[qinvokable]
         #[cxx_name = "viderDossier"]
         fn vider_dossier(self: Pin<&mut Boite>, compte: i32, chemin: &QString);
+
+        /// Vidage partiel de la corbeille ou des indésirables (0.6.24), premier
+        /// temps : le serveur compte les messages qui répondent aux critères
+        /// (JSON, cf. `purge::Criteres`) ; rien n'est effacé. Rend le motif
+        /// d'un refus immédiat, vide si la demande est partie. Issue :
+        /// `purgePreparee`.
+        #[qinvokable]
+        #[cxx_name = "preparerPurge"]
+        fn preparer_purge(self: Pin<&mut Boite>, compte: i32, chemin: &QString, criteres: &QString) -> QString;
+
+        /// Second temps, sur confirmation : efface les messages du dernier
+        /// décompte de ce dossier, ceux-là seuls. Issue : `messagesEffaces`.
+        #[qinvokable]
+        #[cxx_name = "executerPurge"]
+        fn executer_purge(self: Pin<&mut Boite>, compte: i32, chemin: &QString) -> bool;
 
         /// Crée, sur le serveur, le sous-dossier `nom` du dossier `parent`
         /// (clic droit « Nouveau sous-dossier… »). Rend le motif d'un refus
@@ -935,6 +971,19 @@ pub mod qobject {
         #[cxx_name = "corbeillesVidees"]
         fn corbeilles_videes(self: Pin<&mut Boite>, nombre: i32);
 
+        /// Messages effacés pour de bon (0.6.24) : `nombre`, ou aucun et
+        /// pourquoi (`erreur`). Émis une fois par `effacerDans` ou
+        /// `executerPurge` parti.
+        #[qsignal]
+        #[cxx_name = "messagesEffaces"]
+        fn messages_effaces(self: Pin<&mut Boite>, compte: i32, chemin: &QString, nombre: i32, erreur: &QString);
+
+        /// Décompte d'un vidage partiel (0.6.24) : `nombre` messages répondent
+        /// aux critères, ou -1 et pourquoi (`erreur`).
+        #[qsignal]
+        #[cxx_name = "purgePreparee"]
+        fn purge_preparee(self: Pin<&mut Boite>, compte: i32, chemin: &QString, nombre: i32, erreur: &QString);
+
         /// Sous-dossier créé : il figure dans l'arborescence, son parent
         /// déplié.
         #[qsignal]
@@ -996,10 +1045,11 @@ pub mod qobject {
         #[cxx_name = "envoye"]
         fn envoye(self: Pin<&mut Boite>, jeton: &QString, avertissement: &QString);
 
-        /// Brouillon enregistré sous l'UID `uid` du dossier des brouillons.
+        /// Brouillon enregistré sous l'UID `uid` du dossier des brouillons
+        /// `chemin` du compte `compte`.
         #[qsignal]
         #[cxx_name = "brouillonEnregistre"]
-        fn brouillon_enregistre(self: Pin<&mut Boite>, jeton: &QString, uid: i32);
+        fn brouillon_enregistre(self: Pin<&mut Boite>, jeton: &QString, uid: i32, compte: i32, chemin: &QString);
 
         /// Message rangé dans « Envoi différé », pour partir à `echeance`
         /// (secondes Unix, en texte : QML n'a pas d'entier sur 64 bits).
@@ -1305,6 +1355,13 @@ enum Commande {
     /// Vider entièrement les dossiers désignés (corbeille, indésirables) de ce
     /// compte : purge définitive côté serveur.
     ViderDossiers { chemins: Vec<String> },
+    /// Effacer pour de bon ces messages d'un dossier (0.6.24), si sa validité
+    /// est encore `validite` (0 : non vérifiée).
+    Effacer { chemin: String, validite: u32, uids: Vec<u32> },
+    /// Compter, sans rien effacer, les messages d'un dossier qui répondent à
+    /// des critères de vidage partiel (0.6.24) ; `numero` : celui de la
+    /// demande (cf. `purge_numero`).
+    PreparerPurge { chemin: String, criteres: crate::purge::Criteres, numero: u64 },
     /// Créer un dossier — le sous-dossier `nom` de `parent` —, et s'y abonner.
     CreerDossier { parent: String, chemin: String, nom: String },
     /// Renommer le dossier `ancien` en `nouveau` — `nom`, tel que tapé —,
@@ -1426,6 +1483,11 @@ enum Issue {
     MarquageAbandonne { chemin: String },
     /// Corbeille et indésirables de ce compte vidés : `nombre` messages effacés.
     Vide { nombre: u32 },
+    /// Messages effacés pour de bon (0.6.24) ; `erreur` non vide : aucun.
+    Efface { chemin: String, nombre: u32, erreur: String },
+    /// Décompte d'un vidage partiel (0.6.24) ; `erreur` non vide : pas de
+    /// décompte.
+    PurgePreparee { chemin: String, numero: u64, validite: u32, uids: Vec<u32>, erreur: String },
     DossierCree { parent: String, chemin: String, nom: String },
     DossierRenomme { ancien: String, nouveau: String, nom: String, separateur: String },
     /// Des déplacements interrompus ont été repris : ni demandés à l'instant,
@@ -1437,7 +1499,7 @@ enum Issue {
     /// Le fil d'envoi a fini : parti, ou `erreur`. Remise même si la session
     /// du compte a changé entre-temps — un message parti doit avoir sa suite.
     Parti { redaction: Redaction, copie: Vec<u8>, erreur: Option<String> },
-    BrouillonEnregistre { jeton: String, uid: u32 },
+    BrouillonEnregistre { jeton: String, uid: u32, compte: i64, chemin: String },
     Programme { jeton: String, echeance: i64 },
     DifferesEnvoyes { nombre: usize, erreurs: String },
     EchecRedaction { jeton: String, message: String },
@@ -1522,6 +1584,21 @@ pub struct BoiteRust {
     recherche: Arc<AtomicU64>,
     /// Le dernier `chercher` n'a trouvé qu'en tolérant des fautes (0.6.22).
     recherche_approchee: AtomicBool,
+    /// Dernier décompte d'un vidage partiel, montré à l'utilisateur (0.6.24).
+    purge: Option<PurgePrete>,
+    /// Numéro de la dernière demande de décompte : la réponse d'une demande
+    /// antérieure — critères changés, nouveau « Compter » — est ignorée, le
+    /// décompte gardé est toujours celui que l'interface montre.
+    purge_numero: u64,
+}
+
+/// Décompte d'un vidage partiel (0.6.24) : à la confirmation, ces messages-là
+/// partent, et seulement eux — jamais une nouvelle recherche sur les critères.
+struct PurgePrete {
+    compte: i64,
+    chemin: String,
+    validite: u32,
+    uids: Vec<u32>,
 }
 
 /// Liste envoyée à l'interface : dossier, et pour chaque message son UID, sa
@@ -1602,6 +1679,8 @@ impl Default for BoiteRust {
             sauvegardes_lues: HashMap::new(),
             recherche: Arc::new(AtomicU64::new(0)),
             recherche_approchee: AtomicBool::new(false),
+            purge: None,
+            purge_numero: 0,
         }
     }
 }
@@ -3000,7 +3079,17 @@ impl qobject::Boite {
         self.demander_piece(uid, indice, None, false)
     }
 
-    pub fn demander_dans(mut self: Pin<&mut Self>, compte: i32, chemin: &QString, uid: i32, brut: bool) -> bool {
+    pub fn demander_dans(self: Pin<&mut Self>, compte: i32, chemin: &QString, uid: i32, brut: bool) -> bool {
+        self.lire_dans(compte, chemin, uid, brut, false)
+    }
+
+    pub fn afficher_images_dans(self: Pin<&mut Self>, compte: i32, chemin: &QString, uid: i32) -> bool {
+        self.lire_dans(compte, chemin, uid, false, true)
+    }
+
+    /// Corps d'un message pour sa fenêtre ; `distantes` : avec ses images
+    /// distantes (0.6.24).
+    fn lire_dans(mut self: Pin<&mut Self>, compte: i32, chemin: &QString, uid: i32, brut: bool, distantes: bool) -> bool {
         let (compte, chemin) = (compte as i64, chemin.to_string());
         let Some(dossier) = self.magasin.as_ref().and_then(|m| m.dossier_id(compte, &chemin).ok()) else {
             return false;
@@ -3013,21 +3102,28 @@ impl qobject::Boite {
         // cette lecture n'interrompt pas (cf. `rendre_si_actuel`). `lu` vrai :
         // le marquage revient à la fenêtre.
         let local = Local { compte, chemin: chemin.clone(), dossier, uid, lu: true, brut, en_ligne: false };
-        let garde = self.magasin.as_ref().and_then(|m| m.garde_sur_le_poste(dossier, uid).ok().flatten());
+        // Ses images distantes : un compte connecté les fait chercher par son
+        // fil, comme au volet de lecture ; sinon, le poste les télécharge.
+        let en_ligne = self.sessions.contains_key(&compte);
+        let garde = if distantes && en_ligne {
+            None
+        } else {
+            self.magasin.as_ref().and_then(|m| m.garde_sur_le_poste(dossier, uid).ok().flatten())
+        };
         if let Some((id, _)) = garde {
             let profil = self.profil.clone();
             let fil = self.qt_thread();
             let lancement = thread::Builder::new().name("mmail-fenetre".into()).spawn(move || {
                 let preparation = Cache::du_profil(&profil)
                     .lire(id)
-                    .and_then(|octets| rendre_si_actuel(0, &octets, brut, false, compte, &dossier_affichage(&profil), false));
-                let _ = fil.queue(move |boite: Pin<&mut qobject::Boite>| boite.afficher_du_poste(local, preparation, 0, false));
+                    .and_then(|octets| rendre_si_actuel(0, &octets, brut, distantes, compte, &dossier_affichage(&profil), false));
+                let _ = fil.queue(move |boite: Pin<&mut qobject::Boite>| boite.afficher_du_poste(local, preparation, 0, distantes));
             });
             if lancement.is_ok() {
                 return true;
             }
         }
-        self.as_mut().envoyer(compte, Commande::Corps { chemin, uid, brut, distantes: false, numero: 0 })
+        self.as_mut().envoyer(compte, Commande::Corps { chemin, uid, brut, distantes, numero: 0 })
     }
 
     pub fn ouvrir_piece_dans(self: Pin<&mut Self>, compte: i32, chemin: &QString, uid: i32, indice: i32) -> bool {
@@ -3444,6 +3540,31 @@ impl qobject::Boite {
                 false
             }
         }
+    }
+
+    pub fn effacable(&self, compte: i32, chemin: &QString) -> bool {
+        let dossiers = self.magasin.as_ref().and_then(|m| m.dossiers(compte as i64).ok()).unwrap_or_default();
+        dossier_effacable(&dossiers, &chemin.to_string())
+    }
+
+    pub fn effacer_dans(mut self: Pin<&mut Self>, compte: i32, chemin: &QString, uids: &QString) -> bool {
+        let compte = compte as i64;
+        let chemin = chemin.to_string();
+        let uids = lire_uids(uids);
+        if uids.is_empty() {
+            return false;
+        }
+        let dossiers = self.magasin.as_ref().and_then(|m| m.dossiers(compte).ok()).unwrap_or_default();
+        if !dossier_effacable(&dossiers, &chemin) {
+            self.as_mut().set_erreur(QString::from(
+                "seules la corbeille et les indésirables s'effacent pour de bon : ailleurs, « Supprimer » met à la corbeille",
+            ));
+            return false;
+        }
+        // Les UID viennent de l'index : ils valent pour la validité qu'il a
+        // relevée (0 : dossier à relire, pas de contrôle possible).
+        let validite = dossiers.iter().find(|d| d.chemin == chemin).map(|d| d.uid_validity).unwrap_or(0);
+        self.as_mut().envoyer(compte, Commande::Effacer { chemin, validite, uids })
     }
 
     pub fn signaler_indesirable_dans(mut self: Pin<&mut Self>, compte: i32, chemin: &QString, uids: &QString) -> bool {
@@ -4050,6 +4171,45 @@ impl qobject::Boite {
             return;
         }
         self.as_mut().envoyer(compte as i64, Commande::ViderDossiers { chemins: vec![chemin] });
+    }
+
+    pub fn preparer_purge(mut self: Pin<&mut Self>, compte: i32, chemin: &QString, criteres: &QString) -> QString {
+        let compte = compte as i64;
+        let chemin = chemin.to_string();
+        // Un décompte précédent ne vaut plus : les critères ont pu changer.
+        let numero = {
+            let mut noyau = self.as_mut().rust_mut();
+            noyau.purge = None;
+            noyau.purge_numero += 1;
+            noyau.purge_numero
+        };
+        let dossiers = self.magasin.as_ref().and_then(|m| m.dossiers(compte).ok()).unwrap_or_default();
+        if !dossier_effacable(&dossiers, &chemin) {
+            return QString::from("seules la corbeille et les indésirables se vident en partie");
+        }
+        let criteres = match crate::purge::lire(&criteres.to_string()) {
+            Ok(c) => c,
+            Err(motif) => return QString::from(&motif),
+        };
+        if !self.sessions.contains_key(&compte) && !self.identites.contains_key(&compte) {
+            return QString::from("ce compte n'est pas connecté");
+        }
+        self.as_mut().envoyer(compte, Commande::PreparerPurge { chemin, criteres, numero });
+        QString::from("")
+    }
+
+    pub fn executer_purge(mut self: Pin<&mut Self>, compte: i32, chemin: &QString) -> bool {
+        let compte = compte as i64;
+        let chemin = chemin.to_string();
+        let prete = self.as_mut().rust_mut().purge.take();
+        let Some(p) = prete.filter(|p| p.compte == compte && p.chemin == chemin) else {
+            self.as_mut().set_erreur(QString::from("le décompte n'est plus valable : relancez-le"));
+            return false;
+        };
+        if p.uids.is_empty() {
+            return false;
+        }
+        self.as_mut().envoyer(compte, Commande::Effacer { chemin, validite: p.validite, uids: p.uids })
     }
 
     pub fn creer_sous_dossier(mut self: Pin<&mut Self>, compte: i32, parent: &QString, nom: &QString) -> QString {
@@ -4841,9 +5001,9 @@ impl qobject::Boite {
                     self.as_mut().envoye(&QString::from(&jeton), &QString::from(avertissement));
                 }
             }
-            Issue::BrouillonEnregistre { jeton, uid } => {
+            Issue::BrouillonEnregistre { jeton, uid, compte, chemin } => {
                 self.as_mut().reviser();
-                self.as_mut().brouillon_enregistre(&QString::from(&jeton), uid as i32);
+                self.as_mut().brouillon_enregistre(&QString::from(&jeton), uid as i32, compte as i32, &QString::from(&chemin));
             }
             Issue::EchecRedaction { jeton, message } => {
                 self.as_mut().echec_redaction(&QString::from(&jeton), &QString::from(&message));
@@ -4854,6 +5014,23 @@ impl qobject::Boite {
                 self.as_mut().rafraichir_attente();
                 self.as_mut().reviser();
                 self.as_mut().corbeilles_videes(nombre as i32);
+            }
+            Issue::Efface { chemin, nombre, erreur } => {
+                // Comme pour un vidage : le fil a retiré les messages de
+                // l'index et relu les compteurs.
+                self.as_mut().rafraichir_attente();
+                self.as_mut().reviser();
+                self.as_mut().messages_effaces(compte_qt, &QString::from(&chemin), nombre as i32, &QString::from(&erreur));
+            }
+            Issue::PurgePreparee { chemin, numero, validite, uids, erreur } => {
+                if numero == self.purge_numero {
+                    let nombre = if erreur.is_empty() { uids.len() as i32 } else { -1 };
+                    if erreur.is_empty() {
+                        self.as_mut().rust_mut().purge =
+                            Some(PurgePrete { compte, chemin: chemin.clone(), validite, uids });
+                    }
+                    self.as_mut().purge_preparee(compte_qt, &QString::from(&chemin), nombre, &QString::from(&erreur));
+                }
             }
             Issue::DossierCree { parent, chemin, nom } => {
                 // Déplié, le parent montre le dossier qu'on vient de créer.
@@ -5234,6 +5411,14 @@ fn dossiers_a_vider(dossiers: &[DossierLocal]) -> Vec<String> {
         .collect()
 }
 
+/// Vrai si `chemin` est la corbeille ou un dossier d'indésirables du compte
+/// (0.6.24), au sens de `dossiers_a_vider` — ceux que « Vider les corbeilles »
+/// vide —, et seulement lui : un dossier de l'utilisateur dont le nom évoque
+/// le pourriel (« Signalements spam ») n'efface jamais pour de bon.
+fn dossier_effacable(dossiers: &[DossierLocal], chemin: &str) -> bool {
+    !chemin.is_empty() && dossiers_a_vider(dossiers).iter().any(|c| c == chemin)
+}
+
 /// Pourquoi le dossier `chemin` d'un compte ne se renomme pas depuis MMail ;
 /// `None` s'il se renomme. `partagees` : adresses des boîtes partagées du
 /// compte. Dossiers du système : ceux qui portent un rôle, et ceux que MMail
@@ -5413,6 +5598,16 @@ impl Travail {
             Commande::Deplacer { .. } => {
                 Issue::DeplacementEchoue { message: format!("{motif} — messages non déplacés") }
             }
+            Commande::Effacer { chemin, .. } => {
+                Issue::Efface { chemin, nombre: 0, erreur: format!("{motif} — rien n'est effacé") }
+            }
+            Commande::PreparerPurge { chemin, numero, .. } => Issue::PurgePreparee {
+                chemin,
+                numero,
+                validite: 0,
+                uids: Vec::new(),
+                erreur: format!("{motif} — pas de décompte"),
+            },
             Commande::MarquerLu { chemin, .. }
             | Commande::MarquerSuivi { chemin, .. }
             | Commande::MarquerCategorie { chemin, .. } => Issue::MarquageAbandonne { chemin },
@@ -5749,6 +5944,44 @@ impl Travail {
                     }
                 })
             }
+            Commande::Effacer { chemin, validite, uids } => {
+                let resultat = crate::purge::effacer(&mut e.client, &chemin, validite, &uids);
+                if resultat.is_ok() {
+                    // Effacés du serveur, effacés de l'index : la liste suit
+                    // sans attendre la prochaine synchronisation du dossier.
+                    if let Ok(id) = e.magasin.dossier_id(compte, &chemin) {
+                        let _ = e.magasin.retirer(id, &uids);
+                    }
+                }
+                let _ = synchro::arborescence(&mut e.client, &e.magasin, compte);
+                Some(match resultat {
+                    Ok(()) => Issue::Efface { chemin, nombre: uids.len() as u32, erreur: String::new() },
+                    Err(err) => {
+                        let issue = echec("tri", format!("effacement dans {chemin} : {err}"), &err);
+                        // Avant l'échec, qui peut fermer la session : l'interface
+                        // doit remettre les lignes quoi qu'il arrive ensuite.
+                        if let Issue::Echec { message, .. } = &issue {
+                            self.remettre(Issue::Efface { chemin, nombre: 0, erreur: message.clone() });
+                        }
+                        issue
+                    }
+                })
+            }
+            Commande::PreparerPurge { chemin, criteres, numero } => {
+                Some(match crate::purge::chercher(&mut e.client, &chemin, &criteres) {
+                    Ok((validite, uids)) => {
+                        Issue::PurgePreparee { chemin, numero, validite, uids, erreur: String::new() }
+                    }
+                    Err(err) => {
+                        let issue = echec("tri", format!("décompte dans {chemin} : {err}"), &err);
+                        if let Issue::Echec { message, .. } = &issue {
+                            let erreur = message.clone();
+                            self.remettre(Issue::PurgePreparee { chemin, numero, validite: 0, uids: Vec::new(), erreur });
+                        }
+                        issue
+                    }
+                })
+            }
             Commande::CreerDossier { parent, chemin, nom } => {
                 Some(match e.client.creer(&chemin) {
                     Ok(()) => {
@@ -5811,7 +6044,7 @@ impl Travail {
             Commande::Brouillon { redaction } => {
                 let jeton = redaction.jeton.clone();
                 Some(match self.enregistrer_brouillon(e, &redaction) {
-                    Ok(uid) => Issue::BrouillonEnregistre { jeton, uid },
+                    Ok((uid, chemin)) => Issue::BrouillonEnregistre { jeton, uid, compte: self.compte, chemin },
                     Err(message) => Issue::EchecRedaction { jeton, message },
                 })
             }
@@ -6131,8 +6364,14 @@ impl Travail {
 
     /// Retire définitivement un message repris (brouillon, envoi différé) :
     /// il est remplacé par ce qui vient d'être enregistré ou envoyé.
+    ///
+    /// Jamais dans un autre compte que celui du brouillon (0.6.24) : changer
+    /// l'expéditeur en rédaction gardait l'UID du brouillon du premier compte,
+    /// et ce numéro, purgé dans les brouillons du second, y aurait retiré un
+    /// autre message. Le brouillon du premier compte, lui, part à sa corbeille
+    /// par la fenêtre de rédaction.
     fn effacer_repris(&self, e: &mut Etabli, r: &Redaction) -> Result<(), String> {
-        if r.brouillon_uid == 0 {
+        if !brouillon_du_compte(r, self.compte) {
             return Ok(());
         }
         let chemin = if r.brouillon_chemin.is_empty() {
@@ -6353,6 +6592,7 @@ impl Travail {
         if mode == "brouillon" {
             p.brouillon_uid = uid;
             p.brouillon_chemin = chemin.to_string();
+            p.brouillon_compte = self.compte;
         } else {
             p.origine_chemin = chemin.to_string();
             p.origine_uid = uid;
@@ -6501,7 +6741,7 @@ impl Travail {
         avertissements.join(" ; ")
     }
 
-    fn enregistrer_brouillon(&self, e: &mut Etabli, r: &Redaction) -> Result<u32, String> {
+    fn enregistrer_brouillon(&self, e: &mut Etabli, r: &Redaction) -> Result<(u32, String), String> {
         let fichiers = lire_fichiers(&r.pieces)?;
         let (r_images, images) = self.avec_images(r);
         let f = redaction::fabriquer_avec_images(&r_images, maintenant(), &fichiers, &images)?;
@@ -6514,9 +6754,15 @@ impl Travail {
         // La version précédente s'efface une fois la nouvelle en place.
         let _ = self.effacer_repris(e, r);
         let _ = synchro::arborescence(&mut e.client, &e.magasin, self.compte);
-        Ok(uid.unwrap_or(0))
+        Ok((uid.unwrap_or(0), brouillons))
     }
 
+}
+
+/// Le brouillon que remplace `r` est-il porté par `compte` ? Compte inconnu
+/// (0, rédaction d'avant la 0.6.24) : celui de l'envoi, comme avant.
+fn brouillon_du_compte(r: &Redaction, compte: i64) -> bool {
+    r.brouillon_uid != 0 && (r.brouillon_compte == 0 || r.brouillon_compte == compte)
 }
 
 /// Lit les fichiers à joindre. Un fichier disparu entre-temps arrête tout : un
@@ -7450,6 +7696,8 @@ mod tests {
                 Commande::EnvoyerDifferes { .. } => "differes".into(),
                 Commande::Deplacer { .. } => "deplacer".into(),
                 Commande::ViderDossiers { .. } => "vider".into(),
+                Commande::Effacer { .. } => "effacer".into(),
+                Commande::PreparerPurge { .. } => "preparer-purge".into(),
                 Commande::CreerDossier { .. } => "creer".into(),
                 Commande::RenommerDossier { .. } => "renommer".into(),
                 Commande::Arborescence => "arborescence".into(),
@@ -7561,6 +7809,33 @@ mod tests {
     }
 
     #[test]
+    fn effacables_la_corbeille_et_les_indesirables() {
+        let avec_roles = vec![
+            local("INBOX", ""),
+            local("Trash", "Trash"),
+            local("Junk", "Junk"),
+            local("Clients/Signalements spam", ""),
+            local("Corbeille", ""),
+            local("Sent", "Sent"),
+        ];
+        let effacables: Vec<&str> =
+            avec_roles.iter().map(|d| d.chemin.as_str()).filter(|c| dossier_effacable(&avec_roles, c)).collect();
+        assert_eq!(effacables, vec!["Trash", "Junk"]);
+        // Rôles annoncés, sans `\Junk` : « Indésirable » y range, mais le
+        // dossier reste à l'utilisateur, « Supprimer » y met à la corbeille.
+        let sans_junk = vec![local("Trash", "Trash"), local("Signalements spam", "")];
+        assert_eq!(dossier_indesirables(&sans_junk).as_deref(), Some("Signalements spam"));
+        assert!(!dossier_effacable(&sans_junk, "Signalements spam"));
+        // OVH : pas de rôle annoncé, les noms usuels.
+        let sans_roles = vec![local("INBOX", ""), local("Corbeille", ""), local("Spam", ""), local("Clients", "")];
+        let effacables: Vec<&str> =
+            sans_roles.iter().map(|d| d.chemin.as_str()).filter(|c| dossier_effacable(&sans_roles, c)).collect();
+        assert_eq!(effacables, vec!["Corbeille", "Spam"]);
+        assert!(!dossier_effacable(&sans_roles, ""));
+        assert!(!dossier_effacable(&sans_roles, "Inconnu"));
+    }
+
+    #[test]
     fn sans_role_annonce_seuls_les_noms_exacts() {
         let mut non_selectionnable = local("Deleted Items", "");
         non_selectionnable.selectionnable = false;
@@ -7658,6 +7933,17 @@ mod tests {
         let sans: Vec<_> = entetes.iter().filter(|e| e.uid != 14).cloned().collect();
         assert!(differes_interrompus(&sans, &mut vus, 9_000).is_empty());
         assert!(vus.is_empty());
+    }
+
+    #[test]
+    fn brouillon_purge_dans_son_seul_compte() {
+        let r: Redaction = serde_json::from_str(r#"{"brouillonUid":7,"brouillonChemin":"Drafts","brouillonCompte":1}"#).unwrap();
+        assert_eq!(r.brouillon_compte, 1);
+        assert!(brouillon_du_compte(&r, 1));
+        assert!(!brouillon_du_compte(&r, 2), "« De » changé : rien n'est purgé dans l'autre compte");
+        let ancien: Redaction = serde_json::from_str(r#"{"brouillonUid":7}"#).unwrap();
+        assert!(brouillon_du_compte(&ancien, 2), "compte inconnu : celui de l'envoi");
+        assert!(!brouillon_du_compte(&Redaction::default(), 1));
     }
 
     #[test]

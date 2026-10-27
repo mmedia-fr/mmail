@@ -50,10 +50,15 @@ ItemDelegate {
     // avec ses non-lus.
     Accessible.role: Accessible.TreeItem
     Accessible.name: fenetre.libelleLigne(model)
-                     + (model.nonLus > 0 ? ", " + fenetre.accord(model.nonLus, qsTr("non lu"), qsTr("non lus")) : "")
+                     + (brouillons ? (model.messages > 0 ? ", " + fenetre.accord(model.messages, qsTr("élément"), qsTr("éléments")) : "")
+                        : model.nonLus > 0 ? ", " + fenetre.accord(model.nonLus, qsTr("non lu"), qsTr("non lus")) : "")
                      + (cumulVisible ? ", " + texteCumul : "")
     // Ligne repliée d'un compte, ou d'un dossier qui a des sous-dossiers
     // (0.6.21) : elle dit les non-lus qu'elle cache.
+    // Brouillons (0.6.24, comme Outlook) : le nombre total de leurs éléments
+    // entre crochets, au lieu des non-lus — un brouillon enregistré tout seul
+    // se voit, sans passer pour un message non lu.
+    readonly property bool brouillons: estDossier && model.role === "Drafts"
     readonly property bool cumulVisible: model.replie === true && model.nonLusSous > 0
             && (model.genre === "compte" || (model.genre === "dossier" && model.enfants))
     readonly property string texteCumul: model.genre === "compte"
@@ -277,14 +282,20 @@ ItemDelegate {
             ToolTip.text: model.motif
         }
         Label {
-            visible: ligne.estDossier && model.nonLus > 0 && fenetre.marque === null
+            visible: ligne.estDossier && !ligne.brouillons && model.nonLus > 0 && fenetre.marque === null
             text: model.nonLus
             font.bold: true
             color: ligne.highlighted ? fenetre.palette.highlightedText : fenetre.texteAccent
         }
         CompteurNonLus {
-            visible: ligne.estDossier && model.nonLus > 0 && fenetre.marque !== null
+            visible: ligne.estDossier && !ligne.brouillons && model.nonLus > 0 && fenetre.marque !== null
             nombre: model.nonLus
+            Layout.rightMargin: 2
+        }
+        Label {
+            visible: ligne.brouillons && model.messages > 0
+            text: "[" + model.messages + "]"
+            color: ligne.highlighted ? fenetre.palette.highlightedText : fenetre.texteAccent
             Layout.rightMargin: 2
         }
         // Les non-lus cachés par le repli : ceux d'un compte, comme ceux d'un

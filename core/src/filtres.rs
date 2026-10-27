@@ -60,6 +60,11 @@ fn vrai() -> bool {
     true
 }
 
+/// Champs et comparaisons qu'une condition peut employer — dans un filtre
+/// comme dans une purge partielle (0.6.24, cf. `purge`).
+pub const CHAMPS: [&str; 2] = ["expediteur", "objet"];
+pub const OPERATEURS: [&str; 4] = ["contient", "est", "commence", "finit"];
+
 /// Un message reçu, tel que l'index le connaît.
 #[derive(Clone, Debug, Default)]
 pub struct Recu {
@@ -105,10 +110,10 @@ pub fn lire(json: &str) -> Result<Vec<Filtre>, String> {
             return Err(format!("le filtre {nom} n'a pas de condition"));
         }
         for c in &f.conditions {
-            if !matches!(c.champ.as_str(), "expediteur" | "objet") {
+            if !CHAMPS.contains(&c.champ.as_str()) {
                 return Err(format!("le filtre {nom} porte sur un champ inconnu : {}", c.champ));
             }
-            if !matches!(c.operateur.as_str(), "contient" | "est" | "commence" | "finit") {
+            if !OPERATEURS.contains(&c.operateur.as_str()) {
                 return Err(format!("le filtre {nom} a une comparaison inconnue : {}", c.operateur));
             }
             if c.valeur.trim().is_empty() {
@@ -169,6 +174,16 @@ fn correspond(c: &Condition, m: &Recu) -> bool {
     }
 }
 
+/// Vrai si le message répond aux conditions : toutes si `tout`, une au moins
+/// sinon.
+pub fn conditions_remplies(tout: bool, conditions: &[Condition], m: &Recu) -> bool {
+    if tout {
+        conditions.iter().all(|c| correspond(c, m))
+    } else {
+        conditions.iter().any(|c| correspond(c, m))
+    }
+}
+
 /// Plan des filtres pour les messages `recus` d'un dossier du compte
 /// d'adresse `compte`. `deja` : vrai pour un `Message-ID` qu'un filtre a
 /// déjà touché — ce message est laissé tel quel : ramené à la main dans la
@@ -184,12 +199,7 @@ pub fn planifier(filtres: &[Filtre], compte: &str, recus: &[Recu], deja: &dyn Fn
         let (mut touche, mut lu, mut suivi) = (false, false, false);
         let mut destination: Option<(&str, &str)> = None;
         for f in &actifs {
-            let ok = if f.tout {
-                f.conditions.iter().all(|c| correspond(c, m))
-            } else {
-                f.conditions.iter().any(|c| correspond(c, m))
-            };
-            if !ok {
+            if !conditions_remplies(f.tout, &f.conditions, m) {
                 continue;
             }
             touche = true;

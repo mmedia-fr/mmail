@@ -236,6 +236,56 @@ QtObject {
         }
     }
 
+    /// Scénario « brouillon-compte » (0.6.24), deux comptes : un brouillon
+    /// enregistré sur le premier, puis « De » passé sur le second et le
+    /// brouillon réenregistré. Le second compte ne doit rien perdre de ses
+    /// brouillons ; celui du premier part à sa corbeille. Le contrôle des
+    /// boîtes se fait ensuite sur le serveur. Les compteurs des dossiers
+    /// Brouillons sont relevés à la fin.
+    function etapeScenarioBrouillonCompte(r, uid, compte, chemin) {
+        var comptes = fenetre.comptesConnus
+        if (essai.etape === 0) {
+            if (comptes.length < 2) {
+                var encore = Qt.createQmlObject('import QtQuick; Timer { interval: 2000 }', fenetre)
+                encore.triggered.connect(function() { etapeScenarioBrouillonCompte(null, 0, 0, "") })
+                encore.start()
+                return
+            }
+            essai.etape = 1
+            essai.un = comptes[0].compte
+            essai.deux = comptes[1].compte
+            var n = fenetre.ouvrirRedaction(essai.un)
+            n.pret()
+            n.remplir({ a: "destinataire@essai.test", objet: "Essai changement de compte",
+                        texte: "Brouillon commencé sur le premier compte.", mode: "brouillon" })
+            n.modifie = true
+            console.log("scenario: rédaction sur le compte", essai.un)
+            n.enregistrer(false)
+        } else if (essai.etape === 1) {
+            essai.etape = 2
+            console.log("scenario: 1er brouillon | uid", uid, "| compte", compte, "| dossier", chemin)
+            r.choisirCompte(essai.deux)
+            r.modifie = true
+            console.log("scenario: « De » passé sur le compte", r.compteChoisi().compte)
+            r.enregistrer(false)
+        } else if (essai.etape === 2) {
+            essai.etape = 3
+            console.log("scenario: 2e brouillon | uid", uid, "| compte", compte, "| dossier", chemin,
+                        "| porté par", r.brouillonCompte)
+            var fin = Qt.createQmlObject('import QtQuick; Timer { interval: 6000 }', fenetre)
+            fin.triggered.connect(function() {
+                for (var i = 0; i < modeleArborescence.count; ++i) {
+                    var l = modeleArborescence.get(i)
+                    if (l.genre === "dossier" && l.role === "Drafts")
+                        console.log("scenario: Brouillons du compte", l.compte, "| éléments", l.messages,
+                                    "| non lus", l.nonLus, "| affiché", l.messages > 0 ? "[" + l.messages + "]" : "")
+                }
+                console.log("scenario: fin")
+            })
+            fin.start()
+        }
+    }
+
     /// Scénario « recherche-partout » : « Éléments envoyés » puis la boîte de
     /// réception passent par l'index ; le texte de MMAIL_DOSSIER est cherché
     /// dans toutes les boîtes ; un résultat d'un autre dossier est choisi — le
@@ -608,6 +658,61 @@ QtObject {
         }
     }
 
+    /// Scénario « images-confiance » (0.6.24), sur deux messages HTML à images
+    /// distantes du même expéditeur, dans un ordre quelconque : A (DMARC
+    /// réussi) et B (échec DMARC noté par le serveur). B : pas de « Toujours
+    /// pour cet expéditeur ». A : « Toujours » ; puis B : rien d'office ; retour
+    /// à A : images d'office. La confiance est retirée à la fin.
+    function etapeScenarioImagesConfiance(uid, html, bloquees, cle) {
+        var e = fenetre.enteteCourant
+        var office = fenetre.imagesAutoPour === cle
+        var bouton = fenetre.confianceProposee(e)
+        console.log("scenario: étape", essai.etape, "| uid", uid, "| html", html, "| bloquées", bloquees,
+                    "| expéditeur", e.expediteur, "| dmarcEchec", e.dmarcEchec,
+                    "| confiance", fenetre.expediteurDeConfiance(e.expediteur), "| d'office", office,
+                    "| bouton « Toujours »", bouton)
+        if (!html)
+            return
+        var autre = fenetre.indexCourant === 0 ? 1 : 0
+        if (e.dmarcEchec) {
+            console.log(bouton ? "scenario: ECHEC, « Toujours » proposé malgré l'échec DMARC"
+                               : "scenario: OK, « Toujours » absent (DMARC)")
+            if (essai.etape === 2) {
+                console.log(office ? "scenario: ECHEC, images d'office malgré l'échec DMARC"
+                                   : "scenario: OK, rien d'office (DMARC)")
+                essai.etape = 3
+                fenetre.choisir(autre, 0)
+            } else if (essai.etape === 0 && !essai.vuB) {
+                essai.vuB = true
+                fenetre.choisir(autre, 0)
+            }
+            return
+        }
+        if (essai.etape === 0 && bloquees > 0) {
+            console.log(bouton ? "scenario: OK, « Toujours » proposé" : "scenario: ECHEC, « Toujours » absent")
+            essai.etape = 1
+            fenetre.retenirExpediteurConfiance(e.expediteur, true)
+            fenetre.demanderImages()
+        } else if (essai.etape === 1) {
+            console.log(bloquees === 0 ? "scenario: OK, images téléchargées"
+                                       : "scenario: ECHEC, images encore bloquées")
+            console.log("scenario: liste", JSON.stringify(fenetre.expediteursConfiance()))
+            essai.etape = 2
+            fenetre.choisir(autre, 0)
+        } else if (essai.etape === 3) {
+            essai.etape = office ? 4 : 9
+            console.log(office ? "scenario: OK, images d'office au retour"
+                               : "scenario: ECHEC, pas d'images d'office au retour")
+        } else if (essai.etape === 4) {
+            console.log(bloquees === 0 ? "scenario: OK, images d'office téléchargées"
+                                       : "scenario: ECHEC, images d'office encore bloquées")
+            essai.etape = 9
+            fenetre.retenirExpediteurConfiance(e.expediteur, false)
+            console.log("scenario: confiance retirée, liste", JSON.stringify(fenetre.expediteursConfiance()))
+            console.log("scenario: fin")
+        }
+    }
+
     /// Scénario d'essai « pieces » (MMAIL_SCENARIO) : dans la boîte de
     /// réception du premier compte, le premier message portant une pièce
     /// jointe est affiché, et sa première pièce enregistrée dans le dossier
@@ -775,7 +880,7 @@ QtObject {
                       ["dlgRestauration", dlgRestauration], ["dlgAPropos", dlgAPropos], ["dlgCompte", dlgCompte],
                       ["dlgNouveauDossier", dlgNouveauDossier], ["dlgRenommerDossier", dlgRenommerDossier],
                       ["dlgConsentement", dlgConsentement],
-                      ["dlgOuvrirAvec", dlgOuvrirAvec], ["dlgLogiciels", dlgLogiciels], ["dlgReprise", dlgReprise],
+                      ["dlgOuvrirAvec", dlgOuvrirAvec], ["dlgLogiciels", dlgLogiciels], ["dlgExpediteursConfiance", dlgExpediteursConfiance], ["dlgReprise", dlgReprise],
                       ["dlgLien", dlgLien], ["dlgViderDossier", dlgViderDossier], ["popupRappels", popupRappels],
                       ["menuComptes", menuComptes], ["menuReglages", menuReglages], ["menuAffichage", menuAffichage], ["menuPiece", menuPiece],
                       ["menuMessage", menuMessage], ["menuDossier", menuDossier], ["menuCompte", menuCompte]]
@@ -987,6 +1092,92 @@ QtObject {
                     modeleMessages.count === 0 ? "OK vide" : "ECHEC messages encore listés",
                     "| état :", messageEtat.texte)
         Qt.quit()
+    }
+
+    // Scénario « vider-partiellement » (0.6.24) : deux messages de la boîte
+    // de réception partent à la corbeille. Dans la corbeille, « Supprimer »
+    // demande confirmation et efface le premier pour de bon ; puis « Vider
+    // partiellement… » compte les messages reçus avant le 01/01/2000 (aucun),
+    // puis, avant le 01/01/2100, ceux qui ont l'objet du second (un seul), et
+    // l'efface. Chaque fois, la liste ne doit plus montrer le message effacé.
+    function etapeScenarioViderPartiellement() {
+        var a = listeComptes()[0]
+        if (!a || a.etat !== "pret")
+            return
+        if (essai.etape === 0 && boite.dossierCourant === "INBOX" && modeleMessages.count >= 3) {
+            essai.etape = 1
+            essai.sujets = [modeleMessages.get(1).sujet, modeleMessages.get(2).sujet]
+            var choix = {}
+            choix[modeleMessages.get(1).uid] = true
+            choix[modeleMessages.get(2).uid] = true
+            fenetre.selection = choix
+            console.log("scenario: effaçable, boîte de réception :", boite.effacable(a.id, "INBOX"))
+            supprimerSelection()
+            console.log("scenario: deux messages à la corbeille, confirmation demandée :", dlgEffacer.visible)
+        } else if (essai.etape === 1 && deplacementsEnVol === 0) {
+            essai.etape = 2
+            var corbeille = ""
+            var parcourir = function(noeuds) {
+                for (var i = 0; i < noeuds.length && !corbeille; ++i) {
+                    if (noeuds[i].compte === a.id && noeuds[i].role === "Trash")
+                        corbeille = noeuds[i].chemin
+                    else if (noeuds[i].enfants)
+                        parcourir(noeuds[i].enfants)
+                }
+            }
+            parcourir(JSON.parse(boite.arborescence(true)))
+            essai.corbeille = corbeille
+            ouvrirDossier(a.id, corbeille)
+        } else if (essai.etape === 2 && boite.dossierCourant === essai.corbeille
+                   && rangDuSujet(essai.sujets[0]) >= 0 && rangDuSujet(essai.sujets[1]) >= 0) {
+            essai.etape = 3
+            console.log("scenario: corbeille ouverte, effaçable :", boite.effacable(a.id, essai.corbeille))
+            choisir(rangDuSujet(essai.sujets[0]), 0)
+            supprimerSelection()
+            console.log("scenario: Supprimer dans la corbeille | confirmation :", dlgEffacer.visible,
+                        "|", dlgEffacer.title, "|", dlgEffacer.uids.length, "message(s)")
+            dlgEffacer.accept()
+        }
+    }
+    function rangDuSujet(sujet) {
+        for (var i = 0; i < modeleMessages.count; ++i) {
+            if (modeleMessages.get(i).sujet === sujet)
+                return i
+        }
+        return -1
+    }
+    /// Messages effacés pour de bon (`messagesEffaces`).
+    function effacementScenarioViderPartiellement(nombre, erreur) {
+        var a = listeComptes()[0]
+        var efface = essai.etape === 3 ? essai.sujets[0] : essai.sujets[1]
+        console.log("scenario: effacés", nombre, erreur.length > 0 ? "| erreur : " + erreur : "",
+                    "| encore listé :", rangDuSujet(efface) >= 0 ? "ECHEC oui" : "OK non",
+                    "| état :", messageEtat.texte)
+        if (essai.etape === 3) {
+            essai.etape = 4
+            dlgViderPartiellement.ouvrir(a.id, essai.corbeille, essai.corbeille)
+            dlgViderPartiellement.avant = "01/01/2000"
+            dlgViderPartiellement.compter()
+            console.log("scenario: décompte avant le 01/01/2000 demandé |", dlgViderPartiellement.nombre)
+        } else {
+            Qt.quit()
+        }
+    }
+    /// Décompte d'un vidage partiel (`purgePreparee`).
+    function decompteScenarioViderPartiellement(nombre, erreur) {
+        console.log("scenario: décompte", nombre, erreur, "|", dlgViderPartiellement.nombre)
+        if (essai.etape === 4) {
+            essai.etape = 5
+            console.log(nombre === 0 ? "scenario: OK aucun message avant 2000" : "scenario: ECHEC " + nombre + " avant 2000")
+            dlgViderPartiellement.avant = "01/01/2100"
+            dlgViderPartiellement.conditions = [{ champ: "objet", operateur: "est", valeur: essai.sujets[1] }]
+            dlgViderPartiellement.changer()
+            dlgViderPartiellement.compter()
+        } else if (essai.etape === 5) {
+            essai.etape = 6
+            console.log(nombre === 1 ? "scenario: OK un seul message de cet objet" : "scenario: ECHEC " + nombre + " de cet objet")
+            dlgViderPartiellement.accept()
+        }
     }
 
     // Scénario « filtres » (0.6.0) : un filtre incomplet refusé ; un filtre

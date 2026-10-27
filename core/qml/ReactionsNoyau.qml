@@ -122,6 +122,8 @@ Connections {
                 scenarios.etapeScenarioCorbeille()
             if (fenetre.essai.scenario === "vider-dossier")
                 scenarios.etapeScenarioViderDossier()
+            if (fenetre.essai.scenario === "vider-partiellement")
+                scenarios.etapeScenarioViderPartiellement()
             if (fenetre.essai.scenario === "glisser-ligne")
                 scenarios.etapeScenarioGlisserLigne()
             if (fenetre.essai.scenario === "filtres")
@@ -281,6 +283,8 @@ Connections {
             scenarios.etapeScenarioCorbeille()
         if (fenetre.essai && fenetre.essai.scenario === "vider-dossier")
             scenarios.etapeScenarioViderDossier()
+        if (fenetre.essai && fenetre.essai.scenario === "vider-partiellement")
+            scenarios.etapeScenarioViderPartiellement()
         if (fenetre.essai && fenetre.essai.scenario === "glisser-ligne")
             scenarios.etapeScenarioGlisserLigne()
         if (fenetre.essai && fenetre.essai.scenario === "filtres")
@@ -355,6 +359,17 @@ Connections {
             if (i >= 0 && modeleMessages.get(i).pieces !== (fenetre.pieces.length > 0))
                 modeleMessages.setProperty(i, "pieces", fenetre.pieces.length > 0)
         }
+        // Expéditeur de confiance (0.6.24) : ses images distantes se
+        // téléchargent d'office, une fois par affichage du message — la source
+        // affichée, ou un autre message, rouvre la question.
+        var cle = compte + "|" + chemin + "|" + uid
+        if (brut || fenetre.imagesAutoPour !== cle)
+            fenetre.imagesAutoPour = ""
+        if (!brut && html && bloquees > 0 && fenetre.imagesAutoPour === ""
+                && fenetre.imagesDOffice(fenetre.enteteCourant))
+            fenetre.demanderImages()
+        if (fenetre.essai && fenetre.essai.scenario === "images-confiance" && !brut)
+            scenarios.etapeScenarioImagesConfiance(uid, html, bloquees, cle)
         if (fenetre.essai && fenetre.essai.scenario === "pieces")
             scenarios.etapeScenarioPieces()
         if (fenetre.essai && fenetre.essai.scenario === "impression" && !brut)
@@ -393,8 +408,11 @@ Connections {
             Qt.callLater(Qt.quit)
         }
         var r = fenetre.redactions[jeton]
-        if (r)
+        if (r) {
+            if (r.compteChoisi())
+                r.retirerAncienBrouillon(r.compteChoisi().compte)
             r.conteneur.fermerRedaction()
+        }
         messageEtat.texte = avertissement.length > 0
                 ? qsTr("Message envoyé — %1").arg(avertissement)
                 : qsTr("Message envoyé.")
@@ -403,8 +421,11 @@ Connections {
 
     function onProgramme(jeton, echeance) {
         var r = fenetre.redactions[jeton]
-        if (r)
+        if (r) {
+            if (r.compteChoisi())
+                r.retirerAncienBrouillon(r.compteChoisi().compte)
             r.conteneur.fermerRedaction()
+        }
         messageEtat.texte = qsTr("Message programmé pour %1, dans « Envoi différé ». Il partira si MMail est ouvert à ce moment-là.")
                             .arg(fenetre.heureEnvoi(Number(echeance)))
     }
@@ -418,11 +439,13 @@ Connections {
         fenetre.rafraichirListe()
     }
 
-    function onBrouillonEnregistre(jeton, uid) {
+    function onBrouillonEnregistre(jeton, uid, compte, chemin) {
         var r = fenetre.redactions[jeton]
         if (!r)
             return
-        r.brouillonEnregistre(uid)
+        r.brouillonEnregistre(uid, compte, chemin)
+        if (fenetre.essai && fenetre.essai.scenario === "brouillon-compte")
+            scenarios.etapeScenarioBrouillonCompte(r, uid, compte, chemin)
         if (fenetre.essai && fenetre.essai.scenario === "garde-serveur")
             console.log("scenario: brouillon enregistré", uid, "| modifiée", r.modifie,
                         "| gardées après", JSON.parse(boite.redactionsGardees()).length, "| note", r.note)
@@ -693,6 +716,8 @@ Connections {
                 scenarios.etapeScenarioCorbeille()
             if (fenetre.essai.scenario === "vider-dossier")
                 scenarios.etapeScenarioViderDossier()
+            if (fenetre.essai.scenario === "vider-partiellement")
+                scenarios.etapeScenarioViderPartiellement()
             if (fenetre.essai.scenario === "glisser-ligne")
                 scenarios.etapeScenarioGlisserLigne()
             if (fenetre.essai.scenario === "filtres")
@@ -767,6 +792,25 @@ Connections {
                 Qt.quit()
             })
         }
+    }
+
+    // Messages effacés pour de bon (0.6.24), de la corbeille ou des
+    // indésirables : comme un déplacement, les lignes retirées d'avance
+    // reviennent en cas d'échec.
+    function onMessagesEffaces(compte, chemin, nombre, erreur) {
+        fenetre.deplacementsEnVol = Math.max(0, fenetre.deplacementsEnVol - 1)
+        if (fenetre.deplacementsEnVol === 0)
+            fenetre.enDeplacement = ({})
+        fenetre.rafraichirListe(erreur.length > 0)
+        if (erreur.length === 0)
+            messageEtat.texte = fenetre.accord(nombre, qsTr("message effacé définitivement."),
+                                               qsTr("messages effacés définitivement."))
+        if (fenetre.essai && fenetre.essai.scenario === "vider-partiellement")
+            scenarios.effacementScenarioViderPartiellement(nombre, erreur)
+    }
+
+    function onPurgePreparee(compte, chemin, nombre, erreur) {
+        dlgViderPartiellement.decompte(compte, chemin, nombre, erreur)
     }
 
     function onCorbeillesVidees(nombre) {

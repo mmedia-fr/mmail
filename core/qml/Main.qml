@@ -313,6 +313,9 @@ ApplicationWindow {
     property string htmlAffiche: ""
     // Images distantes du message affiché laissées de côté.
     property int imagesBloquees: 0
+    // Message dont les images distantes sont déjà demandées pour cet
+    // affichage (« compte|dossier|uid ») : une seule demande d'office (0.6.24).
+    property string imagesAutoPour: ""
     // Lien survolé dans le message : son adresse s'affiche dans la barre
     // d'information, comme dans un navigateur — un lien trompeur s'y voit.
     property string lienSurvole: ""
@@ -401,6 +404,9 @@ ApplicationWindow {
         // « aucune », au ras du volet comme jusqu'ici, « etroites » ou
         // « larges » (cf. fenetre.margeMessage).
         property string margesMessage: "aucune"
+        // Expéditeurs dont les images distantes se téléchargent d'office
+        // (0.6.24) : adresses en minuscules, JSON. Suit la sauvegarde.
+        property string expediteursConfiance: "[]"
     }
 
     // ---------------------------------------------------------- apparences
@@ -2326,6 +2332,8 @@ ApplicationWindow {
 
     DialogueLogiciels { id: dlgLogiciels }
 
+    DialogueExpediteursConfiance { id: dlgExpediteursConfiance }
+
     FileDialog {
         id: dlgEnregistrerPiece
         property var piece: null
@@ -2720,6 +2728,8 @@ ApplicationWindow {
     }
 
     DialogueViderDossier { id: dlgViderDossier }
+    DialogueViderPartiellement { id: dlgViderPartiellement }
+    DialogueEffacer { id: dlgEffacer }
     DialogueProprietesDossier { id: dlgProprietesDossier }
 
     DialogueNouveauDossier { id: dlgNouveauDossier }
@@ -2961,34 +2971,55 @@ ApplicationWindow {
             supprimerSelection()
             return
         }
-        if (!boite.supprimerDans(compte, chemin, String(r.uid))) {
+        var uid = r.uid
+        // Corbeille, indésirables (0.6.24) : plus de corbeille où aller, le
+        // message s'efface pour de bon, après confirmation.
+        if (boite.effacable(compte, chemin)) {
+            dlgEffacer.ouvrir(compte, chemin, [uid], function() { retirerLigne(cle, uid, "") })
+            return
+        }
+        if (!boite.supprimerDans(compte, chemin, String(uid))) {
             messageEtat.texte = boite.erreur
             return
         }
+        retirerLigne(cle, uid, qsTr("Message mis à la corbeille."))
+    }
+
+    /// La ligne de clé `cle` quitte la liste, son message parti sans être
+    /// ouvert ; `texte` : pour la barre d'état, s'il n'est pas vide.
+    function retirerLigne(cle, uid, texte) {
         var retires = {}
         for (var u in enDeplacement)
             retires[u] = true
         retires[cle] = true
         enDeplacement = retires
         deplacementsEnVol += 1
-        modeleMessages.remove(index)
-        if (!listeMulti && selection[r.uid] === true) {
+        for (var i = modeleMessages.count - 1; i >= 0; --i) {
+            var l = modeleMessages.get(i)
+            var lieu = listeMulti ? l.compte + "|" + l.chemin : boite.compteCourant + "|" + boite.dossierCourant
+            if (lieu + "|" + l.uid === cle) {
+                modeleMessages.remove(i)
+                break
+            }
+        }
+        if (!listeMulti && selection[uid] === true) {
             var reste = {}
             for (var k in selection) {
-                if (parseInt(k) !== r.uid)
+                if (parseInt(k) !== uid)
                     reste[k] = true
             }
             selection = reste
         }
         // Le message affiché, choisi parmi d'autres : il ne reste pas à l'écran.
-        if (!listeMulti && uidCourant === r.uid) {
+        if (!listeMulti && uidCourant === uid) {
             uidCourant = 0
             colonneLecture.sujetAffiche.text = ""
             colonneLecture.auteurAffiche.text = ""
             adresseAffichee = ""
             afficherTexte(qsTr("Aucun message sélectionné."))
         }
-        messageEtat.texte = qsTr("Message mis à la corbeille.")
+        if (texte.length > 0)
+            messageEtat.texte = texte
     }
 
     /// Drapeau d'une ligne : dans « Toutes les BàL » et la recherche globale,
@@ -3492,6 +3523,68 @@ ApplicationWindow {
         coffre.effacer(c)
     }
 
+    // ---- images distantes : expéditeurs de confiance (0.6.24)
+
+    /// Adresses dont les images distantes se téléchargent d'office (réglage
+    /// « expediteursConfiance », JSON, en minuscules).
+    function expediteursConfiance() {
+        try {
+            var l = JSON.parse(reglages.expediteursConfiance)
+            return Array.isArray(l) ? l.filter(function(a) { return typeof a === "string" && a.length > 0 }) : []
+        } catch (e) {
+            return []
+        }
+    }
+
+    function expediteurDeConfiance(adresse) {
+        var a = String(adresse || "").trim().toLowerCase()
+        return a.length > 0 && expediteursConfiance().indexOf(a) >= 0
+    }
+
+    /// Ajoute (`retenu`) ou retire un expéditeur de confiance.
+    function retenirExpediteurConfiance(adresse, retenu) {
+        var a = String(adresse || "").trim().toLowerCase()
+        if (a.length === 0)
+            return
+        var l = expediteursConfiance().filter(function(x) { return x !== a })
+        if (retenu)
+            l.push(a)
+        l.sort()
+        reglages.expediteursConfiance = JSON.stringify(l)
+    }
+
+    /// Images distantes d'office : expéditeur de confiance, et aucun échec
+    /// DMARC noté par le serveur de réception — une adresse d'expéditeur se
+    /// falsifie.
+    function imagesDOffice(entete) {
+        return !!entete && !entete.dmarcEchec && expediteurDeConfiance(entete.expediteur)
+    }
+
+    /// « Toujours pour cet expéditeur » : proposé pour un expéditeur connu
+    /// par son adresse, pas encore de confiance, que le serveur n'a pas vu
+    /// échouer à DMARC.
+    function confianceProposee(entete) {
+        return !!entete && String(entete.expediteur || "").length > 0
+               && !entete.dmarcEchec && !expediteurDeConfiance(entete.expediteur)
+    }
+
+    /// Texte du bandeau des images distantes.
+    function texteImagesBloquees(n, entete) {
+        var debut = n > 1 ? qsTr("%1 images distantes non téléchargées").arg(n)
+                          : qsTr("1 image distante non téléchargée")
+        if (entete && entete.dmarcEchec && expediteurDeConfiance(entete.expediteur))
+            return debut + qsTr(" : expéditeur de confiance, mais le serveur n'a pas pu l'authentifier (DMARC) ; elles ne se téléchargent pas d'office.")
+        return debut + qsTr(" : l'expéditeur saurait que vous avez ouvert le message.")
+    }
+
+    /// Images distantes du message affiché au volet de lecture. Une seule
+    /// demande d'office par affichage (cf. ReactionsNoyau.onCorpsRecu).
+    function demanderImages() {
+        imagesAutoPour = boite.compteCourant + "|" + boite.dossierCourant + "|" + uidCourant
+        messageEtat.texte = qsTr("Téléchargement des images…")
+        boite.afficherImages(uidCourant)
+    }
+
     // ---- sauvegarde de la configuration
 
     /// Les réglages qui suivent la personne d'un poste à l'autre, par
@@ -3718,7 +3811,7 @@ ApplicationWindow {
                 id: suppressionAvantGoogle
                 Layout.fillWidth: true
                 wrapMode: Text.Wrap
-                text: qsTr("MMail ne supprime définitivement que les messages que vous lui demandez d'effacer : « Supprimer » met un message dans la corbeille de Gmail, et seul « Vider », après confirmation, l'efface pour de bon.")
+                text: qsTr("MMail ne supprime définitivement que les messages que vous lui demandez d'effacer : « Supprimer » met un message dans la corbeille de Gmail ; il n'est effacé pour de bon que dans la corbeille ou les indésirables, ou par « Vider », toujours après confirmation.")
             }
             Label {
                 Layout.fillWidth: true
@@ -5215,6 +5308,12 @@ ApplicationWindow {
         var uids = uidsChoisis()
         if (uids.length === 0)
             return
+        // Corbeille, indésirables (0.6.24) : plus de corbeille où aller, les
+        // messages s'effacent pour de bon, après confirmation.
+        if (boite.effacable(boite.compteCourant, boite.dossierCourant)) {
+            dlgEffacer.ouvrir(boite.compteCourant, boite.dossierCourant, uids, function() { retirerDeLaListe(uids) })
+            return
+        }
         if (boite.supprimer(uids.join(",")))
             retirerDeLaListe(uids)
     }
@@ -5246,6 +5345,14 @@ ApplicationWindow {
         var chemin = listeMulti ? r.chemin : boite.dossierCourant
         var role = listeMulti ? (r.role || "") : roleCourant
         var cle = compte + "|" + chemin + "|" + r.uid
+        // Corbeille, indésirables (0.6.24) : un effacement ne se rattrape pas,
+        // le bandeau « Annuler » ne suffit pas — confirmation d'abord.
+        if (genre === "corbeille" && boite.effacable(compte, chemin)) {
+            var uid = r.uid
+            dlgEffacer.ouvrir(compte, chemin, [uid], function() { retirerLigne(cle, uid, "") },
+                              function() { rafraichirListe(true) })
+            return
+        }
         glissement = { cle: cle, compte: compte, chemin: chemin, uid: r.uid, genre: genre }
         var attente = {}
         for (var k in enAttente)
@@ -5571,6 +5678,7 @@ ApplicationWindow {
                                        || identifiantsEssai.scenario === "pieces"
                                        || identifiantsEssai.scenario === "ouvrir-avec"
                                        || identifiantsEssai.scenario === "images"
+                                       || identifiantsEssai.scenario === "images-confiance"
                                        || identifiantsEssai.scenario === "invitation"
                                        || identifiantsEssai.scenario.indexOf("signature") === 0,
                       connecter2: null, scenario: identifiantsEssai.scenario || "",
@@ -6058,6 +6166,11 @@ ApplicationWindow {
                 var attenteImage = Qt.createQmlObject('import QtQuick; Timer { interval: 6000 }', fenetre)
                 attenteImage.triggered.connect(scenarios.etapeScenarioCollerImage)
                 attenteImage.start()
+            }
+            if (essai.scenario === "brouillon-compte") {
+                var attenteCompte = Qt.createQmlObject('import QtQuick; Timer { interval: 8000 }', fenetre)
+                attenteCompte.triggered.connect(function() { scenarios.etapeScenarioBrouillonCompte(null, 0, 0, "") })
+                attenteCompte.start()
             }
             if (essai.scenario === "brouillon-auto") {
                 var attente = Qt.createQmlObject('import QtQuick; Timer { interval: 6000 }', fenetre)

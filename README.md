@@ -33,7 +33,9 @@ de projet interne.
   distinct quand le fournisseur en a un (Orange, Free, SFR) —, dans un fil à part — le compte reste
   utilisable pendant un gros envoi —, copie dans « Éléments envoyés », original
   marqué « répondu » ou « transféré » ; brouillons enregistrés sur le serveur et
-  repris d'un double clic ;
+  repris d'un double clic — un brouillon reste dans le compte où il a été écrit,
+  même quand on change « De » (0.6.24) ; le dossier Brouillons affiche entre
+  crochets le nombre de ses éléments, comme Outlook ;
 - **mise en forme** à la rédaction — gras, italique, souligné, listes à
   puces ou numérotées, liens — envoyée en HTML avec sa version en texte brut ;
   « Mise en forme » décochée, le message part en texte brut ;
@@ -60,7 +62,7 @@ de projet interne.
 - **corbeille sur chaque ligne** : au survol de la souris, une corbeille en bout
   de ligne envoie ce message à la corbeille de sa boîte sans l'ouvrir — dans un
   dossier comme dans « Toutes les BàL » ; le message affiché et la sélection ne
-  bougent pas ;
+  bougent pas ; dans les indésirables, elle l'efface, après confirmation (0.6.24) ;
 - **drapeau de suivi** (`\Flagged`) posé ou retiré d'un clic en bout de ligne,
   par le menu ou la touche Insertion ; importance des messages reçus signalée
   dans la liste (« ! », « ↓ ») et dans l'en-tête ;
@@ -154,7 +156,9 @@ de projet interne.
   récents, plus anciens, expéditeur, objet (sans ses « RE : »), plus gros,
   dossier dans toutes les boîtes — sur le poste : le tri n'est jamais demandé
   au serveur, pour qui il coûte cher sur un gros dossier ;
-- **Supprimer** envoie à la corbeille de la boîte (touche Suppr) ;
+- **Supprimer** envoie à la corbeille de la boîte (touche Suppr) ; dans la
+  corbeille et les indésirables, d'où un message n'a plus de corbeille où aller,
+  il l'efface pour de bon, après confirmation (0.6.24) ;
 - **dossiers de rôle** — brouillons, éléments envoyés, corbeille — désignés
   par le serveur (SPECIAL-USE) ; à défaut (OVH), reconnus à leur nom usuel,
   « Drafts » ou « Brouillons », « Sent » ou « Éléments envoyés »… : le moins
@@ -162,6 +166,12 @@ de projet interne.
 - **vider les corbeilles et indésirables** de tous les comptes : seuls les
   dossiers que le serveur désigne comme tels (`\Trash`, `\Junk`) sont purgés,
   jamais un dossier sur la foi de son nom ;
+- **vider partiellement** une corbeille ou un dossier d'indésirables (0.6.24,
+  clic droit sur le dossier) : les messages reçus avant une date, et ceux dont
+  l'expéditeur ou l'objet remplissent des conditions — celles des filtres :
+  contient, est, commence par, se termine par. Le serveur compte d'abord, y
+  compris les messages que le poste n'a pas encore ; seuls les messages comptés
+  partent, à la confirmation ;
 - marquage lu / non lu (Ctrl+Q, Ctrl+U) ; un message affiché est marqué lu,
   sauf s'il a été marqué entre-temps — « non lu » pendant son chargement le
   laisse non lu ; « Affichage › Marquer comme lu » choisit quand, comme le volet
@@ -171,6 +181,13 @@ de projet interne.
   corps du message des bords, à gauche et à droite, dans le volet de lecture
   comme dans la fenêtre d'un message — « Aucune » (par défaut, au ras du volet),
   « Étroites » ou « Larges », en proportion de la taille du texte ;
+- **expéditeurs de confiance** (0.6.24) : « Toujours pour cet expéditeur », à
+  côté de « Télécharger les images », fait télécharger d'office les images
+  distantes de ses messages, dans le volet de lecture comme dans la fenêtre d'un
+  message — jamais quand le serveur a noté l'échec de son authentification
+  (DMARC), une adresse d'expéditeur se falsifiant ; la liste se revoit dans
+  « Réglages › Expéditeurs de confiance… » et suit la sauvegarde de la
+  configuration ;
 - **masquage local** des dossiers peu utilisés, réaffichage en un clic ;
 - affichage du **message brut** (bouton « Source ») ;
 - **copie automatique de la sélection**, comme dans MMdedit : un texte
@@ -378,7 +395,8 @@ de rafraîchissement va au coffre du système, à la place du mot de passe.
   demandera d'autoriser MMail à « supprimer définitivement » tout le courrier —
   son texte, pour toute application qui lit Gmail en IMAP —, alors que MMail
   n'efface définitivement que ce qu'on lui demande d'effacer (« Supprimer » met
-  à la corbeille, seul « Vider », après confirmation, efface). La page ne s'ouvre
+  à la corbeille ; il n'efface que dans la corbeille ou les indésirables, comme
+  « Vider », toujours après confirmation). La page ne s'ouvre
   qu'à « Continuer chez Google » ; ajout comme reconnexion.
 - **Lecture** en IMAPS sur `imap.gmail.com` (`AUTHENTICATE XOAUTH2`) ; **envoi**
   en SMTP sur TLS, `smtp.gmail.com:465` (`AUTH XOAUTH2`). Gmail range lui-même

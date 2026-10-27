@@ -753,6 +753,18 @@ impl Client {
         Ok(protocole::analyser_search(&texte))
     }
 
+    /// UID des messages du dossier sélectionné reçus avant un jour (`BEFORE`,
+    /// sur la date de réception du serveur, celle du tri de la liste) ; sans
+    /// jour, tous. `jour` : au format de la RFC 3501, « 1-Jan-2026 ».
+    pub fn chercher_avant(&mut self, jour: Option<&str>) -> Resultat<Vec<u32>> {
+        let critere = match jour {
+            Some(jour) => format!("BEFORE {jour}"),
+            None => "ALL".to_string(),
+        };
+        let (texte, _) = self.commande(&format!("UID SEARCH {critere}"))?;
+        Ok(protocole::analyser_search(&texte))
+    }
+
     /// Entre en `IDLE` (RFC 2177) sur le dossier sélectionné : le serveur
     /// signale alors de lui-même messages arrivés, retirés et drapeaux changés.
     pub fn idle_commencer(&mut self) -> Resultat<()> {
@@ -1100,6 +1112,21 @@ mod tests {
         let (mut client, _) = session("UIDPLUS", vec![echange("UID SEARCH ALL", &reponse, "OK")]);
         let texte = client.brute("UID SEARCH ALL").unwrap();
         assert!(texte.contains(" 199999 200000"), "ligne de {} octets lue en entier", reponse.len());
+    }
+
+    #[test]
+    fn recherche_par_date_de_reception() {
+        use crate::simule::{echange, session};
+        let (mut client, journal) = session(
+            "UIDPLUS",
+            vec![
+                echange("UID SEARCH BEFORE 1-Jan-2026", "* SEARCH 3 5\r\n", "OK"),
+                echange("UID SEARCH ALL", "* SEARCH 3 5 8\r\n", "OK"),
+            ],
+        );
+        assert_eq!(client.chercher_avant(Some("1-Jan-2026")).unwrap(), vec![3, 5]);
+        assert_eq!(client.chercher_avant(None).unwrap(), vec![3, 5, 8]);
+        assert_eq!(journal.lock().unwrap().len(), 2);
     }
 
     #[test]

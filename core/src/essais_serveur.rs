@@ -25,6 +25,7 @@ use crate::deplacement;
 use crate::imap::{Client, Erreur};
 use crate::magasin::{Etape, Magasin, Operation};
 use crate::protocole::secondes_date_interne;
+use crate::purge;
 use crate::synchro;
 
 fn variable(nom: &str) -> String {
@@ -736,6 +737,51 @@ fn vidage_d_un_dossier_d_indesirables() {
     assert!(nombre >= 3);
     let reste = a.selectionner("Junk", None).expect("SELECT après vidage");
     assert_eq!(reste.etat.messages, 0);
+}
+
+#[test]
+#[ignore = "exige un serveur IMAP et un compte"]
+fn vidage_partiel_de_la_corbeille() {
+    // 0.6.24 : la date de réception se cherche sur le serveur, l'objet se
+    // vérifie sur le poste ; seuls les messages comptés partent.
+    let mut a = session();
+    let corbeille = a
+        .dossiers()
+        .expect("LIST")
+        .into_iter()
+        .find(|d| d.role() == Some("Trash"))
+        .expect("corbeille")
+        .chemin;
+    let mut deposer = |objet: &str, date: &str| {
+        let (id, brut) = message_essai(objet);
+        let uid = a.deposer(&corbeille, &[], date, &brut).expect("APPEND").expect("APPENDUID");
+        (id, uid)
+    };
+    let releve_ancien = deposer("Relevé ancien", "15-Mar-2025 10:00:00 +0100");
+    let lettre_ancienne = deposer("Lettre ancienne", "20-Jun-2025 10:00:00 +0200");
+    let releve_recent = deposer("Relevé récent", DATE_ESSAI);
+    let miens = [releve_ancien.1, lettre_ancienne.1, releve_recent.1];
+    // La corbeille d'essai peut contenir autre chose : seuls nos messages comptent.
+    let parmi_les_miens = |uids: Vec<u32>| -> Vec<u32> { uids.into_iter().filter(|u| miens.contains(u)).collect() };
+
+    let date_seule = purge::lire(r#"{"avant": "01/01/2026"}"#).unwrap();
+    let (validite, trouves) = purge::chercher(&mut a, &corbeille, &date_seule).expect("décompte par date");
+    assert_eq!(parmi_les_miens(trouves), vec![releve_ancien.1, lettre_ancienne.1]);
+
+    let json = r#"{"avant": "01/01/2026",
+                   "conditions": [{"champ": "objet", "operateur": "commence", "valeur": "relevé"}]}"#;
+    let (_, trouves) = purge::chercher(&mut a, &corbeille, &purge::lire(json).unwrap()).expect("décompte");
+    let a_effacer = parmi_les_miens(trouves);
+    assert_eq!(a_effacer, vec![releve_ancien.1]);
+
+    assert!(purge::effacer(&mut a, &corbeille, validite.wrapping_add(1), &a_effacer).is_err());
+    assert_eq!(compter(&mut a, &corbeille, &releve_ancien.0).len(), 1, "validité changée : rien ne part");
+    purge::effacer(&mut a, &corbeille, validite, &a_effacer).expect("effacement");
+    assert!(compter(&mut a, &corbeille, &releve_ancien.0).is_empty(), "le relevé ancien est effacé");
+    assert_eq!(compter(&mut a, &corbeille, &lettre_ancienne.0).len(), 1, "la lettre ancienne reste");
+    assert_eq!(compter(&mut a, &corbeille, &releve_recent.0).len(), 1, "le relevé récent reste");
+    nettoyer(&mut a, &corbeille, &lettre_ancienne.0);
+    nettoyer(&mut a, &corbeille, &releve_recent.0);
 }
 
 #[test]

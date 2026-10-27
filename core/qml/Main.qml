@@ -2728,6 +2728,8 @@ ApplicationWindow {
     }
 
     DialogueViderDossier { id: dlgViderDossier }
+    DialogueViderPartiellement { id: dlgViderPartiellement }
+    DialogueEffacer { id: dlgEffacer }
     DialogueProprietesDossier { id: dlgProprietesDossier }
 
     DialogueNouveauDossier { id: dlgNouveauDossier }
@@ -2969,34 +2971,55 @@ ApplicationWindow {
             supprimerSelection()
             return
         }
-        if (!boite.supprimerDans(compte, chemin, String(r.uid))) {
+        var uid = r.uid
+        // Corbeille, indésirables (0.6.24) : plus de corbeille où aller, le
+        // message s'efface pour de bon, après confirmation.
+        if (boite.effacable(compte, chemin)) {
+            dlgEffacer.ouvrir(compte, chemin, [uid], function() { retirerLigne(cle, uid, "") })
+            return
+        }
+        if (!boite.supprimerDans(compte, chemin, String(uid))) {
             messageEtat.texte = boite.erreur
             return
         }
+        retirerLigne(cle, uid, qsTr("Message mis à la corbeille."))
+    }
+
+    /// La ligne de clé `cle` quitte la liste, son message parti sans être
+    /// ouvert ; `texte` : pour la barre d'état, s'il n'est pas vide.
+    function retirerLigne(cle, uid, texte) {
         var retires = {}
         for (var u in enDeplacement)
             retires[u] = true
         retires[cle] = true
         enDeplacement = retires
         deplacementsEnVol += 1
-        modeleMessages.remove(index)
-        if (!listeMulti && selection[r.uid] === true) {
+        for (var i = modeleMessages.count - 1; i >= 0; --i) {
+            var l = modeleMessages.get(i)
+            var lieu = listeMulti ? l.compte + "|" + l.chemin : boite.compteCourant + "|" + boite.dossierCourant
+            if (lieu + "|" + l.uid === cle) {
+                modeleMessages.remove(i)
+                break
+            }
+        }
+        if (!listeMulti && selection[uid] === true) {
             var reste = {}
             for (var k in selection) {
-                if (parseInt(k) !== r.uid)
+                if (parseInt(k) !== uid)
                     reste[k] = true
             }
             selection = reste
         }
         // Le message affiché, choisi parmi d'autres : il ne reste pas à l'écran.
-        if (!listeMulti && uidCourant === r.uid) {
+        if (!listeMulti && uidCourant === uid) {
             uidCourant = 0
             colonneLecture.sujetAffiche.text = ""
             colonneLecture.auteurAffiche.text = ""
             adresseAffichee = ""
             afficherTexte(qsTr("Aucun message sélectionné."))
         }
-        messageEtat.texte = qsTr("Message mis à la corbeille.")
+        if (texte.length > 0)
+            messageEtat.texte = texte
     }
 
     /// Drapeau d'une ligne : dans « Toutes les BàL » et la recherche globale,
@@ -3788,7 +3811,7 @@ ApplicationWindow {
                 id: suppressionAvantGoogle
                 Layout.fillWidth: true
                 wrapMode: Text.Wrap
-                text: qsTr("MMail ne supprime définitivement que les messages que vous lui demandez d'effacer : « Supprimer » met un message dans la corbeille de Gmail, et seul « Vider », après confirmation, l'efface pour de bon.")
+                text: qsTr("MMail ne supprime définitivement que les messages que vous lui demandez d'effacer : « Supprimer » met un message dans la corbeille de Gmail ; il n'est effacé pour de bon que dans la corbeille ou les indésirables, ou par « Vider », toujours après confirmation.")
             }
             Label {
                 Layout.fillWidth: true
@@ -5285,6 +5308,12 @@ ApplicationWindow {
         var uids = uidsChoisis()
         if (uids.length === 0)
             return
+        // Corbeille, indésirables (0.6.24) : plus de corbeille où aller, les
+        // messages s'effacent pour de bon, après confirmation.
+        if (boite.effacable(boite.compteCourant, boite.dossierCourant)) {
+            dlgEffacer.ouvrir(boite.compteCourant, boite.dossierCourant, uids, function() { retirerDeLaListe(uids) })
+            return
+        }
         if (boite.supprimer(uids.join(",")))
             retirerDeLaListe(uids)
     }
@@ -5316,6 +5345,14 @@ ApplicationWindow {
         var chemin = listeMulti ? r.chemin : boite.dossierCourant
         var role = listeMulti ? (r.role || "") : roleCourant
         var cle = compte + "|" + chemin + "|" + r.uid
+        // Corbeille, indésirables (0.6.24) : un effacement ne se rattrape pas,
+        // le bandeau « Annuler » ne suffit pas — confirmation d'abord.
+        if (genre === "corbeille" && boite.effacable(compte, chemin)) {
+            var uid = r.uid
+            dlgEffacer.ouvrir(compte, chemin, [uid], function() { retirerLigne(cle, uid, "") },
+                              function() { rafraichirListe(true) })
+            return
+        }
         glissement = { cle: cle, compte: compte, chemin: chemin, uid: r.uid, genre: genre }
         var attente = {}
         for (var k in enAttente)

@@ -1094,6 +1094,92 @@ QtObject {
         Qt.quit()
     }
 
+    // Scénario « vider-partiellement » (0.6.24) : deux messages de la boîte
+    // de réception partent à la corbeille. Dans la corbeille, « Supprimer »
+    // demande confirmation et efface le premier pour de bon ; puis « Vider
+    // partiellement… » compte les messages reçus avant le 01/01/2000 (aucun),
+    // puis, avant le 01/01/2100, ceux qui ont l'objet du second (un seul), et
+    // l'efface. Chaque fois, la liste ne doit plus montrer le message effacé.
+    function etapeScenarioViderPartiellement() {
+        var a = listeComptes()[0]
+        if (!a || a.etat !== "pret")
+            return
+        if (essai.etape === 0 && boite.dossierCourant === "INBOX" && modeleMessages.count >= 3) {
+            essai.etape = 1
+            essai.sujets = [modeleMessages.get(1).sujet, modeleMessages.get(2).sujet]
+            var choix = {}
+            choix[modeleMessages.get(1).uid] = true
+            choix[modeleMessages.get(2).uid] = true
+            fenetre.selection = choix
+            console.log("scenario: effaçable, boîte de réception :", boite.effacable(a.id, "INBOX"))
+            supprimerSelection()
+            console.log("scenario: deux messages à la corbeille, confirmation demandée :", dlgEffacer.visible)
+        } else if (essai.etape === 1 && deplacementsEnVol === 0) {
+            essai.etape = 2
+            var corbeille = ""
+            var parcourir = function(noeuds) {
+                for (var i = 0; i < noeuds.length && !corbeille; ++i) {
+                    if (noeuds[i].compte === a.id && noeuds[i].role === "Trash")
+                        corbeille = noeuds[i].chemin
+                    else if (noeuds[i].enfants)
+                        parcourir(noeuds[i].enfants)
+                }
+            }
+            parcourir(JSON.parse(boite.arborescence(true)))
+            essai.corbeille = corbeille
+            ouvrirDossier(a.id, corbeille)
+        } else if (essai.etape === 2 && boite.dossierCourant === essai.corbeille
+                   && rangDuSujet(essai.sujets[0]) >= 0 && rangDuSujet(essai.sujets[1]) >= 0) {
+            essai.etape = 3
+            console.log("scenario: corbeille ouverte, effaçable :", boite.effacable(a.id, essai.corbeille))
+            choisir(rangDuSujet(essai.sujets[0]), 0)
+            supprimerSelection()
+            console.log("scenario: Supprimer dans la corbeille | confirmation :", dlgEffacer.visible,
+                        "|", dlgEffacer.title, "|", dlgEffacer.uids.length, "message(s)")
+            dlgEffacer.accept()
+        }
+    }
+    function rangDuSujet(sujet) {
+        for (var i = 0; i < modeleMessages.count; ++i) {
+            if (modeleMessages.get(i).sujet === sujet)
+                return i
+        }
+        return -1
+    }
+    /// Messages effacés pour de bon (`messagesEffaces`).
+    function effacementScenarioViderPartiellement(nombre, erreur) {
+        var a = listeComptes()[0]
+        var efface = essai.etape === 3 ? essai.sujets[0] : essai.sujets[1]
+        console.log("scenario: effacés", nombre, erreur.length > 0 ? "| erreur : " + erreur : "",
+                    "| encore listé :", rangDuSujet(efface) >= 0 ? "ECHEC oui" : "OK non",
+                    "| état :", messageEtat.texte)
+        if (essai.etape === 3) {
+            essai.etape = 4
+            dlgViderPartiellement.ouvrir(a.id, essai.corbeille, essai.corbeille)
+            dlgViderPartiellement.avant = "01/01/2000"
+            dlgViderPartiellement.compter()
+            console.log("scenario: décompte avant le 01/01/2000 demandé |", dlgViderPartiellement.nombre)
+        } else {
+            Qt.quit()
+        }
+    }
+    /// Décompte d'un vidage partiel (`purgePreparee`).
+    function decompteScenarioViderPartiellement(nombre, erreur) {
+        console.log("scenario: décompte", nombre, erreur, "|", dlgViderPartiellement.nombre)
+        if (essai.etape === 4) {
+            essai.etape = 5
+            console.log(nombre === 0 ? "scenario: OK aucun message avant 2000" : "scenario: ECHEC " + nombre + " avant 2000")
+            dlgViderPartiellement.avant = "01/01/2100"
+            dlgViderPartiellement.conditions = [{ champ: "objet", operateur: "est", valeur: essai.sujets[1] }]
+            dlgViderPartiellement.changer()
+            dlgViderPartiellement.compter()
+        } else if (essai.etape === 5) {
+            essai.etape = 6
+            console.log(nombre === 1 ? "scenario: OK un seul message de cet objet" : "scenario: ECHEC " + nombre + " de cet objet")
+            dlgViderPartiellement.accept()
+        }
+    }
+
     // Scénario « filtres » (0.6.0) : un filtre incomplet refusé ; un filtre
     // sur l'objet d'un message de la boîte de réception, qui l'envoie dans
     // « Essais » quand on l'applique ; le message y est, on le ramène — et les

@@ -25,9 +25,12 @@ Menu {
     property bool selectionnable: true
     // Vide si le dossier se renomme ; sinon pourquoi « Renommer… » est grisé.
     property string motifRenommage: ""
+    // Corbeille ou indésirables : il se vide aussi en partie (0.6.24).
+    property bool effacable: false
     function ouvrir(c, ch, f, m, n, sel, item, x, y) {
         compte = c; chemin = ch; favori = f; masque = m; nom = n; selectionnable = sel
         motifRenommage = boite.motifRenommage(c, ch)
+        effacable = boite.effacable(c, ch)
         if (item)
             popup(item, x, y)
         else
@@ -50,6 +53,12 @@ Menu {
         text: qsTr("Vider ce dossier…")
         enabled: menuDossier.selectionnable
         onTriggered: dlgViderDossier.ouvrir(menuDossier.compte, menuDossier.chemin, menuDossier.nom)
+    }
+    MenuItem {
+        text: qsTr("Vider partiellement…")
+        visible: menuDossier.effacable
+        height: visible ? implicitHeight : 0
+        onTriggered: dlgViderPartiellement.ouvrir(menuDossier.compte, menuDossier.chemin, menuDossier.nom)
     }
     MenuSeparator {}
     MenuItem {

@@ -27,6 +27,7 @@ pub mod pont_badge;
 pub mod pont_presse_papier;
 pub mod poste;
 pub mod presse_papier;
+pub mod purge;
 pub mod redaction;
 pub mod rendu;
 pub mod saisie;

@@ -122,6 +122,8 @@ Connections {
                 scenarios.etapeScenarioCorbeille()
             if (fenetre.essai.scenario === "vider-dossier")
                 scenarios.etapeScenarioViderDossier()
+            if (fenetre.essai.scenario === "vider-partiellement")
+                scenarios.etapeScenarioViderPartiellement()
             if (fenetre.essai.scenario === "glisser-ligne")
                 scenarios.etapeScenarioGlisserLigne()
             if (fenetre.essai.scenario === "filtres")
@@ -281,6 +283,8 @@ Connections {
             scenarios.etapeScenarioCorbeille()
         if (fenetre.essai && fenetre.essai.scenario === "vider-dossier")
             scenarios.etapeScenarioViderDossier()
+        if (fenetre.essai && fenetre.essai.scenario === "vider-partiellement")
+            scenarios.etapeScenarioViderPartiellement()
         if (fenetre.essai && fenetre.essai.scenario === "glisser-ligne")
             scenarios.etapeScenarioGlisserLigne()
         if (fenetre.essai && fenetre.essai.scenario === "filtres")
@@ -712,6 +716,8 @@ Connections {
                 scenarios.etapeScenarioCorbeille()
             if (fenetre.essai.scenario === "vider-dossier")
                 scenarios.etapeScenarioViderDossier()
+            if (fenetre.essai.scenario === "vider-partiellement")
+                scenarios.etapeScenarioViderPartiellement()
             if (fenetre.essai.scenario === "glisser-ligne")
                 scenarios.etapeScenarioGlisserLigne()
             if (fenetre.essai.scenario === "filtres")
@@ -786,6 +792,25 @@ Connections {
                 Qt.quit()
             })
         }
+    }
+
+    // Messages effacés pour de bon (0.6.24), de la corbeille ou des
+    // indésirables : comme un déplacement, les lignes retirées d'avance
+    // reviennent en cas d'échec.
+    function onMessagesEffaces(compte, chemin, nombre, erreur) {
+        fenetre.deplacementsEnVol = Math.max(0, fenetre.deplacementsEnVol - 1)
+        if (fenetre.deplacementsEnVol === 0)
+            fenetre.enDeplacement = ({})
+        fenetre.rafraichirListe(erreur.length > 0)
+        if (erreur.length === 0)
+            messageEtat.texte = fenetre.accord(nombre, qsTr("message effacé définitivement."),
+                                               qsTr("messages effacés définitivement."))
+        if (fenetre.essai && fenetre.essai.scenario === "vider-partiellement")
+            scenarios.effacementScenarioViderPartiellement(nombre, erreur)
+    }
+
+    function onPurgePreparee(compte, chemin, nombre, erreur) {
+        dlgViderPartiellement.decompte(compte, chemin, nombre, erreur)
     }
 
     function onCorbeillesVidees(nombre) {

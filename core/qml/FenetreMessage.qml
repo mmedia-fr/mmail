@@ -172,6 +172,12 @@ ApplicationWindow {
     }
 
     function supprimer() {
+        // Corbeille, indésirables (0.6.24) : plus de corbeille où aller, le
+        // message s'efface pour de bon, après confirmation.
+        if (boite.effacable(compte, chemin)) {
+            dlgEffacerFenetre.ouvrir(compte, chemin, [uid], function() { retirer(true) })
+            return
+        }
         retirer(boite.supprimerDans(compte, chemin, String(uid)))
     }
 
@@ -259,6 +265,11 @@ ApplicationWindow {
 
     DialogueDeplacer {
         id: dlgDeplacerFenetre
+        pour: fenetreMessage
+    }
+
+    DialogueEffacer {
+        id: dlgEffacerFenetre
         pour: fenetreMessage
     }
 

@@ -2258,6 +2258,74 @@ QtObject {
         tic.start()
     }
 
+    /// Scénario « marges » (0.6.23) : « Affichage › Marges du message », ses
+    /// trois choix l'un après l'autre, dans le volet de lecture et dans la
+    /// fenêtre du message. Le texte doit se décaler de la marge choisie. Avec
+    /// MMAIL_DOSSIER à « aucune », « etroites » ou « larges », ce choix reste
+    /// posé pour une capture (--capture).
+    function lancerScenarioMarges() {
+        var tic = Qt.createQmlObject('import QtQuick; Timer { interval: 1000; repeat: true }', fenetre)
+        var suivi = { n: 0, echecs: 0, marges: {}, x0: -1 }
+        var choix = ["aucune", "etroites", "larges"]
+        var bilan = function(texte, bon) {
+            if (!bon)
+                suivi.echecs += 1
+            console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
+        }
+        var mesurer = function(valeur) {
+            var v = colonneLecture.vueCorps
+            var f = fenetresMessage.length > 0 ? fenetresMessage[0].corps : null
+            var x = v.positionToRectangle(0).x
+            if (valeur === "aucune")
+                suivi.x0 = x
+            suivi.marges[valeur] = fenetre.margeMessage
+            bilan("marges « " + valeur + " » : " + fenetre.margeMessage + " px | volet " + v.leftPadding + "/"
+                  + v.rightPadding + ", texte à " + Math.round(x) + " | fenêtre "
+                  + (f ? f.leftPadding + "/" + f.rightPadding : "absente"),
+                  v.leftPadding === v.padding + 4 + fenetre.margeMessage
+                  && v.rightPadding === v.padding + fenetre.margeMessage
+                  && Math.abs(x - suivi.x0 - fenetre.margeMessage) < 1
+                  && f !== null && f.leftPadding === v.leftPadding && f.rightPadding === v.rightPadding)
+        }
+        tic.triggered.connect(function() {
+            suivi.n += 1
+            if (suivi.n === 4) {
+                ouvrirDossier(comptesConnus[0].compte, "INBOX")
+            } else if (suivi.n === 7) {
+                // Le long message HTML du banc MARGES=1, ou celui de GIF=1,
+                // s'il y est ; le premier sinon.
+                var index = 0
+                for (var i = modeleMessages.count - 1; i >= 0; --i)
+                    if (modeleMessages.get(i).sujet === "GIF anime")
+                        index = i
+                for (var j = modeleMessages.count - 1; j >= 0; --j)
+                    if (modeleMessages.get(j).sujet === "Compte rendu de la réunion")
+                        index = j
+                choisir(index, 0)
+                ouvrirFenetreMessage(index)
+            } else if (suivi.n >= 10 && suivi.n <= 10 + choix.length) {
+                var k = suivi.n - 10
+                if (k > 0)
+                    mesurer(choix[k - 1])
+                if (k < choix.length) {
+                    reglages.margesMessage = choix[k]
+                    return
+                }
+                bilan("marges croissantes : " + choix.map(function(c) { return suivi.marges[c] }).join(" < "),
+                      suivi.marges.aucune === 0 && suivi.marges.etroites > 0
+                      && suivi.marges.larges > suivi.marges.etroites)
+                tic.stop()
+                if (choix.indexOf(identifiantsEssai.dossier) >= 0) {
+                    reglages.margesMessage = identifiantsEssai.dossier
+                    return
+                }
+                console.log("scenario: marges " + (suivi.echecs === 0 ? "OK" : "ECHEC (" + suivi.echecs + ")"))
+                Qt.quit()
+            }
+        })
+        tic.start()
+    }
+
     /// Scénario « corps-long » (0.6.20) : un long message HTML à tableau (banc
     /// LONG=1), descendu jusqu'en bas par pas de 40 px puis remonté. À chaque
     /// pas, le corps visible est capturé dans MMAIL_SORTIE

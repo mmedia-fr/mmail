@@ -167,6 +167,10 @@ de projet interne.
   laisse non lu ; « Affichage › Marquer comme lu » choisit quand, comme le volet
   de lecture d'Outlook (0.6.9) : à l'affichage, après 3 à 30 secondes — un
   message quitté avant reste non lu —, ou jamais, à la main seulement ;
+- **marges du message** (0.6.23) : « Affichage › Marges du message » écarte le
+  corps du message des bords, à gauche et à droite, dans le volet de lecture
+  comme dans la fenêtre d'un message — « Aucune » (par défaut, au ras du volet),
+  « Étroites » ou « Larges », en proportion de la taille du texte ;
 - **masquage local** des dossiers peu utilisés, réaffichage en un clic ;
 - affichage du **message brut** (bouton « Source ») ;
 - **copie automatique de la sélection**, comme dans MMdedit : un texte

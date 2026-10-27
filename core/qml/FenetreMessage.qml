@@ -487,6 +487,9 @@ ApplicationWindow {
                 // l'apparence : ses couleurs supposent ce fond.
                 color: fenetreMessage.html ? "#1f1f1f" : fenetre.palette.text
                 background: Rectangle { color: fenetreMessage.html ? "#ffffff" : fenetre.palette.base }
+                // Mêmes marges que le volet de lecture (0.6.23).
+                leftPadding: padding + 4 + fenetre.margeMessage
+                rightPadding: padding + fenetre.margeMessage
                 text: qsTr("Chargement…")
                 onLinkActivated: function(lien) { fenetre.ouvrirLien(lien) }
                 MiseEnForme {
@@ -500,6 +503,7 @@ ApplicationWindow {
                 }
                 RenduComplet { zone: vueCorps }
                 onWidthChanged: minuterieImagesFenetre.restart()
+                onLeftPaddingChanged: minuterieImagesFenetre.restart()
                 Timer {
                     id: minuterieImagesFenetre
                     interval: 120

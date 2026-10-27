@@ -397,6 +397,10 @@ ApplicationWindow {
         // Double-clic sur un message (0.6.16) : « message », l'ouvrir dans sa
         // fenêtre, comme Outlook ; « reponse », ouvrir une réponse.
         property string doubleClic: "message"
+        // Marges du corps d'un message, à gauche et à droite (0.6.23) :
+        // « aucune », au ras du volet comme jusqu'ici, « etroites » ou
+        // « larges » (cf. fenetre.margeMessage).
+        property string margesMessage: "aucune"
     }
 
     // ---------------------------------------------------------- apparences
@@ -961,6 +965,12 @@ ApplicationWindow {
     readonly property real tailleArborescence: tailleBase * reglages.zoomArborescence
     readonly property real tailleListe: tailleBase * reglages.zoomListe
     readonly property real tailleMessage: tailleBase * reglages.zoomMessage
+    // Marge ajoutée de chaque côté du corps d'un message, en pixels (0.6.23,
+    // demande de Nicolas transmise par Manu le 27/10 ; Manu le préfère au ras
+    // du volet, d'où « aucune » par défaut). En proportion de la taille du
+    // texte, pour suivre le zoom de la colonne.
+    readonly property real margeMessage: reglages.margesMessage === "larges" ? Math.round(tailleMessage * 4)
+                                       : reglages.margesMessage === "etroites" ? Math.round(tailleMessage * 1.5) : 0
     readonly property string policeMono: premierePolice(jeu ? jeu.mono
                                                             : ["Consolas", "DejaVu Sans Mono", "Courier New"])
 
@@ -5981,6 +5991,9 @@ ApplicationWindow {
             // Le corps d'un long message à tableau, défilé aller-retour (0.6.20).
             if (essai.scenario === "corps-long")
                 scenarios.lancerScenarioCorpsLong()
+            // « Affichage › Marges du message » (0.6.23).
+            if (essai.scenario === "marges")
+                scenarios.lancerScenarioMarges()
             // Lot 1 de la 0.6.21 : en-tête, liens, recherche, non-lus cumulés,
             // propriétés d'un dossier (banc LOT1=1).
             if (essai.scenario === "lot-1")

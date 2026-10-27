@@ -3336,8 +3336,8 @@ mod tests {
 
     #[test]
     fn receptions_des_boites_partagees() {
-        // Capture du 27/10/2026 : « Toutes les BàL » ignorait les boîtes
-        // partagées de Stéphane LALANNE.
+        // Capture du 27/10/2026 : « Toutes les BàL » ignorait les boîtes de
+        // réception partagées.
         let m = Magasin::en_memoire().unwrap();
         let a = m.compte("a@b.fr", "h", 993, "a@b.fr").unwrap();
         let b = m.compte("c@d.fr", "h", 993, "c@d.fr").unwrap();

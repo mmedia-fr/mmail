@@ -8438,8 +8438,8 @@ mod tests {
 
     #[test]
     fn dossier_d_une_boite_partagee() {
-        // Capture du 27/10/2026 : trois favoris « INBOX — slalanne@… ».
-        let partagees = vec!["administratif@transportsboudot.fr".to_string()];
+        // Capture du 27/10/2026 : trois favoris « INBOX — » suivis de l'adresse du compte.
+        let partagees = vec!["administratif@exemple.fr".to_string()];
         let d = |chemin: &str| DossierLocal {
             chemin: chemin.into(),
             nom: chemin.rsplit('/').next().unwrap_or(chemin).into(),
@@ -8447,13 +8447,13 @@ mod tests {
             selectionnable: true,
             ..Default::default()
         };
-        let json = json_dossier("favori", &d("Shared/administratif@transportsboudot.fr/INBOX"), "s@t.fr", 0, false, 0, &partagees);
-        assert!(json.contains(r#""proprietaire":"administratif@transportsboudot.fr","rolePartage":"Inbox""#), "{json}");
-        let json = json_dossier("dossier", &d("Shared/administratif@transportsboudot.fr/Sent"), "s@t.fr", 2, false, 0, &partagees);
+        let json = json_dossier("favori", &d("Shared/administratif@exemple.fr/INBOX"), "s@t.fr", 0, false, 0, &partagees);
+        assert!(json.contains(r#""proprietaire":"administratif@exemple.fr","rolePartage":"Inbox""#), "{json}");
+        let json = json_dossier("dossier", &d("Shared/administratif@exemple.fr/Sent"), "s@t.fr", 2, false, 0, &partagees);
         assert!(json.contains(r#""rolePartage":"Sent""#), "{json}");
         // Plus bas que le premier niveau, ou hors des boîtes partagées : aucun rôle.
-        let json = json_dossier("dossier", &d("Shared/administratif@transportsboudot.fr/INBOX/Trash"), "s@t.fr", 3, false, 0, &partagees);
-        assert!(json.contains(r#""proprietaire":"administratif@transportsboudot.fr","rolePartage":"""#), "{json}");
+        let json = json_dossier("dossier", &d("Shared/administratif@exemple.fr/INBOX/Trash"), "s@t.fr", 3, false, 0, &partagees);
+        assert!(json.contains(r#""proprietaire":"administratif@exemple.fr","rolePartage":"""#), "{json}");
         let json = json_dossier("dossier", &d("Trash"), "s@t.fr", 0, false, 0, &partagees);
         assert!(json.contains(r#""proprietaire":"","rolePartage":"""#), "{json}");
     }

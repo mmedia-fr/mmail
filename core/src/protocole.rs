@@ -865,10 +865,10 @@ mod tests {
 
     #[test]
     fn boite_partagee_d_un_dossier() {
-        let partagees = vec!["administratif@transportsboudot.fr".to_string(), "Contact@x.fr".to_string()];
+        let partagees = vec!["administratif@exemple.fr".to_string(), "Contact@x.fr".to_string()];
         assert_eq!(
-            boite_partagee("Shared/administratif@transportsboudot.fr/INBOX", "/", &partagees),
-            Some((1, "administratif@transportsboudot.fr".to_string()))
+            boite_partagee("Shared/administratif@exemple.fr/INBOX", "/", &partagees),
+            Some((1, "administratif@exemple.fr".to_string()))
         );
         // L'adresse telle que relevée, quelle que soit la casse du chemin.
         assert_eq!(boite_partagee("Shared/contact@x.fr/Trash/2025", "/", &partagees), Some((1, "Contact@x.fr".to_string())));

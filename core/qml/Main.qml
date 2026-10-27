@@ -5768,7 +5768,10 @@ ApplicationWindow {
                         if (l.genre !== "dossier" || !l.proprietaire)
                             continue
                         noms.push(l.nom + " → " + libelleLigne(l))
-                        if (l.rolePartage === "Inbox")
+                        // « Shared/deux@…/INBOX » (Mailcow), ou la boîte
+                        // elle-même, sélectionnable (Dovecot du banc).
+                        if (l.rolePartage === "Inbox"
+                                || (l.selectionnable && l.nom.toLowerCase() === l.proprietaire.toLowerCase()))
                             partagee = { compte: l.compte, chemin: l.chemin, nonLus: l.nonLus }
                     }
                     console.log("scenario: dossiers partagés :", noms.join(" | "))

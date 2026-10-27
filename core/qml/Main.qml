@@ -1908,6 +1908,7 @@ ApplicationWindow {
                     ? qsTr("recherche « %1 » : les 500 plus récents, précisez la recherche").arg(recherche)
                     : qsTr("recherche « %1 » : %2").arg(recherche)
                       .arg(accord(modeleMessages.count, qsTr("résultat"), qsTr("résultats"))))
+                    + (boite.rechercheApprochee() ? qsTr(", fautes de frappe tolérées") : "")
             return
         }
         if (boite.dossierCourant.length === 0) {
@@ -1930,6 +1931,8 @@ ApplicationWindow {
                     ? qsTr("recherche « %1 » : les 500 plus récents, précisez la recherche").arg(recherche)
                     : qsTr("recherche « %1 » : %2").arg(recherche)
                       .arg(accord(modeleMessages.count, qsTr("résultat"), qsTr("résultats"))))
+                    // Rien d'exact dans l'index (0.6.22).
+                    + (boite.rechercheApprochee() ? qsTr(", fautes de frappe tolérées") : "")
         } else {
             var total = ligne ? ligne.messages : modeleMessages.count
             texte += "  —  " + accord(total, qsTr("message"), qsTr("messages"))

@@ -2740,34 +2740,40 @@ QtObject {
                 r.envoyer(false)
                 bilan("« Envoyer » : rédaction fermée aussitôt, " + envoisEnCours + " envoi en cours, barre « " + etatSynchro() + " »",
                       !visible(r) && r.enEnvoi && envoisEnCours === 1 && etatSynchro().indexOf("en cours d'envoi") >= 0)
-            } else if (suivi.n === 17) {
-                bilan("message parti : rédaction défaite, plus d'envoi en cours",
-                      !redactions[suivi.envoi] && envoisEnCours === 0)
+            } else if (suivi.n === 14) {
                 var r2 = ouvrirRedaction(c.compte)
                 r2.pret()
                 r2.remplir({ a: "refus@essai.test", objet: "Lot 2 : refusé", mode: "nouveau", texte: "Ne partira pas." })
                 suivi.refus = r2
                 r2.envoyer(false)
                 bilan("second envoi : rédaction fermée aussitôt", !visible(r2) && r2.enEnvoi)
-            } else if (suivi.n === 21) {
+            } else if (suivi.n === 16) {
                 var r3 = suivi.refus
                 bilan("refusé par le serveur : la rédaction revient avec le motif (« " + (r3 ? r3.note : "") + " »)",
                       r3 && visible(r3) && !r3.enEnvoi && r3.noteErreur && r3.note.indexOf("550") >= 0
-                      && r3.titre === "Lot 2 : refusé" && envoisEnCours === 0)
+                      && r3.titre === "Lot 2 : refusé")
                 if (r3)
                     r3.conteneur.fermerRedaction()
+            } else if (suivi.n === 26) {
+                // Parti : la rédaction se défait une fois la copie rangée dans
+                // « Éléments envoyés » — après le lot de mise sur le poste en
+                // cours, sur ce banc chargé de 3 000 messages.
+                bilan("message parti : rédaction défaite, plus d'envoi en cours (" + envoisEnCours + ")",
+                      !redactions[suivi.envoi] && envoisEnCours === 0)
                 colonneListe.porteeRecherche.currentIndex = 0
                 colonneListe.champRecherche.text = "reunoin chantier"
                 lancerRecherche()
-            } else if (suivi.n === 23) {
+            } else if (suivi.n === 28) {
                 bilan("recherche « reunoin chantier » : « " + (modeleMessages.count > 0 ? modeleMessages.get(0).sujet : "")
-                      + " », " + messageEtat.texte,
+                      + " », " + infoDossier + " / " + messageEtat.texte,
                       modeleMessages.count === 1 && modeleMessages.get(0).sujet === "Réunion de chantier"
-                      && boite.rechercheApprochee() && messageEtat.texte.indexOf("fautes de frappe") >= 0)
+                      && boite.rechercheApprochee() && infoDossier.indexOf("fautes de frappe tolérées") >= 0
+                      && messageEtat.texte.indexOf("fautes de frappe") >= 0)
                 colonneListe.champRecherche.text = "chantier"
                 lancerRecherche()
-            } else if (suivi.n === 25) {
-                bilan("recherche exacte « chantier » : rien d'approché", modeleMessages.count === 1 && !boite.rechercheApprochee())
+            } else if (suivi.n === 30) {
+                bilan("recherche exacte « chantier » : rien d'approché", modeleMessages.count === 1 && !boite.rechercheApprochee()
+                      && infoDossier.indexOf("fautes de frappe") < 0)
                 tic.stop()
                 console.log("scenario: lot-2 " + (suivi.echecs === 0 ? "OK" : "ECHEC (" + suivi.echecs + ")"))
                 Qt.quit()

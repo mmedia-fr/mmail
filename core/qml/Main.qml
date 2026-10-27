@@ -5793,7 +5793,7 @@ ApplicationWindow {
                             }
                         }
                         console.log("scenario: unifiée", modeleMessages.count, "messages dont", dePartagee,
-                                    "de la boîte partagée («", chemin, ») | compteur", nonLusReceptions)
+                                    "de la boîte partagée («", chemin, "») | compteur", nonLusReceptions)
                         Qt.quit()
                     })
                 })

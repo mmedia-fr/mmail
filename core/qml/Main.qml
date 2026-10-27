@@ -1941,7 +1941,8 @@ ApplicationWindow {
                 break
             }
         }
-        var texte = ligne ? ligne.adresse + " › " + libelleLigne(ligne) : boite.dossierCourant
+        // Un dossier d'une boîte partagée se dit de cette boîte (0.6.25).
+        var texte = ligne ? (ligne.proprietaire || ligne.adresse) + " › " + libelleLigne(ligne) : boite.dossierCourant
         if (recherche.length > 0) {
             texte += "  —  " + (modeleMessages.count >= 500
                     ? qsTr("recherche « %1 » : les 500 plus récents, précisez la recherche").arg(recherche)
@@ -3940,6 +3941,10 @@ ApplicationWindow {
             masque: l.masque === true,
             favori: l.favori === true,
             enfants: l.enfants === true,
+            // Boîte partagée du dossier et rôle lu à son nom (0.6.25) : noms
+            // en français, favoris à l'adresse de la boîte.
+            proprietaire: l.proprietaire || "",
+            rolePartage: l.rolePartage || "",
             // Section de la liste : la rubrique Favoris, puis un groupe par compte.
             groupe: l.genre === "rubrique" || l.genre === "favori" || l.genre === "favori-vide"
                     ? "favoris" : "compte-" + (l.compte || 0)
@@ -3994,14 +3999,25 @@ ApplicationWindow {
         if (l.genre === "compte")
             return l.adresse
         var nom = l.nom
-        if (l.role === "Sent") nom = qsTr("Éléments envoyés")
-        else if (l.role === "Drafts") nom = qsTr("Brouillons")
-        else if (l.role === "Trash") nom = qsTr("Éléments supprimés")
-        else if (l.role === "Junk") nom = qsTr("Courrier indésirable")
-        else if (l.role === "Archive") nom = qsTr("Archives")
-        else if (l.chemin === "INBOX") nom = qsTr("Boîte de réception")
-        if (l.genre === "favori")
-            return nom + " — " + l.adresse
+        // Rôle annoncé par le serveur ; à défaut, dans une boîte partagée,
+        // celui que dit son nom (0.6.25 : « INBOX », « Trash »… restaient en
+        // anglais).
+        var role = l.role || l.rolePartage || ""
+        if (role === "Sent") nom = qsTr("Éléments envoyés")
+        else if (role === "Drafts") nom = qsTr("Brouillons")
+        else if (role === "Trash") nom = qsTr("Éléments supprimés")
+        else if (role === "Junk") nom = qsTr("Courrier indésirable")
+        else if (role === "Archive") nom = qsTr("Archives")
+        else if (l.chemin === "INBOX" || role === "Inbox") nom = qsTr("Boîte de réception")
+        if (l.genre === "favori") {
+            // Un favori dit de quelle boîte il est : celle qui est partagée,
+            // sinon le compte (capture du 27/10/2026 : trois « INBOX — »
+            // suivis de l'adresse du compte). Une boîte partagée montrée
+            // sous son propre nom est sa boîte de réception.
+            if (l.proprietaire && nom.toLowerCase() === l.proprietaire.toLowerCase())
+                nom = qsTr("Boîte de réception")
+            return nom + " — " + (l.proprietaire || l.adresse)
+        }
         return nom
     }
 
@@ -4450,12 +4466,25 @@ ApplicationWindow {
     /// dossier, nommés comme dans l'arborescence.
     function cheminResultat(r) {
         var c = compteParId(r.compte)
+        var tete = c ? c.adresse : ""
         var noms = (r.segments && r.segments.length > 0 ? r.segments : [r.dossier]).slice()
+        // Dans une boîte partagée (0.6.25) : son adresse en tête, au lieu de
+        // celle du compte, puis le chemin dans la boîte.
+        if (r.proprietaire) {
+            var rang = noms.map(function(n) { return n.toLowerCase() }).indexOf(r.proprietaire.toLowerCase())
+            if (rang >= 0) {
+                tete = r.proprietaire
+                noms = noms.slice(rang + 1)
+                if (noms.length === 0)
+                    noms = [qsTr("Boîte de réception")]
+            }
+        }
         var dernier = noms.length - 1
         if (dernier > 0 && noms[0].toUpperCase() === "INBOX")
             noms[0] = qsTr("Boîte de réception")
-        noms[dernier] = libelleLigne({ genre: "dossier", nom: noms[dernier], role: r.role || "", chemin: r.chemin })
-        return (c ? c.adresse + " › " : "") + noms.join(" › ")
+        noms[dernier] = libelleLigne({ genre: "dossier", nom: noms[dernier], role: r.role || "",
+                                       rolePartage: r.rolePartage || "", chemin: r.chemin })
+        return (tete ? tete + " › " : "") + noms.join(" › ")
     }
 
     /// Boîte de réception unifiée : les réceptions de tous les comptes.
@@ -5726,6 +5755,53 @@ ApplicationWindow {
             // unifiée les réunit, un message du second compte s'y choisit — le
             // noyau passe sur sa réception —, un dossier de l'arborescence en
             // fait sortir.
+            // Scénario « unifiee-partagee » (0.6.25 ; banc PARTAGE=1, sans
+            // second compte) : la boîte de réception de deux@, partagée avec
+            // un@, entre dans « Toutes les BàL » — messages et compteur — ;
+            // ses dossiers se disent en français, son favori à son adresse.
+            if (essai.scenario === "unifiee-partagee") {
+                var attentePartagee = Qt.createQmlObject('import QtQuick; Timer { interval: 15000 }', fenetre)
+                attentePartagee.triggered.connect(function() {
+                    var partagee = null, noms = []
+                    for (var i = 0; i < modeleArborescence.count; ++i) {
+                        var l = modeleArborescence.get(i)
+                        if (l.genre !== "dossier" || !l.proprietaire)
+                            continue
+                        noms.push(l.nom + " → " + libelleLigne(l))
+                        // « Shared/deux@…/INBOX » (Mailcow), ou la boîte
+                        // elle-même, sélectionnable (Dovecot du banc).
+                        if (l.rolePartage === "Inbox"
+                                || (l.selectionnable && l.nom.toLowerCase() === l.proprietaire.toLowerCase()))
+                            partagee = { compte: l.compte, chemin: l.chemin, nonLus: l.nonLus }
+                    }
+                    console.log("scenario: dossiers partagés :", noms.join(" | "))
+                    if (!partagee) {
+                        console.log("scenario: ECHEC réception partagée absente")
+                        Qt.quit()
+                        return
+                    }
+                    console.log("scenario: réception partagée", partagee.chemin, "|", partagee.nonLus, "non lus")
+                    boite.epinglerDossier(partagee.compte, partagee.chemin, true)
+                    scenarios.plusTard(2000, function() {
+                        for (var j = 0; j < modeleFavoris.count; ++j)
+                            if (modeleFavoris.get(j).genre === "favori")
+                                console.log("scenario: favori", libelleLigne(modeleFavoris.get(j)))
+                        ouvrirBoitesUnifiees()
+                        var dePartagee = 0, chemin = ""
+                        for (var k = 0; k < modeleMessages.count; ++k) {
+                            var r = modeleMessages.get(k)
+                            if (r.chemin === partagee.chemin) {
+                                dePartagee += 1
+                                chemin = r.cheminAffiche
+                            }
+                        }
+                        console.log("scenario: unifiée", modeleMessages.count, "messages dont", dePartagee,
+                                    "de la boîte partagée («", chemin, "») | compteur", nonLusReceptions)
+                        Qt.quit()
+                    })
+                })
+                attentePartagee.start()
+            }
             if (essai.scenario === "unifiee") {
                 var attenteUnifiee = Qt.createQmlObject('import QtQuick; Timer { interval: 12000 }', fenetre)
                 attenteUnifiee.triggered.connect(function() {

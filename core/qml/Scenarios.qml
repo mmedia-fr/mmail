@@ -608,38 +608,54 @@ QtObject {
         }
     }
 
-    /// Scénario « images-confiance » (0.6.23) : premier message de la boîte de
-    /// réception (HTML à images distantes), « Toujours pour cet expéditeur » ;
-    /// deuxième message (même expéditeur, échec DMARC noté par le serveur) :
-    /// rien d'office ; retour au premier : images d'office ; la confiance est
-    /// retirée à la fin.
+    /// Scénario « images-confiance » (0.6.23), sur deux messages HTML à images
+    /// distantes du même expéditeur, dans un ordre quelconque : A (DMARC
+    /// réussi) et B (échec DMARC noté par le serveur). B : pas de « Toujours
+    /// pour cet expéditeur ». A : « Toujours » ; puis B : rien d'office ; retour
+    /// à A : images d'office. La confiance est retirée à la fin.
     function etapeScenarioImagesConfiance(uid, html, bloquees, cle) {
         var e = fenetre.enteteCourant
         var office = fenetre.imagesAutoPour === cle
+        var bouton = fenetre.confianceProposee(e)
         console.log("scenario: étape", essai.etape, "| uid", uid, "| html", html, "| bloquées", bloquees,
                     "| expéditeur", e.expediteur, "| dmarcEchec", e.dmarcEchec,
                     "| confiance", fenetre.expediteurDeConfiance(e.expediteur), "| d'office", office,
-                    "| bouton « Toujours »", fenetre.confianceProposee(e))
-        if (essai.etape === 0 && html && bloquees > 0) {
+                    "| bouton « Toujours »", bouton)
+        if (!html)
+            return
+        var autre = fenetre.indexCourant === 0 ? 1 : 0
+        if (e.dmarcEchec) {
+            console.log(bouton ? "scenario: ECHEC, « Toujours » proposé malgré l'échec DMARC"
+                               : "scenario: OK, « Toujours » absent (DMARC)")
+            if (essai.etape === 2) {
+                console.log(office ? "scenario: ECHEC, images d'office malgré l'échec DMARC"
+                                   : "scenario: OK, rien d'office (DMARC)")
+                essai.etape = 3
+                fenetre.choisir(autre, 0)
+            } else if (essai.etape === 0 && !essai.vuB) {
+                essai.vuB = true
+                fenetre.choisir(autre, 0)
+            }
+            return
+        }
+        if (essai.etape === 0 && bloquees > 0) {
+            console.log(bouton ? "scenario: OK, « Toujours » proposé" : "scenario: ECHEC, « Toujours » absent")
             essai.etape = 1
-            essai.premier = uid
-            console.log("scenario: « Toujours pour cet expéditeur »")
             fenetre.retenirExpediteurConfiance(e.expediteur, true)
             fenetre.demanderImages()
-        } else if (essai.etape === 1 && uid === essai.premier) {
-            essai.etape = 2
+        } else if (essai.etape === 1) {
+            console.log(bloquees === 0 ? "scenario: OK, images téléchargées"
+                                       : "scenario: ECHEC, images encore bloquées")
             console.log("scenario: liste", JSON.stringify(fenetre.expediteursConfiance()))
-            fenetre.choisir(1, 0)
-        } else if (essai.etape === 2 && uid !== essai.premier) {
-            essai.etape = 3
-            console.log(office ? "scenario: ECHEC, images d'office malgré l'échec DMARC"
-                               : "scenario: OK, rien d'office (DMARC)")
-            fenetre.choisir(0, 0)
-        } else if (essai.etape === 3 && uid === essai.premier) {
+            essai.etape = 2
+            fenetre.choisir(autre, 0)
+        } else if (essai.etape === 3) {
             essai.etape = office ? 4 : 9
             console.log(office ? "scenario: OK, images d'office au retour"
                                : "scenario: ECHEC, pas d'images d'office au retour")
-        } else if (essai.etape === 4 && uid === essai.premier) {
+        } else if (essai.etape === 4) {
+            console.log(bloquees === 0 ? "scenario: OK, images d'office téléchargées"
+                                       : "scenario: ECHEC, images d'office encore bloquées")
             essai.etape = 9
             fenetre.retenirExpediteurConfiance(e.expediteur, false)
             console.log("scenario: confiance retirée, liste", JSON.stringify(fenetre.expediteursConfiance()))

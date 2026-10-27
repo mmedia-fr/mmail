@@ -228,6 +228,43 @@ jobs:
         run: ./dist/MMail/MMail.exe --smoke
         env:
           QT_QPA_PLATFORM: offscreen
+      - name: Contrôle Windows — accents des libellés
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # Un libellé accentué lu en cp1252 à la compilation sort en « Ã© » :
+          # « Deux Ã©tages » dans Affichage › Disposition (0.6.20, Windows
+          # seulement). Les chaînes de l'interface sont en UTF-16 dans
+          # l'exécutable : on y cherche, aux deux alignements, les suites
+          # « Ã + caractère », « Â + caractère » et « â€ » qu'une telle lecture
+          # produit, au milieu d'un mot.
+          $octets = [IO.File]::ReadAllBytes((Resolve-Path dist\MMail\MMail.exe))
+          $cassure = '\u00C3[\u00A0-\u00BF\u0152\u0153\u0160\u0161\u0178\u017D\u017E\u0192\u02C6\u02DC\u2013\u2014\u2018-\u201E\u2020-\u2022\u2026\u2030\u2039\u203A\u20AC\u2122]|\u00C2[\u00A0-\u00BF]|\u00E2\u20AC'
+          # Un mot entier : bordé d'autre chose qu'une lettre, ce qui écarte les
+          # tables de caractères du binaire.
+          $L = '[^\W\d_]'
+          $motif = "(?<!$L)[A-Za-z]{2,}(?:$cassure)[a-z]*(?!$L)|(?<!$L)(?:$cassure)[a-z]{3,}(?!$L)"
+          $sain = 'Deux ' + [char]0x00E9 + 'tages'
+          $casse = 'Deux ' + [char]0x00C3 + [char]0x00A9 + 'tages'
+          $trouves = [Collections.Generic.SortedSet[string]]::new()
+          $present = $false
+          $cassePresente = $false
+          foreach ($decalage in 0, 1) {
+            $n = $octets.Length - $decalage
+            $texte = [Text.Encoding]::Unicode.GetString($octets, $decalage, $n - ($n % 2))
+            if ($texte.Contains($sain)) { $present = $true }
+            if ($texte.Contains($casse)) { $cassePresente = $true }
+            foreach ($m in [regex]::Matches($texte, $motif)) {
+              $debut = [Math]::Max(0, $m.Index - 20)
+              $extrait = $texte.Substring($debut, [Math]::Min($texte.Length - $debut, $m.Length + 40))
+              [void]$trouves.Add(($extrait -replace '[^\u0020-\u007E\u00A0-\u00FF\u0152\u0153\u2013-\u2030\u20AC]', '|'))
+            }
+          }
+          Write-Host "« $sain » en UTF-16 : $present ; « $casse » : $cassePresente"
+          Write-Host "$($trouves.Count) libellé(s) cassé(s) :"
+          $trouves | Select-Object -First 60 | ForEach-Object { Write-Host "  $_" }
+          if ($trouves.Count -gt 0) { throw "des libellés accentués sont cassés dans MMail.exe" }
+          if (-not $present) { throw "« Deux étages » introuvable en UTF-16 dans MMail.exe" }
       - name: Contrôle Windows — icône de l'exécutable
         if: runner.os == 'Windows'
         shell: pwsh

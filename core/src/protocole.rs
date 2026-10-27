@@ -250,6 +250,16 @@ fn groupe_namespace(texte: &str) -> Option<(Option<String>, &str)> {
     entre_parentheses(texte).map(|(groupe, suite)| (Some(groupe), suite))
 }
 
+/// Vrai si `chemin` est dans un espace des boîtes d'autres utilisateurs
+/// (`NAMESPACE`) — « Shared/contact@exemple.fr/Clients » —, ou en est la
+/// racine — « Shared ».
+pub fn dans_espace_partage(chemin: &str, espaces: &[(String, String)]) -> bool {
+    espaces.iter().filter(|(prefixe, _)| !prefixe.is_empty()).any(|(prefixe, separateur)| {
+        let racine = prefixe.strip_suffix(separateur.as_str()).unwrap_or(prefixe);
+        chemin.starts_with(prefixe.as_str()) || chemin == racine
+    })
+}
+
 /// Adresses des boîtes d'autres utilisateurs dont la boîte de réception est
 /// visible — les boîtes partagées : « Shared/contact@exemple.fr/INBOX » sous
 /// l'espace « Shared/ » donne contact@exemple.fr (Mailcow). Certains Dovecot
@@ -619,15 +629,55 @@ pub fn decoder_utf7(nom: &str) -> String {
 /// tapé — de `parent`, chemin du serveur déjà en UTF-7 modifié. L'erreur se
 /// lit telle quelle dans l'interface.
 pub fn chemin_de_sous_dossier(parent: &str, separateur: &str, nom: &str) -> Result<String, String> {
+    if nom.trim().is_empty() {
+        return Err("indiquez le nom du dossier".into());
+    }
+    if !a_des_niveaux(separateur) {
+        return Err("ce serveur ne range pas de dossiers dans d'autres".into());
+    }
+    Ok(format!("{parent}{separateur}{}", nom_de_dossier(separateur, nom)?))
+}
+
+/// Chemin, sur le serveur, du dossier `ancien` renommé en `nom` — tel que
+/// l'utilisateur l'a tapé — : seul le dernier segment change, le dossier
+/// reste sous son parent. L'erreur se lit telle quelle dans l'interface.
+pub fn chemin_renomme(ancien: &str, separateur: &str, nom: &str) -> Result<String, String> {
+    let nom = nom_de_dossier(separateur, nom)?;
+    let parent = if a_des_niveaux(separateur) { ancien.rfind(separateur) } else { None };
+    Ok(match parent {
+        Some(fin) => format!("{}{separateur}{nom}", &ancien[..fin]),
+        None => nom,
+    })
+}
+
+/// Ce que devient `chemin` quand le dossier `ancien` est renommé en
+/// `nouveau` : `nouveau` pour lui-même, le même reste sous `nouveau` pour un
+/// de ses sous-dossiers, rien pour un autre dossier — « Clients2 » n'est pas
+/// sous « Clients ».
+pub fn chemin_apres_renommage(chemin: &str, ancien: &str, nouveau: &str, separateur: &str) -> Option<String> {
+    if chemin == ancien {
+        return Some(nouveau.to_string());
+    }
+    if !a_des_niveaux(separateur) {
+        return None;
+    }
+    let reste = chemin.strip_prefix(ancien)?.strip_prefix(separateur)?;
+    Some(format!("{nouveau}{separateur}{reste}"))
+}
+
+/// Faux pour « NIL » : le serveur ne connaît qu'un niveau de dossiers.
+fn a_des_niveaux(separateur: &str) -> bool {
+    !separateur.is_empty() && !separateur.eq_ignore_ascii_case("NIL")
+}
+
+/// Nom d'un dossier tel que l'utilisateur l'a tapé, contrôlé puis encodé en
+/// UTF-7 modifié pour le serveur.
+fn nom_de_dossier(separateur: &str, nom: &str) -> Result<String, String> {
     let nom = nom.trim();
     if nom.is_empty() {
         return Err("indiquez le nom du dossier".into());
     }
-    // « NIL » : le serveur ne connaît qu'un niveau de dossiers.
-    if separateur.is_empty() || separateur.eq_ignore_ascii_case("NIL") {
-        return Err("ce serveur ne range pas de dossiers dans d'autres".into());
-    }
-    if nom.contains(separateur) {
+    if a_des_niveaux(separateur) && nom.contains(separateur) {
         return Err(format!("le nom ne peut pas contenir « {separateur} »"));
     }
     // « % » et « * » sont les jokers de LIST : un dossier qui en porte se
@@ -639,7 +689,7 @@ pub fn chemin_de_sous_dossier(parent: &str, separateur: &str, nom: &str) -> Resu
             format!("le nom ne peut pas contenir « {c} »")
         });
     }
-    Ok(format!("{parent}{separateur}{}", encoder_utf7(nom)))
+    Ok(encoder_utf7(nom))
 }
 
 /// Encode un nom de dossier en UTF-7 modifié, pour le créer sur le serveur :
@@ -919,6 +969,44 @@ mod tests {
         assert!(chemin_de_sous_dossier("INBOX", "/", "a\tb").is_err());
         assert!(chemin_de_sous_dossier("INBOX", "NIL", "Factures").is_err());
         assert!(chemin_de_sous_dossier("INBOX", "", "Factures").is_err());
+    }
+
+    #[test]
+    fn chemins_renommes() {
+        assert_eq!(chemin_renomme("INBOX/Clients", "/", " Partenaires ").unwrap(), "INBOX/Partenaires");
+        assert_eq!(chemin_renomme("Clients", "/", "Réglés").unwrap(), "R&AOk-gl&AOk-s");
+        assert_eq!(
+            chemin_renomme("INBOX.Archives.2025", ".", "Année 2025").unwrap(),
+            "INBOX.Archives.Ann&AOk-e 2025"
+        );
+        // Un seul niveau de dossiers : le nom remplace tout le chemin.
+        assert_eq!(chemin_renomme("Clients", "NIL", "a.b").unwrap(), "a.b");
+        assert_eq!(chemin_renomme("INBOX/Clients", "/", "a/b").unwrap_err(), "le nom ne peut pas contenir « / »");
+        assert!(chemin_renomme("INBOX/Clients", "/", "  ").is_err());
+        assert!(chemin_renomme("INBOX/Clients", "/", "tout*").is_err());
+    }
+
+    #[test]
+    fn espace_partage_reconnu() {
+        let espaces = vec![("Shared/".to_string(), "/".to_string())];
+        assert!(dans_espace_partage("Shared/contact@exemple.fr/Clients", &espaces));
+        assert!(dans_espace_partage("Shared/contact@exemple.fr", &espaces));
+        assert!(dans_espace_partage("Shared", &espaces));
+        assert!(!dans_espace_partage("INBOX/Shared", &espaces));
+        assert!(!dans_espace_partage("Sharedx", &espaces));
+        assert!(!dans_espace_partage("Shared", &[]));
+    }
+
+    #[test]
+    fn chemins_apres_renommage() {
+        let apres = |c: &str| chemin_apres_renommage(c, "INBOX/Clients", "INBOX/Partenaires", "/");
+        assert_eq!(apres("INBOX/Clients").as_deref(), Some("INBOX/Partenaires"));
+        assert_eq!(apres("INBOX/Clients/Acme/2026").as_deref(), Some("INBOX/Partenaires/Acme/2026"));
+        assert_eq!(apres("INBOX/Clients2"), None);
+        assert_eq!(apres("INBOX"), None);
+        assert_eq!(apres("Clients"), None);
+        assert_eq!(chemin_apres_renommage("A", "A", "B", "NIL").as_deref(), Some("B"));
+        assert_eq!(chemin_apres_renommage("ANIL", "A", "B", "NIL"), None);
     }
 
     #[test]

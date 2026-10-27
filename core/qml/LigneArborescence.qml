@@ -26,11 +26,39 @@ ItemDelegate {
     property bool survol: false
     highlighted: estCourant
 
+    // Survol du dossier, au même titre que la ligne de message. « survol »
+    // au-dessus est celui d'un glisser-déposer, qui a son propre cadre : ici
+    // c'est le simple passage du pointeur. Sans la clé « survolLigne », le
+    // rectangle reste transparent et rien ne change.
+    Rectangle {
+        // -0,4 : au-dessus du fond du délégué (-1, opaque sous Fusion) ET du
+        // fond de la rubrique Favoris (-0,5), déclaré plus bas, qui l'aurait
+        // recouvert à z égal. Transparent au repos, il ne cache rien.
+        z: -0.25
+        anchors.fill: parent
+        color: !ligne.highlighted && ligne.hovered && fenetre.valeurOu("survolLigne", 0) > 0
+               ? Qt.rgba(fenetre.accent.r, fenetre.accent.g, fenetre.accent.b,
+                         fenetre.valeurOu("survolLigne", 0))
+               : "transparent"
+        Behavior on color {
+            enabled: fenetre.anime
+            ColorAnimation { duration: fenetre.dureeTeinte }
+        }
+    }
+
     // Lecteurs d'écran : un élément d'arborescence, nommé comme à l'écran,
     // avec ses non-lus.
     Accessible.role: Accessible.TreeItem
     Accessible.name: fenetre.libelleLigne(model)
                      + (model.nonLus > 0 ? ", " + fenetre.accord(model.nonLus, qsTr("non lu"), qsTr("non lus")) : "")
+                     + (cumulVisible ? ", " + texteCumul : "")
+    // Ligne repliée d'un compte, ou d'un dossier qui a des sous-dossiers
+    // (0.6.21) : elle dit les non-lus qu'elle cache.
+    readonly property bool cumulVisible: model.replie === true && model.nonLusSous > 0
+            && (model.genre === "compte" || (model.genre === "dossier" && model.enfants))
+    readonly property string texteCumul: model.genre === "compte"
+            ? fenetre.accord(model.nonLusSous, qsTr("non lu dans ce compte"), qsTr("non lus dans ce compte"))
+            : fenetre.accord(model.nonLusSous, qsTr("non lu dans les sous-dossiers"), qsTr("non lus dans les sous-dossiers"))
     Accessible.selectable: estDossier
     Accessible.selected: estCourant
     hoverEnabled: true
@@ -257,6 +285,24 @@ ItemDelegate {
         CompteurNonLus {
             visible: ligne.estDossier && model.nonLus > 0 && fenetre.marque !== null
             nombre: model.nonLus
+            Layout.rightMargin: 2
+        }
+        // Les non-lus cachés par le repli : ceux d'un compte, comme ceux d'un
+        // dossier ; ceux des sous-dossiers, en retrait (« +N », sans gras),
+        // pour ne pas se confondre avec ceux du dossier lui-même.
+        Label {
+            visible: ligne.cumulVisible && (model.genre !== "compte" || fenetre.marque === null)
+            text: model.genre === "compte" ? model.nonLusSous : "+" + model.nonLusSous
+            font.bold: model.genre === "compte"
+            opacity: model.genre === "compte" ? 1 : 0.7
+            color: ligne.highlighted ? fenetre.palette.highlightedText : fenetre.texteAccent
+            HoverHandler { id: survolCumul }
+            ToolTip.visible: survolCumul.hovered
+            ToolTip.text: ligne.texteCumul
+        }
+        CompteurNonLus {
+            visible: ligne.cumulVisible && model.genre === "compte" && fenetre.marque !== null
+            nombre: model.nonLusSous
             Layout.rightMargin: 2
         }
     }

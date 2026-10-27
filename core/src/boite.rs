@@ -180,6 +180,13 @@ pub mod qobject {
         #[cxx_name = "arborescence"]
         fn arborescence(&self, masques: bool) -> QString;
 
+        /// Ce que l'index sait d'un dossier (0.6.21, « Propriétés… »), en
+        /// JSON : `{"messages":…,"nonLus":…,"taille":…}` ; `{}` s'il n'y est
+        /// pas.
+        #[qinvokable]
+        #[cxx_name = "proprietesDossier"]
+        fn proprietes_dossier(&self, compte: i32, chemin: &QString) -> QString;
+
         /// Dossiers pouvant recevoir un message, tous comptes connectés
         /// confondus, en JSON : la liste du dialogue « Déplacer vers… ».
         #[qinvokable]
@@ -624,6 +631,22 @@ pub mod qobject {
         #[cxx_name = "creerSousDossier"]
         fn creer_sous_dossier(self: Pin<&mut Boite>, compte: i32, parent: &QString, nom: &QString) -> QString;
 
+        /// Pourquoi le dossier `chemin` ne se renomme pas — boîte de
+        /// réception, dossier du système, de Gmail, partagé… —, vide s'il se
+        /// renomme : le menu du clic droit grise « Renommer… » d'après lui.
+        #[qinvokable]
+        #[cxx_name = "motifRenommage"]
+        fn motif_renommage(self: &Boite, compte: i32, chemin: &QString) -> QString;
+
+        /// Renomme, sur le serveur, le dossier `chemin` en `nom` — ses
+        /// sous-dossiers le suivent (clic droit « Renommer… »). Rend le motif
+        /// d'un refus immédiat — dossier qui ne se renomme pas, nom vide ou
+        /// interdit, déjà pris, déplacement en cours, compte hors ligne —, vide
+        /// si la demande est partie. Issue : `dossierRenomme`, ou `echec`.
+        #[qinvokable]
+        #[cxx_name = "renommerDossier"]
+        fn renommer_dossier(self: Pin<&mut Boite>, compte: i32, chemin: &QString, nom: &QString) -> QString;
+
         /// Relit compteurs et dossier ouvert de chaque compte ; reconnecte les
         /// comptes dont la session est tombée.
         #[qinvokable]
@@ -904,6 +927,12 @@ pub mod qobject {
         #[qsignal]
         #[cxx_name = "dossierCree"]
         fn dossier_cree(self: Pin<&mut Boite>, compte: i32, chemin: &QString, nom: &QString);
+
+        /// Dossier renommé, sous-dossiers compris : l'arborescence porte le
+        /// nouveau nom, et le dossier ouvert, s'il en était, a suivi.
+        #[qsignal]
+        #[cxx_name = "dossierRenomme"]
+        fn dossier_renomme(self: Pin<&mut Boite>, compte: i32, ancien: &QString, nouveau: &QString, nom: &QString);
 
         /// Une opération a échoué. `etape` : « connexion », « identifiants »,
         /// « dossier », « message », « tri » ou « reseau » (la session du
@@ -1265,6 +1294,9 @@ enum Commande {
     ViderDossiers { chemins: Vec<String> },
     /// Créer un dossier — le sous-dossier `nom` de `parent` —, et s'y abonner.
     CreerDossier { parent: String, chemin: String, nom: String },
+    /// Renommer le dossier `ancien` en `nouveau` — `nom`, tel que tapé —,
+    /// ses sous-dossiers avec lui.
+    RenommerDossier { ancien: String, nouveau: String, nom: String, separateur: String },
     /// Reprendre les déplacements interrompus dont ce compte est la source.
     Reprendre(HashMap<i64, Identifiants>),
     /// Préparer une réponse, un transfert ou la reprise d'un brouillon.
@@ -1382,6 +1414,7 @@ enum Issue {
     /// Corbeille et indésirables de ce compte vidés : `nombre` messages effacés.
     Vide { nombre: u32 },
     DossierCree { parent: String, chemin: String, nom: String },
+    DossierRenomme { ancien: String, nouveau: String, nom: String, separateur: String },
     /// Des déplacements interrompus ont été repris : ni demandés à l'instant,
     /// ni attendus par l'interface, qui n'a qu'à relire ses compteurs.
     Repris { rapport: Rapport },
@@ -2600,7 +2633,7 @@ impl qobject::Boite {
         }
         for d in &favoris {
             let adresse = adresses.get(&d.compte_id).cloned().unwrap_or_default();
-            lignes.push(json_dossier("favori", d, &adresse, 0, false));
+            lignes.push(json_dossier("favori", d, &adresse, 0, false, 0));
         }
         for c in &comptes {
             let motif = if self.etat(c.id).code() == "erreur" {
@@ -2609,23 +2642,30 @@ impl qobject::Boite {
                 String::new()
             };
             let partagees: Vec<String> = c.partagees.iter().map(|a| texte_json(a)).collect();
+            let tous = magasin.dossiers(c.id).unwrap_or_default();
+            let visibles = if masques { tous } else { sans_masques(tous) };
+            // Non-lus du compte entier (0.6.21) : l'interface les montre sur
+            // la ligne du compte replié.
+            let total = non_lus_cumules(visibles.iter());
             lignes.push(format!(
-                r#"{{"genre":"compte","compte":{},"adresse":{},"hote":{},"etat":{},"replie":{},"motif":{},"partagees":[{}]}}"#,
+                r#"{{"genre":"compte","compte":{},"adresse":{},"hote":{},"etat":{},"replie":{},"motif":{},"nonLusSous":{},"partagees":[{}]}}"#,
                 c.id,
                 texte_json(&c.adresse),
                 texte_json(&c.hote),
                 texte_json(self.etat(c.id).code()),
                 c.replie,
                 texte_json(&motif),
+                total,
                 partagees.join(",")
             ));
             if c.replie {
                 continue;
             }
-            let tous = magasin.dossiers(c.id).unwrap_or_default();
-            let visibles = if masques { tous } else { sans_masques(tous) };
             for (d, enfants) in arbre_visible(&visibles) {
-                lignes.push(json_dossier("dossier", d, &c.adresse, d.profondeur, enfants));
+                // Non-lus des sous-dossiers (0.6.21), montrés sur un dossier
+                // parent replié, à côté des siens.
+                let sous = if enfants { non_lus_cumules(visibles.iter().filter(|e| est_sous(d, e))) } else { 0 };
+                lignes.push(json_dossier("dossier", d, &c.adresse, d.profondeur, enfants, sous));
             }
         }
         QString::from(&format!("[{}]", lignes.join(",")))
@@ -2644,7 +2684,7 @@ impl qobject::Boite {
                 if !d.selectionnable {
                     continue;
                 }
-                lignes.push(json_dossier("cible", &d, &c.adresse, d.profondeur, false));
+                lignes.push(json_dossier("cible", &d, &c.adresse, d.profondeur, false, 0));
             }
         }
         QString::from(&format!("[{}]", lignes.join(",")))
@@ -2669,6 +2709,19 @@ impl qobject::Boite {
             let _ = magasin.replier_compte(compte as i64, replie);
         }
         self.as_mut().reviser();
+    }
+
+    pub fn proprietes_dossier(&self, compte: i32, chemin: &QString) -> QString {
+        let statistiques = self.magasin.as_ref().and_then(|magasin| {
+            let id = magasin.dossier_id(compte as i64, &chemin.to_string()).ok()?;
+            magasin.statistiques_dossier(id).ok()
+        });
+        QString::from(&match statistiques {
+            Some((messages, non_lus, taille)) => {
+                format!(r#"{{"messages":{messages},"nonLus":{non_lus},"taille":{taille}}}"#)
+            }
+            None => "{}".to_string(),
+        })
     }
 
     pub fn replier_dossier(mut self: Pin<&mut Self>, compte: i32, chemin: &QString, replie: bool) {
@@ -4002,6 +4055,51 @@ impl qobject::Boite {
         QString::from("")
     }
 
+    pub fn motif_renommage(&self, compte: i32, chemin: &QString) -> QString {
+        let Some(magasin) = self.magasin.as_ref() else {
+            return QString::from("index indisponible");
+        };
+        let compte = compte as i64;
+        let dossiers = magasin.dossiers(compte).unwrap_or_default();
+        let partagees = magasin.compte_par_id(compte).ok().flatten().map(|c| c.partagees).unwrap_or_default();
+        QString::from(&motif_non_renommable(&chemin.to_string(), &dossiers, &partagees).unwrap_or_default())
+    }
+
+    pub fn renommer_dossier(mut self: Pin<&mut Self>, compte: i32, chemin: &QString, nom: &QString) -> QString {
+        let compte = compte as i64;
+        let ancien = chemin.to_string();
+        let nom = nom.to_string().trim().to_string();
+        let Some(magasin) = self.magasin.as_ref() else {
+            return QString::from("index indisponible");
+        };
+        let dossiers = magasin.dossiers(compte).unwrap_or_default();
+        let partagees = magasin.compte_par_id(compte).ok().flatten().map(|c| c.partagees).unwrap_or_default();
+        if let Some(motif) = motif_non_renommable(&ancien, &dossiers, &partagees) {
+            return QString::from(&motif);
+        }
+        let separateur = dossiers.iter().find(|d| d.chemin == ancien).map(|d| d.separateur.clone()).unwrap_or_default();
+        let nouveau = match crate::protocole::chemin_renomme(&ancien, &separateur, &nom) {
+            Ok(c) => c,
+            Err(motif) => return QString::from(&motif),
+        };
+        if nouveau == ancien {
+            return QString::from("le dossier porte déjà ce nom");
+        }
+        if dossiers.iter().any(|d| d.chemin == nouveau) {
+            return QString::from(&format!("« {nom} » existe déjà à cet endroit"));
+        }
+        // Un déplacement en attente vise le dossier par son chemin : il le
+        // perdrait en route.
+        if magasin.deplacements_en_attente(compte, &ancien, &separateur).unwrap_or(0) > 0 {
+            return QString::from("des messages sont en cours de déplacement vers ce dossier ou depuis lui : réessayez quand ils seront arrivés");
+        }
+        if !self.sessions.contains_key(&compte) && !self.identites.contains_key(&compte) {
+            return QString::from("ce compte n'est pas connecté");
+        }
+        self.as_mut().envoyer(compte, Commande::RenommerDossier { ancien, nouveau, nom, separateur });
+        QString::from("")
+    }
+
     pub fn actualiser(mut self: Pin<&mut Self>) {
         let comptes: Vec<i64> = self
             .magasin
@@ -4722,6 +4820,18 @@ impl qobject::Boite {
                 self.as_mut().reviser();
                 self.as_mut().dossier_cree(compte_qt, &QString::from(&chemin), &QString::from(&nom));
             }
+            Issue::DossierRenomme { ancien, nouveau, nom, separateur } => {
+                // Le dossier affiché, s'il était l'un des renommés, suit.
+                if self.compte_courant as i64 == compte {
+                    let courant = self.dossier_courant.to_string();
+                    if let Some(chemin) = crate::protocole::chemin_apres_renommage(&courant, &ancien, &nouveau, &separateur) {
+                        self.as_mut().set_dossier_courant(QString::from(&chemin));
+                    }
+                }
+                self.as_mut().rafraichir_attente();
+                self.as_mut().reviser();
+                self.as_mut().dossier_renomme(compte_qt, &QString::from(&ancien), &QString::from(&nouveau), &QString::from(&nom));
+            }
             Issue::Repris { rapport } => {
                 // Les cibles ont reçu des messages : leurs compteurs aussi.
                 let connectes: Vec<i64> =
@@ -5076,6 +5186,51 @@ fn dossiers_a_vider(dossiers: &[DossierLocal]) -> Vec<String> {
         .filter(|d| if roles_annonces { par_role(d) } else { NOMS_A_VIDER.contains(&d.nom.to_lowercase().as_str()) })
         .map(|d| d.chemin.clone())
         .collect()
+}
+
+/// Pourquoi le dossier `chemin` d'un compte ne se renomme pas depuis MMail ;
+/// `None` s'il se renomme. `partagees` : adresses des boîtes partagées du
+/// compte. Dossiers du système : ceux qui portent un rôle, et ceux que MMail
+/// tient pour tels faute de rôle annoncé — brouillons, envois, corbeille,
+/// indésirables, sur lesquels Mailcow fait apprendre son filtre.
+fn motif_non_renommable(chemin: &str, dossiers: &[DossierLocal], partagees: &[String]) -> Option<String> {
+    let Some(d) = dossiers.iter().find(|d| d.chemin == chemin) else {
+        return Some(format!("dossier inconnu : {chemin}"));
+    };
+    if chemin.eq_ignore_ascii_case("INBOX") {
+        return Some("la boîte de réception ne se renomme pas".into());
+    }
+    let mut systeme: Vec<String> =
+        dossiers.iter().filter(|d| !d.role.is_empty()).map(|d| d.chemin.clone()).collect();
+    systeme.extend(["Drafts", "Sent", "Trash"].iter().filter_map(|r| dossier_de_role(dossiers, r)));
+    systeme.extend(dossier_indesirables(dossiers));
+    if systeme.iter().any(|s| s == chemin) {
+        return Some("un dossier du système — brouillons, envois, corbeille, indésirables… — ne se renomme pas".into());
+    }
+    let separateur = d.separateur.as_str();
+    let segments: Vec<&str> = if separateur.is_empty() || separateur.eq_ignore_ascii_case("NIL") {
+        vec![chemin]
+    } else {
+        chemin.split(separateur).collect()
+    };
+    if matches!(segments.first(), Some(&"[Gmail]") | Some(&"[Google Mail]")) {
+        return Some("les dossiers de Gmail entre crochets ne se renomment pas".into());
+    }
+    let partage = segments.iter().any(|s| {
+        let adresse = crate::protocole::decoder_utf7(s);
+        partagees.iter().any(|p| p.eq_ignore_ascii_case(&adresse))
+    });
+    if partage {
+        return Some("un dossier partagé ne se renomme pas depuis MMail : son nom est aussi celui que voient les autres boîtes".into());
+    }
+    if !d.selectionnable {
+        return Some("ce dossier sert de structure au serveur et ne se renomme pas".into());
+    }
+    let sous_le_dossier = |s: &String| crate::protocole::chemin_apres_renommage(s, chemin, chemin, separateur).is_some();
+    if systeme.iter().any(sous_le_dossier) {
+        return Some("ce dossier contient un dossier du système — envois, corbeille… — et ne se renomme pas".into());
+    }
+    None
 }
 
 // -------------------------------------------------------------- fil de travail
@@ -5562,6 +5717,30 @@ impl Travail {
                         echec("dossier", format!("création de « {nom} » : {echec_imap}"), &echec_imap)
                     }
                 })
+            }
+            Commande::RenommerDossier { ancien, nouveau, nom, separateur } => {
+                let adresse = e.magasin.compte_par_id(compte).ok().flatten().map(|c| c.adresse).unwrap_or_default();
+                Some(
+                    match synchro::renommer_dossier(&mut e.client, &e.magasin, compte, &adresse, &ancien, &nouveau, &separateur) {
+                        Ok(()) => {
+                            // La veille et le dernier message lu suivent leur
+                            // dossier sous son nouveau nom.
+                            let apres = |chemin: &str| {
+                                crate::protocole::chemin_apres_renommage(chemin, &ancien, &nouveau, &separateur)
+                            };
+                            if let Some(chemin) = e.ouvert.as_deref().and_then(apres) {
+                                e.ouvert = Some(chemin);
+                            }
+                            if let Some((chemin, ..)) = e.dernier.as_mut() {
+                                if let Some(nouveau_chemin) = apres(chemin.as_str()) {
+                                    *chemin = nouveau_chemin;
+                                }
+                            }
+                            Issue::DossierRenomme { ancien, nouveau, nom, separateur }
+                        }
+                        Err(err) => echec("dossier", format!("renommage en « {nom} » : {err}"), &err),
+                    },
+                )
             }
             Commande::Reprendre(identites) => {
                 e.identites.extend(identites);
@@ -6448,6 +6627,12 @@ fn rendre_si_actuel(
         return Some(lu);
     } else {
         lu.texte = crate::index::corps_affichable(octets);
+        // Ses adresses écrites en clair deviennent cliquables (0.6.21) : il
+        // passe alors en HTML, sans images.
+        if let Some(html) = crate::rendu::texte_en_html(&lu.texte) {
+            lu.texte = html;
+            lu.html = true;
+        }
     }
     actuel().then_some(lu)
 }
@@ -6972,9 +7157,20 @@ fn arbre_visible(dossiers: &[DossierLocal]) -> Vec<(&DossierLocal, bool)> {
     sortie
 }
 
-fn json_dossier(genre: &str, d: &DossierLocal, adresse: &str, profondeur: u32, enfants: bool) -> String {
+/// Non-lus cumulés de `dossiers`, pour un compte ou un dossier parent : ni la
+/// corbeille ni les indésirables n'y comptent, comme dans Outlook.
+fn non_lus_cumules<'a>(dossiers: impl Iterator<Item = &'a DossierLocal>) -> u32 {
+    dossiers
+        .filter(|d| d.selectionnable && d.role != "Trash" && d.role != "Junk")
+        .map(|d| d.non_lus)
+        .sum()
+}
+
+/// Ligne d'un dossier pour l'arborescence ; `sous` : non-lus de ses
+/// sous-dossiers.
+fn json_dossier(genre: &str, d: &DossierLocal, adresse: &str, profondeur: u32, enfants: bool, sous: u32) -> String {
     format!(
-        r#"{{"genre":{},"compte":{},"adresse":{},"chemin":{},"nom":{},"separateur":{},"profondeur":{},"role":{},"selectionnable":{},"messages":{},"nonLus":{},"masque":{},"favori":{},"enfants":{},"replie":{}}}"#,
+        r#"{{"genre":{},"compte":{},"adresse":{},"chemin":{},"nom":{},"separateur":{},"profondeur":{},"role":{},"selectionnable":{},"messages":{},"nonLus":{},"nonLusSous":{},"masque":{},"favori":{},"enfants":{},"replie":{}}}"#,
         texte_json(genre),
         d.compte_id,
         texte_json(adresse),
@@ -6986,6 +7182,7 @@ fn json_dossier(genre: &str, d: &DossierLocal, adresse: &str, profondeur: u32, e
         d.selectionnable,
         d.messages,
         d.non_lus,
+        sous,
         d.masque,
         d.favori.is_some(),
         enfants,
@@ -7197,6 +7394,7 @@ mod tests {
                 Commande::Deplacer { .. } => "deplacer".into(),
                 Commande::ViderDossiers { .. } => "vider".into(),
                 Commande::CreerDossier { .. } => "creer".into(),
+                Commande::RenommerDossier { .. } => "renommer".into(),
                 Commande::Arborescence => "arborescence".into(),
                 Commande::Reprendre(_) => "reprendre".into(),
                 Commande::Veille => "veille".into(),
@@ -7318,6 +7516,41 @@ mod tests {
             non_selectionnable,
         ];
         assert_eq!(dossiers_a_vider(&dossiers), vec!["INBOX/Trash", "Courrier indésirable"]);
+    }
+
+    #[test]
+    fn dossiers_qui_ne_se_renomment_pas() {
+        let avec = |chemin: &str, role: &str| DossierLocal { separateur: "/".into(), ..local(chemin, role) };
+        let mut gmail = avec("[Gmail]", "");
+        gmail.selectionnable = false;
+        let mut racine = avec("Shared", "");
+        racine.selectionnable = false;
+        let dossiers = vec![
+            avec("INBOX", ""),
+            avec("Sent", "Sent"),
+            avec("Junk", ""),
+            avec("Clients", ""),
+            avec("Clients/Acme", ""),
+            avec("Archives", ""),
+            avec("Archives/Trash", "Trash"),
+            gmail,
+            avec("[Gmail]/Important", ""),
+            racine,
+            avec("Shared/contact@exemple.fr/Commandes", ""),
+        ];
+        let partagees = vec!["contact@exemple.fr".to_string()];
+        let motif = |chemin: &str| motif_non_renommable(chemin, &dossiers, &partagees);
+        assert_eq!(motif("Clients"), None);
+        assert_eq!(motif("Clients/Acme"), None);
+        assert!(motif("INBOX").unwrap().contains("boîte de réception"));
+        assert!(motif("Sent").unwrap().contains("système"));
+        // Sans rôle, « Junk » reste celui où Mailcow fait apprendre son filtre.
+        assert!(motif("Junk").unwrap().contains("système"));
+        assert!(motif("Archives").unwrap().contains("contient"));
+        assert!(motif("[Gmail]/Important").unwrap().contains("Gmail"));
+        assert!(motif("Shared/contact@exemple.fr/Commandes").unwrap().contains("partagé"));
+        assert!(motif("Shared").unwrap().contains("structure"));
+        assert!(motif("Inconnu").unwrap().contains("inconnu"));
     }
 
     #[test]
@@ -7493,6 +7726,33 @@ mod tests {
     }
 
     #[test]
+    fn non_lus_cumules_sans_corbeille_ni_indesirables() {
+        let d = |chemin: &str, role: &str, non_lus, selectionnable| DossierLocal {
+            chemin: chemin.into(),
+            nom: chemin.rsplit('/').next().unwrap_or("").into(),
+            separateur: "/".into(),
+            role: role.into(),
+            non_lus,
+            selectionnable,
+            ..Default::default()
+        };
+        let dossiers = vec![
+            d("INBOX", "", 3, true),
+            d("INBOX/clients", "", 2, true),
+            d("INBOX/clients/2026", "", 1, true),
+            d("Trash", "Trash", 5, true),
+            d("Junk", "Junk", 4, true),
+            d("Projets", "", 0, false),
+            d("Projets/a", "", 6, true),
+        ];
+        assert_eq!(non_lus_cumules(dossiers.iter()), 12);
+        let sous = |i: usize| non_lus_cumules(dossiers.iter().filter(|e| est_sous(&dossiers[i], e)));
+        assert_eq!(sous(0), 3);
+        assert_eq!(sous(1), 1);
+        assert_eq!(sous(5), 6);
+    }
+
+    #[test]
     fn dossier_serialise() {
         let json = json_dossier(
             "dossier",
@@ -7512,11 +7772,13 @@ mod tests {
             "a@b.fr",
             1,
             true,
+            7,
         );
         assert!(json.starts_with('{') && json.ends_with('}'));
         assert!(json.contains(r#""enfants":true"#));
         assert!(json.contains(r#""nom":"Factures""#));
         assert!(json.contains(r#""nonLus":2"#));
+        assert!(json.contains(r#""nonLusSous":7"#));
         assert!(json.contains(r#""compte":2"#));
         assert!(json.contains(r#""favori":true"#));
     }

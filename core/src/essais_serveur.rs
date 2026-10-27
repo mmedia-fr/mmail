@@ -238,6 +238,106 @@ fn sous_dossier_cree_et_abonne() {
     assert!(!apres.iter().any(|d| d.chemin == chemin), "dossier d'épreuve resté sur le serveur");
 }
 
+/// Renommage (0.6.21) : un dossier et son sous-dossier, abonnés, renommés
+/// comme par le clic droit. Le serveur les montre sous le nouveau nom, les
+/// abonnements ont suivi ; dans l'index, le sous-dossier garde son
+/// identifiant — donc ses messages —, le favori reste, le filtre qui y
+/// rangeait suit.
+#[test]
+#[ignore = "exige un serveur IMAP et un compte"]
+fn dossier_renomme_avec_son_sous_dossier() {
+    use crate::protocole::{chemin_de_sous_dossier, chemin_renomme};
+    let mut client = session();
+    let dossiers = client.dossiers().expect("LIST");
+    let separateur = dossiers.iter().find(|d| d.chemin == "INBOX").expect("INBOX").separateur.clone();
+    let unique = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let parent = chemin_de_sous_dossier("INBOX", &separateur, &format!("Épreuve MMail {unique}")).expect("chemin");
+    let enfant = chemin_de_sous_dossier(&parent, &separateur, "Sous-dossier").expect("chemin");
+    for chemin in [&parent, &enfant] {
+        client.creer(chemin).expect("CREATE");
+        client.abonner(chemin).expect("SUBSCRIBE");
+    }
+    let magasin = Magasin::en_memoire().unwrap();
+    let u = variable("MMAIL_UTILISATEUR");
+    let compte = magasin.compte(&u, &variable("MMAIL_HOTE"), 993, &u).unwrap();
+    synchro::arborescence(&mut client, &magasin, compte).expect("arborescence");
+    let id_parent = magasin.dossier_id(compte, &parent).expect("parent indexé");
+    let id_enfant = magasin.dossier_id(compte, &enfant).expect("sous-dossier indexé");
+    magasin.epingler(id_parent, true).unwrap();
+    magasin
+        .poser_filtres(&format!(
+            r#"[{{"nom":"épreuve","compte":"{u}","conditions":[{{"champ":"objet","operateur":"contient","valeur":"x"}}],
+                "destination":"dossier","dossier":{}}}]"#,
+            serde_json::to_string(&enfant).unwrap()
+        ))
+        .unwrap();
+    let nom = format!("Épreuve MMail renommée {unique}");
+    let nouveau = chemin_renomme(&parent, &separateur, &nom).expect("nouveau chemin");
+    let enfant_apres = format!("{nouveau}{separateur}Sous-dossier");
+
+    let resultat = synchro::renommer_dossier(&mut client, &magasin, compte, &u, &parent, &nouveau, &separateur);
+    let liste: Vec<String> = client.dossiers().expect("LIST après").into_iter().map(|d| d.chemin).collect();
+    let abonnes = client.abonnements().expect("LSUB");
+    let index_apres = magasin.dossier_id(compte, &enfant_apres).ok();
+    let favori = magasin.dossier(id_parent).unwrap().and_then(|d| d.favori);
+    let filtres = crate::filtres::lire(&magasin.filtres().unwrap()).unwrap();
+    // Retirés avant tout constat — le sous-dossier d'abord, le serveur
+    // refusant un dossier qui en a.
+    for chemin in [&enfant_apres, &nouveau, &enfant, &parent] {
+        let _ = client.supprimer_dossier(chemin);
+    }
+
+    resultat.expect("renommage");
+    println!("renommé : {parent} → {nouveau}");
+    assert!(liste.contains(&nouveau) && liste.contains(&enfant_apres), "absents de LIST : {liste:?}");
+    assert!(!liste.contains(&parent) && !liste.contains(&enfant), "anciens noms restés : {liste:?}");
+    assert!(abonnes.contains(&nouveau) && abonnes.contains(&enfant_apres), "abonnements non suivis : {abonnes:?}");
+    assert!(!abonnes.contains(&parent) && !abonnes.contains(&enfant), "anciens abonnements restés : {abonnes:?}");
+    assert_eq!(index_apres, Some(id_enfant), "le sous-dossier garde son identifiant dans l'index");
+    assert!(favori.is_some(), "le favori suit");
+    assert_eq!(filtres[0].dossier, enfant_apres, "le filtre suit");
+}
+
+/// Un dossier qu'une autre boîte partage ne se renomme pas, même si le
+/// serveur le permettrait : son nom est aussi celui que voit sa propriétaire.
+#[test]
+#[ignore = "exige un serveur IMAP à boîtes partagées et deux comptes"]
+fn dossier_partage_non_renomme() {
+    let ua = variable("MMAIL_UTILISATEUR");
+    let mut b = session2();
+    let unique = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let separateur = b.dossiers().expect("LIST").into_iter().find(|d| d.chemin == "INBOX").expect("INBOX").separateur;
+    let dossier_b = crate::protocole::chemin_de_sous_dossier("INBOX", &separateur, &format!("Partage {unique}")).unwrap();
+    b.creer(&dossier_b).expect("CREATE");
+    // Tous les droits, renommage compris : le refus doit venir de MMail.
+    b.brute(&format!("SETACL \"{dossier_b}\" \"{ua}\" lrswipkxtea")).expect("SETACL");
+
+    let mut a = session();
+    let magasin = Magasin::en_memoire().unwrap();
+    let compte = magasin.compte(&ua, &variable("MMAIL_HOTE"), 993, &ua).unwrap();
+    let resultat = synchro::arborescence(&mut a, &magasin, compte).and_then(|_| {
+        let vu = magasin
+            .dossiers(compte)?
+            .into_iter()
+            .find(|d| d.chemin.ends_with(&format!("{separateur}Partage {unique}")))
+            .map(|d| d.chemin);
+        Ok(vu)
+    });
+    let refus = match &resultat {
+        Ok(Some(chemin)) => Some(synchro::renommer_dossier(&mut a, &magasin, compte, &ua, chemin, &format!("{chemin} bis"), &separateur)),
+        _ => None,
+    };
+    let chez_b: Vec<String> = b.dossiers().expect("LIST chez B").into_iter().map(|d| d.chemin).collect();
+    // Retiré avant tout constat : un échec ne laisse ni partage ni dossier.
+    let _ = b.supprimer_dossier(&dossier_b);
+
+    let chemin = resultat.expect("arborescence").expect("dossier partagé absent de l'arborescence de A");
+    println!("partagé vu par A : {chemin}");
+    let refus = refus.unwrap();
+    assert!(matches!(&refus, Err(e) if e.to_string().contains("partagé")), "{refus:?}");
+    assert!(chez_b.contains(&dossier_b), "le dossier de B a changé : {chez_b:?}");
+}
+
 #[test]
 #[ignore = "exige un serveur IMAP et un compte"]
 fn index_et_message_accentue() {

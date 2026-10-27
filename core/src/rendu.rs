@@ -114,7 +114,7 @@ pub fn corps_html(brut: &[u8]) -> Option<CorpsHtml> {
         let cid = adresse.get(..4).filter(|p| p.eq_ignore_ascii_case("cid:")).map(|_| &adresse[4..])?;
         integrees.get(&normaliser_cid(cid)).cloned()
     });
-    corps.html = crate::mise_en_page::aplatir(&corps.html);
+    corps.html = lier_html(&crate::mise_en_page::aplatir(&corps.html));
     Some(corps)
 }
 
@@ -189,6 +189,11 @@ fn filtrer(
         (_, "style") => Some(repli_generique(&css_sur(valeur))),
         ("a", "href") => {
             let minuscule = valeur.trim().to_ascii_lowercase();
+            if minuscule.starts_with("www.") {
+                // Lien écrit sans protocole : les navigateurs le lisent comme
+                // une adresse web, `ammonia` comme un chemin relatif (0.6.21).
+                return Some(format!("http://{}", valeur.trim()));
+            }
             ["http:", "https:", "mailto:"]
                 .iter()
                 .any(|s| minuscule.starts_with(s))
@@ -575,6 +580,188 @@ pub(crate) fn echapper(texte: &str) -> String {
     texte.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
 }
 
+/// Un message en texte brut plus long n'est pas mis en HTML pour ses liens :
+/// le moteur de texte riche le dessinerait trop lentement.
+const TEXTE_LIE_MAX: usize = 512 * 1024;
+
+/// Texte brut d'un message en HTML, ses adresses web et de courriel rendues
+/// cliquables (0.6.21), ou `None` s'il n'en porte aucune — il s'affiche
+/// alors en texte simple, comme avant. Les espaces sont gardés tels quels
+/// (`white-space:pre-wrap`) ; un retour à la ligne devient `<br>` : laissé
+/// tel quel, le moteur de Qt en ferait un paragraphe, avec ses marges.
+pub fn texte_en_html(texte: &str) -> Option<String> {
+    if texte.len() > TEXTE_LIE_MAX {
+        return None;
+    }
+    let echappe = echapper(&texte.replace("\r\n", "\n"));
+    let lie = lier_texte(&echappe);
+    (lie != echappe).then(|| format!("<div style=\"white-space:pre-wrap\">{}</div>", lie.replace('\n', "<br>")))
+}
+
+/// Rend cliquables les adresses écrites sans lien dans un HTML assaini
+/// (0.6.21) : seulement dans le texte, hors des liens existants et des
+/// feuilles de style. Le HTML vient d'`assainir` : bien formé, sans « < » ni
+/// « > » dans un attribut.
+pub(crate) fn lier_html(html: &str) -> String {
+    let mut sortie = String::with_capacity(html.len());
+    let mut reste = html;
+    let mut dans_lien = 0usize;
+    while !reste.is_empty() {
+        let Some(debut) = reste.find('<') else {
+            sortie.push_str(&if dans_lien == 0 { lier_texte(reste) } else { reste.to_string() });
+            break;
+        };
+        let (texte, suite) = reste.split_at(debut);
+        if dans_lien == 0 {
+            sortie.push_str(&lier_texte(texte));
+        } else {
+            sortie.push_str(texte);
+        }
+        let Some(fin) = suite.find('>') else {
+            sortie.push_str(suite);
+            break;
+        };
+        let balise = &suite[..=fin];
+        let nom = balise[1..]
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '/')
+            .collect::<String>()
+            .to_ascii_lowercase();
+        match nom.as_str() {
+            "a" if !balise.ends_with("/>") => dans_lien += 1,
+            "/a" => dans_lien = dans_lien.saturating_sub(1),
+            "style" => {
+                // Une feuille de style se recopie telle quelle, jusqu'à sa fin.
+                let minuscule = suite.to_ascii_lowercase();
+                let fin_style = minuscule.find("</style>").map_or(suite.len(), |i| i + "</style>".len());
+                sortie.push_str(&suite[..fin_style]);
+                reste = &suite[fin_style..];
+                continue;
+            }
+            _ => {}
+        }
+        sortie.push_str(balise);
+        reste = &suite[fin + 1..];
+    }
+    sortie
+}
+
+/// Caractère d'une partie locale d'adresse de courriel.
+fn car_local(c: char) -> bool {
+    c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '%' | '+' | '-')
+}
+
+/// Entités qui terminent une adresse dans un texte échappé : « < », « > »,
+/// guillemet, espace insécable, toute entité numérique.
+const FINS_D_ADRESSE: &[&str] = &["&lt;", "&gt;", "&quot;", "&nbsp;", "&#"];
+
+/// Liens posés sur un texte déjà échappé pour HTML (`&amp;`, `&lt;`…) :
+/// adresses `http(s)://`, adresses commençant par `www.`, adresses de
+/// courriel. Le texte affiché ne change pas ; seuls `http`, `https` et
+/// `mailto` sont produits.
+fn lier_texte(texte: &str) -> String {
+    let mut sortie = String::with_capacity(texte.len());
+    let mut precedent: Option<char> = None;
+    let mut i = 0;
+    while i < texte.len() {
+        let reste = &texte[i..];
+        let frontiere = precedent
+            .is_none_or(|c| !c.is_alphanumeric() && !matches!(c, '/' | ':' | '@' | '.' | '-' | '_' | '%' | '+'));
+        if frontiere {
+            if let Some((longueur, cible)) = adresse_web(reste).or_else(|| adresse_courriel(reste)) {
+                let vue = &reste[..longueur];
+                sortie.push_str(&format!("<a href=\"{cible}\">{vue}</a>"));
+                precedent = vue.chars().last();
+                i += longueur;
+                continue;
+            }
+        }
+        let c = reste.chars().next().unwrap_or(' ');
+        sortie.push(c);
+        precedent = Some(c);
+        i += c.len_utf8();
+    }
+    sortie
+}
+
+/// Longueur et cible d'une adresse web en tête de `texte` (échappé), ou
+/// `None`. La ponctuation qui suit une adresse dans une phrase n'en fait pas
+/// partie.
+fn adresse_web(texte: &str) -> Option<(usize, String)> {
+    let debut = texte.get(..8).unwrap_or(texte).to_ascii_lowercase();
+    let www = debut.starts_with("www.");
+    if !(debut.starts_with("http://") || debut.starts_with("https://") || www) {
+        return None;
+    }
+    let mut fin = 0;
+    for (k, c) in texte.char_indices() {
+        if c.is_whitespace()
+            || matches!(c, '<' | '>' | '"' | '\'' | '`')
+            || FINS_D_ADRESSE.iter().any(|e| texte[k..].starts_with(e))
+        {
+            break;
+        }
+        fin = k + c.len_utf8();
+    }
+    let mut adresse = &texte[..fin];
+    loop {
+        if let Some(sans) = adresse.strip_suffix("&amp;") {
+            adresse = sans;
+            continue;
+        }
+        let Some(dernier) = adresse.chars().last() else { break };
+        let fermante_seule = (dernier == ')' && adresse.matches('(').count() < adresse.matches(')').count())
+            || (dernier == ']' && adresse.matches('[').count() < adresse.matches(']').count());
+        if matches!(dernier, '.' | ',' | ';' | ':' | '!' | '?' | '}') || fermante_seule {
+            adresse = &adresse[..adresse.len() - 1];
+        } else {
+            break;
+        }
+    }
+    if www {
+        // « www.exemple.fr » au moins : un point après « www. ».
+        let hote = adresse.get(4..)?.split(['/', '?', '#']).next().unwrap_or("");
+        if !hote.contains('.') || hote.starts_with('.') || hote.ends_with('.') {
+            return None;
+        }
+        Some((adresse.len(), format!("http://{adresse}")))
+    } else {
+        let apres = &adresse[adresse.find("://")? + 3..];
+        if !apres.chars().next()?.is_alphanumeric() {
+            return None;
+        }
+        Some((adresse.len(), adresse.to_string()))
+    }
+}
+
+/// Longueur et cible (`mailto:`) d'une adresse de courriel en tête de
+/// `texte`, ou `None`.
+fn adresse_courriel(texte: &str) -> Option<(usize, String)> {
+    let local = texte.find(|c: char| !car_local(c)).unwrap_or(texte.len());
+    if local == 0 || !texte[local..].starts_with('@') || texte.starts_with('.') {
+        return None;
+    }
+    let domaine = &texte[local + 1..];
+    let mut longueur = domaine
+        .find(|c: char| !(c.is_ascii_alphanumeric() || c == '.' || c == '-'))
+        .unwrap_or(domaine.len());
+    while longueur > 0 && matches!(domaine.as_bytes()[longueur - 1], b'.' | b'-') {
+        longueur -= 1;
+    }
+    let domaine = &domaine[..longueur];
+    let tld = domaine.rsplit('.').next().unwrap_or("");
+    if !domaine.contains('.')
+        || domaine.starts_with(['.', '-'])
+        || domaine.contains("..")
+        || tld.len() < 2
+        || !tld.chars().all(|c| c.is_ascii_alphabetic())
+    {
+        return None;
+    }
+    let total = local + 1 + longueur;
+    Some((total, format!("mailto:{}", &texte[..total])))
+}
+
 /// Adresse `file:` d'un fichier local, caractères réservés encodés : le
 /// profil peut vivre sous « C:\\Users\\Jean Dupont\\… ».
 pub fn url_fichier(chemin: &std::path::Path) -> String {
@@ -837,5 +1024,64 @@ mod tests {
         assert!(!corps.html.contains("<table"), "{}", corps.html);
         assert!(corps.html.contains("<div style=\"text-align:left\"><p>Votre facture est disponible.</p></div>"),
                 "{}", corps.html);
+    }
+
+    #[test]
+    fn liens_poses_sur_le_texte_brut() {
+        let html = texte_en_html(
+            "Voir https://exemple.fr/a?b=1&c=2, ou www.exemple.fr/doc.\n\
+             Écrire à jean.dupont@exemple.fr (ou <marie@exemple.fr>).",
+        )
+        .unwrap();
+        assert_eq!(
+            html,
+            "<div style=\"white-space:pre-wrap\">Voir <a href=\"https://exemple.fr/a?b=1&amp;c=2\">\
+             https://exemple.fr/a?b=1&amp;c=2</a>, ou <a href=\"http://www.exemple.fr/doc\">www.exemple.fr/doc</a>.<br>\
+             Écrire à <a href=\"mailto:jean.dupont@exemple.fr\">jean.dupont@exemple.fr</a> (ou \
+             &lt;<a href=\"mailto:marie@exemple.fr\">marie@exemple.fr</a>&gt;).</div>"
+        );
+    }
+
+    #[test]
+    fn texte_sans_adresse_reste_du_texte() {
+        assert_eq!(texte_en_html("Bonjour,\nà demain à 10 h. 3.5 kg, n@, a@b, www.\n"), None);
+        assert_eq!(texte_en_html("ftp://exemple.fr javascript:alert(1) file:///etc/passwd"), None);
+    }
+
+    #[test]
+    fn adresses_entre_parentheses_et_ponctuation() {
+        assert_eq!(
+            lier_texte("(https://fr.wikipedia.org/wiki/Agen_(Lot-et-Garonne)) et https://x.fr/;"),
+            "(<a href=\"https://fr.wikipedia.org/wiki/Agen_(Lot-et-Garonne)\">\
+             https://fr.wikipedia.org/wiki/Agen_(Lot-et-Garonne)</a>) et <a href=\"https://x.fr/\">https://x.fr/</a>;"
+        );
+        // Une adresse collée à un mot n'en est pas une ; ni un chemin.
+        assert_eq!(lier_texte("abcwww.exemple.fr /chemin/www.exemple.fr"), "abcwww.exemple.fr /chemin/www.exemple.fr");
+    }
+
+    #[test]
+    fn liens_poses_dans_le_html_hors_des_liens() {
+        let c = corps_html(&message(
+            "<p>Site : www.exemple.fr, contact@exemple.fr</p>\
+             <p><a href=\"https://exemple.fr\">https://exemple.fr</a></p>\
+             <p><a href=\"www.autre.fr\">autre</a></p>",
+        ))
+        .unwrap();
+        assert_eq!(
+            c.html,
+            "<p>Site : <a href=\"http://www.exemple.fr\">www.exemple.fr</a>, \
+             <a href=\"mailto:contact@exemple.fr\">contact@exemple.fr</a></p>\
+             <p><a href=\"https://exemple.fr\">https://exemple.fr</a></p>\
+             <p><a href=\"http://www.autre.fr\">autre</a></p>"
+        );
+    }
+
+    #[test]
+    fn feuille_de_style_et_entites_respectees() {
+        assert_eq!(
+            lier_html("<style>a{x:url(https://x.fr)}</style><p>&lt;https://x.fr&gt; a&nbsp;www.y.fr</p>"),
+            "<style>a{x:url(https://x.fr)}</style><p>&lt;<a href=\"https://x.fr\">https://x.fr</a>&gt; \
+             a&nbsp;<a href=\"http://www.y.fr\">www.y.fr</a></p>"
+        );
     }
 }

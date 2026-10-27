@@ -21,6 +21,7 @@
 #include <QtCore/QUrl>
 #include <QtCore/QVariant>
 #include <QtCore/QVariantMap>
+#include <QtGui/QColor>
 #include <QtGui/QFont>
 #include <QtGui/QGuiApplication>
 #ifdef MMAIL_IMPRESSION
@@ -34,6 +35,7 @@
 #include <QtNetwork/QLocalSocket>
 #include <QtQml/QQmlApplicationEngine>
 #include <QtQml/QQmlContext>
+#include <QtQml/QQmlProperty>
 #include <QtQuickControls2/QQuickStyle>
 #include <QtQuick/QQuickWindow>
 #include <QtQml/qqml.h>
@@ -179,6 +181,24 @@ static QString dossierProfil(bool* impose = nullptr)
   if (impose)
     *impose = !reglage.isEmpty();
   return base;
+}
+
+/// Réglage d'accessibilité du poste : « Effets d'animation » sous Windows
+/// (Paramètres, Accessibilité, Effets visuels). C'est l'équivalent du
+/// « prefers-reduced-motion » du web, et l'interface doit l'honorer : une
+/// animation qu'on ne peut pas couper est une animation de trop. Vrai partout
+/// ailleurs, ni macOS ni les bureaux Linux ne l'exposant par une voie que Qt
+/// relaie.
+static bool animationsClientes()
+{
+#ifdef Q_OS_WIN
+  BOOL actives = TRUE;
+  if (!SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, &actives, 0))
+    return true;
+  return actives != FALSE;
+#else
+  return true;
+#endif
 }
 
 #ifdef Q_OS_WIN
@@ -401,6 +421,13 @@ int main(int argc, char* argv[])
   // En contrôle de fabrication, l'interface ne touche ni au coffre ni au réseau
   // de sa propre initiative.
   engine.rootContext()->setContextProperty(QStringLiteral("modeControle"), smoke);
+  // Réglage d'accessibilité du poste, que l'interface doit honorer avant toute
+  // transition (cf. « anime » dans Main.qml). MMAIL_ANIMATIONS force la valeur
+  // pour les essais : sans elle, le cas « le système refuse » ne se joue pas.
+  engine.rootContext()->setContextProperty(QStringLiteral("animationsSysteme"),
+                                           qgetenv("MMAIL_ANIMATIONS").isEmpty()
+                                             ? animationsClientes()
+                                             : qgetenv("MMAIL_ANIMATIONS") != "0");
   // Avis de nouvelle version : coupé pour la machine (« AvisVersion » à 0) sur
   // un parc dont l'administrateur déploie lui-même les mises à jour.
   engine.rootContext()->setContextProperty(
@@ -534,6 +561,23 @@ int main(int argc, char* argv[])
   engine.load(url);
 
 #ifndef Q_OS_ANDROID
+  // Matériau de la fenêtre, demandé par l'apparence. Hors de la condition qui
+  // suit : celle-ci écarte les contrôles et les captures, or une capture doit
+  // justement montrer le matériau. Le fond de la fenêtre passe au transparent
+  // quand il est accordé, sinon il le recouvrirait.
+  if (!engine.rootObjects().isEmpty()) {
+    if (auto* principale = qobject_cast<QQuickWindow*>(engine.rootObjects().first())) {
+      const QString voulu = principale->property("materiauVoulu").toString();
+      if (!voulu.isEmpty() && fenetre::materiau(principale, voulu)) {
+        // QQmlProperty et non setColor() : le style lie « color » à
+        // palette.window dans son ApplicationWindow, et setColor() écrit la
+        // propriété C++ sans retirer la liaison — à la prochaine évaluation
+        // de la palette, un changement d'apparence par exemple, le style
+        // réécrirait une couleur opaque et recouvrirait le matériau.
+        QQmlProperty::write(principale, QStringLiteral("color"), QColor(Qt::transparent));
+      }
+    }
+  }
   // Position de la fenêtre retenue d'une session à l'autre — sauf pour les
   // contrôles, les captures et les essais à taille imposée (MMAIL_TAILLE).
   if (!smoke && capture.isEmpty() && qgetenv("MMAIL_TAILLE").isEmpty() && !engine.rootObjects().isEmpty()) {

@@ -453,7 +453,7 @@ ColumnLayout {
                 text: qsTr("Télécharger les images")
                 onClicked: fenetre.demanderImages()
             }
-            // Expéditeur de confiance (0.6.23, demande de Guillaume LUDGER) :
+            // Expéditeur de confiance (0.6.24, demande de Guillaume LUDGER) :
             // ses images se téléchargeront d'office. Absent quand le serveur a
             // noté un échec DMARC.
             Button {

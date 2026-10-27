@@ -55,7 +55,7 @@ ItemDelegate {
                      + (cumulVisible ? ", " + texteCumul : "")
     // Ligne repliée d'un compte, ou d'un dossier qui a des sous-dossiers
     // (0.6.21) : elle dit les non-lus qu'elle cache.
-    // Brouillons (0.6.23, comme Outlook) : le nombre total de leurs éléments
+    // Brouillons (0.6.24, comme Outlook) : le nombre total de leurs éléments
     // entre crochets, au lieu des non-lus — un brouillon enregistré tout seul
     // se voit, sans passer pour un message non lu.
     readonly property bool brouillons: estDossier && model.role === "Drafts"

@@ -502,7 +502,7 @@ fn premier_contact(adresses: &Address<'_>) -> (String, String) {
 /// En-tête d'un message pour sa fenêtre (0.6.16) : expéditeur, destinataires
 /// et copie — chacun « Nom <adresse> », séparés par « ; » —, et date (RFC
 /// 3339, vide si absente) ; adresse seule de l'expéditeur, en minuscules, et échec DMARC noté
-/// par le serveur (0.6.23, images distantes d'un expéditeur de confiance). JSON :
+/// par le serveur (0.6.24, images distantes d'un expéditeur de confiance). JSON :
 /// `{"de":…,"a":…,"cc":…,"date":…,"expediteur":…,"dmarcEchec":…}`.
 pub fn entete_affichable(brut: &[u8]) -> String {
     let Some(message) = MessageParser::default().parse(brut) else {
@@ -544,7 +544,7 @@ pub fn entete_affichable(brut: &[u8]) -> String {
 /// en-têtes du message comptent, pas ceux d'un message joint ; un en-tête écrit
 /// par l'expéditeur lui-même ne peut qu'ajouter un échec, pas effacer celui que
 /// le serveur de réception a noté. Sert aux images distantes d'un expéditeur de
-/// confiance (0.6.23), qu'une adresse falsifiée ne doit pas déclencher.
+/// confiance (0.6.24), qu'une adresse falsifiée ne doit pas déclencher.
 pub fn dmarc_echoue(brut: &[u8]) -> bool {
     let fin = brut
         .windows(4)

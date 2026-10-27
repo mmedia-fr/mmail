@@ -46,7 +46,7 @@ Page {
     readonly property alias animations: animationsRedaction
     readonly property alias boutonSignature: boutonSignature
     property string brouillonChemin: ""
-    // Compte qui porte le brouillon (0.6.23) : changer « De » le laisse là,
+    // Compte qui porte le brouillon (0.6.24) : changer « De » le laisse là,
     // d'où il part à la corbeille une fois le nouveau enregistré ou envoyé.
     property int brouillonCompte: 0
     // Rédaction gardée sur le poste (noyau, garde.rs) : son
@@ -231,7 +231,7 @@ Page {
         }
         brouillonUid = p.brouillonUid || 0
         brouillonChemin = p.brouillonChemin || ""
-        // Rédaction gardée par une version d'avant la 0.6.23 : le compte
+        // Rédaction gardée par une version d'avant la 0.6.24 : le compte
         // choisi, celui qui l'avait.
         brouillonCompte = p.brouillonCompte || (brouillonUid > 0 && compteChoisi() ? compteChoisi().compte : 0)
         importance = p.importance || 0
@@ -443,7 +443,7 @@ Page {
 
     /// Le brouillon laissé sur un autre compte par un changement de « De »
     /// part à la corbeille de ce compte, une fois remplacé sur `compte` par un
-    /// brouillon ou un envoi (0.6.23).
+    /// brouillon ou un envoi (0.6.24).
     function retirerAncienBrouillon(compte) {
         if (brouillonUid > 0 && brouillonCompte > 0 && brouillonCompte !== compte && brouillonChemin.length > 0)
             boite.supprimerDans(brouillonCompte, brouillonChemin, String(brouillonUid))

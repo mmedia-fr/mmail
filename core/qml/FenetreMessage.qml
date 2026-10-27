@@ -53,7 +53,7 @@ ApplicationWindow {
     property bool source: false
     property var pieces: []
     property var entete: ({})
-    // Images distantes laissées de côté, et déjà demandées (0.6.23).
+    // Images distantes laissées de côté, et déjà demandées (0.6.24).
     property int bloquees: 0
     property bool imagesDemandees: false
     readonly property var cible: ({ compte: compte, chemin: chemin, uid: uid })
@@ -111,7 +111,7 @@ ApplicationWindow {
                 fenetreMessage.pieces = JSON.parse(piecesRecues)
                 try { fenetreMessage.entete = JSON.parse(enteteRecu) } catch (e) { fenetreMessage.entete = {} }
             }
-            // Expéditeur de confiance (0.6.23) : images d'office, une fois.
+            // Expéditeur de confiance (0.6.24) : images d'office, une fois.
             if (!brut && estHtml && bloquees > 0 && !fenetreMessage.imagesDemandees
                     && fenetre.imagesDOffice(fenetreMessage.entete))
                 fenetreMessage.telechargerImages()
@@ -127,7 +127,7 @@ ApplicationWindow {
             mef.bornerImages(Math.floor(vueCorps.width - vueCorps.leftPadding - vueCorps.rightPadding) - 2)
     }
 
-    /// Ses images distantes, téléchargées à cette demande (0.6.23).
+    /// Ses images distantes, téléchargées à cette demande (0.6.24).
     function telechargerImages() {
         imagesDemandees = true
         boite.afficherImagesDans(compte, chemin, uid)
@@ -419,7 +419,7 @@ ApplicationWindow {
             }
         }
 
-        // Images distantes (0.6.23), comme au volet de lecture : rien ne se
+        // Images distantes (0.6.24), comme au volet de lecture : rien ne se
         // télécharge sans le demander, sauf pour un expéditeur de confiance.
         Pane {
             Layout.fillWidth: true

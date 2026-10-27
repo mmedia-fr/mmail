@@ -236,7 +236,7 @@ QtObject {
         }
     }
 
-    /// Scénario « brouillon-compte » (0.6.23), deux comptes : un brouillon
+    /// Scénario « brouillon-compte » (0.6.24), deux comptes : un brouillon
     /// enregistré sur le premier, puis « De » passé sur le second et le
     /// brouillon réenregistré. Le second compte ne doit rien perdre de ses
     /// brouillons ; celui du premier part à sa corbeille. Le contrôle des
@@ -658,7 +658,7 @@ QtObject {
         }
     }
 
-    /// Scénario « images-confiance » (0.6.23), sur deux messages HTML à images
+    /// Scénario « images-confiance » (0.6.24), sur deux messages HTML à images
     /// distantes du même expéditeur, dans un ordre quelconque : A (DMARC
     /// réussi) et B (échec DMARC noté par le serveur). B : pas de « Toujours
     /// pour cet expéditeur ». A : « Toujours » ; puis B : rien d'office ; retour

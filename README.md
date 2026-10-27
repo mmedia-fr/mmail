@@ -33,7 +33,9 @@ de projet interne.
   distinct quand le fournisseur en a un (Orange, Free, SFR) —, dans un fil à part — le compte reste
   utilisable pendant un gros envoi —, copie dans « Éléments envoyés », original
   marqué « répondu » ou « transféré » ; brouillons enregistrés sur le serveur et
-  repris d'un double clic ;
+  repris d'un double clic — un brouillon reste dans le compte où il a été écrit,
+  même quand on change « De » (0.6.24) ; le dossier Brouillons affiche entre
+  crochets le nombre de ses éléments, comme Outlook ;
 - **mise en forme** à la rédaction — gras, italique, souligné, listes à
   puces ou numérotées, liens — envoyée en HTML avec sa version en texte brut ;
   « Mise en forme » décochée, le message part en texte brut ;
@@ -171,6 +173,13 @@ de projet interne.
   corps du message des bords, à gauche et à droite, dans le volet de lecture
   comme dans la fenêtre d'un message — « Aucune » (par défaut, au ras du volet),
   « Étroites » ou « Larges », en proportion de la taille du texte ;
+- **expéditeurs de confiance** (0.6.24) : « Toujours pour cet expéditeur », à
+  côté de « Télécharger les images », fait télécharger d'office les images
+  distantes de ses messages, dans le volet de lecture comme dans la fenêtre d'un
+  message — jamais quand le serveur a noté l'échec de son authentification
+  (DMARC), une adresse d'expéditeur se falsifiant ; la liste se revoit dans
+  « Réglages › Expéditeurs de confiance… » et suit la sauvegarde de la
+  configuration ;
 - **masquage local** des dossiers peu utilisés, réaffichage en un clic ;
 - affichage du **message brut** (bouton « Source ») ;
 - **copie automatique de la sélection**, comme dans MMdedit : un texte

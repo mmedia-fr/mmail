@@ -314,7 +314,7 @@ ApplicationWindow {
     // Images distantes du message affiché laissées de côté.
     property int imagesBloquees: 0
     // Message dont les images distantes sont déjà demandées pour cet
-    // affichage (« compte|dossier|uid ») : une seule demande d'office (0.6.23).
+    // affichage (« compte|dossier|uid ») : une seule demande d'office (0.6.24).
     property string imagesAutoPour: ""
     // Lien survolé dans le message : son adresse s'affiche dans la barre
     // d'information, comme dans un navigateur — un lien trompeur s'y voit.
@@ -405,7 +405,7 @@ ApplicationWindow {
         // « larges » (cf. fenetre.margeMessage).
         property string margesMessage: "aucune"
         // Expéditeurs dont les images distantes se téléchargent d'office
-        // (0.6.23) : adresses en minuscules, JSON. Suit la sauvegarde.
+        // (0.6.24) : adresses en minuscules, JSON. Suit la sauvegarde.
         property string expediteursConfiance: "[]"
     }
 
@@ -3500,7 +3500,7 @@ ApplicationWindow {
         coffre.effacer(c)
     }
 
-    // ---- images distantes : expéditeurs de confiance (0.6.23)
+    // ---- images distantes : expéditeurs de confiance (0.6.24)
 
     /// Adresses dont les images distantes se téléchargent d'office (réglage
     /// « expediteursConfiance », JSON, en minuscules).

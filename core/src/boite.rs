@@ -327,7 +327,7 @@ pub mod qobject {
         #[cxx_name = "demanderDans"]
         fn demander_dans(self: Pin<&mut Boite>, compte: i32, chemin: &QString, uid: i32, brut: bool) -> bool;
 
-        /// Fenêtre d'un message (0.6.23) : son corps avec ses images
+        /// Fenêtre d'un message (0.6.24) : son corps avec ses images
         /// distantes, téléchargées à cette demande — bouton du bandeau, ou
         /// expéditeur de confiance. Issue : `corpsRecu`.
         #[qinvokable]
@@ -3017,7 +3017,7 @@ impl qobject::Boite {
     }
 
     /// Corps d'un message pour sa fenêtre ; `distantes` : avec ses images
-    /// distantes (0.6.23).
+    /// distantes (0.6.24).
     fn lire_dans(mut self: Pin<&mut Self>, compte: i32, chemin: &QString, uid: i32, brut: bool, distantes: bool) -> bool {
         let (compte, chemin) = (compte as i64, chemin.to_string());
         let Some(dossier) = self.magasin.as_ref().and_then(|m| m.dossier_id(compte, &chemin).ok()) else {
@@ -6157,7 +6157,7 @@ impl Travail {
     /// Retire définitivement un message repris (brouillon, envoi différé) :
     /// il est remplacé par ce qui vient d'être enregistré ou envoyé.
     ///
-    /// Jamais dans un autre compte que celui du brouillon (0.6.23) : changer
+    /// Jamais dans un autre compte que celui du brouillon (0.6.24) : changer
     /// l'expéditeur en rédaction gardait l'UID du brouillon du premier compte,
     /// et ce numéro, purgé dans les brouillons du second, y aurait retiré un
     /// autre message. Le brouillon du premier compte, lui, part à sa corbeille
@@ -6552,7 +6552,7 @@ impl Travail {
 }
 
 /// Le brouillon que remplace `r` est-il porté par `compte` ? Compte inconnu
-/// (0, rédaction d'avant la 0.6.23) : celui de l'envoi, comme avant.
+/// (0, rédaction d'avant la 0.6.24) : celui de l'envoi, comme avant.
 fn brouillon_du_compte(r: &Redaction, compte: i64) -> bool {
     r.brouillon_uid != 0 && (r.brouillon_compte == 0 || r.brouillon_compte == compte)
 }

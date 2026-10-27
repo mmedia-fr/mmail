@@ -355,7 +355,7 @@ Connections {
             if (i >= 0 && modeleMessages.get(i).pieces !== (fenetre.pieces.length > 0))
                 modeleMessages.setProperty(i, "pieces", fenetre.pieces.length > 0)
         }
-        // Expéditeur de confiance (0.6.23) : ses images distantes se
+        // Expéditeur de confiance (0.6.24) : ses images distantes se
         // téléchargent d'office, une fois par affichage du message — la source
         // affichée, ou un autre message, rouvre la question.
         var cle = compte + "|" + chemin + "|" + uid

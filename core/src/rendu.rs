@@ -239,7 +239,7 @@ const NOMS_DE_COULEURS: &[&str] = &[
 /// (notification 3CX du 16/10). Le « # » est rétabli ; toute autre valeur
 /// qu'un code ou un nom connu est écartée — mieux vaut pas de fond qu'un fond
 /// noir.
-fn couleur(valeur: &str) -> Option<String> {
+pub(crate) fn couleur(valeur: &str) -> Option<String> {
     let v = valeur.trim();
     let hexa = |h: &str| matches!(h.len(), 3 | 6) && h.chars().all(|c| c.is_ascii_hexdigit());
     if let Some(code) = v.strip_prefix('#') {

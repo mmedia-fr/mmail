@@ -578,7 +578,10 @@ reproposées.
 - Le rendu HTML est celui du texte riche de Qt : pas de mise en page par
   feuille de style élaborée. Les tableaux de mise en page à une colonne des
   lettres d'information sont ramenés à des blocs, et une image plus large que
-  la colonne est réduite ; les images SVG ne s'affichent pas.
+  la colonne est réduite ; les images SVG ne s'affichent pas. Sous un fond
+  coloré, l'interligne imposé par l'expéditeur est retiré (0.6.25 : Qt le
+  laissait hors du fond, en bandes blanches), et les retraits intérieurs
+  (`padding`) des encadrés sont perdus : le texte y touche les bords.
 - Sous Android, les pièces jointes s'ouvrent mais ne s'enregistrent pas
   ailleurs ; leur ouverture n'a pas été éprouvée sur un téléphone.
 - Hors connexion, un message ouvert reste non lu sur le serveur ; pas de

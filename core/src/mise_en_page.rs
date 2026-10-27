@@ -15,6 +15,15 @@
 //! plusieurs colonnes reste un tableau, et une largeur fixe d'au moins
 //! `LARGEUR_PLEINE` pixels y devient la pleine largeur.
 //!
+//! Le moteur de Qt peint le fond d'un bloc sur la hauteur naturelle de ses
+//! lignes : l'interligne qu'impose `line-height` reste hors du fond, et chaque
+//! bloc d'un encadré sombre finissait souligné d'une bande blanche (avis de
+//! Steam du 27/10/2026). Sous un fond autre que le blanc de la page,
+//! `line-height` est donc retiré. Un tableau gardé est un cadre à part, que le
+//! fond des blocs qui l'entourent ne couvre pas : il le reçoit en `bgcolor`.
+//! Une cellule vide de quelques pixels (filet, espaceur) disparaît, faute de
+//! pouvoir être plus basse qu'une ligne de texte.
+//!
 //! Le HTML traité est celui qui sort d'`ammonia` : bien formé, chaque élément
 //! non vide fermé, attributs entre guillemets, aucun « < » ni « > » dans un
 //! attribut. Faute de pouvoir le relire, il est rendu tel quel.
@@ -35,6 +44,10 @@ const PROFONDEUR_MAX: usize = 256;
 /// Attributs repris par le bloc qui remplace une cellule ou un tableau.
 const ATTRIBUTS_REPRIS: &[&str] = &["class", "dir", "lang"];
 
+/// Hauteur, en pixels, en deçà de laquelle une cellule vide est un filet ou un
+/// espaceur.
+const ESPACEUR_MAX: u32 = 4;
+
 #[derive(Debug, Clone, PartialEq)]
 enum Noeud {
     Texte(String),
@@ -47,7 +60,7 @@ pub fn aplatir(html: &str) -> String {
         return html.to_string();
     };
     let mut sortie = String::with_capacity(html.len());
-    for noeud in noeuds.into_iter().flat_map(transformer) {
+    for noeud in noeuds.into_iter().flat_map(|noeud| transformer(noeud, None)) {
         ecrire(&noeud, &mut sortie);
     }
     sortie
@@ -138,24 +151,146 @@ fn ecrire(noeud: &Noeud, sortie: &mut String) {
 }
 
 /// Un nœud après transformation : les tableaux intérieurs d'abord, puis le
-/// nœud lui-même.
-fn transformer(noeud: Noeud) -> Vec<Noeud> {
+/// nœud lui-même. `fond` : couleur de fond du bloc qui l'entoure, quand elle
+/// n'est pas le blanc de la page.
+fn transformer(noeud: Noeud, fond: Option<&str>) -> Vec<Noeud> {
     let Noeud::Element { nom, attributs, enfants } = noeud else {
         return vec![noeud];
     };
-    let enfants: Vec<Noeud> = enfants.into_iter().flat_map(transformer).collect();
+    let propre = fond_de(&attributs);
+    let fond = match propre.as_deref() {
+        Some(couleur) => (!blanc(couleur)).then_some(couleur),
+        None => fond,
+    };
+    if nom == "table" && lignes(&enfants).iter().any(|ligne| cellules(ligne).len() > 1) {
+        let mut attributs = pleine_largeur(attributs);
+        if propre.is_none() {
+            if let Some(couleur) = fond {
+                attributs.push(("bgcolor".to_string(), couleur.to_string()));
+            }
+        }
+        let enfants = enfants.into_iter().flat_map(garder).collect();
+        return vec![Noeud::Element { nom, attributs, enfants }];
+    }
+    let attributs = sans_interligne(attributs, fond.is_some());
+    let enfants: Vec<Noeud> = enfants.into_iter().flat_map(|enfant| transformer(enfant, fond)).collect();
     if nom != "table" {
         return vec![Noeud::Element { nom, attributs, enfants }];
     }
-    let lignes = lignes(&enfants);
-    if lignes.iter().any(|ligne| cellules(ligne).len() > 1) {
-        return vec![Noeud::Element { nom, attributs: pleine_largeur(attributs), enfants }];
-    }
     let blocs: Vec<Noeud> = enfants.into_iter().flat_map(en_blocs).collect();
+    // Plus rien à montrer : le tableau ne portait qu'un filet ou un espaceur.
+    if blocs.is_empty() {
+        return Vec::new();
+    }
     // L'alignement d'un tableau le centre dans la page, il n'aligne pas son
     // texte : un bloc occupant toute la largeur, il est sans objet.
     let attributs: Vec<(String, String)> = attributs.into_iter().filter(|(a, _)| a != "align").collect();
     vec![bloc(&attributs, blocs)]
+}
+
+/// Ce que devient un enfant d'un tableau gardé : ses lignes et ses cellules
+/// demeurent ; le contenu d'une cellule repart sans fond hérité, la cellule
+/// peignant le sien sur toute sa hauteur.
+fn garder(noeud: Noeud) -> Vec<Noeud> {
+    match noeud {
+        Noeud::Element { nom, attributs, enfants }
+            if matches!(nom.as_str(), "tbody" | "thead" | "tfoot" | "tr") =>
+        {
+            vec![Noeud::Element { nom, attributs, enfants: enfants.into_iter().flat_map(garder).collect() }]
+        }
+        Noeud::Element { nom, attributs, enfants } if matches!(nom.as_str(), "td" | "th" | "caption") => {
+            let enfants = enfants.into_iter().flat_map(|enfant| transformer(enfant, None)).collect();
+            vec![Noeud::Element { nom, attributs, enfants }]
+        }
+        autre => transformer(autre, None),
+    }
+}
+
+/// Couleur de fond d'un élément : son attribut `bgcolor` (déjà validé par
+/// `ammonia`), sinon la dernière déclaration `background-color` ou
+/// `background` de son style qui en nomme une. `transparent` n'en est pas une.
+fn fond_de(attributs: &[(String, String)]) -> Option<String> {
+    let valeur = |nom: &str| attributs.iter().find(|(a, _)| a == nom).map(|(_, v)| v.as_str());
+    let couleur = valeur("bgcolor").map(str::to_string).or_else(|| {
+        declarations(valeur("style").unwrap_or(""))
+            .filter(|(propriete, _)| propriete == "background-color" || propriete == "background")
+            .filter_map(|(_, v)| v.split_whitespace().find_map(crate::rendu::couleur))
+            .last()
+    })?;
+    (!couleur.eq_ignore_ascii_case("transparent")).then_some(couleur)
+}
+
+/// Vrai pour le blanc : sur la page blanche du volet de lecture, un fond blanc
+/// ne laisse voir aucun interligne.
+fn blanc(couleur: &str) -> bool {
+    matches!(couleur.to_ascii_lowercase().as_str(), "#fff" | "#ffffff" | "white")
+}
+
+/// Attributs dont le style perd ses `line-height` : tous sous un fond, les nuls
+/// partout (`line-height:0`, qui ne sert qu'aux espaceurs pour Outlook). Un
+/// style dont rien n'est retiré reste tel qu'écrit.
+fn sans_interligne(attributs: Vec<(String, String)>, sous_fond: bool) -> Vec<(String, String)> {
+    attributs
+        .into_iter()
+        .filter_map(|(attribut, valeur)| {
+            if attribut != "style" {
+                return Some((attribut, valeur));
+            }
+            let retire = |declaration: &str| {
+                let (propriete, v) = declaration.split_once(':').unwrap_or((declaration, ""));
+                propriete.trim().eq_ignore_ascii_case("line-height") && (sous_fond || nul(v))
+            };
+            if !valeur.split(';').any(retire) {
+                return Some((attribut, valeur));
+            }
+            let style = valeur
+                .split(';')
+                .filter(|declaration| !declaration.trim().is_empty() && !retire(declaration))
+                .map(str::trim)
+                .collect::<Vec<_>>()
+                .join(";");
+            (!style.is_empty()).then_some((attribut, style))
+        })
+        .collect()
+}
+
+/// Déclarations d'un style : propriété en minuscules, valeur sans
+/// `!important`.
+fn declarations(style: &str) -> impl Iterator<Item = (String, &str)> {
+    style.split(';').filter_map(|declaration| {
+        let (propriete, valeur) = declaration.split_once(':')?;
+        let valeur = valeur.trim();
+        Some((propriete.trim().to_ascii_lowercase(), valeur.strip_suffix("!important").unwrap_or(valeur).trim()))
+    })
+}
+
+/// Longueur nulle : « 0 », « 0pt », « 0px », « 0% ».
+fn nul(valeur: &str) -> bool {
+    let valeur = valeur.trim();
+    let valeur = valeur.strip_suffix("!important").unwrap_or(valeur).trim();
+    valeur
+        .trim_end_matches(|c: char| c.is_ascii_alphabetic() || c == '%')
+        .parse::<f32>()
+        .is_ok_and(|v| v == 0.0)
+}
+
+/// Cellule sans autre contenu que des blancs, d'au plus `ESPACEUR_MAX` pixels
+/// de haut ou en police nulle : un filet, un espaceur. Le moteur de Qt ne fait
+/// pas de bloc plus bas qu'une ligne de texte — le filet de 1 pixel d'un avis
+/// de Steam devenait une bande grise de toute la largeur.
+fn espaceur(attributs: &[(String, String)], enfants: &[Noeud]) -> bool {
+    let vide = enfants.iter().all(|enfant| match enfant {
+        Noeud::Texte(texte) => texte.replace("&nbsp;", " ").replace("&#160;", " ").trim().is_empty(),
+        Noeud::Element { .. } => false,
+    });
+    let valeur = |nom: &str| attributs.iter().find(|(a, _)| a == nom).map(|(_, v)| v.as_str());
+    let style: Vec<(String, &str)> = declarations(valeur("style").unwrap_or("")).collect();
+    let basse = valeur("height")
+        .into_iter()
+        .chain(style.iter().filter(|(propriete, _)| propriete == "height").map(|(_, v)| *v))
+        .any(|hauteur| pixels(hauteur).is_some_and(|h| h <= ESPACEUR_MAX));
+    let police_nulle = style.iter().any(|(propriete, v)| propriete == "font-size" && nul(v));
+    vide && (basse || police_nulle)
 }
 
 /// Lignes d'un tableau : directement sous lui, ou sous `tbody`, `thead`,
@@ -197,13 +332,15 @@ fn en_blocs(noeud: Noeud) -> Vec<Noeud> {
         "tbody" | "thead" | "tfoot" => enfants.into_iter().flat_map(en_blocs).collect(),
         "tr" => {
             let contenu: Vec<Noeud> = enfants.into_iter().flat_map(en_blocs).collect();
-            // Une ligne ne porte un bloc que si elle a un style à transmettre.
-            if attributs.iter().any(|(a, _)| a == "style" || a == "bgcolor") {
+            // Une ligne ne porte un bloc que si elle a un style à transmettre,
+            // et un contenu : vide, son fond ferait une ligne de texte.
+            if !contenu.is_empty() && attributs.iter().any(|(a, _)| a == "style" || a == "bgcolor") {
                 vec![bloc(&attributs, contenu)]
             } else {
                 contenu
             }
         }
+        "td" | "th" | "caption" if espaceur(&attributs, &enfants) => Vec::new(),
         "td" | "th" | "caption" => vec![bloc(&attributs, enfants)],
         // `colgroup`, `col` : des largeurs de colonnes, sans objet.
         _ => Vec::new(),
@@ -338,6 +475,71 @@ mod tests {
             aplatir(html),
             "<div><div style=\"background-color:#eee\"><div dir=\"rtl\" lang=\"ar\">x</div></div></div>"
         );
+    }
+
+    #[test]
+    fn interligne_retire_sous_un_fond() {
+        // Avis de Steam du 27/10/2026 : l'interligne restait hors du fond, une
+        // bande blanche sous chaque bloc.
+        let html = "<table bgcolor=\"#212429\"><tbody><tr><td style=\"font-size:18px; line-height:25px; \
+                    color:#f1f1f1\">x <span style=\"line-height:1.3\">y</span></td></tr></tbody></table>";
+        assert_eq!(
+            aplatir(html),
+            "<div style=\"background-color:#212429\"><div style=\"font-size:18px;color:#f1f1f1\">\
+             x <span>y</span></div></div>"
+        );
+        // Sur du blanc, il ne se voit pas : l'interligne demeure, son style
+        // tel qu'écrit.
+        let blanc = "<table bgcolor=\"#ffffff\"><tbody><tr><td><p style=\"line-height: 25px\">x</p>\
+                     </td></tr></tbody></table>";
+        assert_eq!(
+            aplatir(blanc),
+            "<div style=\"background-color:#ffffff\"><div><p style=\"line-height: 25px\">x</p></div></div>"
+        );
+        // Fond d'un style, et interligne nul retiré partout.
+        let style = "<div style=\"background: none #333 \"><p style=\"line-height:20px\">x</p></div>\
+                     <div style=\"font-size:0pt; line-height:0pt\">y</div>";
+        assert_eq!(
+            aplatir(style),
+            "<div style=\"background: none #333 \"><p>x</p></div><div style=\"font-size:0pt\">y</div>"
+        );
+    }
+
+    #[test]
+    fn filet_et_espaceur_ecartes() {
+        // Le filet de Steam : 210 px de large, 1 px de haut, une espace insécable.
+        let html = "<table width=\"210\" bgcolor=\"#727483\"><tbody><tr><td height=\"1\" \
+                    style=\"font-size:0pt; line-height:0pt\">&nbsp;</td></tr></tbody></table><p>y</p>";
+        assert_eq!(aplatir(html), "<p>y</p>");
+        let police_nulle = "<table><tbody><tr style=\"background:#ccc\"><td style=\"font-size:0\"> </td></tr>\
+                            </tbody></table>";
+        assert_eq!(aplatir(police_nulle), "");
+        // Un espace de 20 px, ou une cellule de 1 px qui porte un texte, reste.
+        let espace = "<table><tbody><tr><td height=\"20\">&nbsp;</td></tr></tbody></table>";
+        assert_eq!(aplatir(espace), "<div><div>&nbsp;</div></div>");
+        let texte = "<table><tbody><tr><td height=\"1\">x</td></tr></tbody></table>";
+        assert_eq!(aplatir(texte), "<div><div>x</div></div>");
+    }
+
+    #[test]
+    fn fond_transmis_au_tableau_garde() {
+        // La signature de Steam : barre bleue, espace, texte clair, dans un
+        // encadré sombre aplati. Sans le fond, le texte clair restait sur blanc.
+        let html = "<table bgcolor=\"#212429\"><tbody><tr><td><table width=\"100%\"><tbody><tr>\
+                    <td width=\"3\" bgcolor=\"#3a9aed\"></td><td style=\"line-height:22px\">Cordialement</td>\
+                    </tr></tbody></table></td></tr></tbody></table>";
+        assert_eq!(
+            aplatir(html),
+            "<div style=\"background-color:#212429\"><div><table width=\"100%\" bgcolor=\"#212429\"><tbody><tr>\
+             <td width=\"3\" bgcolor=\"#3a9aed\"></td><td style=\"line-height:22px\">Cordialement</td>\
+             </tr></tbody></table></div></div>"
+        );
+        // Un tableau qui a son fond le garde ; sur la page, aucun n'est ajouté.
+        let propre = "<div style=\"background-color:#000\"><table bgcolor=\"#fff\"><tbody><tr><td>a</td>\
+                      <td>b</td></tr></tbody></table></div>";
+        assert_eq!(aplatir(propre), propre);
+        let page = "<table><tbody><tr><td>a</td><td>b</td></tr></tbody></table>";
+        assert_eq!(aplatir(page), page);
     }
 
     #[test]

@@ -28,7 +28,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::sync::{Arc, OnceLock};
 use std::thread;
@@ -703,6 +703,19 @@ pub mod qobject {
         #[qinvokable]
         #[cxx_name = "redactionsGardees"]
         fn redactions_gardees(&self) -> QString;
+
+        /// Ce que font les comptes en ce moment (0.6.22), en une phrase pour la
+        /// barre d'état — compte, dossier, avancement, durée restante —, ou
+        /// une chaîne vide.
+        #[qinvokable]
+        #[cxx_name = "activiteEnCours"]
+        fn activite_en_cours(&self) -> QString;
+
+        /// Vrai si les résultats du dernier `chercher` viennent de la
+        /// recherche tolérante aux fautes de frappe (0.6.22).
+        #[qinvokable]
+        #[cxx_name = "rechercheApprochee"]
+        fn recherche_approchee(&self) -> bool;
 
         /// Fichier à joindre, désigné par son URL (`file:…`) ou son chemin :
         /// `{chemin, nom, taille, risquee}` en JSON, ou une chaîne vide s'il
@@ -1507,6 +1520,8 @@ pub struct BoiteRust {
     /// Numéro de la recherche sur le serveur en cours : une nouvelle, ou
     /// l'arrêt, l'augmente, et les fils de la précédente s'arrêtent (0.6.16).
     recherche: Arc<AtomicU64>,
+    /// Le dernier `chercher` n'a trouvé qu'en tolérant des fautes (0.6.22).
+    recherche_approchee: AtomicBool,
 }
 
 /// Liste envoyée à l'interface : dossier, et pour chaque message son UID, sa
@@ -1586,6 +1601,7 @@ impl Default for BoiteRust {
             sauvegarde_en_cours: false,
             sauvegardes_lues: HashMap::new(),
             recherche: Arc::new(AtomicU64::new(0)),
+            recherche_approchee: AtomicBool::new(false),
         }
     }
 }
@@ -2851,15 +2867,21 @@ impl qobject::Boite {
             return QString::from("[]");
         };
         let (texte, categories) = criteres_recherche(magasin, &texte.to_string());
+        self.recherche_approchee.store(false, Ordering::SeqCst);
+        // Rien d'exact : la même recherche, fautes de frappe tolérées (0.6.22).
+        let chercher = |dossier| {
+            let (trouves, approchee) =
+                magasin.chercher_tolerant(dossier, &texte, &categories, RECHERCHE_MAX).unwrap_or_default();
+            self.recherche_approchee.store(approchee, Ordering::SeqCst);
+            trouves
+        };
         if partout {
-            return QString::from(&json_trouves(
-                &magasin.chercher_avec(None, &texte, &categories, RECHERCHE_MAX).unwrap_or_default(),
-            ));
+            return QString::from(&json_trouves(&chercher(None)));
         }
         let Some((_, _, id)) = self.courant.as_ref() else {
             return QString::from("[]");
         };
-        let trouves = magasin.chercher_avec(Some(*id), &texte, &categories, RECHERCHE_MAX).unwrap_or_default();
+        let trouves = chercher(Some(*id));
         let messages: Vec<MessageLocal> = trouves.into_iter().map(|t| t.message).collect();
         QString::from(&json_messages(&messages))
     }
@@ -4234,6 +4256,30 @@ impl qobject::Boite {
         if !self.profil.is_empty() {
             crate::garde::Garde::du_profil(&self.profil).oublier(&id.to_string());
         }
+    }
+
+    pub fn activite_en_cours(&self) -> QString {
+        let Some(magasin) = self.magasin.as_ref() else {
+            return QString::from("");
+        };
+        let comptes = magasin.comptes().unwrap_or_default();
+        let phrases: Vec<String> = crate::activite::en_cours()
+            .iter()
+            .filter_map(|a| {
+                let adresse = &comptes.iter().find(|c| c.id == a.compte)?.adresse;
+                Some(crate::activite::phrase(a, adresse, a.debut.elapsed().as_secs_f64()))
+            })
+            .collect();
+        QString::from(&match phrases.len() {
+            0 => String::new(),
+            1 => phrases[0].clone(),
+            2 => format!("{} — et un autre compte", phrases[0]),
+            n => format!("{} — et {} autres comptes", phrases[0], n - 1),
+        })
+    }
+
+    pub fn recherche_approchee(&self) -> bool {
+        self.recherche_approchee.load(Ordering::SeqCst)
     }
 
     pub fn redactions_gardees(&self) -> QString {
@@ -6245,6 +6291,10 @@ impl Travail {
         if a_faire.is_empty() {
             return Ok(false);
         }
+        // Ce qui reste à mettre sur le poste pour ce dossier, annoncé dans la
+        // barre d'état (0.6.22) ; le lot en fait une part.
+        let (reste, volume) = e.magasin.reste_a_garder(dossier, limite, crate::cache::taille_max()).unwrap_or((0, 0));
+        let _activite = crate::activite::commencer(self.compte, crate::activite::Tache::Contenus, chemin, reste, volume);
         let avant = e.client.selection().map(str::to_string);
         assurer_selection(&mut e.client, chemin)?;
         let mut faits = 0;
@@ -6268,6 +6318,7 @@ impl Travail {
                 Err(_) => e.magasin.poser_etat_corps(*id, "echec")?,
             }
             faits += 1;
+            crate::activite::avancer(self.compte, faits as u64, octets_lus as u64);
             if octets_lus > OCTETS_PAR_LOT {
                 break;
             }
@@ -6394,9 +6445,15 @@ impl Travail {
         };
         let retour = self.retour();
         let lance = thread::Builder::new().name("mmail-smtp".into()).spawn(move || {
-            let erreur = remettre_message(&id, &r.de, &f.destinataires, &f.envoi, r.accuse_remise)
-                .err()
-                .map(|x| format!("envoi : {x}"));
+            let erreur = remettre_message(&id, &r.de, &f.destinataires, &f.envoi, r.accuse_remise).err().map(|x| {
+                // Coupure après le texte du message (0.6.22) : le dire, la
+                // rédaction rouverte proposerait sinon un double sans prévenir.
+                if smtp::incertain(&x) {
+                    format!("{x} — le serveur a pu garder le message : le renvoyer risque un double")
+                } else {
+                    format!("envoi : {x}")
+                }
+            });
             retour.remettre(Issue::Parti { redaction: r, copie: f.copie, erreur }, true);
         });
         match lance {

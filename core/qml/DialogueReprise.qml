@@ -29,7 +29,9 @@ Dialog {
                 var c = liste[k].contenu || {}
                 var objet = (c.objet || "").length > 0 ? "« " + c.objet + " »" : qsTr("(sans objet)")
                 var a = (c.a || "").length > 0 ? qsTr(" à %1").arg(c.a) : ""
-                lignes.push("• " + objet + a + qsTr(", modifié le %1").arg(fenetre.dateLongue(liste[k].modifie * 1000)))
+                lignes.push("• " + objet + a + qsTr(", modifié le %1").arg(fenetre.dateLongue(liste[k].modifie * 1000))
+                            // Fermé en plein envoi (0.6.22) : il a pu partir.
+                            + (liste[k].enEnvoi ? qsTr(" — MMail s'est fermé pendant son envoi : il a pu partir, vérifiez avant de le renvoyer") : ""))
             }
             return (liste.length > 1
                     ? qsTr("MMail s'est fermé alors que %1 messages étaient en cours de rédaction :").arg(liste.length)

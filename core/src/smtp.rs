@@ -98,13 +98,38 @@ fn remettre(
             return Err(Erreur::Refuse(format!("destinataire {destinataire} refusé : {code} {texte}")));
         }
     }
-    s.echanger("données", "DATA", 354)?;
-    s.flux.get_mut().write_all(&donnees(octets))?;
-    s.flux.get_mut().flush()?;
-    s.attendre("remise", 250)?;
+    remettre_donnees(&mut s, octets)?;
     // Le message est accepté : un QUIT perdu n'y change rien.
     let _ = s.envoyer_ligne("QUIT");
     Ok(())
+}
+
+/// Début du texte d'une erreur de remise dont on ne sait pas si le serveur a
+/// gardé le message (0.6.22).
+pub const INCERTAIN: &str = "envoi incertain";
+
+/// Vrai si l'erreur laisse ignorer si le message est parti : la connexion a
+/// lâché après l'envoi de son texte, avant la réponse du serveur. Avant, il
+/// n'est pas parti ; un refus dit qu'il n'est pas parti.
+pub fn incertain(e: &Erreur) -> bool {
+    matches!(e, Erreur::Reseau(m) if m.starts_with(INCERTAIN))
+}
+
+/// `DATA`, le texte du message, puis la réponse du serveur. Une coupure
+/// entre le texte envoyé et la réponse rend une erreur `INCERTAIN` : le
+/// serveur a pu garder le message, le renvoyer sans le dire ferait un double.
+fn remettre_donnees<F: Read + Write>(s: &mut Session<F>, octets: &[u8]) -> Resultat<()> {
+    s.echanger("données", "DATA", 354)?;
+    let remise = (|| -> Resultat<String> {
+        s.flux.get_mut().write_all(&donnees(octets))?;
+        s.flux.get_mut().flush()?;
+        s.attendre("remise", 250)
+    })();
+    match remise {
+        Ok(_) => Ok(()),
+        Err(Erreur::Reseau(m)) => Err(Erreur::Reseau(format!("{INCERTAIN} ({m})"))),
+        Err(e) => Err(e),
+    }
 }
 
 /// Ouvre la session SMTP selon les mécanismes annoncés.
@@ -313,6 +338,26 @@ mod tests {
 
         let e = authentifier(&mut session(""), &["PLAIN".to_string()], &jeton).unwrap_err();
         assert!(matches!(e, Erreur::Refuse(ref m) if m.contains("XOAUTH2")));
+    }
+
+    /// Coupure après le texte du message : on ne sait pas s'il est parti, et
+    /// l'erreur le dit ; un refus, ou une coupure avant le texte, non.
+    #[test]
+    fn remise_coupee_apres_le_texte_incertaine() {
+        let mut s = session("354 go\r\n250 2.0.0 Ok: queued\r\n");
+        remettre_donnees(&mut s, b"Subject: x\r\n\r\ncorps\r\n").unwrap();
+        assert_eq!(envoye(&s), "DATA\r\nSubject: x\r\n\r\ncorps\r\n.\r\n");
+
+        let e = remettre_donnees(&mut session("354 go\r\n"), b"corps").unwrap_err();
+        assert!(incertain(&e), "{e:?}");
+        assert!(e.to_string().contains(INCERTAIN), "{e}");
+
+        let e = remettre_donnees(&mut session("354 go\r\n554 5.7.1 rejet\r\n"), b"corps").unwrap_err();
+        assert!(matches!(e, Erreur::Refuse(ref m) if m.starts_with("remise : 554")), "{e:?}");
+        assert!(!incertain(&e));
+
+        let e = remettre_donnees(&mut session(""), b"corps").unwrap_err();
+        assert!(!incertain(&e), "coupure avant le texte : pas parti — {e:?}");
     }
 
     #[test]

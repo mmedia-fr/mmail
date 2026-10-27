@@ -21,6 +21,7 @@
 
 use std::collections::HashSet;
 
+use crate::activite::{self, Tache};
 use crate::imap::{self, Client};
 use crate::index::ligne_index;
 use crate::magasin::{self, Magasin, MessageLocal};
@@ -95,6 +96,7 @@ impl Bilan {
 /// « De » (0.6.8). Relit aussi les catalogues de catégories du compte et de
 /// ses boîtes partagées (0.6.15) : rend vrai si l'un d'eux a changé.
 pub fn arborescence(client: &mut Client, magasin: &Magasin, compte: i64) -> Result<bool, Echec> {
+    let _activite = activite::commencer(compte, Tache::Dossiers, "", 0, 0);
     let (dossiers, statuts) = client.dossiers_et_compteurs()?;
     magasin.poser_dossiers(compte, &dossiers)?;
     magasin.poser_compteurs(compte, &statuts)?;
@@ -203,6 +205,8 @@ pub fn synchroniser(
     chemin: &str,
 ) -> Result<Bilan, Echec> {
     let id = magasin.dossier_id(compte, chemin)?;
+    // Ce que dit la barre d'état (0.6.22) : compte, dossier, en-têtes lus.
+    let _activite = activite::commencer(compte, Tache::Messages, chemin, 0, 0);
     let local = magasin
         .dossier(id)?
         .ok_or_else(|| magasin::Erreur(format!("dossier inconnu : {chemin}")))?;
@@ -222,7 +226,7 @@ pub fn synchroniser(
             id,
             &EtatDossier { uid_validity: etat.uid_validity, ..Default::default() },
         )?;
-        let (nouveaux, retires, _) = reconcilier(client, magasin, id, &etat, true)?;
+        let (nouveaux, retires, _) = reconcilier(client, magasin, compte, id, &etat, true)?;
         bilan.complet = true;
         bilan.reconstruit = true;
         bilan.nouveaux = nouveaux;
@@ -235,7 +239,7 @@ pub fn synchroniser(
             bilan.nouveaux = lire_depuis(client, magasin, id, local.uid_next.max(1))?;
         }
     } else {
-        let (nouveaux, retires, drapeaux) = reconcilier(client, magasin, id, &etat, false)?;
+        let (nouveaux, retires, drapeaux) = reconcilier(client, magasin, compte, id, &etat, false)?;
         bilan.complet = true;
         bilan.nouveaux = nouveaux;
         bilan.retires = retires;
@@ -245,7 +249,7 @@ pub fn synchroniser(
     // Contrôle de cohérence : l'index doit compter autant de messages que le
     // serveur. Un écart se répare par la liste des UID, sans tout relire.
     if !bilan.complet && magasin.uids(id)?.len() as u32 != etat.messages {
-        let (nouveaux, retires, drapeaux) = reconcilier(client, magasin, id, &etat, false)?;
+        let (nouveaux, retires, drapeaux) = reconcilier(client, magasin, compte, id, &etat, false)?;
         bilan.complet = true;
         bilan.nouveaux += nouveaux;
         bilan.retires += retires;
@@ -281,6 +285,7 @@ fn lire_depuis(client: &mut Client, magasin: &Magasin, id: i64, depuis: u32) -> 
 fn reconcilier(
     client: &mut Client,
     magasin: &Magasin,
+    compte: i64,
     id: i64,
     etat: &EtatDossier,
     tout_relire: bool,
@@ -308,6 +313,7 @@ fn reconcilier(
     // UID décroissants : les messages récents apparaissent d'abord.
     manquants.sort_unstable_by(|a, b| b.cmp(a));
     let mut nouveaux = 0;
+    activite::poser_total(compte, manquants.len() as u64);
     // Par paquets : une commande par millier d'UID reste de taille raisonnable
     // même quand les UID sont épars.
     for paquet in manquants.chunks(1000) {
@@ -315,6 +321,7 @@ fn reconcilier(
             client.entetes(&ensemble_uid(paquet))?.iter().map(ligne_index).collect();
         nouveaux += lignes.len();
         magasin.poser_messages(id, &lignes)?;
+        activite::avancer(compte, nouveaux as u64, 0);
     }
     Ok((nouveaux, perimes.len(), drapeaux))
 }

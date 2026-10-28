@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # MMail — noyau Rust (core/), interface Qt 6 / QML, coffre des mots de passe natif.
 cmake_minimum_required(VERSION 3.24)
-project(mmail VERSION 0.6.25 LANGUAGES CXX)
+project(mmail VERSION 0.6.26 LANGUAGES CXX)
 
 if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
   set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreadedDLL")
@@ -79,8 +79,12 @@ include(FetchContent)
 # son CMakeLists, moins l'installation.
 FetchContent_Declare(qtkeychain
   GIT_REPOSITORY https://github.com/frankosterfeld/qtkeychain.git
-  # 0.15.0, par son commit.
-  GIT_TAG ad7344c45a86a4f66cbafc4b081b5f7b876cb0b7
+  # 0.17.0, par son commit. La 0.15.0 chiffrait sous Android le secret en un
+  # seul bloc RSA, 245 octets au plus : un jeton de rafraîchissement Microsoft
+  # (1 à 2 Ko) n'entrait pas au coffre, et le compte se perdait à chaque
+  # relance de MMail (AADSTS9002313, 28/10). La 0.17.0 chiffre le secret en AES
+  # sous une clé elle-même chiffrée en RSA, et relit l'ancien format.
+  GIT_TAG 875f77d9f61bd97fd84cca47ce3bc71186dfbd09
   # Répertoire inexistant : les sources sont récupérées, sans add_subdirectory.
   SOURCE_SUBDIR sans-cmake)
 FetchContent_MakeAvailable(qtkeychain)
@@ -117,7 +121,11 @@ target_include_directories(coffre PUBLIC ${qtkeychain_SOURCE_DIR}
 target_compile_definitions(coffre PUBLIC QTKEYCHAIN_NO_EXPORT)
 target_link_libraries(coffre PUBLIC Qt::Core)
 if(WIN32)
-  target_compile_definitions(coffre PRIVATE USE_CREDENTIAL_STORE=1 UNICODE _UNICODE)
+  # USE_COMPAT_NAMING_SCHEME : depuis la 0.17.0, QtKeychain nomme sous Windows
+  # les secrets avec le service, et ne relirait plus ceux des versions
+  # précédentes de MMail ; le nommage d'avant est gardé.
+  target_compile_definitions(coffre PRIVATE USE_CREDENTIAL_STORE=1 USE_COMPAT_NAMING_SCHEME=1
+                                            UNICODE _UNICODE)
   target_link_libraries(coffre PRIVATE crypt32 advapi32)
 elseif(APPLE)
   target_link_libraries(coffre PRIVATE "-framework Foundation" "-framework Security")

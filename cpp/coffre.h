@@ -9,7 +9,8 @@
 //     DPAPI pour la session de l'utilisateur ;
 //   - Linux   : Secret Service (GNOME Keyring, KeePassXC…) par libsecret, ou
 //     KWallet par D-Bus ;
-//   - Android : Android Keystore ;
+//   - Android : Android Keystore (secret chiffré en AES, la clé AES par une
+//     clé RSA du Keystore, depuis QtKeychain 0.17.0) ;
 //   - macOS   : Trousseau (construit par portabilité, non distribué).
 //
 // Aucun repli en clair : si le système n'offre pas de coffre, l'opération

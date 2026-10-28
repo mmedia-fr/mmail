@@ -608,3 +608,14 @@ jobs:
           name: mmail-android-arm64
           path: _build/android-build/build/outputs/apk/**/*.apk
           if-no-files-found: error
+      # APK x86_64 (non signé) : le seul que l'émulateur d'essai de srvandroid
+      # exécute à une vitesse utilisable — l'arm64 y passe par la traduction,
+      # 20 à 45 s par action et un affichage qui ne se redessine plus.
+      - name: Dépôt de l'APK x86_64
+        if: matrix.abi == 'x86_64'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: mmail-android-x86_64
+          path: _build/android-build/build/outputs/apk/**/*.apk
+          retention-days: 7
+          if-no-files-found: error

@@ -182,9 +182,10 @@ de projet interne.
   de lecture d'Outlook (0.6.9) : à l'affichage, après 3 à 30 secondes — un
   message quitté avant reste non lu —, ou jamais, à la main seulement ;
 - **marges du message** (0.6.23) : « Affichage › Marges du message » écarte le
-  corps du message des bords, à gauche et à droite, dans le volet de lecture
-  comme dans la fenêtre d'un message — « Aucune » (par défaut, au ras du volet),
-  « Étroites » ou « Larges », en proportion de la taille du texte ;
+  corps du message des quatre bords (en haut et en bas aussi depuis la 0.6.27),
+  dans le volet de lecture comme dans la fenêtre d'un message — « Aucune » (par
+  défaut, au ras du volet), « Étroites » ou « Larges », en proportion de la
+  taille du texte ;
 - **expéditeurs de confiance** (0.6.24) : « Toujours pour cet expéditeur », à
   côté de « Télécharger les images », fait télécharger d'office les images
   distantes de ses messages, dans le volet de lecture comme dans la fenêtre d'un
@@ -589,7 +590,10 @@ reproposées.
   la colonne est réduite ; les images SVG ne s'affichent pas. Sous un fond
   coloré, l'interligne imposé par l'expéditeur est retiré (0.6.25 : Qt le
   laissait hors du fond, en bandes blanches), et les retraits intérieurs
-  (`padding`) des encadrés sont perdus : le texte y touche les bords.
+  (`padding`) des encadrés sont perdus : le texte y touche les bords. Dans un
+  tableau à plusieurs colonnes, la largeur d'une cellule fusionnée est ignorée :
+  Qt la reportait sur les colonnes qu'elle couvre, au mépris des largeurs des
+  autres lignes.
 - Sous Android, les pièces jointes s'ouvrent mais ne s'enregistrent pas
   ailleurs ; leur ouverture n'a pas été éprouvée sur un téléphone.
 - Hors connexion, un message ouvert reste non lu sur le serveur ; pas de

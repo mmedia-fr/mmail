@@ -24,6 +24,15 @@
 //! Une cellule vide de quelques pixels (filet, espaceur) disparaît, faute de
 //! pouvoir être plus basse qu'une ligne de texte.
 //!
+//! Dans un tableau gardé, une cellule fusionnée sur plusieurs colonnes perd sa
+//! largeur : le moteur de Qt la reporte sur les colonnes qu'elle couvre, et les
+//! largeurs des lignes suivantes n'y comptent plus — le titre d'une lettre
+//! d'information du 29/10/2026 tenait dans une colonne de quelques lettres.
+//! Une cellule gardée qui peint son propre fond en est un pour son contenu :
+//! `line-height` y tombe aussi, le libellé blanc d'un bouton noir débordant
+//! sinon de la cellule. Le moteur de Qt ignore la police nulle : un texte qui
+//! n'est qu'en police nulle, invisible ailleurs, est retiré.
+//!
 //! Le HTML traité est celui qui sort d'`ammonia` : bien formé, chaque élément
 //! non vide fermé, attributs entre guillemets, aucun « < » ni « > » dans un
 //! attribut. Faute de pouvoir le relire, il est rendu tel quel.
@@ -173,7 +182,11 @@ fn transformer(noeud: Noeud, fond: Option<&str>) -> Vec<Noeud> {
         return vec![Noeud::Element { nom, attributs, enfants }];
     }
     let attributs = sans_interligne(attributs, fond.is_some());
-    let enfants: Vec<Noeud> = enfants.into_iter().flat_map(|enfant| transformer(enfant, fond)).collect();
+    let enfants: Vec<Noeud> = if muet(&attributs, &enfants) {
+        Vec::new()
+    } else {
+        enfants.into_iter().flat_map(|enfant| transformer(enfant, fond)).collect()
+    };
     if nom != "table" {
         return vec![Noeud::Element { nom, attributs, enfants }];
     }
@@ -189,8 +202,9 @@ fn transformer(noeud: Noeud, fond: Option<&str>) -> Vec<Noeud> {
 }
 
 /// Ce que devient un enfant d'un tableau gardé : ses lignes et ses cellules
-/// demeurent ; le contenu d'une cellule repart sans fond hérité, la cellule
-/// peignant le sien sur toute sa hauteur.
+/// demeurent ; le contenu d'une cellule repart sous le fond de la cellule, ou
+/// sans fond hérité si elle n'en a pas, la cellule peignant celui du tableau
+/// sur toute sa hauteur. Une cellule muette garde sa place, vidée.
 fn garder(noeud: Noeud) -> Vec<Noeud> {
     match noeud {
         Noeud::Element { nom, attributs, enfants }
@@ -199,11 +213,41 @@ fn garder(noeud: Noeud) -> Vec<Noeud> {
             vec![Noeud::Element { nom, attributs, enfants: enfants.into_iter().flat_map(garder).collect() }]
         }
         Noeud::Element { nom, attributs, enfants } if matches!(nom.as_str(), "td" | "th" | "caption") => {
-            let enfants = enfants.into_iter().flat_map(|enfant| transformer(enfant, None)).collect();
+            let fond = fond_de(&attributs).filter(|couleur| !blanc(couleur));
+            let mut attributs = sans_interligne(attributs, fond.is_some());
+            if fusionnee(&attributs) {
+                attributs = sans_largeur(attributs);
+            }
+            let enfants = if muet(&attributs, &enfants) {
+                Vec::new()
+            } else {
+                enfants.into_iter().flat_map(|enfant| transformer(enfant, fond.as_deref())).collect()
+            };
             vec![Noeud::Element { nom, attributs, enfants }]
         }
         autre => transformer(autre, None),
     }
+}
+
+/// Cellule fusionnée sur plusieurs colonnes.
+fn fusionnee(attributs: &[(String, String)]) -> bool {
+    attributs.iter().any(|(a, v)| a == "colspan" && v.trim().parse::<u32>().is_ok_and(|n| n > 1))
+}
+
+/// Attributs sans largeur : ni attribut `width`, ni `width` ou ses bornes dans
+/// le style.
+fn sans_largeur(attributs: Vec<(String, String)>) -> Vec<(String, String)> {
+    attributs
+        .into_iter()
+        .filter(|(attribut, _)| attribut != "width")
+        .filter_map(|(attribut, valeur)| {
+            if attribut != "style" {
+                return Some((attribut, valeur));
+            }
+            let style = sans_proprietes(&valeur, &["width", "min-width", "max-width"]);
+            (!style.is_empty()).then_some((attribut, style))
+        })
+        .collect()
 }
 
 /// Couleur de fond d'un élément : son attribut `bgcolor` (déjà validé par
@@ -284,13 +328,28 @@ fn espaceur(attributs: &[(String, String)], enfants: &[Noeud]) -> bool {
         Noeud::Element { .. } => false,
     });
     let valeur = |nom: &str| attributs.iter().find(|(a, _)| a == nom).map(|(_, v)| v.as_str());
-    let style: Vec<(String, &str)> = declarations(valeur("style").unwrap_or("")).collect();
     let basse = valeur("height")
         .into_iter()
-        .chain(style.iter().filter(|(propriete, _)| propriete == "height").map(|(_, v)| *v))
+        .chain(
+            declarations(valeur("style").unwrap_or(""))
+                .filter(|(propriete, _)| propriete == "height")
+                .map(|(_, v)| v),
+        )
         .any(|hauteur| pixels(hauteur).is_some_and(|h| h <= ESPACEUR_MAX));
-    let police_nulle = style.iter().any(|(propriete, v)| propriete == "font-size" && nul(v));
-    vide && (basse || police_nulle)
+    vide && (basse || police_nulle(attributs))
+}
+
+/// Police nulle : `font-size` à 0 dans le style.
+fn police_nulle(attributs: &[(String, String)]) -> bool {
+    let style = attributs.iter().find(|(a, _)| a == "style").map_or("", |(_, v)| v.as_str());
+    declarations(style).any(|(propriete, v)| propriete == "font-size" && nul(v))
+}
+
+/// Élément en police nulle sans autre contenu que du texte : rien ne s'en voit
+/// ailleurs, mais le moteur de Qt ignore la police nulle — le point qui garde
+/// ouverte, pour Outlook, la cellule d'un espaceur s'y affichait.
+fn muet(attributs: &[(String, String)], enfants: &[Noeud]) -> bool {
+    police_nulle(attributs) && enfants.iter().all(|enfant| matches!(enfant, Noeud::Texte(_)))
 }
 
 /// Lignes d'un tableau : directement sous lui, ou sous `tbody`, `thead`,
@@ -375,15 +434,16 @@ fn ajouter(style: &mut String, declaration: &str) {
 
 /// Un style sans `width`, `height` ni leurs bornes.
 fn sans_dimensions(style: &str) -> String {
+    sans_proprietes(style, &["width", "min-width", "max-width", "height", "min-height", "max-height"])
+}
+
+/// Un style sans les propriétés nommées.
+fn sans_proprietes(style: &str, proprietes: &[&str]) -> String {
     style
         .split(';')
         .filter(|declaration| {
             let propriete = declaration.split(':').next().unwrap_or("").trim().to_ascii_lowercase();
-            !declaration.trim().is_empty()
-                && !matches!(
-                    propriete.as_str(),
-                    "width" | "min-width" | "max-width" | "height" | "min-height" | "max-height"
-                )
+            !declaration.trim().is_empty() && !proprietes.contains(&propriete.as_str())
         })
         .map(str::trim)
         .collect::<Vec<_>>()
@@ -496,12 +556,13 @@ mod tests {
             aplatir(blanc),
             "<div style=\"background-color:#ffffff\"><div><p style=\"line-height: 25px\">x</p></div></div>"
         );
-        // Fond d'un style, et interligne nul retiré partout.
+        // Fond d'un style, et interligne nul retiré partout (le texte en police
+        // nulle aussi, invisible ailleurs).
         let style = "<div style=\"background: none #333 \"><p style=\"line-height:20px\">x</p></div>\
                      <div style=\"font-size:0pt; line-height:0pt\">y</div>";
         assert_eq!(
             aplatir(style),
-            "<div style=\"background: none #333 \"><p>x</p></div><div style=\"font-size:0pt\">y</div>"
+            "<div style=\"background: none #333 \"><p>x</p></div><div style=\"font-size:0pt\"></div>"
         );
     }
 
@@ -519,6 +580,48 @@ mod tests {
         assert_eq!(aplatir(espace), "<div><div>&nbsp;</div></div>");
         let texte = "<table><tbody><tr><td height=\"1\">x</td></tr></tbody></table>";
         assert_eq!(aplatir(texte), "<div><div>x</div></div>");
+        // Le point d'un espaceur en police nulle : la cellule aplatie disparaît,
+        // celle d'un tableau gardé reste, vidée.
+        let point = "<table><tbody><tr><td style=\"font-size:0\" height=\"20\">.</td></tr></tbody></table><p>y</p>";
+        assert_eq!(aplatir(point), "<p>y</p>");
+        let garde = "<table><tbody><tr><td>a</td><td style=\"font-size: 0; width: 12px\" width=\"12\">.</td>\
+                     <td style=\"font-size: 0\"><div style=\"height:1px;font-size:0\"> . </div></td>\
+                     </tr></tbody></table>";
+        assert_eq!(
+            aplatir(garde),
+            "<table><tbody><tr><td>a</td><td style=\"font-size: 0; width: 12px\" width=\"12\"></td>\
+             <td style=\"font-size: 0\"><div style=\"height:1px;font-size:0\"></div></td>\
+             </tr></tbody></table>"
+        );
+    }
+
+    #[test]
+    fn cellule_fusionnee_sans_largeur() {
+        // Lettre d'information du 29/10/2026 : la ligne d'espace, fusionnée sur
+        // les colonnes, fixait 600 px que Qt reportait sur elles ; le titre de
+        // la colonne de 310 px tenait en quelques lettres par ligne.
+        let html = "<table width=\"100%\"><tbody><tr><td width=\"600\" height=\"32\" colspan=\"3\" \
+                    style=\"width: 600px; height: 32px;\"></td></tr><tr><td width=\"135\">a</td>\
+                    <td width=\"35\"></td><td width=\"310\">b</td></tr></tbody></table>";
+        assert_eq!(
+            aplatir(html),
+            "<table width=\"100%\"><tbody><tr><td height=\"32\" colspan=\"3\" style=\"height: 32px\"></td></tr>\
+             <tr><td width=\"135\">a</td><td width=\"35\"></td><td width=\"310\">b</td></tr></tbody></table>"
+        );
+    }
+
+    #[test]
+    fn interligne_des_cellules_gardees() {
+        // Même lettre : des vignettes en interligne nul, dont l'image recouvrait
+        // le texte suivant, et un bouton noir dont le libellé débordait.
+        let html = "<table><tbody><tr><td style=\"line-height: 0; padding-top: 12px;\">a</td>\
+                    <td bgcolor=\"#000000\"><table><tbody><tr><td style=\"font-size: 28px; line-height: 42px\">\
+                    Voir plus</td></tr></tbody></table></td></tr></tbody></table>";
+        assert_eq!(
+            aplatir(html),
+            "<table><tbody><tr><td style=\"padding-top: 12px\">a</td><td bgcolor=\"#000000\">\
+             <div><div style=\"font-size: 28px\">Voir plus</div></div></td></tr></tbody></table>"
+        );
     }
 
     #[test]

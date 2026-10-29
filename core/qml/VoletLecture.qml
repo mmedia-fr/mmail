@@ -511,9 +511,12 @@ ColumnLayout {
                 color: fenetre.corpsHtml && !fenetre.sourceVisible ? "#ffffff" : fenetre.palette.base
             }
             // Les marges du style Fusion, plus celle d'« Affichage › Marges
-            // du message » (0.6.23), sur le fond du message.
+            // du message » (0.6.23), sur le fond du message ; en haut et en
+            // bas aussi depuis la 0.6.27.
             leftPadding: padding + 4 + fenetre.margeMessage
             rightPadding: padding + fenetre.margeMessage
+            topPadding: padding + fenetre.margeMessage
+            bottomPadding: padding + fenetre.margeMessage
             text: qsTr("Aucun message sélectionné.")
 
             onLinkActivated: function(lien) { fenetre.ouvrirLien(lien) }

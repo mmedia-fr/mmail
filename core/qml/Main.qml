@@ -400,7 +400,8 @@ ApplicationWindow {
         // Double-clic sur un message (0.6.16) : « message », l'ouvrir dans sa
         // fenêtre, comme Outlook ; « reponse », ouvrir une réponse.
         property string doubleClic: "message"
-        // Marges du corps d'un message, à gauche et à droite (0.6.23) :
+        // Marges du corps d'un message, à gauche et à droite (0.6.23), en
+        // haut et en bas aussi (0.6.27, demande de Manu du 29/10) :
         // « aucune », au ras du volet comme jusqu'ici, « etroites » ou
         // « larges » (cf. fenetre.margeMessage).
         property string margesMessage: "aucune"
@@ -971,8 +972,9 @@ ApplicationWindow {
     readonly property real tailleArborescence: tailleBase * reglages.zoomArborescence
     readonly property real tailleListe: tailleBase * reglages.zoomListe
     readonly property real tailleMessage: tailleBase * reglages.zoomMessage
-    // Marge ajoutée de chaque côté du corps d'un message, en pixels (0.6.23,
-    // demande de Nicolas transmise par Manu le 27/10 ; Manu le préfère au ras
+    // Marge ajoutée sur les quatre côtés du corps d'un message, en pixels
+    // (0.6.23, à gauche et à droite seulement jusqu'à la 0.6.26 ; demande
+    // de Nicolas transmise par Manu le 27/10 ; Manu le préfère au ras
     // du volet, d'où « aucune » par défaut). En proportion de la taille du
     // texte, pour suivre le zoom de la colonne.
     readonly property real margeMessage: reglages.margesMessage === "larges" ? Math.round(tailleMessage * 4)

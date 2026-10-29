@@ -2451,12 +2451,13 @@ QtObject {
 
     /// Scénario « marges » (0.6.23) : « Affichage › Marges du message », ses
     /// trois choix l'un après l'autre, dans le volet de lecture et dans la
-    /// fenêtre du message. Le texte doit se décaler de la marge choisie. Avec
+    /// fenêtre du message. Le texte doit se décaler de la marge choisie, vers
+    /// la droite et, depuis la 0.6.27, vers le bas. Avec
     /// MMAIL_DOSSIER à « aucune », « etroites » ou « larges », ce choix reste
     /// posé pour une capture (--capture).
     function lancerScenarioMarges() {
         var tic = Qt.createQmlObject('import QtQuick; Timer { interval: 1000; repeat: true }', fenetre)
-        var suivi = { n: 0, echecs: 0, marges: {}, x0: -1 }
+        var suivi = { n: 0, echecs: 0, marges: {}, x0: -1, y0: -1 }
         var choix = ["aucune", "etroites", "larges"]
         var bilan = function(texte, bon) {
             if (!bon)
@@ -2467,16 +2468,25 @@ QtObject {
             var v = colonneLecture.vueCorps
             var f = fenetresMessage.length > 0 ? fenetresMessage[0].corps : null
             var x = v.positionToRectangle(0).x
-            if (valeur === "aucune")
+            var y = v.positionToRectangle(0).y
+            if (valeur === "aucune") {
                 suivi.x0 = x
+                suivi.y0 = y
+            }
             suivi.marges[valeur] = fenetre.margeMessage
             bilan("marges « " + valeur + " » : " + fenetre.margeMessage + " px | volet " + v.leftPadding + "/"
-                  + v.rightPadding + ", texte à " + Math.round(x) + " | fenêtre "
-                  + (f ? f.leftPadding + "/" + f.rightPadding : "absente"),
+                  + v.rightPadding + "/" + v.topPadding + "/" + v.bottomPadding + ", texte à "
+                  + Math.round(x) + "," + Math.round(y) + " | fenêtre "
+                  + (f ? f.leftPadding + "/" + f.rightPadding + "/" + f.topPadding + "/" + f.bottomPadding
+                       : "absente"),
                   v.leftPadding === v.padding + 4 + fenetre.margeMessage
                   && v.rightPadding === v.padding + fenetre.margeMessage
+                  && v.topPadding === v.padding + fenetre.margeMessage
+                  && v.bottomPadding === v.padding + fenetre.margeMessage
                   && Math.abs(x - suivi.x0 - fenetre.margeMessage) < 1
-                  && f !== null && f.leftPadding === v.leftPadding && f.rightPadding === v.rightPadding)
+                  && Math.abs(y - suivi.y0 - fenetre.margeMessage) < 1
+                  && f !== null && f.leftPadding === v.leftPadding && f.rightPadding === v.rightPadding
+                  && f.topPadding === v.topPadding && f.bottomPadding === v.bottomPadding)
         }
         tic.triggered.connect(function() {
             suivi.n += 1

@@ -30,7 +30,8 @@
 //! d'information du 29/10/2026 tenait dans une colonne de quelques lettres.
 //! Une cellule gardée qui peint son propre fond en est un pour son contenu :
 //! `line-height` y tombe aussi, le libellé blanc d'un bouton noir débordant
-//! sinon de la cellule.
+//! sinon de la cellule. Le moteur de Qt ignore la police nulle : un texte qui
+//! n'est qu'en police nulle, invisible ailleurs, est retiré.
 //!
 //! Le HTML traité est celui qui sort d'`ammonia` : bien formé, chaque élément
 //! non vide fermé, attributs entre guillemets, aucun « < » ni « > » dans un
@@ -181,7 +182,11 @@ fn transformer(noeud: Noeud, fond: Option<&str>) -> Vec<Noeud> {
         return vec![Noeud::Element { nom, attributs, enfants }];
     }
     let attributs = sans_interligne(attributs, fond.is_some());
-    let enfants: Vec<Noeud> = enfants.into_iter().flat_map(|enfant| transformer(enfant, fond)).collect();
+    let enfants: Vec<Noeud> = if muet(&attributs, &enfants) {
+        Vec::new()
+    } else {
+        enfants.into_iter().flat_map(|enfant| transformer(enfant, fond)).collect()
+    };
     if nom != "table" {
         return vec![Noeud::Element { nom, attributs, enfants }];
     }
@@ -199,7 +204,7 @@ fn transformer(noeud: Noeud, fond: Option<&str>) -> Vec<Noeud> {
 /// Ce que devient un enfant d'un tableau gardé : ses lignes et ses cellules
 /// demeurent ; le contenu d'une cellule repart sous le fond de la cellule, ou
 /// sans fond hérité si elle n'en a pas, la cellule peignant celui du tableau
-/// sur toute sa hauteur. Un espaceur garde sa place, vidé.
+/// sur toute sa hauteur. Une cellule muette garde sa place, vidée.
 fn garder(noeud: Noeud) -> Vec<Noeud> {
     match noeud {
         Noeud::Element { nom, attributs, enfants }
@@ -213,7 +218,7 @@ fn garder(noeud: Noeud) -> Vec<Noeud> {
             if fusionnee(&attributs) {
                 attributs = sans_largeur(attributs);
             }
-            let enfants = if espaceur(&attributs, &enfants) {
+            let enfants = if muet(&attributs, &enfants) {
                 Vec::new()
             } else {
                 enfants.into_iter().flat_map(|enfant| transformer(enfant, fond.as_deref())).collect()
@@ -314,25 +319,37 @@ fn nul(valeur: &str) -> bool {
 }
 
 /// Cellule sans autre contenu que des blancs, d'au plus `ESPACEUR_MAX` pixels
-/// de haut, ou sans autre contenu qu'un texte en police nulle : un filet, un
-/// espaceur. Le moteur de Qt ne fait pas de bloc plus bas qu'une ligne de
-/// texte — le filet de 1 pixel d'un avis de Steam devenait une bande grise de
-/// toute la largeur — et ignore la police nulle : le point qui garde ouverte,
-/// pour Outlook, la cellule d'un espaceur s'y voyait.
+/// de haut ou en police nulle : un filet, un espaceur. Le moteur de Qt ne fait
+/// pas de bloc plus bas qu'une ligne de texte — le filet de 1 pixel d'un avis
+/// de Steam devenait une bande grise de toute la largeur.
 fn espaceur(attributs: &[(String, String)], enfants: &[Noeud]) -> bool {
-    let texte_seul = enfants.iter().all(|enfant| matches!(enfant, Noeud::Texte(_)));
     let vide = enfants.iter().all(|enfant| match enfant {
         Noeud::Texte(texte) => texte.replace("&nbsp;", " ").replace("&#160;", " ").trim().is_empty(),
         Noeud::Element { .. } => false,
     });
     let valeur = |nom: &str| attributs.iter().find(|(a, _)| a == nom).map(|(_, v)| v.as_str());
-    let style: Vec<(String, &str)> = declarations(valeur("style").unwrap_or("")).collect();
     let basse = valeur("height")
         .into_iter()
-        .chain(style.iter().filter(|(propriete, _)| propriete == "height").map(|(_, v)| *v))
+        .chain(
+            declarations(valeur("style").unwrap_or(""))
+                .filter(|(propriete, _)| propriete == "height")
+                .map(|(_, v)| v),
+        )
         .any(|hauteur| pixels(hauteur).is_some_and(|h| h <= ESPACEUR_MAX));
-    let police_nulle = style.iter().any(|(propriete, v)| propriete == "font-size" && nul(v));
-    (vide && basse) || (texte_seul && police_nulle)
+    vide && (basse || police_nulle(attributs))
+}
+
+/// Police nulle : `font-size` à 0 dans le style.
+fn police_nulle(attributs: &[(String, String)]) -> bool {
+    let style = attributs.iter().find(|(a, _)| a == "style").map_or("", |(_, v)| v.as_str());
+    declarations(style).any(|(propriete, v)| propriete == "font-size" && nul(v))
+}
+
+/// Élément en police nulle sans autre contenu que du texte : rien ne s'en voit
+/// ailleurs, mais le moteur de Qt ignore la police nulle — le point qui garde
+/// ouverte, pour Outlook, la cellule d'un espaceur s'y affichait.
+fn muet(attributs: &[(String, String)], enfants: &[Noeud]) -> bool {
+    police_nulle(attributs) && enfants.iter().all(|enfant| matches!(enfant, Noeud::Texte(_)))
 }
 
 /// Lignes d'un tableau : directement sous lui, ou sous `tbody`, `thead`,
@@ -539,12 +556,13 @@ mod tests {
             aplatir(blanc),
             "<div style=\"background-color:#ffffff\"><div><p style=\"line-height: 25px\">x</p></div></div>"
         );
-        // Fond d'un style, et interligne nul retiré partout.
+        // Fond d'un style, et interligne nul retiré partout (le texte en police
+        // nulle aussi, invisible ailleurs).
         let style = "<div style=\"background: none #333 \"><p style=\"line-height:20px\">x</p></div>\
                      <div style=\"font-size:0pt; line-height:0pt\">y</div>";
         assert_eq!(
             aplatir(style),
-            "<div style=\"background: none #333 \"><p>x</p></div><div style=\"font-size:0pt\">y</div>"
+            "<div style=\"background: none #333 \"><p>x</p></div><div style=\"font-size:0pt\"></div>"
         );
     }
 
@@ -567,10 +585,12 @@ mod tests {
         let point = "<table><tbody><tr><td style=\"font-size:0\" height=\"20\">.</td></tr></tbody></table><p>y</p>";
         assert_eq!(aplatir(point), "<p>y</p>");
         let garde = "<table><tbody><tr><td>a</td><td style=\"font-size: 0; width: 12px\" width=\"12\">.</td>\
+                     <td style=\"font-size: 0\"><div style=\"height:1px;font-size:0\"> . </div></td>\
                      </tr></tbody></table>";
         assert_eq!(
             aplatir(garde),
             "<table><tbody><tr><td>a</td><td style=\"font-size: 0; width: 12px\" width=\"12\"></td>\
+             <td style=\"font-size: 0\"><div style=\"height:1px;font-size:0\"></div></td>\
              </tr></tbody></table>"
         );
     }

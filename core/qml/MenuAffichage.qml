@@ -57,8 +57,9 @@ Menu {
             }
         }
     }
-    // Marges du corps d'un message (0.6.23), dans le volet de lecture comme
-    // dans la fenêtre d'un message : au ras par défaut, comme jusqu'ici.
+    // Marges du corps d'un message (0.6.23 ; en haut et en bas aussi depuis
+    // la 0.6.27), dans le volet de lecture comme dans la fenêtre d'un
+    // message : au ras par défaut, comme jusqu'ici.
     Menu {
         id: menuMarges
         title: qsTr("Marges du message")

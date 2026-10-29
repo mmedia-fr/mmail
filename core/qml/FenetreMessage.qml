@@ -546,9 +546,12 @@ ApplicationWindow {
                 // l'apparence : ses couleurs supposent ce fond.
                 color: fenetreMessage.html ? "#1f1f1f" : fenetre.palette.text
                 background: Rectangle { color: fenetreMessage.html ? "#ffffff" : fenetre.palette.base }
-                // Mêmes marges que le volet de lecture (0.6.23).
+                // Mêmes marges que le volet de lecture (0.6.23 ; en haut et
+                // en bas depuis la 0.6.27).
                 leftPadding: padding + 4 + fenetre.margeMessage
                 rightPadding: padding + fenetre.margeMessage
+                topPadding: padding + fenetre.margeMessage
+                bottomPadding: padding + fenetre.margeMessage
                 text: qsTr("Chargement…")
                 onLinkActivated: function(lien) { fenetre.ouvrirLien(lien) }
                 MiseEnForme {

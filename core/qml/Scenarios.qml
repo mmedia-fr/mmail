@@ -3085,6 +3085,62 @@ QtObject {
         attente.start()
     }
 
+    /// Scénario « zoom-lecture » (0.6.29) : le zoom du volet de lecture grossit
+    /// le message, pas les boutons. « Devis joint » (banc PIECE=1) affiché, le
+    /// zoom passe à 1,5 : le corps et l'objet grossissent d'autant ; le bouton
+    /// « Répondre » et le bandeau des pièces jointes gardent leur taille.
+    function lancerScenarioZoomLecture() {
+        var suivi = { echecs: 0 }
+        var bilan = function(texte, bon) {
+            if (!bon)
+                suivi.echecs += 1
+            console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
+        }
+        var mesurer = function() {
+            var b = objetNomme(colonneLecture, "boutonRepondre")
+            var p = objetNomme(colonneLecture, "bandeauPieces")
+            return { bouton: b ? b.font.pointSize : -1, hauteur: b ? b.height : -1,
+                     pieces: p && p.visible ? p.font.pointSize : -1,
+                     corps: colonneLecture.vueCorps.font.pointSize,
+                     objet: colonneLecture.sujetAffiche.font.pointSize }
+        }
+        var zoomAvant = reglages.zoomMessage
+        plusTard(8000, function() {
+            poserZoom("message", 1)
+            ouvrirDossier(comptesConnus[0].compte, "INBOX")
+            plusTard(4000, function() {
+                var i = -1
+                for (var k = 0; k < modeleMessages.count; ++k)
+                    if (modeleMessages.get(k).sujet === "Devis joint")
+                        i = k
+                if (i < 0) {
+                    bilan("« Devis joint » absent (banc PIECE=1 ?)", false)
+                    Qt.quit()
+                    return
+                }
+                choisir(i, 0)
+                plusTard(4000, function() {
+                    var avant = mesurer()
+                    poserZoom("message", 1.5)
+                    plusTard(1000, function() {
+                        var apres = mesurer()
+                        var dire = function(nom) { return nom + " " + avant[nom] + " → " + apres[nom] }
+                        var proche = function(a, b) { return Math.abs(a - b) < 0.01 }
+                        bilan("boutons : " + dire("bouton") + " pt, " + dire("hauteur") + " px",
+                              avant.bouton > 0 && apres.bouton === avant.bouton && apres.hauteur === avant.hauteur)
+                        bilan("pièces jointes : " + dire("pieces") + " pt", avant.pieces > 0 && apres.pieces === avant.pieces)
+                        bilan("corps : " + dire("corps") + " pt", proche(apres.corps, avant.corps * 1.5))
+                        bilan("objet : " + dire("objet") + " pt", proche(apres.objet, avant.objet * 1.5))
+                        poserZoom("message", zoomAvant)
+                        console.log("scenario: zoom-lecture " + (suivi.echecs === 0 ? "OK" : "ECHEC (" + suivi.echecs + ")"))
+                        if (identifiantsEssai.dossier !== "garder")
+                            Qt.quit()
+                    })
+                })
+            })
+        })
+    }
+
     /// Premier objet nommé `nom` sous `racine` (objectName), ou null.
     function objetNomme(racine, nom) {
         if (!racine)

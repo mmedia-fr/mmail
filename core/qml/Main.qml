@@ -6320,6 +6320,10 @@ ApplicationWindow {
             // Le corps d'un long message à tableau, défilé aller-retour (0.6.20).
             if (essai.scenario === "corps-long")
                 scenarios.lancerScenarioCorpsLong()
+            // Scénario « zoom-lecture » (0.6.29) : le zoom du volet de lecture
+            // laisse les boutons à leur taille (banc PIECE=1).
+            if (essai.scenario === "zoom-lecture")
+                scenarios.lancerScenarioZoomLecture()
             // « Affichage › Marges du message » (0.6.23).
             if (essai.scenario === "marges")
                 scenarios.lancerScenarioMarges()

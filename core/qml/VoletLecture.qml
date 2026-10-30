@@ -444,13 +444,13 @@ ColumnLayout {
             columns: fenetre.tactile ? 1 : 3
             columnSpacing: 6
             Label {
-                text: fenetre.texteImagesBloquees(fenetre.imagesBloquees, fenetre.enteteCourant)
+                text: fenetre.texteImagesBloquees(fenetre.imagesBloquees, fenetre.enteteCourant, fenetre.imagesTentees())
                 color: "#1c1f24"
                 wrapMode: Text.Wrap
                 Layout.fillWidth: true
             }
             Button {
-                text: qsTr("Télécharger les images")
+                text: fenetre.imagesTentees() ? qsTr("Réessayer") : qsTr("Télécharger les images")
                 onClicked: fenetre.demanderImages()
             }
             // Expéditeur de confiance (0.6.24, demande de Guillaume LUDGER) :

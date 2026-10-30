@@ -56,6 +56,9 @@ ApplicationWindow {
     // Images distantes laissées de côté, et déjà demandées (0.6.24).
     property int bloquees: 0
     property bool imagesDemandees: false
+    // Le corps affiché répond à la demande des images : celles qui manquent
+    // n'ont pas pu venir.
+    property bool imagesTentees: false
     readonly property var cible: ({ compte: compte, chemin: chemin, uid: uid })
     readonly property bool brouillon: role === "Drafts" || role === "Differe"
     readonly property var categories: fenetre.pastilles(compte, chemin, motsCles, boite.revisionCategories)
@@ -105,6 +108,7 @@ ApplicationWindow {
                 return
             fenetreMessage.html = estHtml && !brut
             fenetreMessage.bloquees = estHtml && !brut ? bloquees : 0
+            fenetreMessage.imagesTentees = !brut && fenetreMessage.imagesDemandees
             vueCorps.text = texte
             vueCorps.cursorPosition = 0
             if (!brut) {
@@ -443,13 +447,13 @@ ApplicationWindow {
                 columns: fenetre.tactile ? 1 : 3
                 columnSpacing: 6
                 Label {
-                    text: fenetre.texteImagesBloquees(fenetreMessage.bloquees, fenetreMessage.entete)
+                    text: fenetre.texteImagesBloquees(fenetreMessage.bloquees, fenetreMessage.entete, fenetreMessage.imagesTentees)
                     color: "#1c1f24"
                     wrapMode: Text.Wrap
                     Layout.fillWidth: true
                 }
                 Button {
-                    text: qsTr("Télécharger les images")
+                    text: fenetreMessage.imagesTentees ? qsTr("Réessayer") : qsTr("Télécharger les images")
                     onClicked: fenetreMessage.telechargerImages()
                 }
                 Button {

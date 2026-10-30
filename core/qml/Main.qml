@@ -316,6 +316,9 @@ ApplicationWindow {
     // Message dont les images distantes sont déjà demandées pour cet
     // affichage (« compte|dossier|uid ») : une seule demande d'office (0.6.24).
     property string imagesAutoPour: ""
+    // Message affiché avec ses images distantes déjà demandées : celles qui
+    // manquent encore n'ont pas pu venir (cf. texteImagesBloquees).
+    property string imagesTenteesPour: ""
     // Lien survolé dans le message : son adresse s'affiche dans la barre
     // d'information, comme dans un navigateur — un lien trompeur s'y voit.
     property string lienSurvole: ""
@@ -3571,13 +3574,26 @@ ApplicationWindow {
                && !entete.dmarcEchec && !expediteurDeConfiance(entete.expediteur)
     }
 
-    /// Texte du bandeau des images distantes.
-    function texteImagesBloquees(n, entete) {
+    /// Texte du bandeau des images distantes. `tentees` : elles ont été
+    /// demandées pour cet affichage, et `n` d'entre elles ne sont pas venues —
+    /// le bandeau ne propose plus de les télécharger, mais de réessayer (le
+    /// 30/10, il proposait encore « Télécharger les images » pour un
+    /// expéditeur de confiance).
+    function texteImagesBloquees(n, entete, tentees) {
+        if (tentees)
+            return n > 1 ? qsTr("%1 images distantes n'ont pas pu être téléchargées : serveur injoignable, ou image refusée.").arg(n)
+                         : qsTr("1 image distante n'a pas pu être téléchargée : serveur injoignable, ou image refusée.")
         var debut = n > 1 ? qsTr("%1 images distantes non téléchargées").arg(n)
                           : qsTr("1 image distante non téléchargée")
         if (entete && entete.dmarcEchec && expediteurDeConfiance(entete.expediteur))
             return debut + qsTr(" : expéditeur de confiance, mais le serveur n'a pas pu l'authentifier (DMARC) ; elles ne se téléchargent pas d'office.")
         return debut + qsTr(" : l'expéditeur saurait que vous avez ouvert le message.")
+    }
+
+    /// Vrai si les images distantes du message affiché au volet de lecture
+    /// ont déjà été demandées pour cet affichage.
+    function imagesTentees() {
+        return imagesTenteesPour !== "" && imagesTenteesPour === boite.compteCourant + "|" + boite.dossierCourant + "|" + uidCourant
     }
 
     /// Images distantes du message affiché au volet de lecture. Une seule

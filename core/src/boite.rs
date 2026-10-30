@@ -7107,8 +7107,9 @@ const APLAT_PNG: &[u8] = &[
 ];
 
 /// Images distantes d'un message, à la demande de l'utilisateur : HTTPS seul,
-/// 5 Mo par image, quatre téléchargements à la fois. Une image qui ne vient
-/// pas reste un aplat — rien n'empêche l'affichage du message. `None` si
+/// 5 Mo par image, quatre téléchargements à la fois, une seconde tentative
+/// après une erreur de réseau. Une image qui ne vient pas reste un aplat —
+/// rien n'empêche l'affichage du message. `None` si
 /// `actuel` cesse d'être vrai : vérifié entre deux lots, il abandonne les
 /// téléchargements d'un message que l'utilisateur a quitté.
 fn telecharger(adresses: &[String], actuel: &dyn Fn() -> bool) -> Option<Vec<Option<(String, Vec<u8>)>>> {
@@ -7129,7 +7130,16 @@ fn telecharger(adresses: &[String], actuel: &dyn Fn() -> bool) -> Option<Vec<Opt
                 .map(|&i| {
                     let adresse = adresses[i].replace("&amp;", "&");
                     portee.spawn(move || {
-                        let reponse = crate::http::requete_bornee("GET", &adresse, "image/*", TAILLE).ok()?;
+                        // Un échec passager laissait en aplat la photo de
+                        // l'article d'un avis de remboursement (29/10/2026), les logos
+                        // du même serveur venus : une seconde tentative. Une
+                        // réponse reçue, refus compris, fait foi.
+                        let essai = || crate::http::requete_bornee("GET", &adresse, "image/*", TAILLE);
+                        let reponse = match essai() {
+                            Err(crate::imap::Erreur::Reseau(_)) => essai(),
+                            autre => autre,
+                        }
+                        .ok()?;
                         let type_mime = reponse.type_contenu.split(';').next().unwrap_or("").trim().to_ascii_lowercase();
                         (reponse.statut == 200 && type_mime.starts_with("image/") && !reponse.corps.is_empty())
                             .then_some((type_mime, reponse.corps))

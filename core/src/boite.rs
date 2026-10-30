@@ -21,7 +21,7 @@
 //!   session fermée ou remplacée peuvent encore arriver, ils sont ignorés ;
 //! - **un fil sans commande veille** : toutes les deux minutes, il relit les
 //!   compteurs de ses dossiers, resynchronise la boîte de réception si son
-//!   `STATUS` a changé, puis le dossier ouvert. « Actualiser » fait passer
+//!   `SELECT` montre du neuf, puis le dossier ouvert. « Actualiser » fait passer
 //!   cette veille sur-le-champ ; une session perdue se rouvre d'elle-même une
 //!   minute après (cf. `ReactionsNoyau.onEchec`).
 //!
@@ -6157,12 +6157,18 @@ impl Travail {
                 // notification du serveur (IDLE) ; qu'elle manque, et le
                 // courrier n'arrivait plus qu'au redémarrage — la pastille
                 // comptait des messages que la liste ne montrait pas
-                // (30/10/2026). Le `STATUS` que l'arborescence vient de lire
-                // dit s'il y a du neuf : elle n'est relue qu'alors. Avant le
-                // dossier ouvert, qui reste ainsi sélectionné.
-                if e.ouvert.as_deref() != Some("INBOX") && reception_a_change(&e.magasin, compte) {
-                    if let Err(err) = synchro::synchroniser(&mut e.client, &e.magasin, compte, "INBOX") {
-                        return Some(echec("reseau", format!("veille : {err}"), &err));
+                // (30/10/2026). Son `SELECT` dit s'il y a du neuf : elle n'est
+                // relue qu'alors. Avant le dossier ouvert, qui reste ainsi
+                // sélectionné.
+                if e.ouvert.as_deref() != Some("INBOX") {
+                    let relire = match reception_a_change(&mut e.client, &e.magasin, compte) {
+                        Ok(relire) => relire,
+                        Err(err) => return Some(echec("reseau", format!("veille : {err}"), &err)),
+                    };
+                    if relire {
+                        if let Err(err) = synchro::synchroniser(&mut e.client, &e.magasin, compte, "INBOX") {
+                            return Some(echec("reseau", format!("veille : {err}"), &err));
+                        }
                     }
                 }
                 match e.ouvert.clone() {
@@ -6274,17 +6280,22 @@ enum Reveil {
     Perdue(Issue),
 }
 
-/// Vrai si le `STATUS` de la boîte de réception, que l'arborescence vient
-/// d'écrire dans ses compteurs, ne s'accorde plus avec son index : message
-/// arrivé ou retiré, lu ou remis non lu ailleurs.
-fn reception_a_change(magasin: &Magasin, compte: i64) -> bool {
+/// Vrai si la boîte de réception a changé depuis sa dernière lecture : son
+/// `SELECT` annonce une autre UIDVALIDITY, un autre UIDNEXT ou un autre
+/// nombre de messages que l'index. Léger — ni drapeaux ni en-têtes —, et à
+/// jour : le `STATUS` d'une boîte que la session tient sélectionnée peut ne
+/// pas l'être (RFC 3501, § 6.3.10) ; au banc, il ne voyait pas le message
+/// arrivé.
+fn reception_a_change(client: &mut Client, magasin: &Magasin, compte: i64) -> Result<bool, Echec> {
     let Ok(id) = magasin.dossier_id(compte, "INBOX") else {
-        return false;
+        return Ok(false);
     };
-    match (magasin.dossier(id), magasin.statistiques_dossier(id)) {
-        (Ok(Some(serveur)), Ok((messages, non_lus, _))) => serveur.messages != messages || serveur.non_lus != non_lus,
-        _ => false,
-    }
+    let Some(local) = magasin.dossier(id)? else {
+        return Ok(false);
+    };
+    let (messages, _, _) = magasin.statistiques_dossier(id)?;
+    let etat = client.selectionner("INBOX", None)?.etat;
+    Ok(etat.uid_validity != local.uid_validity || etat.uid_next != local.uid_next || etat.messages != messages)
 }
 
 /// Dossier qu'un compte surveille en `IDLE` : celui qu'on y a ouvert, à défaut

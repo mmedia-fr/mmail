@@ -232,9 +232,9 @@ de projet interne.
   autres dossiers se mettent à jour toutes les deux minutes, ou sur F5. Une
   liste de dizaines de milliers de messages ne se met à jour que des lignes
   qui changent. Toutes les deux minutes aussi, la boîte de réception de
-  chaque compte est relue si le serveur y compte d'autres messages ou d'autres
-  non-lus que l'index — même quand elle n'est pas le dossier ouvert, et même
-  si le serveur ne signale rien en IDLE ; « Actualiser » (F5) en fait autant
+  chaque compte est relue si le serveur y annonce des messages arrivés ou
+  retirés — même quand elle n'est pas le dossier ouvert, et même si le
+  serveur ne signale rien en IDLE ; « Actualiser » (F5) en fait autant
   sur-le-champ. Une session perdue (réseau coupé, poste sorti de veille,
   serveur qui ferme) se rouvre d'elle-même une minute après.
 

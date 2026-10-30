@@ -33,14 +33,15 @@
 //! sinon de la cellule. Le moteur de Qt ignore la police nulle : un texte qui
 //! n'est qu'en police nulle, invisible ailleurs, est retiré.
 //!
-//! Un tableau gardé à pleine largeur, sous un fond autre que le blanc, dont
-//! toutes les cellules d'une ligne ont une largeur fixe voit ces largeurs
-//! devenir des parts de la ligne : le moteur de Qt s'en tenait à leur somme, et
-//! laissait de part et d'autre du tableau deux pans que le fond de l'encadré ne
-//! couvre pas. Sur le blanc de la page, ces pans ne se voient pas, et le
-//! tableau garde ses largeurs (des colonnes de données, ramenées à leurs parts,
-//! passaient à la ligne). L'astuce `dir="rtl"` des
-//! colonnes inversées sur téléphone est retirée : Qt la portait sur le texte.
+//! Dans un tableau gardé à pleine largeur, sous un fond autre que le blanc,
+//! une ligne dont toutes les cellules ont une largeur fixe rend la leur à ses
+//! cellules vides, qui prennent la place qui reste : le moteur de Qt s'en
+//! tenait à la somme des largeurs, et laissait de part et d'autre du tableau
+//! deux pans que le fond de l'encadré ne couvre pas. Les colonnes de contenu
+//! gardent leur largeur ; sur le blanc de la page, rien ne change. Une colonne
+//! vide de largeur nulle (« expander » des gabarits Foundation) ne fait pas
+//! d'un tableau un tableau à colonnes. L'astuce `dir="rtl"` des colonnes
+//! inversées sur téléphone est retirée : Qt la portait sur le texte.
 //!
 //! Le HTML traité est celui qui sort d'`ammonia` : bien formé, chaque élément
 //! non vide fermé, attributs entre guillemets, aucun « < » ni « > » dans un
@@ -180,7 +181,9 @@ fn transformer(noeud: Noeud, fond: Option<&str>) -> Vec<Noeud> {
         Some(couleur) => (!blanc(couleur)).then_some(couleur),
         None => fond,
     };
-    if nom == "table" && lignes(&enfants).iter().any(|ligne| cellules(ligne).len() > 1) {
+    if nom == "table"
+        && lignes(&enfants).iter().any(|ligne| cellules(ligne).into_iter().filter(|c| !expansion(c)).count() > 1)
+    {
         let mut attributs = pleine_largeur(attributs);
         if colonnes_inversees(&attributs, &enfants) {
             attributs = sans_direction(attributs);
@@ -267,40 +270,36 @@ fn largeur_fixe(attributs: &[(String, String)]) -> Option<u32> {
 }
 
 /// Ce que devient une ligne d'un tableau gardé à pleine largeur dont toutes les
-/// cellules ont une largeur fixe : ces largeurs deviennent leurs parts de la
-/// ligne. Un navigateur répartit ainsi la place qui reste ; le moteur de Qt
-/// s'en tenait à leur somme, et le tableau, plus étroit que son encadré, y
-/// laissait deux pans blancs (ligne du prix d'une lettre d'information du 29/10/2026).
+/// cellules ont une largeur fixe : ses cellules vides (espaces entre deux
+/// colonnes) perdent la leur, et prennent la place qui reste. Le moteur de Qt
+/// s'en tenait à la somme des largeurs, et le tableau, plus étroit que son
+/// encadré, y laissait deux pans blancs (ligne du prix d'une lettre
+/// d'information du 29/10/2026). Les colonnes qui portent un contenu gardent
+/// leur largeur : réparties en pourcentages, elles s'écrasaient dans un volet
+/// étroit, où Qt les calcule mal.
 fn repartir(noeud: Noeud) -> Noeud {
     let Noeud::Element { nom, attributs, enfants } = noeud else {
         return noeud;
     };
-    fn cellule(noeud: &Noeud) -> bool {
-        matches!(noeud, Noeud::Element { nom, .. } if nom == "td" || nom == "th")
-    }
     match nom.as_str() {
         "tbody" | "thead" | "tfoot" => {
             Noeud::Element { nom, attributs, enfants: enfants.into_iter().map(repartir).collect() }
         }
         "tr" => {
-            let largeurs: Option<Vec<u32>> = enfants
-                .iter()
-                .filter(|enfant| cellule(enfant))
-                .map(|enfant| match enfant {
-                    Noeud::Element { attributs, .. } => largeur_fixe(attributs).filter(|&l| l > 0),
-                    Noeud::Texte(_) => None,
-                })
-                .collect();
-            let Some(largeurs) = largeurs.filter(|l| l.len() > 1) else {
+            let cellules: Vec<&Noeud> = enfants.iter().filter(|enfant| est_cellule(enfant)).collect();
+            let toutes_fixes = cellules.len() > 1
+                && cellules.iter().all(|cellule| match cellule {
+                    Noeud::Element { attributs, .. } => largeur_fixe(attributs).is_some_and(|l| l > 0),
+                    Noeud::Texte(_) => false,
+                });
+            if !toutes_fixes {
                 return Noeud::Element { nom, attributs, enfants };
-            };
-            let mut parts = parts(&largeurs).into_iter();
+            }
             let enfants = enfants
                 .into_iter()
                 .map(|enfant| match enfant {
-                    Noeud::Element { nom, attributs, enfants } if nom == "td" || nom == "th" => {
-                        let part = parts.next().unwrap_or(0);
-                        Noeud::Element { nom, attributs: en_part(attributs, part), enfants }
+                    Noeud::Element { nom, attributs, enfants } if est_cellule_nom(&nom) && sans_contenu(&enfants) => {
+                        Noeud::Element { nom, attributs: sans_largeur(attributs), enfants }
                     }
                     autre => autre,
                 })
@@ -311,41 +310,33 @@ fn repartir(noeud: Noeud) -> Noeud {
     }
 }
 
-/// Parts entières, en pour cent, de largeurs fixes : 1 au moins chacune, le
-/// reste de l'arrondi à la plus large.
-fn parts(largeurs: &[u32]) -> Vec<u32> {
-    let somme: u64 = largeurs.iter().map(|&l| u64::from(l)).sum();
-    let mut parts: Vec<u32> = largeurs.iter().map(|&l| ((u64::from(l) * 100 / somme) as u32).max(1)).collect();
-    let total: u32 = parts.iter().sum();
-    if let Some(plus_large) = (0..largeurs.len()).max_by_key(|&i| largeurs[i]) {
-        parts[plus_large] = (parts[plus_large] + 100).saturating_sub(total).max(1);
-    }
-    parts
+fn est_cellule(noeud: &Noeud) -> bool {
+    matches!(noeud, Noeud::Element { nom, .. } if est_cellule_nom(nom))
 }
 
-/// Attributs d'une cellule dont la largeur devient `part` pour cent de la
-/// ligne : attribut `width` remplacé à sa place, largeurs du style retirées.
-fn en_part(attributs: Vec<(String, String)>, part: u32) -> Vec<(String, String)> {
-    let largeur = format!("{part}%");
-    let mut posee = false;
-    let mut attributs: Vec<(String, String)> = attributs
-        .into_iter()
-        .filter_map(|(attribut, valeur)| match attribut.as_str() {
-            "width" => {
-                posee = true;
-                Some((attribut, largeur.clone()))
-            }
-            "style" => {
-                let style = sans_proprietes(&valeur, &["width", "min-width", "max-width"]);
-                (!style.is_empty()).then_some((attribut, style))
-            }
-            _ => Some((attribut, valeur)),
-        })
-        .collect();
-    if !posee {
-        attributs.push(("width".to_string(), largeur));
+fn est_cellule_nom(nom: &str) -> bool {
+    nom == "td" || nom == "th"
+}
+
+/// Rien à montrer : aucun élément, du texte blanc ou des espaces insécables.
+fn sans_contenu(enfants: &[Noeud]) -> bool {
+    enfants.iter().all(|enfant| match enfant {
+        Noeud::Texte(texte) => texte.replace("&nbsp;", " ").replace("&#160;", " ").trim().is_empty(),
+        Noeud::Element { .. } => false,
+    })
+}
+
+/// Cellule vide de largeur nulle : la colonne « expander » des gabarits
+/// Foundation (avis de Microsoft), qui pousse le contenu à gauche dans un
+/// navigateur. Elle ne fait pas une seconde colonne : gardé pour elle, le
+/// tableau décalait son contenu de quelque 190 pixels et l'étranglait.
+fn expansion(noeud: &Noeud) -> bool {
+    match noeud {
+        Noeud::Element { nom, attributs, enfants } => {
+            est_cellule_nom(nom) && sans_contenu(enfants) && largeur_fixe(attributs) == Some(0)
+        }
+        Noeud::Texte(_) => false,
     }
-    attributs
 }
 
 /// Tableau en `dir="rtl"` dont les cellules se déclarent `direction:ltr` :
@@ -552,6 +543,7 @@ fn en_blocs(noeud: Noeud) -> Vec<Noeud> {
             }
         }
         "td" | "th" | "caption" if espaceur(&attributs, &enfants) => Vec::new(),
+        "td" | "th" if largeur_fixe(&attributs) == Some(0) && sans_contenu(&enfants) => Vec::new(),
         "td" | "th" | "caption" => vec![bloc(&attributs, enfants)],
         // `colgroup`, `col` : des largeurs de colonnes, sans objet.
         _ => Vec::new(),
@@ -751,45 +743,61 @@ mod tests {
     fn cellule_fusionnee_sans_largeur() {
         // Lettre d'information du 29/10/2026 : la ligne d'espace, fusionnée sur
         // les colonnes, fixait 600 px que Qt reportait sur elles ; le titre de
-        // la colonne de 310 px tenait en quelques lettres par ligne. Les
-        // largeurs fixes de la ligne suivante deviennent ses parts (le tableau
-        // est à pleine largeur, sur son propre fond).
+        // la colonne de 310 px tenait en quelques lettres par ligne. Dans la
+        // ligne suivante, à colonnes fixes sous le fond du tableau, la cellule
+        // vide rend sa largeur.
         let html = "<table width=\"100%\" bgcolor=\"#fff3f0\"><tbody><tr><td width=\"600\" height=\"32\" \
                     colspan=\"3\" style=\"width: 600px; height: 32px;\"></td></tr><tr><td width=\"135\">a</td>\
-                    <td width=\"35\"></td><td width=\"310\">b</td></tr></tbody></table>";
+                    <td width=\"35\" style=\"width: 35px;\"></td><td width=\"310\">b</td></tr></tbody></table>";
         assert_eq!(
             aplatir(html),
             "<table width=\"100%\" bgcolor=\"#fff3f0\"><tbody><tr><td height=\"32\" colspan=\"3\" \
-             style=\"height: 32px\"></td></tr><tr><td width=\"28%\">a</td><td width=\"7%\"></td>\
-             <td width=\"65%\">b</td></tr></tbody></table>"
+             style=\"height: 32px\"></td></tr><tr><td width=\"135\">a</td><td></td>\
+             <td width=\"310\">b</td></tr></tbody></table>"
         );
     }
 
     #[test]
-    fn colonnes_fixes_en_parts_de_la_ligne() {
+    fn espaces_d_une_ligne_a_colonnes_fixes() {
         // Ligne du prix d'une lettre d'information du 29/10/2026 : 220 + 25 + 365 px
         // dans un tableau à pleine largeur, que Qt dessinait à 610 px entre
-        // deux pans blancs, dans un encadré sombre. Largeur du style comprise,
-        // reste de l'arrondi à la plus large.
+        // deux pans blancs, dans un encadré sombre. L'espace vide prend la
+        // place qui reste ; le prix et l'offre gardent leur largeur.
         let ligne = "<table width=\"100%\"><tbody><tr><th width=\"220\">a</th><th width=\"25\"></th>\
                      <th width=\"365\" style=\"width:365px; color:#3999ec\">b</th></tr></tbody></table>";
         let html = format!("<table bgcolor=\"#212429\"><tbody><tr><td>{ligne}</td></tr></tbody></table>");
         assert_eq!(
             aplatir(&html),
             "<div style=\"background-color:#212429\"><div><table width=\"100%\" bgcolor=\"#212429\"><tbody><tr>\
-             <th width=\"36%\">a</th><th width=\"4%\"></th><th width=\"60%\" style=\"color:#3999ec\">b</th>\
+             <th width=\"220\">a</th><th></th><th width=\"365\" style=\"width:365px; color:#3999ec\">b</th>\
              </tr></tbody></table></div></div>"
         );
-        // Sur le blanc de la page, une colonne sans largeur, un tableau qui
-        // n'est pas à pleine largeur : rien ne change.
+        // Sur le blanc de la page, une ligne sans cellule vide, une colonne
+        // sans largeur, un tableau qui n'est pas à pleine largeur : rien ne
+        // change.
+        let sans_vide = "<table width=\"100%\" bgcolor=\"#212429\"><tbody><tr><td width=\"220\">a</td>\
+                         <td width=\"365\">b</td></tr></tbody></table>";
         for html in [
             ligne,
+            sans_vide,
             "<table width=\"100%\"><tbody><tr><td width=\"3\" bgcolor=\"#3a9aed\"></td><td>a</td></tr></tbody></table>",
             "<table width=\"210\"><tbody><tr><td width=\"100\">a</td><td width=\"110\">b</td></tr></tbody></table>",
         ] {
             assert_eq!(aplatir(html), html);
         }
-        assert_eq!(parts(&[3, 600]), vec![1, 99]);
+    }
+
+    #[test]
+    fn colonne_expander_sans_effet() {
+        // Avis du 30/10/2026 (gabarit Foundation) : le contenu et une colonne
+        // vide de largeur nulle ; le tableau est aplati comme s'il n'avait
+        // qu'une colonne.
+        let html = "<table><tbody><tr><th><h1>Titre</h1></th><th class=\"expander\" style=\"width: 0;padding: 0\">\
+                    </th></tr></tbody></table>";
+        assert_eq!(aplatir(html), "<div><div><h1>Titre</h1></div></div>");
+        // Deux colonnes de contenu : le tableau reste.
+        let deux = "<table><tbody><tr><td>a</td><td>b</td><td style=\"width:0\"></td></tr></tbody></table>";
+        assert_eq!(aplatir(deux), deux);
     }
 
     #[test]

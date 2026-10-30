@@ -34,7 +34,10 @@ jobs:
           # Ubuntu 22.04 ; ubuntu-22.04 (glibc 2.35) les couvre.
           - { nom: linux,   os: ubuntu-22.04 }
           - { nom: windows, os: windows-2022 }
-          - { nom: macos,   os: macos-14 }
+          # macOS 14 retiré par GitHub le 02/11/2026, ses tâches échouant aux
+          # coupures annoncées d'ici là (actions/runner-images#13518) ; macOS
+          # 15, même architecture (Apple silicon).
+          - { nom: macos,   os: macos-15 }
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable

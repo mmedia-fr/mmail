@@ -79,6 +79,14 @@ de projet interne.
   les comptes s'affiche en pastille sur l'icône de MMail dans la barre des
   tâches (Windows ; compteur du lanceur sous Linux) ; la boîte de réception
   d'un compte qu'on ne regarde pas est surveillée en continu (IDLE) ;
+- **groupes par date** (0.6.29), comme Outlook : la liste se range sous des
+  intitulés selon la date de réception — « Aujourd'hui », « Hier »,
+  « Avant-hier », le nom des autres jours de la semaine (qui commence le
+  lundi), « La semaine dernière », « Il y a deux semaines », « Il y a trois
+  semaines », « Plus tôt ce mois-ci », « Le mois dernier », « Plus ancien » ;
+  dans un dossier, dans « Toutes les BàL » et dans une recherche triée par
+  date. Les intitulés suivent le jour (« Aujourd'hui » devient « Hier » passé
+  minuit) ; « Affichage › Regrouper les messages par date » les retire ;
 - **gros dossiers** : la liste s'affiche dès sa première page (une vingtaine
   de millisecondes pour 40 000 messages), le reste suit par paquets sans figer
   la fenêtre ; de même en sortant d'une recherche ;

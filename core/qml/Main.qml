@@ -411,6 +411,9 @@ ApplicationWindow {
         // Expéditeurs dont les images distantes se téléchargent d'office
         // (0.6.24) : adresses en minuscules, JSON. Suit la sauvegarde.
         property string expediteursConfiance: "[]"
+        // Liste des messages regroupée par date de réception, comme Outlook
+        // (0.6.29, demande de Manu du 30/10 ; cf. fenetre.bornesGroupes).
+        property bool groupesDates: true
     }
 
     // ---------------------------------------------------------- apparences
@@ -1705,6 +1708,7 @@ ApplicationWindow {
             lu: false; repondu: false; reponduTous: false; transfere: false; pieces: false
             suivi: false; importance: 0; motsCles: ""
             compte: 0; chemin: ""; dossier: ""; role: ""; cheminAffiche: ""
+            groupe: ""
         }
         Component.onCompleted: clear()
     }
@@ -4156,11 +4160,13 @@ ApplicationWindow {
             if (km >= 0)
                 modeleMessages.set(km, m)
         }
+        var bornes = bornesGroupes()
         for (var a = 0; a < c.ajoutes.length; ++a) {
             var n = c.ajoutes[a]
             delete absents[n.uid]
             if (fenetre.masquee(cleDeplacement(n.uid)) || rangExact(n.h, n.uid) >= 0)
                 continue
+            n.groupe = groupeDate(n.h, bornes)
             modeleMessages.insert(rangInsertion(n.h, n.uid), n)
         }
         if (enHaut)
@@ -4190,7 +4196,7 @@ ApplicationWindow {
         var position = colonneListe.vueMessages.contentY
         var rangHaut = Math.max(0, colonneListe.vueMessages.indexAt(1, position + 1))
         modeleMessages.clear()
-        modeleMessages.append(messages)
+        modeleMessages.append(grouper(messages))
         var presents = {}
         for (var k = 0; k < messages.length; ++k)
             presents[messages[k].uid] = true
@@ -4257,7 +4263,7 @@ ApplicationWindow {
             return !fenetre.masquee(cleDeplacement(m.uid))
         })
         if (lignes.length > 0)
-            modeleMessages.append(lignes)
+            modeleMessages.append(grouper(lignes))
         if (mesureSuite) {
             mesureSuite.paquets += 1
             mesureSuite.plusLong = Math.max(mesureSuite.plusLong, Date.now() - debut)
@@ -4561,13 +4567,13 @@ ApplicationWindow {
     /// leur, et la vue sa position.
     function poserBoitesUnifiees() {
         arreterSuite()
-        var lignes = JSON.parse(boite.boitesDeReception()).map(function(r) {
+        var lignes = grouper(JSON.parse(boite.boitesDeReception()).map(function(r) {
             r.cheminAffiche = cheminResultat(r)
             delete r.segments
             return r
         }).filter(function(r) {
             return !fenetre.masquee(r.compte + "|" + r.chemin + "|" + r.uid)
-        })
+        }))
         var cle = function(m) { return fenetre.cleResultat(m.compte, m.chemin, m.uid) }
         var voulues = {}
         for (var i = 0; i < lignes.length; ++i)
@@ -5670,6 +5676,80 @@ ApplicationWindow {
         return jour + "/" + d.getFullYear()
     }
 
+    // Groupes de la liste par date de réception, comme Outlook (0.6.29,
+    // demande de Manu du 30/10) : « Aujourd'hui », « Hier », « Avant-hier »,
+    // le nom des autres jours de la semaine, qui commence le lundi, puis « La
+    // semaine dernière », « Il y a deux semaines », « Il y a trois semaines »,
+    // « Plus tôt ce mois-ci », « Le mois dernier » et « Plus ancien ». Une
+    // date à venir (horloge de l'expéditeur) compte pour aujourd'hui.
+    //
+    // Les bornes, en secondes comme `h`, se calculent une fois par lot de
+    // lignes : un dossier de 40 000 messages arrive par paquets de 500. Chaque
+    // groupe est un intervalle, la liste triée par date les garde d'un seul
+    // tenant ; un groupe dont la borne passe au-dessus d'une précédente
+    // (« Plus tôt ce mois-ci » en début de mois) reste vide.
+    readonly property var nomsJours: [qsTr("Dimanche"), qsTr("Lundi"), qsTr("Mardi"), qsTr("Mercredi"),
+                                      qsTr("Jeudi"), qsTr("Vendredi"), qsTr("Samedi")]
+    function bornesGroupes(maintenant) {
+        var m = maintenant || new Date()
+        // Minuit, n jours plus tôt, à l'heure locale (changements d'heure compris).
+        var minuit = function(n) {
+            return new Date(m.getFullYear(), m.getMonth(), m.getDate() - n).getTime() / 1000
+        }
+        var bornes = [[minuit(0), qsTr("Aujourd'hui")], [minuit(1), qsTr("Hier")],
+                      [minuit(2), qsTr("Avant-hier")]]
+        var depuisLundi = (m.getDay() + 6) % 7
+        for (var n = 3; n <= depuisLundi; ++n)
+            bornes.push([minuit(n), nomsJours[(m.getDay() - n + 7) % 7]])
+        bornes.push([minuit(depuisLundi + 7), qsTr("La semaine dernière")],
+                    [minuit(depuisLundi + 14), qsTr("Il y a deux semaines")],
+                    [minuit(depuisLundi + 21), qsTr("Il y a trois semaines")],
+                    [new Date(m.getFullYear(), m.getMonth(), 1).getTime() / 1000, qsTr("Plus tôt ce mois-ci")],
+                    [new Date(m.getFullYear(), m.getMonth() - 1, 1).getTime() / 1000, qsTr("Le mois dernier")])
+        return bornes
+    }
+    function groupeDate(h, bornes) {
+        for (var i = 0; i < bornes.length; ++i)
+            if (h >= bornes[i][0])
+                return bornes[i][1]
+        return qsTr("Plus ancien")
+    }
+    /// Pose le groupe de chaque ligne d'un lot, et rend le lot.
+    function grouper(lignes) {
+        var bornes = bornesGroupes()
+        for (var i = 0; i < lignes.length; ++i)
+            lignes[i].groupe = groupeDate(lignes[i].h, bornes)
+        return lignes
+    }
+    // Groupes montrés : liste triée par date seulement — une recherche rangée
+    // par expéditeur, objet, taille ou dossier n'en a pas.
+    readonly property bool groupesVisibles: reglages.groupesDates
+                                            && (recherche.length === 0 || triRecherche === "recents"
+                                                || triRecherche === "anciens")
+    // Passé minuit, « Aujourd'hui » devient « Hier » : le jour se relève chaque
+    // minute — un minuteur calé sur minuit manquerait le réveil d'un poste
+    // mis en veille la veille au soir.
+    property string jourDesGroupes: new Date().toDateString()
+    Timer {
+        interval: 60000
+        repeat: true
+        running: true
+        onTriggered: fenetre.suivreJour()
+    }
+    function suivreJour() {
+        var jour = new Date().toDateString()
+        if (jour === jourDesGroupes)
+            return
+        jourDesGroupes = jour
+        var bornes = bornesGroupes()
+        for (var i = 0; i < modeleMessages.count; ++i) {
+            var l = modeleMessages.get(i)
+            var g = groupeDate(l.h, bornes)
+            if (l.groupe !== g)
+                modeleMessages.setProperty(i, "groupe", g)
+        }
+    }
+
     // « mer. 16/09/2026 14:54 », indépendamment de la langue du système.
     function dateLongue(date) {
         var d = new Date(date)
@@ -6189,6 +6269,10 @@ ApplicationWindow {
             // reconnexion automatique (banc LIVRAISON=1, SANS_IDLE=1).
             if (essai.scenario === "veille-reception")
                 scenarios.lancerScenarioVeilleReception()
+            // Scénario « groupes-dates » (0.6.29) : la liste regroupée par date
+            // de réception (banc DATES=1).
+            if (essai.scenario === "groupes-dates")
+                scenarios.lancerScenarioGroupesDates()
             // Scénario « lu-differe » (0.6.9) : marquage « lu » après un délai,
             // ou jamais.
             if (essai.scenario === "lu-differe")

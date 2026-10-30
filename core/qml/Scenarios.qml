@@ -2449,6 +2449,65 @@ QtObject {
         tic.start()
     }
 
+    /// Scénario « veille-reception » (signalement du 30/10/2026 : les nouveaux
+    /// messages n'apparaissaient plus, « Actualiser » sans effet, il fallait
+    /// relancer MMail). Boîte de réception unifiée affichée ; le banc
+    /// (LIVRAISON=1, SANS_IDLE=1 : serveur qui ne notifie pas) livre un
+    /// message dans la boîte de réception de deux@ — compte que l'on ne
+    /// regarde pas — quand le journal dit « scenario: livrer N », et coupe
+    /// les sessions sur « scenario: couper ». 1 : la veille le montre ;
+    /// 2 : « Actualiser » le montre ; 3 : après la coupure, la reconnexion
+    /// automatique le montre.
+    function lancerScenarioVeilleReception() {
+        var suivi = { echecs: 0 }
+        var bilan = function(texte, bon) {
+            if (!bon)
+                suivi.echecs += 1
+            console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
+        }
+        // Attend qu'une ligne de plus paraisse dans la liste, d'elle-même.
+        var attendre = function(delai, suite) {
+            var debut = Date.now()
+            var avant = modeleMessages.count
+            var tic = Qt.createQmlObject('import QtQuick; Timer { interval: 1000; repeat: true }', fenetre)
+            tic.triggered.connect(function() {
+                var ecoule = Math.round((Date.now() - debut) / 1000)
+                if (modeleMessages.count > avant || ecoule >= delai) {
+                    tic.stop()
+                    suite(modeleMessages.count > avant, ecoule)
+                }
+            })
+            tic.start()
+        }
+        var dire = function(numero, bon, s) {
+            return "message " + numero + (bon ? " affiché après " : " absent après ") + s + " s"
+        }
+        plusTard(12000, function() {
+            fenetre.ouvrirBoitesUnifiees()
+            console.log("scenario: unifiée,", modeleMessages.count, "messages")
+            console.log("scenario: livrer 1")
+            attendre(170, function(bon, s) {
+                bilan("veille : " + dire(1, bon, s), bon)
+                console.log("scenario: livrer 2")
+                plusTard(3000, function() {
+                    boite.actualiser()
+                    attendre(30, function(bon2, s2) {
+                        bilan("actualiser : " + dire(2, bon2, s2), bon2)
+                        console.log("scenario: couper")
+                        plusTard(8000, function() {
+                            console.log("scenario: livrer 3")
+                            attendre(260, function(bon3, s3) {
+                                bilan("reconnexion : " + dire(3, bon3, s3), bon3)
+                                console.log("scenario: veille-reception " + (suivi.echecs === 0 ? "OK" : "ECHEC (" + suivi.echecs + ")"))
+                                Qt.quit()
+                            })
+                        })
+                    })
+                })
+            })
+        })
+    }
+
     /// Scénario « marges » (0.6.23) : « Affichage › Marges du message », ses
     /// trois choix l'un après l'autre, dans le volet de lecture et dans la
     /// fenêtre du message. Le texte doit se décaler de la marge choisie, vers

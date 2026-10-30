@@ -6146,6 +6146,11 @@ ApplicationWindow {
             // juste après l'affichage ou pendant le chargement du message.
             if (essai.scenario === "non-lu")
                 scenarios.lancerScenarioNonLu()
+            // Scénario « veille-reception » : la boîte de réception d'un compte
+            // que l'on ne regarde pas, par la veille, « Actualiser » et la
+            // reconnexion automatique (banc LIVRAISON=1, SANS_IDLE=1).
+            if (essai.scenario === "veille-reception")
+                scenarios.lancerScenarioVeilleReception()
             // Scénario « lu-differe » (0.6.9) : marquage « lu » après un délai,
             // ou jamais.
             if (essai.scenario === "lu-differe")

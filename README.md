@@ -192,7 +192,11 @@ de projet interne.
   message — jamais quand le serveur a noté l'échec de son authentification
   (DMARC), une adresse d'expéditeur se falsifiant ; la liste se revoit dans
   « Réglages › Expéditeurs de confiance… » et suit la sauvegarde de la
-  configuration ;
+  configuration. Une image en `http://` se demande en HTTPS, seul protocole du
+  téléchargement ; une image masquée par l'expéditeur (logo du thème sombre) ne
+  se télécharge pas ; une erreur de réseau vaut une seconde tentative. Une
+  image demandée qui n'est pas venue est dite telle dans le bandeau, qui
+  propose alors de réessayer ;
 - **masquage local** des dossiers peu utilisés, réaffichage en un clic ;
 - affichage du **message brut** (bouton « Source ») ;
 - **copie automatique de la sélection**, comme dans MMdedit : un texte

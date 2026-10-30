@@ -148,6 +148,10 @@ pub fn assainir(source: &str, resoudre: impl Fn(&str) -> Option<Image> + Send + 
     };
     let collecte = std::mem::take(&mut *collecte.lock().unwrap_or_else(|e| e.into_inner()));
     let html = retirer_elements(&html).trim().to_string();
+    // Une image d'un élément masqué (logo du thème sombre d'un avis de
+    // remboursement, 29/10/2026) ne s'affiche pas : elle ne se télécharge pas non plus, et
+    // son échec ne compte pas au bandeau.
+    let (html, distantes) = distantes_affichees(html, collecte.distantes);
 
     // Les feuilles de style de l'expéditeur, assainies, en tête.
     let styles = feuilles_de_style(source);
@@ -156,7 +160,26 @@ pub fn assainir(source: &str, resoudre: impl Fn(&str) -> Option<Image> + Send + 
     } else {
         format!("<style>{styles}</style>{html}")
     };
-    CorpsHtml { html, images: collecte.images, distantes: collecte.distantes }
+    CorpsHtml { html, images: collecte.images, distantes }
+}
+
+/// Les images distantes que le HTML désigne encore après le retrait des
+/// éléments masqués, renumérotées dans l'ordre de leur rang d'origine. Un rang
+/// ne fait que descendre, et les rangs plus petits sont réécrits d'abord :
+/// aucun repère n'en recouvre un autre.
+fn distantes_affichees(mut html: String, distantes: Vec<String>) -> (String, Vec<String>) {
+    let repere = |rang: usize| format!("\"{REPERE_DISTANTE}{rang}\"");
+    let gardees: Vec<usize> = (0..distantes.len()).filter(|&rang| html.contains(&repere(rang))).collect();
+    if gardees.len() == distantes.len() {
+        return (html, distantes);
+    }
+    for (nouveau, &ancien) in gardees.iter().enumerate() {
+        if nouveau != ancien {
+            html = html.replace(&repere(ancien), &repere(nouveau));
+        }
+    }
+    let distantes = gardees.into_iter().map(|rang| distantes[rang].clone()).collect();
+    (html, distantes)
 }
 
 #[derive(Default)]
@@ -259,13 +282,23 @@ fn source_image(valeur: &str, collecte: &Mutex<Collecte>, resoudre: &dyn Fn(&str
     };
     let minuscule = valeur.to_ascii_lowercase();
     if minuscule.starts_with("http://") || minuscule.starts_with("https://") {
-        if let Some(rang) = c.distantes.iter().position(|d| d == valeur) {
+        // Une image en `http://` se demande en HTTPS, seul protocole du
+        // téléchargement, comme les navigateurs le font des images d'une page
+        // sûre : bien des expéditeurs les servent aux deux, et celles d'un
+        // avis du 29/10/2026 ne venaient jamais, expéditeur de
+        // confiance ou non.
+        let adresse = if minuscule.starts_with("http://") {
+            format!("https://{}", &valeur["http://".len()..])
+        } else {
+            valeur.to_string()
+        };
+        if let Some(rang) = c.distantes.iter().position(|d| *d == adresse) {
             return format!("{REPERE_DISTANTE}{rang}");
         }
         if c.distantes.len() + c.images.len() >= IMAGES_MAX {
             return REPERE_VIDE.to_string();
         }
-        c.distantes.push(valeur.to_string());
+        c.distantes.push(adresse);
         return format!("{REPERE_DISTANTE}{}", c.distantes.len() - 1);
     }
     if let Some(&rang) = c.deja.get(valeur) {
@@ -893,10 +926,32 @@ mod tests {
              <img src=\"http://exemple.fr/b.gif\"><img src=\"file:///c:/x.png\"><img src=\"ftp://x/y\">",
         ))
         .unwrap();
-        assert_eq!(c.distantes, vec!["https://exemple.fr/logo.png", "http://exemple.fr/b.gif"]);
+        // L'image en `http://` est demandée en HTTPS.
+        assert_eq!(c.distantes, vec!["https://exemple.fr/logo.png", "https://exemple.fr/b.gif"]);
         assert_eq!(
             c.html,
             "<img src=\"mmail-distante:0\" width=\"10\"><img src=\"mmail-distante:0\"><img src=\"mmail-distante:1\">"
+        );
+        // La même, une fois en `http://` et une fois en `https://` : une seule.
+        let c = corps_html(&message("<img src=\"HTTP://exemple.fr/a.png\"><img src=\"https://exemple.fr/a.png\">"))
+            .unwrap();
+        assert_eq!(c.distantes, vec!["https://exemple.fr/a.png"]);
+    }
+
+    #[test]
+    fn images_distantes_masquees_ni_reperees_ni_comptees() {
+        // Avis de remboursement du 29/10/2026 : les logos du thème sombre, masqués,
+        // se téléchargeaient pour rien et leur échec comptait au bandeau.
+        let c = corps_html(&message(
+            "<img src=\"https://exemple.fr/clair.png\"><img style=\"display:none\" src=\"https://exemple.fr/sombre.png\">\
+             <div style=\"display: none\"><img src=\"https://exemple.fr/cache.png\"></div>\
+             <img src=\"https://exemple.fr/article.jpg\"><img src=\"https://exemple.fr/clair.png\">",
+        ))
+        .unwrap();
+        assert_eq!(c.distantes, vec!["https://exemple.fr/clair.png", "https://exemple.fr/article.jpg"]);
+        assert_eq!(
+            c.html,
+            "<img src=\"mmail-distante:0\"><img src=\"mmail-distante:1\"><img src=\"mmail-distante:0\">"
         );
     }
 

@@ -365,6 +365,9 @@ Connections {
         var cle = compte + "|" + chemin + "|" + uid
         if (brut || fenetre.imagesAutoPour !== cle)
             fenetre.imagesAutoPour = ""
+        // Ce corps répond à la demande de ses images : celles qui manquent
+        // n'ont pas pu venir (le bandeau propose alors de réessayer).
+        fenetre.imagesTenteesPour = fenetre.imagesAutoPour
         if (!brut && html && bloquees > 0 && fenetre.imagesAutoPour === ""
                 && fenetre.imagesDOffice(fenetre.enteteCourant))
             fenetre.demanderImages()

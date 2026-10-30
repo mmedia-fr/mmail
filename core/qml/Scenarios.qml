@@ -2449,15 +2449,75 @@ QtObject {
         tic.start()
     }
 
+    /// Scénario « veille-reception » (signalement du 30/10/2026 : les nouveaux
+    /// messages n'apparaissaient plus, « Actualiser » sans effet, il fallait
+    /// relancer MMail). Boîte de réception unifiée affichée ; le banc
+    /// (LIVRAISON=1, SANS_IDLE=1 : serveur qui ne notifie pas) livre un
+    /// message dans la boîte de réception de deux@ — compte que l'on ne
+    /// regarde pas — quand le journal dit « scenario: livrer N », et coupe
+    /// les sessions sur « scenario: couper ». 1 : la veille le montre ;
+    /// 2 : « Actualiser » le montre ; 3 : après la coupure, la reconnexion
+    /// automatique le montre.
+    function lancerScenarioVeilleReception() {
+        var suivi = { echecs: 0 }
+        var bilan = function(texte, bon) {
+            if (!bon)
+                suivi.echecs += 1
+            console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
+        }
+        // Attend qu'une ligne de plus paraisse dans la liste, d'elle-même.
+        var attendre = function(delai, suite) {
+            var debut = Date.now()
+            var avant = modeleMessages.count
+            var tic = Qt.createQmlObject('import QtQuick; Timer { interval: 1000; repeat: true }', fenetre)
+            tic.triggered.connect(function() {
+                var ecoule = Math.round((Date.now() - debut) / 1000)
+                if (modeleMessages.count > avant || ecoule >= delai) {
+                    tic.stop()
+                    suite(modeleMessages.count > avant, ecoule)
+                }
+            })
+            tic.start()
+        }
+        var dire = function(numero, bon, s) {
+            return "message " + numero + (bon ? " affiché après " : " absent après ") + s + " s"
+        }
+        plusTard(12000, function() {
+            fenetre.ouvrirBoitesUnifiees()
+            console.log("scenario: unifiée,", modeleMessages.count, "messages")
+            console.log("scenario: livrer 1")
+            attendre(170, function(bon, s) {
+                bilan("veille : " + dire(1, bon, s), bon)
+                console.log("scenario: livrer 2")
+                plusTard(3000, function() {
+                    boite.actualiser()
+                    attendre(30, function(bon2, s2) {
+                        bilan("actualiser : " + dire(2, bon2, s2), bon2)
+                        console.log("scenario: couper")
+                        plusTard(8000, function() {
+                            console.log("scenario: livrer 3")
+                            attendre(260, function(bon3, s3) {
+                                bilan("reconnexion : " + dire(3, bon3, s3), bon3)
+                                console.log("scenario: veille-reception " + (suivi.echecs === 0 ? "OK" : "ECHEC (" + suivi.echecs + ")"))
+                                Qt.quit()
+                            })
+                        })
+                    })
+                })
+            })
+        })
+    }
+
     /// Scénario « marges » (0.6.23) : « Affichage › Marges du message », ses
     /// trois choix l'un après l'autre, dans le volet de lecture et dans la
     /// fenêtre du message. Le texte doit se décaler de la marge choisie, vers
     /// la droite et, depuis la 0.6.27, vers le bas. Avec
     /// MMAIL_DOSSIER à « aucune », « etroites » ou « larges », ce choix reste
-    /// posé pour une capture (--capture).
+    /// posé pour une capture (--capture). Le retrait d'une lettre centrée à sa
+    /// largeur de conception s'ajoute à la marge, et en prend sa part.
     function lancerScenarioMarges() {
         var tic = Qt.createQmlObject('import QtQuick; Timer { interval: 1000; repeat: true }', fenetre)
-        var suivi = { n: 0, echecs: 0, marges: {}, x0: -1, y0: -1 }
+        var suivi = { n: 0, echecs: 0, marges: {}, x0: -1, y0: -1, retrait0: 0 }
         var choix = ["aucune", "etroites", "larges"]
         var bilan = function(texte, bon) {
             if (!bon)
@@ -2472,20 +2532,23 @@ QtObject {
             if (valeur === "aucune") {
                 suivi.x0 = x
                 suivi.y0 = y
+                suivi.retrait0 = v.retrait
             }
             suivi.marges[valeur] = fenetre.margeMessage
             bilan("marges « " + valeur + " » : " + fenetre.margeMessage + " px | volet " + v.leftPadding + "/"
                   + v.rightPadding + "/" + v.topPadding + "/" + v.bottomPadding + ", texte à "
-                  + Math.round(x) + "," + Math.round(y) + " | fenêtre "
+                  + Math.round(x) + "," + Math.round(y) + ", retrait " + v.retrait + " | fenêtre "
                   + (f ? f.leftPadding + "/" + f.rightPadding + "/" + f.topPadding + "/" + f.bottomPadding
+                         + ", retrait " + f.retrait
                        : "absente"),
-                  v.leftPadding === v.padding + 4 + fenetre.margeMessage
-                  && v.rightPadding === v.padding + fenetre.margeMessage
+                  v.leftPadding === v.padding + 4 + fenetre.margeMessage + v.retrait
+                  && v.rightPadding === v.padding + fenetre.margeMessage + v.retrait
                   && v.topPadding === v.padding + fenetre.margeMessage
                   && v.bottomPadding === v.padding + fenetre.margeMessage
-                  && Math.abs(x - suivi.x0 - fenetre.margeMessage) < 1
+                  && Math.abs(x - suivi.x0 - fenetre.margeMessage - (v.retrait - suivi.retrait0)) < 1
                   && Math.abs(y - suivi.y0 - fenetre.margeMessage) < 1
-                  && f !== null && f.leftPadding === v.leftPadding && f.rightPadding === v.rightPadding
+                  && f !== null && f.leftPadding - f.retrait === v.leftPadding - v.retrait
+                  && f.rightPadding - f.retrait === v.rightPadding - v.retrait
                   && f.topPadding === v.topPadding && f.bottomPadding === v.bottomPadding)
         }
         tic.triggered.connect(function() {

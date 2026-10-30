@@ -444,13 +444,13 @@ ColumnLayout {
             columns: fenetre.tactile ? 1 : 3
             columnSpacing: 6
             Label {
-                text: fenetre.texteImagesBloquees(fenetre.imagesBloquees, fenetre.enteteCourant)
+                text: fenetre.texteImagesBloquees(fenetre.imagesBloquees, fenetre.enteteCourant, fenetre.imagesTentees())
                 color: "#1c1f24"
                 wrapMode: Text.Wrap
                 Layout.fillWidth: true
             }
             Button {
-                text: qsTr("Télécharger les images")
+                text: fenetre.imagesTentees() ? qsTr("Réessayer") : qsTr("Télécharger les images")
                 onClicked: fenetre.demanderImages()
             }
             // Expéditeur de confiance (0.6.24, demande de Guillaume LUDGER) :
@@ -512,9 +512,13 @@ ColumnLayout {
             }
             // Les marges du style Fusion, plus celle d'« Affichage › Marges
             // du message » (0.6.23), sur le fond du message ; en haut et en
-            // bas aussi depuis la 0.6.27.
-            leftPadding: padding + 4 + fenetre.margeMessage
-            rightPadding: padding + fenetre.margeMessage
+            // bas aussi depuis la 0.6.27. Une lettre d'information se lit à
+            // la largeur pour laquelle elle a été composée, centrée.
+            readonly property int retrait: fenetre.corpsHtml && !fenetre.sourceVisible
+                ? fenetre.retraitConception(fenetre.largeurConception, width - 2 * padding - 4 - 2 * fenetre.margeMessage)
+                : 0
+            leftPadding: padding + 4 + fenetre.margeMessage + retrait
+            rightPadding: padding + fenetre.margeMessage + retrait
             topPadding: padding + fenetre.margeMessage
             bottomPadding: padding + fenetre.margeMessage
             text: qsTr("Aucun message sélectionné.")

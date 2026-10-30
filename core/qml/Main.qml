@@ -316,6 +316,9 @@ ApplicationWindow {
     // Message dont les images distantes sont déjà demandées pour cet
     // affichage (« compte|dossier|uid ») : une seule demande d'office (0.6.24).
     property string imagesAutoPour: ""
+    // Message affiché avec ses images distantes déjà demandées : celles qui
+    // manquent encore n'ont pas pu venir (cf. texteImagesBloquees).
+    property string imagesTenteesPour: ""
     // Lien survolé dans le message : son adresse s'affiche dans la barre
     // d'information, comme dans un navigateur — un lien trompeur s'y voit.
     property string lienSurvole: ""
@@ -979,6 +982,28 @@ ApplicationWindow {
     // texte, pour suivre le zoom de la colonne.
     readonly property real margeMessage: reglages.margesMessage === "larges" ? Math.round(tailleMessage * 4)
                                        : reglages.margesMessage === "etroites" ? Math.round(tailleMessage * 1.5) : 0
+    // Largeur pour laquelle l'expéditeur a composé le message affiché au
+    // volet de lecture, en pixels (0 : aucune), lue dans le repère que le
+    // noyau pose en tête de son HTML (cf. largeurDeConception).
+    property int largeurConception: 0
+
+    /// Largeur de conception d'un message HTML affiché : son repère
+    /// `<!--mmail-largeur:N-->`, ou 0.
+    function largeurDeConception(html) {
+        var m = /^<!--mmail-largeur:(\d+)-->/.exec(html || "")
+        return m ? parseInt(m[1]) : 0
+    }
+
+    /// Retrait de chaque côté du corps d'un message composé pour `largeur`
+    /// pixels, dans une zone de `zone` pixels : une lettre d'information se
+    /// lit à sa largeur, centrée, comme dans un navigateur ou dans Outlook —
+    /// étalée sur un grand écran, son encadré laissait de grands aplats à
+    /// droite de ses images (30/10/2026). La largeur suit le zoom, avec 48
+    /// pixels de jeu : un tableau de la largeur exacte de conception
+    /// débordait des marges du document de Qt, qui le rognait.
+    function retraitConception(largeur, zone) {
+        return largeur > 0 ? Math.max(0, Math.floor((zone - largeur * reglages.zoomMessage - 48) / 2)) : 0
+    }
     readonly property string policeMono: premierePolice(jeu ? jeu.mono
                                                             : ["Consolas", "DejaVu Sans Mono", "Courier New"])
 
@@ -3571,13 +3596,26 @@ ApplicationWindow {
                && !entete.dmarcEchec && !expediteurDeConfiance(entete.expediteur)
     }
 
-    /// Texte du bandeau des images distantes.
-    function texteImagesBloquees(n, entete) {
+    /// Texte du bandeau des images distantes. `tentees` : elles ont été
+    /// demandées pour cet affichage, et `n` d'entre elles ne sont pas venues —
+    /// le bandeau ne propose plus de les télécharger, mais de réessayer (le
+    /// 30/10, il proposait encore « Télécharger les images » pour un
+    /// expéditeur de confiance).
+    function texteImagesBloquees(n, entete, tentees) {
+        if (tentees)
+            return n > 1 ? qsTr("%1 images distantes n'ont pas pu être téléchargées : serveur injoignable, ou image refusée.").arg(n)
+                         : qsTr("1 image distante n'a pas pu être téléchargée : serveur injoignable, ou image refusée.")
         var debut = n > 1 ? qsTr("%1 images distantes non téléchargées").arg(n)
                           : qsTr("1 image distante non téléchargée")
         if (entete && entete.dmarcEchec && expediteurDeConfiance(entete.expediteur))
             return debut + qsTr(" : expéditeur de confiance, mais le serveur n'a pas pu l'authentifier (DMARC) ; elles ne se téléchargent pas d'office.")
         return debut + qsTr(" : l'expéditeur saurait que vous avez ouvert le message.")
+    }
+
+    /// Vrai si les images distantes du message affiché au volet de lecture
+    /// ont déjà été demandées pour cet affichage.
+    function imagesTentees() {
+        return imagesTenteesPour !== "" && imagesTenteesPour === boite.compteCourant + "|" + boite.dossierCourant + "|" + uidCourant
     }
 
     /// Images distantes du message affiché au volet de lecture. Une seule
@@ -5450,6 +5488,22 @@ ApplicationWindow {
         onTriggered: fenetre.validerGlissement()
     }
 
+    // Reconnexion automatique : une session perdue (réseau coupé, poste sorti
+    // de veille, serveur qui ferme) restait perdue jusqu'à un geste de
+    // l'utilisateur, et le courrier n'arrivait plus qu'au redémarrage de
+    // MMail (30/10/2026). Une minute après, les comptes sans session se
+    // rouvrent ; un nouvel échec reprogramme l'essai.
+    Timer {
+        id: minuterieReconnexion
+        interval: 60 * 1000
+        onTriggered: boite.reconnecter()
+    }
+
+    function prevoirReconnexion() {
+        if (!minuterieReconnexion.running)
+            minuterieReconnexion.start()
+    }
+
     function retirerDeLaListe(uids) {
         var retires = {}
         for (var u in enDeplacement)
@@ -6130,6 +6184,11 @@ ApplicationWindow {
             // juste après l'affichage ou pendant le chargement du message.
             if (essai.scenario === "non-lu")
                 scenarios.lancerScenarioNonLu()
+            // Scénario « veille-reception » : la boîte de réception d'un compte
+            // que l'on ne regarde pas, par la veille, « Actualiser » et la
+            // reconnexion automatique (banc LIVRAISON=1, SANS_IDLE=1).
+            if (essai.scenario === "veille-reception")
+                scenarios.lancerScenarioVeilleReception()
             // Scénario « lu-differe » (0.6.9) : marquage « lu » après un délai,
             // ou jamais.
             if (essai.scenario === "lu-differe")

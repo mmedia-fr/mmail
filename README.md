@@ -186,13 +186,24 @@ de projet interne.
   dans le volet de lecture comme dans la fenêtre d'un message — « Aucune » (par
   défaut, au ras du volet), « Étroites » ou « Larges », en proportion de la
   taille du texte ;
+- **largeur de conception** : une lettre d'information composée pour une
+  largeur fixe (600 pixels le plus souvent) s'affiche à cette largeur, centrée,
+  sur fond blanc de part et d'autre, comme dans un navigateur, au lieu de
+  s'étaler sur tout un grand écran — dans le volet de lecture comme dans la
+  fenêtre d'un message, la largeur suivant le zoom. Un message ordinaire n'en
+  a pas : il faut des conteneurs de largeur fixe qui portent les quatre
+  cinquièmes du texte ;
 - **expéditeurs de confiance** (0.6.24) : « Toujours pour cet expéditeur », à
   côté de « Télécharger les images », fait télécharger d'office les images
   distantes de ses messages, dans le volet de lecture comme dans la fenêtre d'un
   message — jamais quand le serveur a noté l'échec de son authentification
   (DMARC), une adresse d'expéditeur se falsifiant ; la liste se revoit dans
   « Réglages › Expéditeurs de confiance… » et suit la sauvegarde de la
-  configuration ;
+  configuration. Une image en `http://` se demande en HTTPS, seul protocole du
+  téléchargement ; une image masquée par l'expéditeur (logo du thème sombre) ne
+  se télécharge pas ; une erreur de réseau vaut une seconde tentative. Une
+  image demandée qui n'est pas venue est dite telle dans le bandeau, qui
+  propose alors de réessayer ;
 - **masquage local** des dossiers peu utilisés, réaffichage en un clic ;
 - affichage du **message brut** (bouton « Source ») ;
 - **copie automatique de la sélection**, comme dans MMdedit : un texte
@@ -231,7 +242,12 @@ de projet interne.
   (IDLE) — un message arrivé apparaît en quelques secondes —, les compteurs des
   autres dossiers se mettent à jour toutes les deux minutes, ou sur F5. Une
   liste de dizaines de milliers de messages ne se met à jour que des lignes
-  qui changent.
+  qui changent. Toutes les deux minutes aussi, la boîte de réception de
+  chaque compte est relue si le serveur y annonce des messages arrivés ou
+  retirés — même quand elle n'est pas le dossier ouvert, et même si le
+  serveur ne signale rien en IDLE ; « Actualiser » (F5) en fait autant
+  sur-le-champ. Une session perdue (réseau coupé, poste sorti de veille,
+  serveur qui ferme) se rouvre d'elle-même une minute après.
 
 ### L'agenda
 

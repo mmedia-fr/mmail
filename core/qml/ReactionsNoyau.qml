@@ -346,6 +346,8 @@ Connections {
         fenetre.lienSurvole = ""
         fenetre.corpsHtml = html
         fenetre.htmlAffiche = html ? texte : ""
+        // Avant le texte : les images se bornent à la colonne qu'elle fait.
+        fenetre.largeurConception = html && !brut ? fenetre.largeurDeConception(texte) : 0
         fenetre.imagesBloquees = bloquees
         colonneLecture.vueCorps.text = html ? fenetre.htmlAuZoom(texte) : texte
         fenetre.bornerImages()
@@ -365,6 +367,9 @@ Connections {
         var cle = compte + "|" + chemin + "|" + uid
         if (brut || fenetre.imagesAutoPour !== cle)
             fenetre.imagesAutoPour = ""
+        // Ce corps répond à la demande de ses images : celles qui manquent
+        // n'ont pas pu venir (le bandeau propose alors de réessayer).
+        fenetre.imagesTenteesPour = fenetre.imagesAutoPour
         if (!brut && html && bloquees > 0 && fenetre.imagesAutoPour === ""
                 && fenetre.imagesDOffice(fenetre.enteteCourant))
             fenetre.demanderImages()
@@ -848,6 +853,13 @@ Connections {
     function onEchec(compte, etape, message) {
         if (fenetre.essai && fenetre.essai.scenario === "vidage")
             scenarios.bilanScenarioVidage("échec du compte " + compte + " | étape " + etape + " | " + message)
+        // Session perdue, ou serveur injoignable pour un compte déjà là : on
+        // retentera dans une minute. Pas pendant la modification d'un compte,
+        // ni pour un compte nouveau (sa fenêtre revient), ni pour un mot de
+        // passe refusé.
+        if ((etape === "reseau" || etape === "connexion") && fenetre.compteParId(compte)
+                && !fenetre.modificationEnCours)
+            fenetre.prevoirReconnexion()
         if (etape === "tri") {
             // Le compte des déplacements en cours n'est pas touché ici : un
             // déplacement rend toujours « deplacementTermine », réussi ou

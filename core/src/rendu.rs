@@ -35,7 +35,15 @@ pub struct CorpsHtml {
     pub images: Vec<(String, Vec<u8>)>,
     /// Adresses des images distantes, sans doublon, dans l'ordre du message.
     pub distantes: Vec<String>,
+    /// Largeur, en pixels, pour laquelle l'expéditeur a composé le message
+    /// (cf. `mise_en_page::largeur_de_conception`) : l'affichage s'y tient.
+    pub largeur: Option<u32>,
 }
+
+/// Repère posé en tête du HTML affiché, `<!--mmail-largeur:775-->` : la
+/// largeur de conception, que l'interface lit pour centrer le message. Le
+/// HTML d'une réponse, qui cite le message, ne le porte pas.
+pub const REPERE_LARGEUR: &str = "<!--mmail-largeur:";
 
 /// Repère d'une image intégrée.
 pub const REPERE_IMAGE: &str = "mmail-image:";
@@ -114,6 +122,7 @@ pub fn corps_html(brut: &[u8]) -> Option<CorpsHtml> {
         let cid = adresse.get(..4).filter(|p| p.eq_ignore_ascii_case("cid:")).map(|_| &adresse[4..])?;
         integrees.get(&normaliser_cid(cid)).cloned()
     });
+    corps.largeur = crate::mise_en_page::largeur_de_conception(&corps.html);
     corps.html = lier_html(&crate::mise_en_page::aplatir(&corps.html));
     Some(corps)
 }
@@ -148,6 +157,10 @@ pub fn assainir(source: &str, resoudre: impl Fn(&str) -> Option<Image> + Send + 
     };
     let collecte = std::mem::take(&mut *collecte.lock().unwrap_or_else(|e| e.into_inner()));
     let html = retirer_elements(&html).trim().to_string();
+    // Une image d'un élément masqué (logo du thème sombre d'un avis de
+    // remboursement, 29/10/2026) ne s'affiche pas : elle ne se télécharge pas non plus, et
+    // son échec ne compte pas au bandeau.
+    let (html, distantes) = distantes_affichees(html, collecte.distantes);
 
     // Les feuilles de style de l'expéditeur, assainies, en tête.
     let styles = feuilles_de_style(source);
@@ -156,7 +169,26 @@ pub fn assainir(source: &str, resoudre: impl Fn(&str) -> Option<Image> + Send + 
     } else {
         format!("<style>{styles}</style>{html}")
     };
-    CorpsHtml { html, images: collecte.images, distantes: collecte.distantes }
+    CorpsHtml { html, images: collecte.images, distantes, largeur: None }
+}
+
+/// Les images distantes que le HTML désigne encore après le retrait des
+/// éléments masqués, renumérotées dans l'ordre de leur rang d'origine. Un rang
+/// ne fait que descendre, et les rangs plus petits sont réécrits d'abord :
+/// aucun repère n'en recouvre un autre.
+fn distantes_affichees(mut html: String, distantes: Vec<String>) -> (String, Vec<String>) {
+    let repere = |rang: usize| format!("\"{REPERE_DISTANTE}{rang}\"");
+    let gardees: Vec<usize> = (0..distantes.len()).filter(|&rang| html.contains(&repere(rang))).collect();
+    if gardees.len() == distantes.len() {
+        return (html, distantes);
+    }
+    for (nouveau, &ancien) in gardees.iter().enumerate() {
+        if nouveau != ancien {
+            html = html.replace(&repere(ancien), &repere(nouveau));
+        }
+    }
+    let distantes = gardees.into_iter().map(|rang| distantes[rang].clone()).collect();
+    (html, distantes)
 }
 
 #[derive(Default)]
@@ -186,7 +218,7 @@ fn filtrer(
     match (balise, attribut) {
         (_, "hidden") => Some("hidden".to_string()),
         (_, "style") if masque(valeur) => Some(REPERE_MASQUE.to_string()),
-        (_, "style") => Some(repli_generique(&css_sur(valeur))),
+        (_, "style") => Some(repli_generique(&marges_sans_auto(&css_sur(valeur)))),
         ("a", "href") => {
             let minuscule = valeur.trim().to_ascii_lowercase();
             if minuscule.starts_with("www.") {
@@ -259,13 +291,23 @@ fn source_image(valeur: &str, collecte: &Mutex<Collecte>, resoudre: &dyn Fn(&str
     };
     let minuscule = valeur.to_ascii_lowercase();
     if minuscule.starts_with("http://") || minuscule.starts_with("https://") {
-        if let Some(rang) = c.distantes.iter().position(|d| d == valeur) {
+        // Une image en `http://` se demande en HTTPS, seul protocole du
+        // téléchargement, comme les navigateurs le font des images d'une page
+        // sûre : bien des expéditeurs les servent aux deux, et celles d'un
+        // avis du 29/10/2026 ne venaient jamais, expéditeur de
+        // confiance ou non.
+        let adresse = if minuscule.starts_with("http://") {
+            format!("https://{}", &valeur["http://".len()..])
+        } else {
+            valeur.to_string()
+        };
+        if let Some(rang) = c.distantes.iter().position(|d| *d == adresse) {
             return format!("{REPERE_DISTANTE}{rang}");
         }
         if c.distantes.len() + c.images.len() >= IMAGES_MAX {
             return REPERE_VIDE.to_string();
         }
-        c.distantes.push(valeur.to_string());
+        c.distantes.push(adresse);
         return format!("{REPERE_DISTANTE}{}", c.distantes.len() - 1);
     }
     if let Some(&rang) = c.deja.get(valeur) {
@@ -381,7 +423,7 @@ fn feuilles_de_style(html: &str) -> String {
         css.push('\n');
         depart = contenu + g;
     }
-    let css = repli_generique(&css_sur(&sans_regles_at(&css.replace("<!--", "").replace("-->", ""))));
+    let css = repli_generique(&marges_sans_auto(&css_sur(&sans_regles_at(&css.replace("<!--", "").replace("-->", "")))));
     // Une feuille ne doit pas pouvoir refermer l'élément qui la porte.
     css.replace('<', "")
 }
@@ -424,6 +466,43 @@ fn sans_regles_at(css: &str) -> String {
         }
     }
     sortie.push_str(reste);
+    sortie
+}
+
+/// Un style ou une feuille de style dont les marges `auto` sont nulles. Dans
+/// un navigateur, `margin: 0 auto` centre un bloc de largeur fixe ; aplati en
+/// bloc pleine largeur, il n'a plus rien à centrer — et le moteur de Qt en
+/// faisait un retrait d'environ 185 pixels à gauche, qui étranglait le texte
+/// des avis au gabarit Foundation (30/10/2026).
+fn marges_sans_auto(css: &str) -> String {
+    let mut sortie = String::with_capacity(css.len());
+    let mut reste = css;
+    while !reste.is_empty() {
+        let fin = reste.find([';', '{', '}']).map_or(reste.len(), |i| i + 1);
+        let (declaration, suite) = reste.split_at(fin);
+        match declaration.split_once(':') {
+            Some((propriete, valeur))
+                if matches!(propriete.trim().to_ascii_lowercase().as_str(), "margin" | "margin-left" | "margin-right") =>
+            {
+                sortie.push_str(propriete);
+                sortie.push(':');
+                let mut mot = String::new();
+                for c in valeur.chars().chain(std::iter::once('\0')) {
+                    if c.is_ascii_alphanumeric() || c == '-' || c == '.' {
+                        mot.push(c);
+                        continue;
+                    }
+                    sortie.push_str(if mot.eq_ignore_ascii_case("auto") { "0" } else { &mot });
+                    mot.clear();
+                    if c != '\0' {
+                        sortie.push(c);
+                    }
+                }
+            }
+            _ => sortie.push_str(declaration),
+        }
+        reste = suite;
+    }
     sortie
 }
 
@@ -893,10 +972,32 @@ mod tests {
              <img src=\"http://exemple.fr/b.gif\"><img src=\"file:///c:/x.png\"><img src=\"ftp://x/y\">",
         ))
         .unwrap();
-        assert_eq!(c.distantes, vec!["https://exemple.fr/logo.png", "http://exemple.fr/b.gif"]);
+        // L'image en `http://` est demandée en HTTPS.
+        assert_eq!(c.distantes, vec!["https://exemple.fr/logo.png", "https://exemple.fr/b.gif"]);
         assert_eq!(
             c.html,
             "<img src=\"mmail-distante:0\" width=\"10\"><img src=\"mmail-distante:0\"><img src=\"mmail-distante:1\">"
+        );
+        // La même, une fois en `http://` et une fois en `https://` : une seule.
+        let c = corps_html(&message("<img src=\"HTTP://exemple.fr/a.png\"><img src=\"https://exemple.fr/a.png\">"))
+            .unwrap();
+        assert_eq!(c.distantes, vec!["https://exemple.fr/a.png"]);
+    }
+
+    #[test]
+    fn images_distantes_masquees_ni_reperees_ni_comptees() {
+        // Avis de remboursement du 29/10/2026 : les logos du thème sombre, masqués,
+        // se téléchargeaient pour rien et leur échec comptait au bandeau.
+        let c = corps_html(&message(
+            "<img src=\"https://exemple.fr/clair.png\"><img style=\"display:none\" src=\"https://exemple.fr/sombre.png\">\
+             <div style=\"display: none\"><img src=\"https://exemple.fr/cache.png\"></div>\
+             <img src=\"https://exemple.fr/article.jpg\"><img src=\"https://exemple.fr/clair.png\">",
+        ))
+        .unwrap();
+        assert_eq!(c.distantes, vec!["https://exemple.fr/clair.png", "https://exemple.fr/article.jpg"]);
+        assert_eq!(
+            c.html,
+            "<img src=\"mmail-distante:0\"><img src=\"mmail-distante:1\"><img src=\"mmail-distante:0\">"
         );
     }
 
@@ -953,6 +1054,21 @@ mod tests {
         assert_eq!(css_sur("a:url(\"x)y\");b:1"), "a:none;b:1");
         assert_eq!(css_sur("width:expression(alert(1))"), "width:nonealert(1))");
         assert_eq!(css_sur("color:URL(x"), "color:none");
+    }
+
+    #[test]
+    fn marges_auto_nulles() {
+        // Gabarit Foundation (avis du 30/10/2026) : style d'un élément, puis
+        // feuille de style ; les autres propriétés et marges restent.
+        assert_eq!(
+            marges_sans_auto("text-align:left;Margin: 0 auto;width:616px"),
+            "text-align:left;Margin: 0 0;width:616px"
+        );
+        assert_eq!(
+            marges_sans_auto(".float-center{margin:0 auto !important;float:none}a:hover{margin-left:auto}"),
+            ".float-center{margin:0 0 !important;float:none}a:hover{margin-left:0}"
+        );
+        assert_eq!(marges_sans_auto("margin:10px 20px;padding:auto"), "margin:10px 20px;padding:auto");
     }
 
     #[test]

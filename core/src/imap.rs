@@ -163,6 +163,8 @@ pub struct Client {
     espaces_autres: Option<Vec<(String, String)>>,
     /// Attente patiente de la commande en cours, et son échéance.
     patience: Option<(Attente, Instant)>,
+    /// `LOGOUT` envoyé : le `BYE` qui suit est attendu (cf. `bye`).
+    sortie: bool,
 }
 
 impl Client {
@@ -192,6 +194,7 @@ impl Client {
             echeance: None,
             espaces_autres: None,
             patience: None,
+            sortie: false,
         };
         // Salutation : une seule ligne non étiquetée.
         let salutation = client.lire_ligne()?;
@@ -787,21 +790,29 @@ impl Client {
     /// Attend au plus `delai` une ligne du serveur pendant `IDLE`. `None` :
     /// rien n'est venu — c'est le cas courant, la session reste en `IDLE`.
     pub fn idle_attendre(&mut self, delai: Duration) -> Resultat<Option<String>> {
-        if let Some(ligne) = self.ligne_en_attente() {
-            return Ok(Some(ligne));
-        }
-        self.flux.delai_lecture(delai)?;
-        let mut tampon = [0u8; 16384];
-        let lu = self.flux.read(&mut tampon);
-        self.flux.delai_lecture(DELAI)?;
-        match lu {
-            Ok(0) => Err(Erreur::Reseau("connexion fermée par le serveur".into())),
-            Ok(n) => {
-                self.reste.extend_from_slice(&tampon[..n]);
-                Ok(self.ligne_en_attente())
+        let ligne = match self.ligne_en_attente() {
+            Some(ligne) => Some(ligne),
+            None => {
+                self.flux.delai_lecture(delai)?;
+                let mut tampon = [0u8; 16384];
+                let lu = self.flux.read(&mut tampon);
+                self.flux.delai_lecture(DELAI)?;
+                match lu {
+                    Ok(0) => return Err(Erreur::Reseau("connexion fermée par le serveur".into())),
+                    Ok(n) => {
+                        self.reste.extend_from_slice(&tampon[..n]);
+                        self.ligne_en_attente()
+                    }
+                    Err(e) if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => None,
+                    Err(e) => return Err(e.into()),
+                }
             }
-            Err(e) if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => Ok(None),
-            Err(e) => Err(e.into()),
+        };
+        match ligne {
+            Some(ligne) if bye(&ligne) => {
+                Err(Erreur::Reseau(format!("le serveur a fermé la session : {}", ligne[5..].trim())))
+            }
+            autre => Ok(autre),
         }
     }
 
@@ -825,6 +836,7 @@ impl Client {
     }
 
     pub fn fermer(&mut self) {
+        self.sortie = true;
         let _ = self.commande("LOGOUT");
     }
 
@@ -851,6 +863,9 @@ impl Client {
         let mut total = 0usize;
         loop {
             let ligne = self.lire_ligne_logique(&mut litteraux, &mut total)?;
+            if !self.sortie && bye(&ligne) {
+                return Err(Erreur::Reseau(format!("le serveur a fermé la session : {}", ligne[5..].trim())));
+            }
             let terminee = ligne.starts_with(etiquette);
             texte.push_str(&ligne);
             texte.push('\n');
@@ -1044,6 +1059,18 @@ pub(crate) fn joindre(hote: &str, port: u16) -> Resultat<TcpStream> {
     Err(derniere)
 }
 
+/// `BYE` non étiqueté : le serveur ferme la session. Exchange Online
+/// l'envoie quand le jeton d'accès de la session expire, une heure environ
+/// après la connexion (« * BYE Session invalidated - AccessTokenExpired »),
+/// sans toujours couper la connexion : pris pour une réponse ordinaire, il
+/// laissait une session morte où tout échouait, « Actualiser » compris, et le
+/// courrier n'arrivait plus qu'au redémarrage de MMail (30/10/2026). C'est
+/// une perte de session, que la reconnexion répare avec un jeton neuf ;
+/// seul celui qui répond à `LOGOUT` est attendu.
+fn bye(ligne: &str) -> bool {
+    ligne.get(..5).is_some_and(|debut| debut.eq_ignore_ascii_case("* BYE"))
+}
+
 /// Taille annoncée par un littéral en fin de ligne : `… {123}`.
 fn taille_litteral(ligne: &str) -> Option<usize> {
     let ligne = ligne.trim_end();
@@ -1102,6 +1129,23 @@ mod tests {
             session("UIDPLUS", vec![echange("NOOP", "* 1 FETCH (UID 1 BODY[] {999999999999}\r\n", "OK")]);
         let e = client.brute("NOOP").unwrap_err();
         assert!(matches!(e, Erreur::Reseau(ref m) if m.contains("999999999999")), "{e:?}");
+    }
+
+    #[test]
+    fn bye_du_serveur_coupe_la_session() {
+        use crate::simule::{echange, session};
+        // Exchange Online, jeton d'accès de la session expiré (30/10/2026) :
+        // le refus qui suit le BYE ne doit pas passer pour un simple refus.
+        let (mut client, _) = session(
+            "UIDPLUS",
+            vec![echange("NOOP", "* BYE Session invalidated - AccessTokenExpired\r\n", "NO Session invalidated")],
+        );
+        let e = client.brute("NOOP").unwrap_err();
+        assert!(matches!(e, Erreur::Reseau(ref m) if m.contains("AccessTokenExpired")), "{e:?}");
+        // Celui qui répond à LOGOUT est attendu.
+        let (mut client, journal) = session("UIDPLUS", vec![echange("LOGOUT", "* BYE Logging out\r\n", "OK")]);
+        client.fermer();
+        assert_eq!(journal.lock().unwrap().len(), 1);
     }
 
     #[test]

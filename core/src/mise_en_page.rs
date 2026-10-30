@@ -33,10 +33,13 @@
 //! sinon de la cellule. Le moteur de Qt ignore la police nulle : un texte qui
 //! n'est qu'en police nulle, invisible ailleurs, est retiré.
 //!
-//! Un tableau gardé à pleine largeur dont toutes les cellules d'une ligne ont
-//! une largeur fixe voit ces largeurs devenir des parts de la ligne : le moteur
-//! de Qt s'en tenait à leur somme, et laissait de part et d'autre du tableau
-//! deux pans que le fond de l'encadré ne couvre pas. L'astuce `dir="rtl"` des
+//! Un tableau gardé à pleine largeur, sous un fond autre que le blanc, dont
+//! toutes les cellules d'une ligne ont une largeur fixe voit ces largeurs
+//! devenir des parts de la ligne : le moteur de Qt s'en tenait à leur somme, et
+//! laissait de part et d'autre du tableau deux pans que le fond de l'encadré ne
+//! couvre pas. Sur le blanc de la page, ces pans ne se voient pas, et le
+//! tableau garde ses largeurs (des colonnes de données, ramenées à leurs parts,
+//! passaient à la ligne). L'astuce `dir="rtl"` des
 //! colonnes inversées sur téléphone est retirée : Qt la portait sur le texte.
 //!
 //! Le HTML traité est celui qui sort d'`ammonia` : bien formé, chaque élément
@@ -187,7 +190,10 @@ fn transformer(noeud: Noeud, fond: Option<&str>) -> Vec<Noeud> {
                 attributs.push(("bgcolor".to_string(), couleur.to_string()));
             }
         }
-        let a_repartir = toute_la_largeur(&attributs);
+        // Sur le blanc de la page, la place que Qt laisse de part et d'autre ne
+        // se voit pas, et des colonnes de données, ramenées à leurs parts, y
+        // passaient à la ligne : seul un tableau sous un fond est réparti.
+        let a_repartir = fond.is_some() && toute_la_largeur(&attributs);
         let enfants = enfants
             .into_iter()
             .flat_map(garder)
@@ -747,14 +753,15 @@ mod tests {
         // les colonnes, fixait 600 px que Qt reportait sur elles ; le titre de
         // la colonne de 310 px tenait en quelques lettres par ligne. Les
         // largeurs fixes de la ligne suivante deviennent ses parts (le tableau
-        // est à pleine largeur).
-        let html = "<table width=\"100%\"><tbody><tr><td width=\"600\" height=\"32\" colspan=\"3\" \
-                    style=\"width: 600px; height: 32px;\"></td></tr><tr><td width=\"135\">a</td>\
+        // est à pleine largeur, sur son propre fond).
+        let html = "<table width=\"100%\" bgcolor=\"#fff3f0\"><tbody><tr><td width=\"600\" height=\"32\" \
+                    colspan=\"3\" style=\"width: 600px; height: 32px;\"></td></tr><tr><td width=\"135\">a</td>\
                     <td width=\"35\"></td><td width=\"310\">b</td></tr></tbody></table>";
         assert_eq!(
             aplatir(html),
-            "<table width=\"100%\"><tbody><tr><td height=\"32\" colspan=\"3\" style=\"height: 32px\"></td></tr>\
-             <tr><td width=\"28%\">a</td><td width=\"7%\"></td><td width=\"65%\">b</td></tr></tbody></table>"
+            "<table width=\"100%\" bgcolor=\"#fff3f0\"><tbody><tr><td height=\"32\" colspan=\"3\" \
+             style=\"height: 32px\"></td></tr><tr><td width=\"28%\">a</td><td width=\"7%\"></td>\
+             <td width=\"65%\">b</td></tr></tbody></table>"
         );
     }
 
@@ -762,18 +769,21 @@ mod tests {
     fn colonnes_fixes_en_parts_de_la_ligne() {
         // Ligne du prix d'une lettre d'information du 29/10/2026 : 220 + 25 + 365 px
         // dans un tableau à pleine largeur, que Qt dessinait à 610 px entre
-        // deux pans blancs. Largeur du style comprise, reste de l'arrondi à
-        // la plus large.
-        let html = "<table width=\"100%\"><tbody><tr><th width=\"220\">a</th><th width=\"25\"></th>\
-                    <th width=\"365\" style=\"width:365px; color:#3999ec\">b</th></tr></tbody></table>";
+        // deux pans blancs, dans un encadré sombre. Largeur du style comprise,
+        // reste de l'arrondi à la plus large.
+        let ligne = "<table width=\"100%\"><tbody><tr><th width=\"220\">a</th><th width=\"25\"></th>\
+                     <th width=\"365\" style=\"width:365px; color:#3999ec\">b</th></tr></tbody></table>";
+        let html = format!("<table bgcolor=\"#212429\"><tbody><tr><td>{ligne}</td></tr></tbody></table>");
         assert_eq!(
-            aplatir(html),
-            "<table width=\"100%\"><tbody><tr><th width=\"36%\">a</th><th width=\"4%\"></th>\
-             <th width=\"60%\" style=\"color:#3999ec\">b</th></tr></tbody></table>"
+            aplatir(&html),
+            "<div style=\"background-color:#212429\"><div><table width=\"100%\" bgcolor=\"#212429\"><tbody><tr>\
+             <th width=\"36%\">a</th><th width=\"4%\"></th><th width=\"60%\" style=\"color:#3999ec\">b</th>\
+             </tr></tbody></table></div></div>"
         );
-        // Une colonne sans largeur, ou un tableau qui n'est pas à pleine
-        // largeur : rien ne change.
+        // Sur le blanc de la page, une colonne sans largeur, un tableau qui
+        // n'est pas à pleine largeur : rien ne change.
         for html in [
+            ligne,
             "<table width=\"100%\"><tbody><tr><td width=\"3\" bgcolor=\"#3a9aed\"></td><td>a</td></tr></tbody></table>",
             "<table width=\"210\"><tbody><tr><td width=\"100\">a</td><td width=\"110\">b</td></tr></tbody></table>",
         ] {

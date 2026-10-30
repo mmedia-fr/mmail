@@ -5450,6 +5450,22 @@ ApplicationWindow {
         onTriggered: fenetre.validerGlissement()
     }
 
+    // Reconnexion automatique : une session perdue (réseau coupé, poste sorti
+    // de veille, serveur qui ferme) restait perdue jusqu'à un geste de
+    // l'utilisateur, et le courrier n'arrivait plus qu'au redémarrage de
+    // MMail (30/10/2026). Une minute après, les comptes sans session se
+    // rouvrent ; un nouvel échec reprogramme l'essai.
+    Timer {
+        id: minuterieReconnexion
+        interval: 60 * 1000
+        onTriggered: boite.reconnecter()
+    }
+
+    function prevoirReconnexion() {
+        if (!minuterieReconnexion.running)
+            minuterieReconnexion.start()
+    }
+
     function retirerDeLaListe(uids) {
         var retires = {}
         for (var u in enDeplacement)

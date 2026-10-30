@@ -848,6 +848,13 @@ Connections {
     function onEchec(compte, etape, message) {
         if (fenetre.essai && fenetre.essai.scenario === "vidage")
             scenarios.bilanScenarioVidage("échec du compte " + compte + " | étape " + etape + " | " + message)
+        // Session perdue, ou serveur injoignable pour un compte déjà là : on
+        // retentera dans une minute. Pas pendant la modification d'un compte,
+        // ni pour un compte nouveau (sa fenêtre revient), ni pour un mot de
+        // passe refusé.
+        if ((etape === "reseau" || etape === "connexion") && fenetre.compteParId(compte)
+                && !fenetre.modificationEnCours)
+            fenetre.prevoirReconnexion()
         if (etape === "tri") {
             // Le compte des déplacements en cours n'est pas touché ici : un
             // déplacement rend toujours « deplacementTermine », réussi ou

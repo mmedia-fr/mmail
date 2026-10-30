@@ -2454,10 +2454,11 @@ QtObject {
     /// fenêtre du message. Le texte doit se décaler de la marge choisie, vers
     /// la droite et, depuis la 0.6.27, vers le bas. Avec
     /// MMAIL_DOSSIER à « aucune », « etroites » ou « larges », ce choix reste
-    /// posé pour une capture (--capture).
+    /// posé pour une capture (--capture). Le retrait d'une lettre centrée à sa
+    /// largeur de conception s'ajoute à la marge, et en prend sa part.
     function lancerScenarioMarges() {
         var tic = Qt.createQmlObject('import QtQuick; Timer { interval: 1000; repeat: true }', fenetre)
-        var suivi = { n: 0, echecs: 0, marges: {}, x0: -1, y0: -1 }
+        var suivi = { n: 0, echecs: 0, marges: {}, x0: -1, y0: -1, retrait0: 0 }
         var choix = ["aucune", "etroites", "larges"]
         var bilan = function(texte, bon) {
             if (!bon)
@@ -2472,20 +2473,23 @@ QtObject {
             if (valeur === "aucune") {
                 suivi.x0 = x
                 suivi.y0 = y
+                suivi.retrait0 = v.retrait
             }
             suivi.marges[valeur] = fenetre.margeMessage
             bilan("marges « " + valeur + " » : " + fenetre.margeMessage + " px | volet " + v.leftPadding + "/"
                   + v.rightPadding + "/" + v.topPadding + "/" + v.bottomPadding + ", texte à "
-                  + Math.round(x) + "," + Math.round(y) + " | fenêtre "
+                  + Math.round(x) + "," + Math.round(y) + ", retrait " + v.retrait + " | fenêtre "
                   + (f ? f.leftPadding + "/" + f.rightPadding + "/" + f.topPadding + "/" + f.bottomPadding
+                         + ", retrait " + f.retrait
                        : "absente"),
-                  v.leftPadding === v.padding + 4 + fenetre.margeMessage
-                  && v.rightPadding === v.padding + fenetre.margeMessage
+                  v.leftPadding === v.padding + 4 + fenetre.margeMessage + v.retrait
+                  && v.rightPadding === v.padding + fenetre.margeMessage + v.retrait
                   && v.topPadding === v.padding + fenetre.margeMessage
                   && v.bottomPadding === v.padding + fenetre.margeMessage
-                  && Math.abs(x - suivi.x0 - fenetre.margeMessage) < 1
+                  && Math.abs(x - suivi.x0 - fenetre.margeMessage - (v.retrait - suivi.retrait0)) < 1
                   && Math.abs(y - suivi.y0 - fenetre.margeMessage) < 1
-                  && f !== null && f.leftPadding === v.leftPadding && f.rightPadding === v.rightPadding
+                  && f !== null && f.leftPadding - f.retrait === v.leftPadding - v.retrait
+                  && f.rightPadding - f.retrait === v.rightPadding - v.retrait
                   && f.topPadding === v.topPadding && f.bottomPadding === v.bottomPadding)
         }
         tic.triggered.connect(function() {

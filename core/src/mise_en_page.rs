@@ -85,6 +85,80 @@ pub fn aplatir(html: &str) -> String {
     sortie
 }
 
+/// Largeur de conception au-delà de laquelle une valeur n'en est plus une.
+const LARGEUR_CONCEPTION_MAX: u32 = 1600;
+
+/// Largeur, en pixels, pour laquelle l'expéditeur a composé le message (à lire
+/// avant l'aplatissement, qui retire les largeurs) : celle, fixe et d'au moins
+/// `LARGEUR_PLEINE` pixels, de conteneurs — tableau, cellule, bloc à
+/// `max-width` — qui portent à eux tous les quatre cinquièmes du texte au
+/// moins. Une lettre d'information se compose sur 600 pixels, d'autres sur
+/// 775 : étalée sur toute la largeur du volet, elle laissait de grands aplats
+/// de son fond à droite de ses images (30/10/2026). `None` pour un message
+/// ordinaire, dont un tableau de signature ne fait pas la largeur.
+pub fn largeur_de_conception(html: &str) -> Option<u32> {
+    let noeuds = analyser(html)?;
+    let total = texte_visible(&noeuds);
+    let mut sommes = std::collections::HashMap::new();
+    let mut ouvertes = Vec::new();
+    for noeud in &noeuds {
+        mesurer(noeud, &mut ouvertes, &mut sommes);
+    }
+    sommes
+        .into_iter()
+        .filter(|&(_, texte)| total > 0 && texte * 5 >= total * 4)
+        .max_by_key(|&(largeur, texte)| (texte, largeur))
+        .map(|(largeur, _)| largeur)
+}
+
+/// Ajoute à `sommes` le texte de chaque conteneur de largeur fixe, par
+/// largeur ; un conteneur dans un autre de même largeur ne compte pas deux
+/// fois.
+fn mesurer(noeud: &Noeud, ouvertes: &mut Vec<u32>, sommes: &mut std::collections::HashMap<u32, usize>) {
+    let Noeud::Element { nom, attributs, enfants } = noeud else {
+        return;
+    };
+    let largeur = largeur_de_conteneur(nom, attributs)
+        .filter(|largeur| (LARGEUR_PLEINE..=LARGEUR_CONCEPTION_MAX).contains(largeur));
+    if let Some(largeur) = largeur {
+        if !ouvertes.contains(&largeur) {
+            *sommes.entry(largeur).or_insert(0) += texte_visible(enfants);
+        }
+        ouvertes.push(largeur);
+    }
+    for enfant in enfants {
+        mesurer(enfant, ouvertes, sommes);
+    }
+    if largeur.is_some() {
+        ouvertes.pop();
+    }
+}
+
+/// Largeur fixe d'un conteneur, en pixels : `width` ou `max-width` de son
+/// style, sinon son attribut `width`.
+fn largeur_de_conteneur(nom: &str, attributs: &[(String, String)]) -> Option<u32> {
+    if !matches!(nom, "table" | "td" | "th" | "div" | "center") {
+        return None;
+    }
+    let valeur = |cle: &str| attributs.iter().find(|(a, _)| a == cle).map(|(_, v)| v.as_str());
+    declarations(valeur("style").unwrap_or(""))
+        .filter(|(propriete, _)| propriete == "width" || propriete == "max-width")
+        .find_map(|(_, v)| pixels(v))
+        .or_else(|| valeur("width").and_then(pixels))
+}
+
+/// Nombre de caractères visibles d'un arbre, hors blancs et feuilles de style.
+fn texte_visible(noeuds: &[Noeud]) -> usize {
+    noeuds
+        .iter()
+        .map(|noeud| match noeud {
+            Noeud::Texte(texte) => texte.chars().filter(|c| !c.is_whitespace()).count(),
+            Noeud::Element { nom, .. } if nom == "style" => 0,
+            Noeud::Element { enfants, .. } => texte_visible(enfants),
+        })
+        .sum()
+}
+
 /// Arbre du HTML, ou `None` s'il n'est pas bien formé.
 fn analyser(html: &str) -> Option<Vec<Noeud>> {
     let mut pile: Vec<(String, Vec<(String, String)>, Vec<Noeud>)> = vec![(String::new(), Vec::new(), Vec::new())];
@@ -632,6 +706,28 @@ fn pixels(valeur: &str) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn largeur_de_conception_d_une_lettre() {
+        // Encadré de 775 px qui porte tout le texte, cellule de même largeur
+        // comprise.
+        let lettre = "<table width=\"100%\"><tr><td><table width=\"775\"><tr><td style=\"width:775px\">\
+                      Bonjour, voici la lettre du mois.</td></tr></table></td></tr></table>";
+        assert_eq!(largeur_de_conception(lettre), Some(775));
+        // Sections successives à `max-width:600px`.
+        let sections = "<div style=\"margin:0 auto;max-width:600px\">Première section</div>\
+                        <div style=\"max-width:600px\">Seconde section</div><p>x</p>";
+        assert_eq!(largeur_de_conception(sections), Some(600));
+        // Un message ordinaire et sa signature en tableau de 450 px : rien.
+        let ordinaire = "<p>Bonjour, je vous écris au sujet de la facture de septembre, que je n'ai pas reçue.</p>\
+                         <table width=\"450\"><tr><td>Jean Martin</td><td>Exemple SARL</td></tr></table>";
+        assert_eq!(largeur_de_conception(ordinaire), None);
+        // Une feuille de style n'est pas du texte ; une largeur démesurée
+        // n'en est pas une.
+        let style = "<style>p { color: red; margin: 0 }</style><table width=\"600\"><tr><td>Court</td></tr></table>";
+        assert_eq!(largeur_de_conception(style), Some(600));
+        assert_eq!(largeur_de_conception("<table width=\"5000\"><tr><td>x</td></tr></table>"), None);
+    }
 
     #[test]
     fn tableaux_d_une_colonne_aplatis() {

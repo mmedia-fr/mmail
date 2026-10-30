@@ -6972,8 +6972,13 @@ fn rendre_si_actuel(
         }
         // Les images ne servent qu'à l'affichage : si leur écriture échoue,
         // le message s'affiche sans elles plutôt que pas du tout.
+        let largeur = corps.largeur;
         let (html, bloquees) = poser_images(corps, compte, telechargees, atelier, numero == 0);
-        lu.texte = html;
+        // La largeur de conception, en tête : l'interface y centre le message.
+        lu.texte = match largeur {
+            Some(largeur) => format!("{}{largeur}-->{html}", crate::rendu::REPERE_LARGEUR),
+            None => html,
+        };
         lu.html = true;
         lu.bloquees = bloquees;
         return Some(lu);

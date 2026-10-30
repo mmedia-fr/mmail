@@ -36,6 +36,8 @@ ApplicationWindow {
     // Animations des GIF du corps (scénarios d'essai).
     property alias animations: animationsFenetre
     property alias corps: vueCorps
+    // Largeur de conception du message, comme au volet de lecture.
+    property int largeurConception: 0
     property int compte: 0
     property string chemin: ""
     property int uid: 0
@@ -109,6 +111,7 @@ ApplicationWindow {
             fenetreMessage.html = estHtml && !brut
             fenetreMessage.bloquees = estHtml && !brut ? bloquees : 0
             fenetreMessage.imagesTentees = !brut && fenetreMessage.imagesDemandees
+            fenetreMessage.largeurConception = estHtml && !brut ? fenetre.largeurDeConception(texte) : 0
             vueCorps.text = texte
             vueCorps.cursorPosition = 0
             if (!brut) {
@@ -551,9 +554,12 @@ ApplicationWindow {
                 color: fenetreMessage.html ? "#1f1f1f" : fenetre.palette.text
                 background: Rectangle { color: fenetreMessage.html ? "#ffffff" : fenetre.palette.base }
                 // Mêmes marges que le volet de lecture (0.6.23 ; en haut et
-                // en bas depuis la 0.6.27).
-                leftPadding: padding + 4 + fenetre.margeMessage
-                rightPadding: padding + fenetre.margeMessage
+                // en bas depuis la 0.6.27), largeur de conception comprise.
+                readonly property int retrait: fenetreMessage.html
+                    ? fenetre.retraitConception(fenetreMessage.largeurConception, width - 2 * padding - 4 - 2 * fenetre.margeMessage)
+                    : 0
+                leftPadding: padding + 4 + fenetre.margeMessage + retrait
+                rightPadding: padding + fenetre.margeMessage + retrait
                 topPadding: padding + fenetre.margeMessage
                 bottomPadding: padding + fenetre.margeMessage
                 text: qsTr("Chargement…")

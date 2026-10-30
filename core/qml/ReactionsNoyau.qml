@@ -346,6 +346,8 @@ Connections {
         fenetre.lienSurvole = ""
         fenetre.corpsHtml = html
         fenetre.htmlAffiche = html ? texte : ""
+        // Avant le texte : les images se bornent à la colonne qu'elle fait.
+        fenetre.largeurConception = html && !brut ? fenetre.largeurDeConception(texte) : 0
         fenetre.imagesBloquees = bloquees
         colonneLecture.vueCorps.text = html ? fenetre.htmlAuZoom(texte) : texte
         fenetre.bornerImages()

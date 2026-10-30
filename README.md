@@ -186,6 +186,13 @@ de projet interne.
   dans le volet de lecture comme dans la fenêtre d'un message — « Aucune » (par
   défaut, au ras du volet), « Étroites » ou « Larges », en proportion de la
   taille du texte ;
+- **largeur de conception** : une lettre d'information composée pour une
+  largeur fixe (600 pixels le plus souvent) s'affiche à cette largeur, centrée,
+  sur fond blanc de part et d'autre, comme dans un navigateur, au lieu de
+  s'étaler sur tout un grand écran — dans le volet de lecture comme dans la
+  fenêtre d'un message, la largeur suivant le zoom. Un message ordinaire n'en
+  a pas : il faut des conteneurs de largeur fixe qui portent les quatre
+  cinquièmes du texte ;
 - **expéditeurs de confiance** (0.6.24) : « Toujours pour cet expéditeur », à
   côté de « Télécharger les images », fait télécharger d'office les images
   distantes de ses messages, dans le volet de lecture comme dans la fenêtre d'un

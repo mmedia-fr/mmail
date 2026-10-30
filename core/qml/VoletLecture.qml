@@ -512,9 +512,13 @@ ColumnLayout {
             }
             // Les marges du style Fusion, plus celle d'« Affichage › Marges
             // du message » (0.6.23), sur le fond du message ; en haut et en
-            // bas aussi depuis la 0.6.27.
-            leftPadding: padding + 4 + fenetre.margeMessage
-            rightPadding: padding + fenetre.margeMessage
+            // bas aussi depuis la 0.6.27. Une lettre d'information se lit à
+            // la largeur pour laquelle elle a été composée, centrée.
+            readonly property int retrait: fenetre.corpsHtml && !fenetre.sourceVisible
+                ? fenetre.retraitConception(fenetre.largeurConception, width - 2 * padding - 4 - 2 * fenetre.margeMessage)
+                : 0
+            leftPadding: padding + 4 + fenetre.margeMessage + retrait
+            rightPadding: padding + fenetre.margeMessage + retrait
             topPadding: padding + fenetre.margeMessage
             bottomPadding: padding + fenetre.margeMessage
             text: qsTr("Aucun message sélectionné.")

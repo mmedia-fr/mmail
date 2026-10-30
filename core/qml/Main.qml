@@ -982,6 +982,26 @@ ApplicationWindow {
     // texte, pour suivre le zoom de la colonne.
     readonly property real margeMessage: reglages.margesMessage === "larges" ? Math.round(tailleMessage * 4)
                                        : reglages.margesMessage === "etroites" ? Math.round(tailleMessage * 1.5) : 0
+    // Largeur pour laquelle l'expéditeur a composé le message affiché au
+    // volet de lecture, en pixels (0 : aucune), lue dans le repère que le
+    // noyau pose en tête de son HTML (cf. largeurDeConception).
+    property int largeurConception: 0
+
+    /// Largeur de conception d'un message HTML affiché : son repère
+    /// `<!--mmail-largeur:N-->`, ou 0.
+    function largeurDeConception(html) {
+        var m = /^<!--mmail-largeur:(\d+)-->/.exec(html || "")
+        return m ? parseInt(m[1]) : 0
+    }
+
+    /// Retrait de chaque côté du corps d'un message composé pour `largeur`
+    /// pixels, dans une zone de `zone` pixels : une lettre d'information se
+    /// lit à sa largeur, centrée, comme dans un navigateur ou dans Outlook —
+    /// étalée sur un grand écran, son encadré laissait de grands aplats à
+    /// droite de ses images (30/10/2026). La largeur suit le zoom.
+    function retraitConception(largeur, zone) {
+        return largeur > 0 ? Math.max(0, Math.floor((zone - largeur * reglages.zoomMessage) / 2)) : 0
+    }
     readonly property string policeMono: premierePolice(jeu ? jeu.mono
                                                             : ["Consolas", "DejaVu Sans Mono", "Courier New"])
 

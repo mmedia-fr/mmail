@@ -35,7 +35,15 @@ pub struct CorpsHtml {
     pub images: Vec<(String, Vec<u8>)>,
     /// Adresses des images distantes, sans doublon, dans l'ordre du message.
     pub distantes: Vec<String>,
+    /// Largeur, en pixels, pour laquelle l'expéditeur a composé le message
+    /// (cf. `mise_en_page::largeur_de_conception`) : l'affichage s'y tient.
+    pub largeur: Option<u32>,
 }
+
+/// Repère posé en tête du HTML affiché, `<!--mmail-largeur:775-->` : la
+/// largeur de conception, que l'interface lit pour centrer le message. Le
+/// HTML d'une réponse, qui cite le message, ne le porte pas.
+pub const REPERE_LARGEUR: &str = "<!--mmail-largeur:";
 
 /// Repère d'une image intégrée.
 pub const REPERE_IMAGE: &str = "mmail-image:";
@@ -114,6 +122,7 @@ pub fn corps_html(brut: &[u8]) -> Option<CorpsHtml> {
         let cid = adresse.get(..4).filter(|p| p.eq_ignore_ascii_case("cid:")).map(|_| &adresse[4..])?;
         integrees.get(&normaliser_cid(cid)).cloned()
     });
+    corps.largeur = crate::mise_en_page::largeur_de_conception(&corps.html);
     corps.html = lier_html(&crate::mise_en_page::aplatir(&corps.html));
     Some(corps)
 }
@@ -160,7 +169,7 @@ pub fn assainir(source: &str, resoudre: impl Fn(&str) -> Option<Image> + Send + 
     } else {
         format!("<style>{styles}</style>{html}")
     };
-    CorpsHtml { html, images: collecte.images, distantes }
+    CorpsHtml { html, images: collecte.images, distantes, largeur: None }
 }
 
 /// Les images distantes que le HTML désigne encore après le retrait des

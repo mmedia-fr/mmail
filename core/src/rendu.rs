@@ -218,7 +218,7 @@ fn filtrer(
     match (balise, attribut) {
         (_, "hidden") => Some("hidden".to_string()),
         (_, "style") if masque(valeur) => Some(REPERE_MASQUE.to_string()),
-        (_, "style") => Some(repli_generique(&css_sur(valeur))),
+        (_, "style") => Some(repli_generique(&marges_sans_auto(&css_sur(valeur)))),
         ("a", "href") => {
             let minuscule = valeur.trim().to_ascii_lowercase();
             if minuscule.starts_with("www.") {
@@ -423,7 +423,7 @@ fn feuilles_de_style(html: &str) -> String {
         css.push('\n');
         depart = contenu + g;
     }
-    let css = repli_generique(&css_sur(&sans_regles_at(&css.replace("<!--", "").replace("-->", ""))));
+    let css = repli_generique(&marges_sans_auto(&css_sur(&sans_regles_at(&css.replace("<!--", "").replace("-->", "")))));
     // Une feuille ne doit pas pouvoir refermer l'élément qui la porte.
     css.replace('<', "")
 }
@@ -466,6 +466,43 @@ fn sans_regles_at(css: &str) -> String {
         }
     }
     sortie.push_str(reste);
+    sortie
+}
+
+/// Un style ou une feuille de style dont les marges `auto` sont nulles. Dans
+/// un navigateur, `margin: 0 auto` centre un bloc de largeur fixe ; aplati en
+/// bloc pleine largeur, il n'a plus rien à centrer — et le moteur de Qt en
+/// faisait un retrait d'environ 185 pixels à gauche, qui étranglait le texte
+/// des avis au gabarit Foundation (30/10/2026).
+fn marges_sans_auto(css: &str) -> String {
+    let mut sortie = String::with_capacity(css.len());
+    let mut reste = css;
+    while !reste.is_empty() {
+        let fin = reste.find([';', '{', '}']).map_or(reste.len(), |i| i + 1);
+        let (declaration, suite) = reste.split_at(fin);
+        match declaration.split_once(':') {
+            Some((propriete, valeur))
+                if matches!(propriete.trim().to_ascii_lowercase().as_str(), "margin" | "margin-left" | "margin-right") =>
+            {
+                sortie.push_str(propriete);
+                sortie.push(':');
+                let mut mot = String::new();
+                for c in valeur.chars().chain(std::iter::once('\0')) {
+                    if c.is_ascii_alphanumeric() || c == '-' || c == '.' {
+                        mot.push(c);
+                        continue;
+                    }
+                    sortie.push_str(if mot.eq_ignore_ascii_case("auto") { "0" } else { &mot });
+                    mot.clear();
+                    if c != '\0' {
+                        sortie.push(c);
+                    }
+                }
+            }
+            _ => sortie.push_str(declaration),
+        }
+        reste = suite;
+    }
     sortie
 }
 
@@ -1017,6 +1054,21 @@ mod tests {
         assert_eq!(css_sur("a:url(\"x)y\");b:1"), "a:none;b:1");
         assert_eq!(css_sur("width:expression(alert(1))"), "width:nonealert(1))");
         assert_eq!(css_sur("color:URL(x"), "color:none");
+    }
+
+    #[test]
+    fn marges_auto_nulles() {
+        // Gabarit Foundation (avis du 30/10/2026) : style d'un élément, puis
+        // feuille de style ; les autres propriétés et marges restent.
+        assert_eq!(
+            marges_sans_auto("text-align:left;Margin: 0 auto;width:616px"),
+            "text-align:left;Margin: 0 0;width:616px"
+        );
+        assert_eq!(
+            marges_sans_auto(".float-center{margin:0 auto !important;float:none}a:hover{margin-left:auto}"),
+            ".float-center{margin:0 0 !important;float:none}a:hover{margin-left:0}"
+        );
+        assert_eq!(marges_sans_auto("margin:10px 20px;padding:auto"), "margin:10px 20px;padding:auto");
     }
 
     #[test]

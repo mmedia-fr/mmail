@@ -33,6 +33,12 @@
 //! sinon de la cellule. Le moteur de Qt ignore la police nulle : un texte qui
 //! n'est qu'en police nulle, invisible ailleurs, est retiré.
 //!
+//! Un tableau gardé à pleine largeur dont toutes les cellules d'une ligne ont
+//! une largeur fixe voit ces largeurs devenir des parts de la ligne : le moteur
+//! de Qt s'en tenait à leur somme, et laissait de part et d'autre du tableau
+//! deux pans que le fond de l'encadré ne couvre pas. L'astuce `dir="rtl"` des
+//! colonnes inversées sur téléphone est retirée : Qt la portait sur le texte.
+//!
 //! Le HTML traité est celui qui sort d'`ammonia` : bien formé, chaque élément
 //! non vide fermé, attributs entre guillemets, aucun « < » ni « > » dans un
 //! attribut. Faute de pouvoir le relire, il est rendu tel quel.
@@ -173,12 +179,20 @@ fn transformer(noeud: Noeud, fond: Option<&str>) -> Vec<Noeud> {
     };
     if nom == "table" && lignes(&enfants).iter().any(|ligne| cellules(ligne).len() > 1) {
         let mut attributs = pleine_largeur(attributs);
+        if colonnes_inversees(&attributs, &enfants) {
+            attributs = sans_direction(attributs);
+        }
         if propre.is_none() {
             if let Some(couleur) = fond {
                 attributs.push(("bgcolor".to_string(), couleur.to_string()));
             }
         }
-        let enfants = enfants.into_iter().flat_map(garder).collect();
+        let a_repartir = toute_la_largeur(&attributs);
+        let enfants = enfants
+            .into_iter()
+            .flat_map(garder)
+            .map(|enfant| if a_repartir { repartir(enfant) } else { enfant })
+            .collect();
         return vec![Noeud::Element { nom, attributs, enfants }];
     }
     let attributs = sans_interligne(attributs, fond.is_some());
@@ -227,6 +241,138 @@ fn garder(noeud: Noeud) -> Vec<Noeud> {
         }
         autre => transformer(autre, None),
     }
+}
+
+/// Tableau qui prend toute la largeur : `100%` en attribut ou en style.
+fn toute_la_largeur(attributs: &[(String, String)]) -> bool {
+    let valeur = |nom: &str| attributs.iter().find(|(a, _)| a == nom).map(|(_, v)| v.trim());
+    valeur("width") == Some("100%")
+        || declarations(valeur("style").unwrap_or("")).any(|(propriete, v)| propriete == "width" && v == "100%")
+}
+
+/// Largeur fixe d'une cellule, en pixels : celle de son style, sinon celle de
+/// son attribut.
+fn largeur_fixe(attributs: &[(String, String)]) -> Option<u32> {
+    let valeur = |nom: &str| attributs.iter().find(|(a, _)| a == nom).map(|(_, v)| v.as_str());
+    match declarations(valeur("style").unwrap_or("")).filter(|(propriete, _)| propriete == "width").last() {
+        Some((_, v)) => pixels(v),
+        None => valeur("width").and_then(pixels),
+    }
+}
+
+/// Ce que devient une ligne d'un tableau gardé à pleine largeur dont toutes les
+/// cellules ont une largeur fixe : ces largeurs deviennent leurs parts de la
+/// ligne. Un navigateur répartit ainsi la place qui reste ; le moteur de Qt
+/// s'en tenait à leur somme, et le tableau, plus étroit que son encadré, y
+/// laissait deux pans blancs (ligne du prix d'une lettre d'information du 29/10/2026).
+fn repartir(noeud: Noeud) -> Noeud {
+    let Noeud::Element { nom, attributs, enfants } = noeud else {
+        return noeud;
+    };
+    fn cellule(noeud: &Noeud) -> bool {
+        matches!(noeud, Noeud::Element { nom, .. } if nom == "td" || nom == "th")
+    }
+    match nom.as_str() {
+        "tbody" | "thead" | "tfoot" => {
+            Noeud::Element { nom, attributs, enfants: enfants.into_iter().map(repartir).collect() }
+        }
+        "tr" => {
+            let largeurs: Option<Vec<u32>> = enfants
+                .iter()
+                .filter(|enfant| cellule(enfant))
+                .map(|enfant| match enfant {
+                    Noeud::Element { attributs, .. } => largeur_fixe(attributs).filter(|&l| l > 0),
+                    Noeud::Texte(_) => None,
+                })
+                .collect();
+            let Some(largeurs) = largeurs.filter(|l| l.len() > 1) else {
+                return Noeud::Element { nom, attributs, enfants };
+            };
+            let mut parts = parts(&largeurs).into_iter();
+            let enfants = enfants
+                .into_iter()
+                .map(|enfant| match enfant {
+                    Noeud::Element { nom, attributs, enfants } if nom == "td" || nom == "th" => {
+                        let part = parts.next().unwrap_or(0);
+                        Noeud::Element { nom, attributs: en_part(attributs, part), enfants }
+                    }
+                    autre => autre,
+                })
+                .collect();
+            Noeud::Element { nom, attributs, enfants }
+        }
+        _ => Noeud::Element { nom, attributs, enfants },
+    }
+}
+
+/// Parts entières, en pour cent, de largeurs fixes : 1 au moins chacune, le
+/// reste de l'arrondi à la plus large.
+fn parts(largeurs: &[u32]) -> Vec<u32> {
+    let somme: u64 = largeurs.iter().map(|&l| u64::from(l)).sum();
+    let mut parts: Vec<u32> = largeurs.iter().map(|&l| ((u64::from(l) * 100 / somme) as u32).max(1)).collect();
+    let total: u32 = parts.iter().sum();
+    if let Some(plus_large) = (0..largeurs.len()).max_by_key(|&i| largeurs[i]) {
+        parts[plus_large] = (parts[plus_large] + 100).saturating_sub(total).max(1);
+    }
+    parts
+}
+
+/// Attributs d'une cellule dont la largeur devient `part` pour cent de la
+/// ligne : attribut `width` remplacé à sa place, largeurs du style retirées.
+fn en_part(attributs: Vec<(String, String)>, part: u32) -> Vec<(String, String)> {
+    let largeur = format!("{part}%");
+    let mut posee = false;
+    let mut attributs: Vec<(String, String)> = attributs
+        .into_iter()
+        .filter_map(|(attribut, valeur)| match attribut.as_str() {
+            "width" => {
+                posee = true;
+                Some((attribut, largeur.clone()))
+            }
+            "style" => {
+                let style = sans_proprietes(&valeur, &["width", "min-width", "max-width"]);
+                (!style.is_empty()).then_some((attribut, style))
+            }
+            _ => Some((attribut, valeur)),
+        })
+        .collect();
+    if !posee {
+        attributs.push(("width".to_string(), largeur));
+    }
+    attributs
+}
+
+/// Tableau en `dir="rtl"` dont les cellules se déclarent `direction:ltr` :
+/// l'astuce des lettres d'information qui inverse l'ordre des colonnes sur un
+/// téléphone. Le moteur de Qt applique la direction au texte des cellules
+/// (« -67% » devenait « 67%- ») sans inverser les colonnes.
+fn colonnes_inversees(attributs: &[(String, String)], enfants: &[Noeud]) -> bool {
+    fn direction(attributs: &[(String, String)], sens: &str) -> bool {
+        attributs.iter().any(|(a, v)| a == "dir" && v.trim().eq_ignore_ascii_case(sens))
+            || attributs.iter().filter(|(a, _)| a == "style").any(|(_, style)| {
+                declarations(style).any(|(propriete, v)| propriete == "direction" && v.eq_ignore_ascii_case(sens))
+            })
+    }
+    direction(attributs, "rtl")
+        && lignes(enfants).iter().flat_map(|ligne| cellules(ligne)).any(|cellule| match cellule {
+            Noeud::Element { attributs, .. } => direction(attributs, "ltr"),
+            Noeud::Texte(_) => false,
+        })
+}
+
+/// Attributs sans direction : ni `dir`, ni `direction` dans le style.
+fn sans_direction(attributs: Vec<(String, String)>) -> Vec<(String, String)> {
+    attributs
+        .into_iter()
+        .filter(|(attribut, _)| attribut != "dir")
+        .filter_map(|(attribut, valeur)| {
+            if attribut != "style" {
+                return Some((attribut, valeur));
+            }
+            let style = sans_proprietes(&valeur, &["direction"]);
+            (!style.is_empty()).then_some((attribut, style))
+        })
+        .collect()
 }
 
 /// Cellule fusionnée sur plusieurs colonnes.
@@ -599,15 +745,57 @@ mod tests {
     fn cellule_fusionnee_sans_largeur() {
         // Lettre d'information du 29/10/2026 : la ligne d'espace, fusionnée sur
         // les colonnes, fixait 600 px que Qt reportait sur elles ; le titre de
-        // la colonne de 310 px tenait en quelques lettres par ligne.
+        // la colonne de 310 px tenait en quelques lettres par ligne. Les
+        // largeurs fixes de la ligne suivante deviennent ses parts (le tableau
+        // est à pleine largeur).
         let html = "<table width=\"100%\"><tbody><tr><td width=\"600\" height=\"32\" colspan=\"3\" \
                     style=\"width: 600px; height: 32px;\"></td></tr><tr><td width=\"135\">a</td>\
                     <td width=\"35\"></td><td width=\"310\">b</td></tr></tbody></table>";
         assert_eq!(
             aplatir(html),
             "<table width=\"100%\"><tbody><tr><td height=\"32\" colspan=\"3\" style=\"height: 32px\"></td></tr>\
-             <tr><td width=\"135\">a</td><td width=\"35\"></td><td width=\"310\">b</td></tr></tbody></table>"
+             <tr><td width=\"28%\">a</td><td width=\"7%\"></td><td width=\"65%\">b</td></tr></tbody></table>"
         );
+    }
+
+    #[test]
+    fn colonnes_fixes_en_parts_de_la_ligne() {
+        // Ligne du prix d'une lettre d'information du 29/10/2026 : 220 + 25 + 365 px
+        // dans un tableau à pleine largeur, que Qt dessinait à 610 px entre
+        // deux pans blancs. Largeur du style comprise, reste de l'arrondi à
+        // la plus large.
+        let html = "<table width=\"100%\"><tbody><tr><th width=\"220\">a</th><th width=\"25\"></th>\
+                    <th width=\"365\" style=\"width:365px; color:#3999ec\">b</th></tr></tbody></table>";
+        assert_eq!(
+            aplatir(html),
+            "<table width=\"100%\"><tbody><tr><th width=\"36%\">a</th><th width=\"4%\"></th>\
+             <th width=\"60%\" style=\"color:#3999ec\">b</th></tr></tbody></table>"
+        );
+        // Une colonne sans largeur, ou un tableau qui n'est pas à pleine
+        // largeur : rien ne change.
+        for html in [
+            "<table width=\"100%\"><tbody><tr><td width=\"3\" bgcolor=\"#3a9aed\"></td><td>a</td></tr></tbody></table>",
+            "<table width=\"210\"><tbody><tr><td width=\"100\">a</td><td width=\"110\">b</td></tr></tbody></table>",
+        ] {
+            assert_eq!(aplatir(html), html);
+        }
+        assert_eq!(parts(&[3, 600]), vec![1, 99]);
+    }
+
+    #[test]
+    fn colonnes_inversees_remises_dans_le_sens_du_texte() {
+        // Même avis : `dir="rtl"` inversait les colonnes sur téléphone ; Qt
+        // l'appliquait au texte, « -67% » devenait « 67%- ».
+        let html = "<table width=\"100%\" dir=\"rtl\" style=\"direction:rtl;\"><tbody><tr>\
+                    <th style=\"direction:ltr\">-67%</th><th style=\"direction:ltr\">b</th></tr></tbody></table>";
+        assert_eq!(
+            aplatir(html),
+            "<table width=\"100%\"><tbody><tr>\
+             <th style=\"direction:ltr\">-67%</th><th style=\"direction:ltr\">b</th></tr></tbody></table>"
+        );
+        // Un texte qui s'écrit vraiment de droite à gauche garde sa direction.
+        let arabe = "<table dir=\"rtl\"><tbody><tr><td>أ</td><td>ب</td></tr></tbody></table>";
+        assert_eq!(aplatir(arabe), arabe);
     }
 
     #[test]

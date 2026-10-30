@@ -998,9 +998,11 @@ ApplicationWindow {
     /// pixels, dans une zone de `zone` pixels : une lettre d'information se
     /// lit à sa largeur, centrée, comme dans un navigateur ou dans Outlook —
     /// étalée sur un grand écran, son encadré laissait de grands aplats à
-    /// droite de ses images (30/10/2026). La largeur suit le zoom.
+    /// droite de ses images (30/10/2026). La largeur suit le zoom, avec 48
+    /// pixels de jeu : un tableau de la largeur exacte de conception
+    /// débordait des marges du document de Qt, qui le rognait.
     function retraitConception(largeur, zone) {
-        return largeur > 0 ? Math.max(0, Math.floor((zone - largeur * reglages.zoomMessage) / 2)) : 0
+        return largeur > 0 ? Math.max(0, Math.floor((zone - largeur * reglages.zoomMessage - 48) / 2)) : 0
     }
     readonly property string policeMono: premierePolice(jeu ? jeu.mono
                                                             : ["Consolas", "DejaVu Sans Mono", "Courier New"])

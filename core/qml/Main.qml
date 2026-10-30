@@ -6189,6 +6189,10 @@ ApplicationWindow {
             // reconnexion automatique (banc LIVRAISON=1, SANS_IDLE=1).
             if (essai.scenario === "veille-reception")
                 scenarios.lancerScenarioVeilleReception()
+            // Scénario « zoom-lecture » (0.6.29) : le zoom du volet de lecture
+            // laisse les boutons à leur taille (banc PIECE=1).
+            if (essai.scenario === "zoom-lecture")
+                scenarios.lancerScenarioZoomLecture()
             // Scénario « lu-differe » (0.6.9) : marquage « lu » après un délai,
             // ou jamais.
             if (essai.scenario === "lu-differe")

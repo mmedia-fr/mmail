@@ -231,7 +231,11 @@ de projet interne.
   choisi dans la fenêtre de Windows, il lui échappait. Un programme ou un
   script (`.exe`, `.js`, `.bat`…) ne s'ouvre pas depuis MMail, il s'enregistre ;
 - **zoom propre à chaque colonne** : Ctrl + molette sur la colonne, ou Ctrl +,
-  Ctrl − et Ctrl 0 sur la dernière colonne survolée ; pincement au doigt ;
+  Ctrl − et Ctrl 0 sur la dernière colonne survolée ; pincement au doigt. Au
+  volet de lecture comme dans la fenêtre d'un message, il grossit le message
+  — en-tête et corps —, pas les boutons : barre d'actions, pièces jointes,
+  bandeaux des images et des invitations gardent la taille de l'apparence
+  (0.6.29) ;
 - **quatre apparences**, celles de MMdedit : classique (Windows 9x), moderne
   (M-Media), système, et MMEDIA, aux couleurs du site mmedia.fr — en-tête en
   bandeau nuit, boutons en pastilles, non-lus en pastilles rouges, dossier et

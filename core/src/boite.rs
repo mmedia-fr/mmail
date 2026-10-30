@@ -20,7 +20,10 @@
 //! - **chaque session porte un numéro de génération** : les résultats d'une
 //!   session fermée ou remplacée peuvent encore arriver, ils sont ignorés ;
 //! - **un fil sans commande veille** : toutes les deux minutes, il relit les
-//!   compteurs de ses dossiers et resynchronise le dossier ouvert.
+//!   compteurs de ses dossiers, resynchronise la boîte de réception si son
+//!   `SELECT` montre du neuf, puis le dossier ouvert. « Actualiser » fait passer
+//!   cette veille sur-le-champ ; une session perdue se rouvre d'elle-même une
+//!   minute après (cf. `ReactionsNoyau.onEchec`).
 //!
 //! Les lectures de l'index (`arborescence`, `messages`) restent synchrones :
 //! elles sont locales, et l'index est en WAL, qui laisse lire pendant que les
@@ -683,11 +686,18 @@ pub mod qobject {
         #[cxx_name = "renommerDossier"]
         fn renommer_dossier(self: Pin<&mut Boite>, compte: i32, chemin: &QString, nom: &QString) -> QString;
 
-        /// Relit compteurs et dossier ouvert de chaque compte ; reconnecte les
-        /// comptes dont la session est tombée.
+        /// Fait passer la veille de chaque compte — compteurs, boîte de
+        /// réception si elle a changé, dossier ouvert ; reconnecte les comptes
+        /// dont la session est tombée.
         #[qinvokable]
         #[cxx_name = "actualiser"]
         fn actualiser(self: Pin<&mut Boite>);
+
+        /// Rouvre la session des comptes qui l'ont perdue, et d'eux seuls :
+        /// la reconnexion automatique, qui ne doit pas charger les autres.
+        #[qinvokable]
+        #[cxx_name = "reconnecter"]
+        fn reconnecter(self: Pin<&mut Boite>);
 
         /// Prépare une rédaction à partir d'un message du dossier ouvert.
         /// `mode` : « repondre », « repondre_tous », « transferer » ou
@@ -4307,7 +4317,11 @@ impl qobject::Boite {
             .collect();
         let courant = self.courant.clone();
         for compte in comptes {
-            let mut commandes = vec![Commande::Arborescence];
+            // Une veille entière, et non plus la seule arborescence : la
+            // boîte de réception d'un compte que l'on ne regarde pas, ou de la
+            // boîte de réception unifiée, n'était pas relue — le bouton
+            // semblait sans effet (30/10/2026).
+            let mut commandes = vec![Commande::Veille];
             if let Some((c, chemin, _)) = courant.as_ref() {
                 if *c == compte {
                     commandes.push(Commande::OuvrirDossier(chemin.clone()));
@@ -4320,6 +4334,22 @@ impl qobject::Boite {
             } else if self.identites.contains_key(&compte) {
                 self.as_mut().lancer(compte, commandes);
             }
+        }
+    }
+
+    pub fn reconnecter(mut self: Pin<&mut Self>) {
+        let mut comptes: Vec<i64> =
+            self.identites.keys().copied().filter(|compte| !self.sessions.contains_key(compte)).collect();
+        comptes.sort_unstable();
+        let courant = self.courant.clone();
+        for compte in comptes {
+            // La connexion relit d'elle-même la boîte de réception ; le
+            // dossier affiché, s'il est de ce compte, suit.
+            let commandes = match courant.as_ref() {
+                Some((c, chemin, _)) if *c == compte => vec![Commande::OuvrirDossier(chemin.clone())],
+                _ => Vec::new(),
+            };
+            self.as_mut().lancer(compte, commandes);
         }
     }
 
@@ -6121,6 +6151,26 @@ impl Travail {
                     }
                     self.remettre(issue);
                 }
+                // La boîte de réception, quand elle n'est pas le dossier
+                // ouvert : un compte que l'on ne regarde pas, ou la boîte de
+                // réception unifiée, ne la voyaient changer que par la
+                // notification du serveur (IDLE) ; qu'elle manque, et le
+                // courrier n'arrivait plus qu'au redémarrage — la pastille
+                // comptait des messages que la liste ne montrait pas
+                // (30/10/2026). Son `SELECT` dit s'il y a du neuf : elle n'est
+                // relue qu'alors. Avant le dossier ouvert, qui reste ainsi
+                // sélectionné.
+                if e.ouvert.as_deref() != Some("INBOX") {
+                    let relire = match reception_a_change(&mut e.client, &e.magasin, compte) {
+                        Ok(relire) => relire,
+                        Err(err) => return Some(echec("reseau", format!("veille : {err}"), &err)),
+                    };
+                    if relire {
+                        if let Err(err) = synchro::synchroniser(&mut e.client, &e.magasin, compte, "INBOX") {
+                            return Some(echec("reseau", format!("veille : {err}"), &err));
+                        }
+                    }
+                }
                 match e.ouvert.clone() {
                     Some(chemin) => Some(match synchro::synchroniser(&mut e.client, &e.magasin, compte, &chemin) {
                         Ok(bilan) if bilan.change_la_liste() => Issue::Dossier { chemin, veille: true },
@@ -6228,6 +6278,24 @@ enum Reveil {
     /// L'interface a lâché la session.
     Fermee,
     Perdue(Issue),
+}
+
+/// Vrai si la boîte de réception a changé depuis sa dernière lecture : son
+/// `SELECT` annonce une autre UIDVALIDITY, un autre UIDNEXT ou un autre
+/// nombre de messages que l'index. Léger — ni drapeaux ni en-têtes —, et à
+/// jour : le `STATUS` d'une boîte que la session tient sélectionnée peut ne
+/// pas l'être (RFC 3501, § 6.3.10) ; au banc, il ne voyait pas le message
+/// arrivé.
+fn reception_a_change(client: &mut Client, magasin: &Magasin, compte: i64) -> Result<bool, Echec> {
+    let Ok(id) = magasin.dossier_id(compte, "INBOX") else {
+        return Ok(false);
+    };
+    let Some(local) = magasin.dossier(id)? else {
+        return Ok(false);
+    };
+    let (messages, _, _) = magasin.statistiques_dossier(id)?;
+    let etat = client.selectionner("INBOX", None)?.etat;
+    Ok(etat.uid_validity != local.uid_validity || etat.uid_next != local.uid_next || etat.messages != messages)
 }
 
 /// Dossier qu'un compte surveille en `IDLE` : celui qu'on y a ouvert, à défaut

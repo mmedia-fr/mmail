@@ -5488,6 +5488,22 @@ ApplicationWindow {
         onTriggered: fenetre.validerGlissement()
     }
 
+    // Reconnexion automatique : une session perdue (réseau coupé, poste sorti
+    // de veille, serveur qui ferme) restait perdue jusqu'à un geste de
+    // l'utilisateur, et le courrier n'arrivait plus qu'au redémarrage de
+    // MMail (30/10/2026). Une minute après, les comptes sans session se
+    // rouvrent ; un nouvel échec reprogramme l'essai.
+    Timer {
+        id: minuterieReconnexion
+        interval: 60 * 1000
+        onTriggered: boite.reconnecter()
+    }
+
+    function prevoirReconnexion() {
+        if (!minuterieReconnexion.running)
+            minuterieReconnexion.start()
+    }
+
     function retirerDeLaListe(uids) {
         var retires = {}
         for (var u in enDeplacement)
@@ -6168,6 +6184,11 @@ ApplicationWindow {
             // juste après l'affichage ou pendant le chargement du message.
             if (essai.scenario === "non-lu")
                 scenarios.lancerScenarioNonLu()
+            // Scénario « veille-reception » : la boîte de réception d'un compte
+            // que l'on ne regarde pas, par la veille, « Actualiser » et la
+            // reconnexion automatique (banc LIVRAISON=1, SANS_IDLE=1).
+            if (essai.scenario === "veille-reception")
+                scenarios.lancerScenarioVeilleReception()
             // Scénario « lu-differe » (0.6.9) : marquage « lu » après un délai,
             // ou jamais.
             if (essai.scenario === "lu-differe")

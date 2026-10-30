@@ -79,6 +79,14 @@ Menu {
             }
         }
     }
+    // Comme « Afficher en groupes » d'Outlook (0.6.29) : la liste regroupée
+    // par date de réception, « Aujourd'hui », « Hier »…
+    MenuItem {
+        text: qsTr("Regrouper les messages par date")
+        checkable: true
+        checked: reglages.groupesDates
+        onTriggered: reglages.groupesDates = checked
+    }
     MenuSeparator {}
     MenuItem {
         text: qsTr("Notifier le nouveau courrier")

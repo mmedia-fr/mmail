@@ -79,6 +79,14 @@ de projet interne.
   les comptes s'affiche en pastille sur l'icône de MMail dans la barre des
   tâches (Windows ; compteur du lanceur sous Linux) ; la boîte de réception
   d'un compte qu'on ne regarde pas est surveillée en continu (IDLE) ;
+- **groupes par date** (0.6.29), comme Outlook : la liste se range sous des
+  intitulés selon la date de réception — « Aujourd'hui », « Hier »,
+  « Avant-hier », le nom des autres jours de la semaine (qui commence le
+  lundi), « La semaine dernière », « Il y a deux semaines », « Il y a trois
+  semaines », « Plus tôt ce mois-ci », « Le mois dernier », « Plus ancien » ;
+  dans un dossier, dans « Toutes les BàL » et dans une recherche triée par
+  date. Les intitulés suivent le jour (« Aujourd'hui » devient « Hier » passé
+  minuit) ; « Affichage › Regrouper les messages par date » les retire ;
 - **gros dossiers** : la liste s'affiche dès sa première page (une vingtaine
   de millisecondes pour 40 000 messages), le reste suit par paquets sans figer
   la fenêtre ; de même en sortant d'une recherche ;
@@ -231,7 +239,11 @@ de projet interne.
   choisi dans la fenêtre de Windows, il lui échappait. Un programme ou un
   script (`.exe`, `.js`, `.bat`…) ne s'ouvre pas depuis MMail, il s'enregistre ;
 - **zoom propre à chaque colonne** : Ctrl + molette sur la colonne, ou Ctrl +,
-  Ctrl − et Ctrl 0 sur la dernière colonne survolée ; pincement au doigt ;
+  Ctrl − et Ctrl 0 sur la dernière colonne survolée ; pincement au doigt. Au
+  volet de lecture comme dans la fenêtre d'un message, il grossit le message
+  — en-tête et corps —, pas les boutons : barre d'actions, pièces jointes,
+  bandeaux des images et des invitations gardent la taille de l'apparence
+  (0.6.29) ;
 - **quatre apparences**, celles de MMdedit : classique (Windows 9x), moderne
   (M-Media), système, et MMEDIA, aux couleurs du site mmedia.fr — en-tête en
   bandeau nuit, boutons en pastilles, non-lus en pastilles rouges, dossier et

@@ -2508,6 +2508,127 @@ QtObject {
         })
     }
 
+    /// Scénario « groupes-dates » (0.6.29) : la liste regroupée par date de
+    /// réception. 1 : les groupes de dates choisies, pour trois jours de
+    /// référence — un vendredi (la semaine du changement d'heure derrière
+    /// lui), un dimanche, un lundi qui ouvre le mois ; 2 : la boîte de
+    /// réception de un@ (banc DATES=1 : messages reçus de 1 à 400 jours plus
+    /// tôt) — chaque ligne porte le groupe de sa date, chaque groupe est d'un
+    /// seul tenant, leurs intitulés sont à l'écran ; 3 : « Regrouper les
+    /// messages par date » les retire, puis les rend ; 4 : une recherche triée
+    /// par expéditeur n'en a pas, triée par date si. Avec MMAIL_DOSSIER à
+    /// « garder », la liste reste ouverte, groupée, pour une capture.
+    function lancerScenarioGroupesDates() {
+        var suivi = { echecs: 0 }
+        var bilan = function(texte, bon) {
+            if (!bon)
+                suivi.echecs += 1
+            console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
+        }
+        var vendredi = new Date(2026, 9, 30, 15, 0)
+        var dimanche = new Date(2026, 10, 1, 11, 0)
+        var lundi = new Date(2026, 10, 2, 9, 0)
+        var cas = [
+            [vendredi, new Date(2026, 9, 31, 8, 0), "Aujourd'hui"],
+            [vendredi, new Date(2026, 9, 30, 0, 0), "Aujourd'hui"],
+            [vendredi, new Date(2026, 9, 29, 23, 59), "Hier"],
+            [vendredi, new Date(2026, 9, 28, 0, 0), "Avant-hier"],
+            [vendredi, new Date(2026, 9, 27, 23, 59), "Mardi"],
+            [vendredi, new Date(2026, 9, 26, 0, 0), "Lundi"],
+            [vendredi, new Date(2026, 9, 25, 23, 59), "La semaine dernière"],
+            [vendredi, new Date(2026, 9, 19, 0, 0), "La semaine dernière"],
+            [vendredi, new Date(2026, 9, 18, 12, 0), "Il y a deux semaines"],
+            [vendredi, new Date(2026, 9, 5, 0, 0), "Il y a trois semaines"],
+            [vendredi, new Date(2026, 9, 4, 12, 0), "Plus tôt ce mois-ci"],
+            [vendredi, new Date(2026, 8, 1, 0, 0), "Le mois dernier"],
+            [vendredi, new Date(2026, 7, 31, 23, 59), "Plus ancien"],
+            [vendredi, new Date(0), "Plus ancien"],
+            [dimanche, new Date(2026, 9, 29, 12, 0), "Jeudi"],
+            [dimanche, new Date(2026, 9, 26, 0, 0), "Lundi"],
+            [dimanche, new Date(2026, 9, 25, 23, 0), "La semaine dernière"],
+            [lundi, new Date(2026, 10, 1, 20, 0), "Hier"],
+            [lundi, new Date(2026, 9, 31, 8, 0), "Avant-hier"],
+            [lundi, new Date(2026, 9, 30, 8, 0), "La semaine dernière"],
+            [lundi, new Date(2026, 9, 26, 0, 0), "La semaine dernière"],
+            [lundi, new Date(2026, 9, 25, 12, 0), "Il y a deux semaines"],
+            [lundi, new Date(2026, 9, 12, 0, 0), "Il y a trois semaines"],
+            [lundi, new Date(2026, 9, 11, 23, 0), "Le mois dernier"],
+            [lundi, new Date(2026, 8, 30, 12, 0), "Plus ancien"]
+        ]
+        var faux = []
+        for (var i = 0; i < cas.length; ++i) {
+            var g = groupeDate(cas[i][1].getTime() / 1000, bornesGroupes(cas[i][0]))
+            if (g !== cas[i][2])
+                faux.push(dateLongue(cas[i][1].toISOString()) + " le " + dateLongue(cas[i][0].toISOString())
+                          + " : « " + g + " » au lieu de « " + cas[i][2] + " »")
+        }
+        bilan("bornes : " + (cas.length - faux.length) + "/" + cas.length + " dates à leur groupe"
+              + (faux.length > 0 ? " — " + faux.join(" ; ") : ""), faux.length === 0)
+
+        // Intitulés de groupe à l'écran, de haut en bas.
+        var intitules = function() {
+            var v = colonneListe.vueMessages
+            var enfants = v.contentItem.children
+            var vus = []
+            for (var k = 0; k < enfants.length; ++k) {
+                var e = enfants[k]
+                if (e.section !== undefined && e.visible && e.y + e.height > v.contentY && e.y < v.contentY + v.height)
+                    vus.push({ y: e.y, texte: e.section })
+            }
+            vus.sort(function(a, b) { return a.y - b.y })
+            return vus.map(function(x) { return x.texte })
+        }
+        plusTard(8000, function() {
+            ouvrirDossier(comptesConnus[0].compte, "INBOX")
+            plusTard(5000, function() {
+                var bornes = bornesGroupes()
+                var suite = []
+                var mal = 0
+                for (var r = 0; r < modeleMessages.count; ++r) {
+                    var l = modeleMessages.get(r)
+                    if (l.groupe !== groupeDate(l.h, bornes))
+                        mal += 1
+                    if (suite.length === 0 || suite[suite.length - 1] !== l.groupe)
+                        suite.push(l.groupe)
+                }
+                var uniques = suite.filter(function(x, n) { return suite.indexOf(x) === n })
+                bilan("liste : " + modeleMessages.count + " messages, groupes " + suite.join(" | ")
+                      + (mal > 0 ? " — " + mal + " ligne(s) au mauvais groupe" : ""),
+                      mal === 0 && uniques.length === suite.length && uniques.length >= 6)
+                var ecran = intitules()
+                bilan("intitulés à l'écran : " + ecran.join(" | "),
+                      ecran.length >= 3 && ecran.every(function(t, n) { return t === suite[n] }))
+                reglages.groupesDates = false
+                plusTard(1000, function() {
+                    bilan("option retirée : section « " + colonneListe.vueMessages.section.property + " », "
+                          + intitules().length + " intitulé(s)",
+                          colonneListe.vueMessages.section.property === "" && intitules().length === 0)
+                    reglages.groupesDates = true
+                    plusTard(1000, function() {
+                        bilan("option rendue : " + intitules().length + " intitulé(s)", intitules().length >= 3)
+                        lancerRecherche("Essai")
+                        trierRecherche("expediteur")
+                        plusTard(3000, function() {
+                            bilan("recherche triée par expéditeur : " + intitules().length + " intitulé(s)",
+                                  !groupesVisibles && intitules().length === 0)
+                            trierRecherche("recents")
+                            plusTard(1000, function() {
+                                bilan("recherche triée par date : " + intitules().join(" | "),
+                                      groupesVisibles && intitules().length >= 1)
+                                quitterRecherche()
+                                plusTard(3000, function() {
+                                    console.log("scenario: groupes-dates " + (suivi.echecs === 0 ? "OK" : "ECHEC (" + suivi.echecs + ")"))
+                                    if (identifiantsEssai.dossier !== "garder")
+                                        Qt.quit()
+                                })
+                            })
+                        })
+                    })
+                })
+            })
+        })
+    }
+
     /// Scénario « marges » (0.6.23) : « Affichage › Marges du message », ses
     /// trois choix l'un après l'autre, dans le volet de lecture et dans la
     /// fenêtre du message. Le texte doit se décaler de la marge choisie, vers
@@ -2962,6 +3083,62 @@ QtObject {
             }
         })
         attente.start()
+    }
+
+    /// Scénario « zoom-lecture » (0.6.29) : le zoom du volet de lecture grossit
+    /// le message, pas les boutons. « Devis joint » (banc PIECE=1) affiché, le
+    /// zoom passe à 1,5 : le corps et l'objet grossissent d'autant ; le bouton
+    /// « Répondre » et le bandeau des pièces jointes gardent leur taille.
+    function lancerScenarioZoomLecture() {
+        var suivi = { echecs: 0 }
+        var bilan = function(texte, bon) {
+            if (!bon)
+                suivi.echecs += 1
+            console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
+        }
+        var mesurer = function() {
+            var b = objetNomme(colonneLecture, "boutonRepondre")
+            var p = objetNomme(colonneLecture, "bandeauPieces")
+            return { bouton: b ? b.font.pointSize : -1, hauteur: b ? b.height : -1,
+                     pieces: p && p.visible ? p.font.pointSize : -1,
+                     corps: colonneLecture.vueCorps.font.pointSize,
+                     objet: colonneLecture.sujetAffiche.font.pointSize }
+        }
+        var zoomAvant = reglages.zoomMessage
+        plusTard(8000, function() {
+            poserZoom("message", 1)
+            ouvrirDossier(comptesConnus[0].compte, "INBOX")
+            plusTard(4000, function() {
+                var i = -1
+                for (var k = 0; k < modeleMessages.count; ++k)
+                    if (modeleMessages.get(k).sujet === "Devis joint")
+                        i = k
+                if (i < 0) {
+                    bilan("« Devis joint » absent (banc PIECE=1 ?)", false)
+                    Qt.quit()
+                    return
+                }
+                choisir(i, 0)
+                plusTard(4000, function() {
+                    var avant = mesurer()
+                    poserZoom("message", 1.5)
+                    plusTard(1000, function() {
+                        var apres = mesurer()
+                        var dire = function(nom) { return nom + " " + avant[nom] + " → " + apres[nom] }
+                        var proche = function(a, b) { return Math.abs(a - b) < 0.01 }
+                        bilan("boutons : " + dire("bouton") + " pt, " + dire("hauteur") + " px",
+                              avant.bouton > 0 && apres.bouton === avant.bouton && apres.hauteur === avant.hauteur)
+                        bilan("pièces jointes : " + dire("pieces") + " pt", avant.pieces > 0 && apres.pieces === avant.pieces)
+                        bilan("corps : " + dire("corps") + " pt", proche(apres.corps, avant.corps * 1.5))
+                        bilan("objet : " + dire("objet") + " pt", proche(apres.objet, avant.objet * 1.5))
+                        poserZoom("message", zoomAvant)
+                        console.log("scenario: zoom-lecture " + (suivi.echecs === 0 ? "OK" : "ECHEC (" + suivi.echecs + ")"))
+                        if (identifiantsEssai.dossier !== "garder")
+                            Qt.quit()
+                    })
+                })
+            })
+        })
     }
 
     /// Premier objet nommé `nom` sous `racine` (objectName), ou null.

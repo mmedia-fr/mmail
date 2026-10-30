@@ -442,7 +442,9 @@ ApplicationWindow {
         Pane {
             Layout.fillWidth: true
             visible: !fenetreMessage.source && fenetreMessage.html && fenetreMessage.bloquees > 0
-            font.pointSize: fenetre.tailleMessage
+            // Bandeaux et boutons hors du zoom du message (0.6.29), comme au
+            // volet de lecture.
+            font.pointSize: fenetre.tailleBase
             padding: 4
             background: Rectangle { color: "#e8f0fb" }
             GridLayout {
@@ -474,7 +476,7 @@ ApplicationWindow {
         Pane {
             Layout.fillWidth: true
             visible: !fenetreMessage.source && fenetreMessage.pieces.length > 0
-            font.pointSize: fenetre.tailleMessage
+            font.pointSize: fenetre.tailleBase
             padding: 6
             background: Rectangle { color: fenetre.palette.window }
             ColumnLayout {
@@ -506,7 +508,7 @@ ApplicationWindow {
                                 text: lignePieceFenetre.genre.libelle
                                 color: "#ffffff"
                                 font.bold: true
-                                font.pointSize: fenetre.tailleMessage * 0.7
+                                font.pointSize: fenetre.tailleBase * 0.7
                             }
                         }
                         Label {

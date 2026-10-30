@@ -82,10 +82,15 @@ ColumnLayout {
 
     HoverHandler { onHoveredChanged: if (hovered) fenetre.colonneActive = "message" }
 
+    // Le zoom du volet (Ctrl + molette, pincement) grossit le message — son
+    // en-tête et son corps —, pas les boutons qui l'entourent : barre
+    // d'actions, bandeaux des pièces jointes, des images et des invitations
+    // restent à la taille de l'apparence, comme dans Outlook (0.6.29, demande
+    // de Manu du 30/10). Les éléments de l'en-tête portent leur taille.
     ToolBar {
         Layout.fillWidth: true
         visible: fenetre.uidCourant > 0
-        font.pointSize: fenetre.tailleMessage
+        font.pointSize: fenetre.tailleBase
         leftPadding: 8
         rightPadding: 8
         // Les actions sur leur ligne, au-dessus de l'objet, comme dans
@@ -110,6 +115,7 @@ ColumnLayout {
                     onClicked: fenetre.rediger("brouillon")
                 }
                 BoutonAction {
+                    objectName: "boutonRepondre"
                     visible: !fenetre.dossierDeReprise
                     text: qsTr("Répondre")
                     onClicked: fenetre.rediger("repondre")
@@ -186,6 +192,7 @@ ColumnLayout {
                 text: fenetre.importanceCourante > 0 ? qsTr("Importance haute") : qsTr("Importance basse")
                 color: fenetre.importanceCourante > 0 ? fenetre.couleurAlerte : "#1a4480"
                 font.bold: true
+                font.pointSize: fenetre.tailleMessage
             }
             // Catégories du message (0.6.15), à leur nom : un clic cherche
             // les messages de la même catégorie.
@@ -255,7 +262,7 @@ ColumnLayout {
         readonly property bool active: fenetre.invitation.planification !== false
         Layout.fillWidth: true
         visible: fenetre.uidCourant > 0 && !fenetre.sourceVisible && methode.length > 0
-        font.pointSize: fenetre.tailleMessage
+        font.pointSize: fenetre.tailleBase
         padding: 8
         background: Rectangle {
             color: Qt.tint(fenetre.palette.base, "#263a7bd5")
@@ -333,9 +340,10 @@ ColumnLayout {
     // Double-clic sur la ligne : comme « Ouvrir » (0.6.12, demande de
     // Fabienne).
     Pane {
+        objectName: "bandeauPieces"
         Layout.fillWidth: true
         visible: fenetre.uidCourant > 0 && !fenetre.sourceVisible && fenetre.pieces.length > 0
-        font.pointSize: fenetre.tailleMessage
+        font.pointSize: fenetre.tailleBase
         padding: 6
         background: Rectangle { color: fenetre.palette.window }
         ColumnLayout {
@@ -388,7 +396,7 @@ ColumnLayout {
                             text: lignePiece.genre.libelle
                             color: "white"
                             font.bold: true
-                            font.pointSize: fenetre.tailleMessage * 0.6
+                            font.pointSize: fenetre.tailleBase * 0.6
                         }
                     }
                     Label {
@@ -435,7 +443,7 @@ ColumnLayout {
         Layout.fillWidth: true
         visible: fenetre.uidCourant > 0 && !fenetre.sourceVisible && fenetre.corpsHtml
                  && fenetre.imagesBloquees > 0
-        font.pointSize: fenetre.tailleMessage
+        font.pointSize: fenetre.tailleBase
         padding: 4
         background: Rectangle { color: "#e8f0fb" }
         // Au téléphone, les boutons passent sous le texte.

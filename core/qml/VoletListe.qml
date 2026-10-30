@@ -210,6 +210,41 @@ ColumnLayout {
             keyNavigationEnabled: false
             delegate: ligneMessage
 
+            // Groupes par date, comme Outlook (0.6.29) : un intitulé au-dessus
+            // du premier message de chaque groupe (cf. fenetre.bornesGroupes).
+            section.property: fenetre.groupesVisibles ? "groupe" : ""
+            section.criteria: ViewSection.FullString
+            section.delegate: Rectangle {
+                id: enTeteGroupe
+                required property string section
+                width: vueMessages.width
+                height: intituleGroupe.implicitHeight + 12
+                color: fenetre.palette.base
+                Accessible.role: Accessible.StaticText
+                Accessible.name: section
+                Label {
+                    id: intituleGroupe
+                    anchors.left: parent.left
+                    anchors.leftMargin: 10
+                    anchors.right: parent.right
+                    anchors.bottom: parent.bottom
+                    anchors.bottomMargin: 4
+                    text: enTeteGroupe.section
+                    color: fenetre.texteAccent
+                    font.bold: true
+                    font.pointSize: fenetre.tailleListe * 0.85
+                    elide: Text.ElideRight
+                }
+                Rectangle {
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.bottom: parent.bottom
+                    height: 1
+                    color: fenetre.texteAccent
+                    opacity: 0.35
+                }
+            }
+
             Keys.onUpPressed: function(touche) {
                 fenetre.deplacerCurseur(-1, touche.modifiers & Qt.ShiftModifier)
             }

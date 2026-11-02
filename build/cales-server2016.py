@@ -44,7 +44,7 @@ CALES = [
 
 SOURCE_UIA = r"""
 /* Cale de MMail (0.6.39) : UiaRaiseNotificationEvent, absente de Windows 10
- * avant 1709 (Server 2016). La vraie si le système l'a, sinon rien. */
+ * avant 1709 (Server 2016). La vraie si le systeme l'a, sinon rien. */
 #include <windows.h>
 typedef HRESULT(WINAPI *Notification)(void *, int, int, BSTR, BSTR);
 static Notification vraie;
@@ -175,7 +175,8 @@ def construire(dossier, nom_cale, dll, fonctions, renvois, ecrites, travail):
     subprocess.run([outil("cl"), "/nologo", "/c", "/O2", "/GS-", "/Fo" + objet, source], check=True)
     sortie = os.path.join(dossier, nom_cale + ".dll")
     subprocess.run([outil("link"), "/nologo", "/DLL", "/NOENTRY", "/NODEFAULTLIB", "/MACHINE:X64",
-                    "/DEF:" + definition, "/OUT:" + sortie, objet, "kernel32.lib"], check=True)
+                    "/DEF:" + definition, "/OUT:" + sortie, "/IMPLIB:" + os.path.join(travail, nom_cale + ".lib"),
+                    objet, "kernel32.lib"], check=True)
     return sortie
 
 

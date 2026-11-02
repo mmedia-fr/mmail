@@ -116,8 +116,10 @@ class Pe:
                 if v == 0:
                     break
                 if v & (1 << 63):
-                    raise ValueError(f"{self.chemin} : import par numéro, non pris en charge")
-                fonctions.append(self.chaine(self.fichier(v & 0xFFFFFFFF) + 2))
+                    # Import par numéro (ws2_32, oleaut32…) : sans nom à renvoyer.
+                    fonctions.append(f"#{v & 0xFFFF}")
+                else:
+                    fonctions.append(self.chaine(self.fichier(v & 0xFFFFFFFF) + 2))
                 t += 8
             res.append((self.chaine(pos_nom), pos_nom, fonctions))
             d += 20
@@ -128,6 +130,8 @@ class Pe:
         if len(trouve) != 1:
             raise ValueError(f"{self.chemin} : {len(trouve)} imports de {ancien}")
         nom, pos, fonctions = trouve[0]
+        if any(f.startswith("#") for f in fonctions):
+            raise ValueError(f"{self.chemin} : import par numéro depuis {ancien}, non pris en charge")
         neuf = nouveau.encode("ascii")
         if len(neuf) > len(nom):
             raise ValueError(f"{nouveau} plus long que {nom}")

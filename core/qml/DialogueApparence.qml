@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // « Affichage › Apparence › Créer mon apparence… » (0.6.37) : chacun met
 // MMail à ses couleurs. On part d'une apparence existante, on choisit le fond,
-// le bandeau, l'accent et la sélection ; les encres posées dessus (texte du
+// le bandeau, l'accent, la sélection et, depuis la 0.6.32, la couleur des
+// liens des messages ; les encres posées dessus (texte du
 // bandeau, de la sélection, des repères) sont déduites pour rester lisibles
 // (cf. Main.qml, `avecApparencePerso`). L'apparence « Personnelle » rejoint
 // la liste ; le réglage suit la sauvegarde de la configuration.
@@ -24,7 +25,7 @@ Dialog {
     readonly property var bases: ["mmedia", "pomme", "outlook", "moderne", "nuit"]
     property string base: "mmedia"
     // Couleurs choisies ; vide : celle de l'apparence de base.
-    property var choix: ({ fond: "", bandeau: "", accent: "", surbrillance: "" })
+    property var choix: ({ fond: "", bandeau: "", accent: "", surbrillance: "", lien: "" })
     // Ce qui était là à l'ouverture : « Annuler » le rend.
     property string persoAvant: ""
     property string apparenceAvant: ""
@@ -34,7 +35,8 @@ Dialog {
         { cle: "fond", nom: qsTr("Fond des fenêtres") },
         { cle: "bandeau", nom: qsTr("Bandeau de l'en-tête") },
         { cle: "accent", nom: qsTr("Accent (filets, pastilles, boutons)") },
-        { cle: "surbrillance", nom: qsTr("Sélection") }
+        { cle: "surbrillance", nom: qsTr("Sélection") },
+        { cle: "lien", nom: qsTr("Liens des messages") }
     ]
 
     function ouvrir() {
@@ -44,8 +46,8 @@ Dialog {
         try { p = persoAvant ? JSON.parse(persoAvant) : null } catch (e) { p = null }
         base = p && bases.indexOf(p.base) >= 0 ? p.base : (bases.indexOf(fenetre.apparence) >= 0 ? fenetre.apparence : "mmedia")
         choix = p ? { fond: p.fond || "", bandeau: p.bandeau || "", accent: p.accent || "",
-                      surbrillance: p.surbrillance || "" }
-                  : { fond: "", bandeau: "", accent: "", surbrillance: "" }
+                      surbrillance: p.surbrillance || "", lien: p.lien || "" }
+                  : { fond: "", bandeau: "", accent: "", surbrillance: "", lien: "" }
         open()
     }
 
@@ -54,6 +56,9 @@ Dialog {
         if (choix[cle])
             return choix[cle]
         var j = fenetre.jeuxDeBase[base]
+        // Liens : ceux de la page blanche des messages (cf. couleurLienPage).
+        if (cle === "lien")
+            return !j.sombre && j.lien ? j.lien : "#0563c1"
         return j[cle] || (cle === "bandeau" ? "" : j.surbrillance)
     }
 

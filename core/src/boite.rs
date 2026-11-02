@@ -699,6 +699,13 @@ pub mod qobject {
         #[cxx_name = "reconnecter"]
         fn reconnecter(self: Pin<&mut Boite>);
 
+        /// Passe un compte sans session en « erreur », avec son motif, sans
+        /// tenter de connexion : secret absent du coffre au démarrage. La
+        /// fenêtre du compte ne s'ouvre qu'à l'appui sur « erreur » (0.6.31).
+        #[qinvokable]
+        #[cxx_name = "marquerErreur"]
+        fn marquer_erreur(self: Pin<&mut Boite>, compte: i32, motif: &QString);
+
         /// Prépare une rédaction à partir d'un message du dossier ouvert.
         /// `mode` : « repondre », « repondre_tous », « transferer » ou
         /// « brouillon » ; `adresses` : les autres adresses d'envoi du compte
@@ -4351,6 +4358,20 @@ impl qobject::Boite {
             };
             self.as_mut().lancer(compte, commandes);
         }
+    }
+
+    pub fn marquer_erreur(mut self: Pin<&mut Self>, compte: i32, motif: &QString) {
+        let compte = compte as i64;
+        // Une session ouverte entre-temps l'emporte : le compte est prêt.
+        if self.sessions.contains_key(&compte) {
+            return;
+        }
+        {
+            let mut noyau = self.as_mut().rust_mut();
+            noyau.etats.insert(compte, Etat::Erreur);
+            noyau.motifs.insert(compte, motif.to_string());
+        }
+        self.as_mut().reviser();
     }
 
     pub fn preparer(self: Pin<&mut Self>, uid: i32, mode: &QString, jeton: &QString, adresses: &QString) -> bool {

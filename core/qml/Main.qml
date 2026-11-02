@@ -2803,9 +2803,21 @@ ApplicationWindow {
                 boite.connecter(compte.hote, compte.adresse, secret)
                 return
             }
-            if (erreur.length > 0)
-                messageEtat.texte = qsTr("Coffre du système indisponible : %1").arg(erreur)
-            fenetre.demanderCompte(compte, "")
+            // « Se connecter… » : la fenêtre, comme avant. Au démarrage, le
+            // compte passe en « erreur », sans fenêtre (0.6.31) : un appui sur
+            // la mention l'ouvre.
+            if (fenetre.gesteEnCours(compte.adresse)) {
+                if (erreur.length > 0)
+                    messageEtat.texte = qsTr("Coffre du système indisponible : %1").arg(erreur)
+                fenetre.finGeste(compte.adresse)
+                fenetre.demanderCompte(compte, "")
+                return
+            }
+            var motif = erreur.length > 0 ? qsTr("coffre du système indisponible (%1)").arg(erreur)
+                      : fenetre.compteOAuth(compte.auth) ? qsTr("connexion absente du coffre du système")
+                      : qsTr("mot de passe absent du coffre du système")
+            boite.marquerErreur(compte.id, motif)
+            fenetre.signalerErreurCompte(compte.adresse, motif)
         }
         onEcrit: function(cle, ok, erreur) {
             if (!ok)
@@ -2840,6 +2852,48 @@ ApplicationWindow {
 
     // ------------------------------------------------------------- logique
     property var dernierDemande: null
+
+    // Connexions lancées par la personne (ajout ou modification d'un compte,
+    // « Se connecter… », reconnexion à Microsoft ou à Google), par adresse :
+    // un refus y rouvre la fenêtre du compte. Une connexion automatique
+    // (démarrage, réveil, reconnexion après une coupure) ne fait que passer
+    // le compte en « erreur » ; un appui sur la mention ouvre sa fenêtre
+    // (0.6.31, note de Manu du 28/10 : la fenêtre revenait à chaque lancement).
+    property var gestesCompte: ({})
+
+    function marquerGeste(adresse) {
+        if (adresse)
+            gestesCompte[adresse.toLowerCase()] = true
+    }
+
+    function gesteEnCours(adresse) {
+        return !!adresse && gestesCompte[adresse.toLowerCase()] === true
+    }
+
+    function finGeste(adresse) {
+        if (adresse)
+            delete gestesCompte[adresse.toLowerCase()]
+    }
+
+    /// Connexion automatique en échec : le motif dans la barre d'état, et
+    /// ce que la personne peut y faire.
+    function signalerErreurCompte(adresse, motif) {
+        messageEtat.texte = qsTr("%1 : %2. Cliquez sur « erreur » à côté du compte pour vous reconnecter.")
+                .arg(adresse).arg(motif)
+        if (essai)
+            console.log("scenario: erreur signalée |", adresse, "|", motif)
+    }
+
+    /// Appui sur la mention « erreur » d'un compte : sa fenêtre, motif
+    /// compris (« Se reconnecter… » pour un compte Microsoft ou Google).
+    function ouvrirErreurCompte(id, motif) {
+        var c = compteParId(id)
+        if (!c)
+            return
+        // Le noyau note « étape — motif » : l'étape ne dit rien à la personne.
+        var note = motif.replace(/^(identifiants|connexion|reseau) — /, "")
+        demanderCompte(c, note)
+    }
 
     function cle(adresse, hote) {
         return adresse + "@" + hote
@@ -3467,6 +3521,7 @@ ApplicationWindow {
             return
         }
         dernierDemande = { id: dlgCompte.compteId, adresse: adresse, hote: hote }
+        marquerGeste(adresse)
         if (dlgCompte.caseMemoriser.checked)
             secretsAConserver[adresse] = { cle: cle(adresse, hote), motDePasse: motDePasse }
         else
@@ -3528,6 +3583,7 @@ ApplicationWindow {
                     effacerDiscretement(nouvelle)
             }
             messageEtat.texte = qsTr("Connexion de %1…").arg(adresse)
+            marquerGeste(adresse)
             boite.connecter(hote, adresse, motDePasse)
             return
         }
@@ -3542,6 +3598,7 @@ ApplicationWindow {
         if (reglages.memoriser) {
             changementsServeur[adresse] = hote
             messageEtat.texte = qsTr("Connexion de %1 à %2…").arg(adresse).arg(hote)
+            marquerGeste(adresse)
             coffre.lire(ancienne)
         } else {
             demanderCompte({ id: id, adresse: adresse, hote: hote, hoteEnvoi: hoteEnvoi },
@@ -3806,7 +3863,11 @@ ApplicationWindow {
         }
     }
 
-    function connecterCompte(compte) {
+    /// `geste` : « Se connecter… », un refus rouvre la fenêtre du compte ;
+    /// sans lui (démarrage), le compte passe en « erreur ».
+    function connecterCompte(compte, geste) {
+        if (geste)
+            marquerGeste(compte.adresse)
         var connu = compte.id > 0 ? compteParId(compte.id) : null
         // Un compte Microsoft ou Google ne vit que par son jeton au coffre.
         if (reglages.memoriser || (connu && compteOAuth(connu.auth)))
@@ -3881,6 +3942,7 @@ ApplicationWindow {
 
     /// La page de Google, dans le navigateur.
     function ouvrirGoogle(indice) {
+        marquerGeste(indice)
         var url = boite.connecterGoogle(indice)
         if (url.length === 0) {
             messageEtat.texte = qsTr("Connexion à Google impossible : %1").arg(boite.erreur)
@@ -3942,6 +4004,7 @@ ApplicationWindow {
             messageEtat.texte = qsTr("Comptes Microsoft indisponibles dans cette version de MMail.")
             return
         }
+        marquerGeste(indice)
         var url = boite.connecterMicrosoft(indice)
         if (url.length === 0) {
             messageEtat.texte = qsTr("Connexion à Microsoft impossible : %1").arg(boite.erreur)
@@ -6401,6 +6464,11 @@ ApplicationWindow {
                 var attente = Qt.createQmlObject('import QtQuick; Timer { interval: 6000 }', fenetre)
                 attente.triggered.connect(function() { scenarios.etapeScenarioBrouillonAuto(null, 0) })
                 attente.start()
+            }
+            if (essai.scenario === "compte-erreur") {
+                var attenteErreur = Qt.createQmlObject('import QtQuick; Timer { interval: 8000 }', fenetre)
+                attenteErreur.triggered.connect(function() { scenarios.etapeScenarioCompteErreur(0) })
+                attenteErreur.start()
             }
             // Scénario « horsligne » : aucune connexion ; le profil d'une
             // session précédente doit suffire à lire la boîte de réception.

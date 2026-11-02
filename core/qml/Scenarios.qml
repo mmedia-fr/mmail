@@ -27,6 +27,75 @@ QtObject {
         return Math.round((Date.now() - depart) / 5000) * 5
     }
 
+    /// Scénario « compte-erreur » (0.6.31) : une connexion automatique en
+    /// échec — secret absent du coffre au démarrage, mot de passe refusé —
+    /// laisse le compte en « erreur » sans ouvrir sa fenêtre ; un appui sur
+    /// la mention l'ouvre ; après un geste de la personne, un refus la fait
+    /// revenir, comme avant ; le bon mot de passe reconnecte le compte.
+    function etapeScenarioCompteErreur(etape) {
+        var comptes = fenetre.listeComptes()
+        var c = null
+        for (var i = 0; i < comptes.length; ++i)
+            if (comptes[i].adresse === identifiantsEssai.utilisateur)
+                c = comptes[i]
+        if (!c) {
+            console.log("scenario: ECHEC compte d'essai absent")
+            Qt.quit()
+            return
+        }
+        var ligne = function() {
+            for (var k = 0; k < modeleArborescence.count; ++k) {
+                var l = modeleArborescence.get(k)
+                if (l.genre === "compte" && l.compte === c.id)
+                    return l
+            }
+            return null
+        }
+        var decrire = function() {
+            var l = ligne()
+            return l ? l.etat + " | motif « " + l.motif + " »" : "ligne absente"
+        }
+        var suite = function(n, delai) {
+            var t = Qt.createQmlObject('import QtQuick; Timer { interval: ' + delai + ' }', fenetre)
+            t.triggered.connect(function() { etapeScenarioCompteErreur(n) })
+            t.start()
+        }
+        if (etape === 0) {
+            // Démarrage simulé : session fermée, secret relu au coffre — que
+            // le banc n'a pas.
+            boite.deconnecter(c.id)
+            reglages.memoriser = true
+            fenetre.connecterCompte(c)
+            suite(1, 3000)
+        } else if (etape === 1) {
+            console.log("scenario: démarrage sans secret | fenêtre", dlgCompte.visible, "|", decrire())
+            // Refus du serveur pendant une connexion automatique.
+            boite.connecter(c.hote, c.adresse, "mauvais-mot-de-passe")
+            suite(2, 5000)
+        } else if (etape === 2) {
+            console.log("scenario: refus automatique | fenêtre", dlgCompte.visible, "|", decrire(),
+                        "| barre « " + messageEtat.texte + " »")
+            var l = ligne()
+            fenetre.ouvrirErreurCompte(c.id, l ? l.motif : "")
+            console.log("scenario: appui sur « erreur » | fenêtre", dlgCompte.visible,
+                        "| note « " + dlgCompte.noteCompte.text + " »")
+            // Geste de la personne : un mot de passe encore faux.
+            dlgCompte.champMotDePasse.text = "encore-faux"
+            dlgCompte.accept()
+            suite(3, 5000)
+        } else if (etape === 3) {
+            console.log("scenario: refus après un geste | fenêtre", dlgCompte.visible,
+                        "| note « " + dlgCompte.noteCompte.text + " »")
+            dlgCompte.champMotDePasse.text = identifiantsEssai.motDePasse
+            dlgCompte.accept()
+            suite(4, 5000)
+        } else {
+            console.log("scenario: reconnecté | fenêtre", dlgCompte.visible, "|", decrire(),
+                        "| gestes", JSON.stringify(fenetre.gestesCompte))
+            Qt.quit()
+        }
+    }
+
     /// Scénario « double-clic » (0.6.16) : la fenêtre du message a reçu son
     /// corps. Marquage non lu puis lu depuis la fenêtre, fermeture ; puis
     /// l'option « Ouvrir une réponse », et les brouillons.

@@ -47,6 +47,7 @@ Page {
     // Lus par les scénarios d'essai (cf. Scenarios.qml, « majuscule »).
     readonly property alias corps: corpsRedaction
     readonly property alias mefCorps: mef
+    readonly property alias correcteurOrtho: correcteurCorps
     readonly property alias animations: animationsRedaction
     readonly property alias boutonSignature: boutonSignature
     property string brouillonChemin: ""
@@ -464,6 +465,11 @@ Page {
         fenetre.majEnvois()
         garder(true)
         signaler(qsTr("Envoi suspendu : le message ne repartira qu'à « Envoyer »."), false)
+    }
+
+    /// Relit l'orthographe de tout le corps : un mot ajouté au dictionnaire.
+    function rafraichirOrthographe() {
+        correcteurCorps.rafraichir()
     }
 
     /// `auto` : enregistrement périodique, et non demandé.
@@ -958,12 +964,23 @@ Page {
             }
             TextArea {
                 id: corpsRedaction
-                // « Coller » colle aussi une image ou des fichiers, comme Ctrl+V.
+                // « Coller » colle aussi une image ou des fichiers, comme Ctrl+V ;
+                // sur un mot souligné, ses suggestions (0.6.36).
                 MenuSaisie {
+                    correcteur: correcteurCorps
                     coller: function() {
                         if (!redac.collerImage())
                             corpsRedaction.paste()
                     }
+                }
+                // Correcteur d'orthographe (0.6.36) : les mots inconnus du
+                // dictionnaire, soulignés en rouge, sans toucher au texte.
+                Correcteur {
+                    id: correcteurCorps
+                    document: corpsRedaction.textDocument
+                    orthographe: dictionnaire
+                    actif: reglagesRedaction.orthographe && !redac.chargement
+                    curseur: corpsRedaction.cursorPosition
                 }
                 textFormat: TextEdit.RichText
                 wrapMode: TextEdit.Wrap

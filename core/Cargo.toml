@@ -15,6 +15,9 @@ crate-type = ["staticlib", "rlib"]
 cxx = "1.0"
 cxx-qt = "0.10"
 cxx-qt-lib = { version = "0.10", features = ["qt_full"] }
+# Correcteur d'orthographe (0.6.36) : dictionnaires au format de Hunspell, sans
+# bibliothèque du système ; dictionnaire français de Grammalecte dans dictionnaires/.
+spellbook = "0.4.2"
 
 # TLS en pur Rust : pas d'OpenSSL à compiler pour Android.
 rustls = "0.23"

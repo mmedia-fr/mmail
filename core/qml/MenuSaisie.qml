@@ -22,6 +22,12 @@ TapHandler {
     // Collage propre au champ (le corps d'une rédaction colle aussi les
     // images) ; nul : celui du champ, permis s'il y a du texte à coller.
     property var coller: null
+    // Correcteur d'orthographe du champ (0.6.36, cf. cpp/correcteur.h) : au
+    // clic droit sur un mot souligné, ses suggestions en tête du menu.
+    property var correcteur: null
+    // Le mot souligné sous le clic : {debut, fin, mot}, ou nul.
+    property var faute: null
+    property var suggestions: []
     // Mot de passe : ni couper ni copier, comme le champ lui-même.
     readonly property bool masque: champ.echoMode !== undefined && champ.echoMode !== TextInput.Normal
 
@@ -37,11 +43,29 @@ TapHandler {
     property int fin: 0
     property bool agi: false
 
-    onTapped: {
+    onTapped: function(point) {
         debut = champ.selectionStart
         fin = champ.selectionEnd
         agi = false
+        faute = null
+        suggestions = []
+        if (correcteur && correcteur.actif) {
+            var trouve = correcteur.motA(champ.positionAt(point.position.x, point.position.y))
+            if (trouve.length > 0) {
+                faute = JSON.parse(trouve)
+                suggestions = fenetre.suggestionsOrthographe(faute.mot)
+            }
+        }
         menu.popup()
+    }
+
+    /// Remplace le mot souligné par la suggestion choisie.
+    function corriger(texte) {
+        var f = faute
+        agi = true
+        champ.forceActiveFocus()
+        correcteur.remplacer(f.debut, f.fin, texte)
+        champ.cursorPosition = f.debut + texte.length
     }
 
     function agir(action) {
@@ -58,6 +82,36 @@ TapHandler {
         // Le focus rendu au champ, pour continuer à la frappe (Entrée lance
         // la recherche collée).
         onClosed: if (clicDroit.agi) clicDroit.champ.forceActiveFocus()
+        // Suggestions du correcteur, en tête (0.6.36).
+        Instantiator {
+            model: clicDroit.suggestions
+            delegate: MenuItem {
+                text: modelData
+                font.bold: true
+                onTriggered: clicDroit.corriger(modelData)
+            }
+            onObjectAdded: function(index, objet) { menuChamp.insertItem(index, objet) }
+            onObjectRemoved: function(index, objet) { menuChamp.removeItem(objet) }
+        }
+        MenuItem {
+            text: qsTr("Aucune suggestion")
+            enabled: false
+            visible: clicDroit.faute !== null && clicDroit.suggestions.length === 0
+            height: visible ? implicitHeight : 0
+        }
+        MenuItem {
+            text: qsTr("Ajouter « %1 » au dictionnaire").arg(clicDroit.faute ? clicDroit.faute.mot : "")
+            visible: clicDroit.faute !== null
+            height: visible ? implicitHeight : 0
+            onTriggered: {
+                clicDroit.agi = true
+                fenetre.ajouterAuDictionnaire(clicDroit.faute.mot)
+            }
+        }
+        MenuSeparator {
+            visible: clicDroit.faute !== null
+            height: visible ? implicitHeight : 0
+        }
         EntreeMenu {
             text: qsTr("Annuler")
             raccourci: qsTr("Ctrl+Z")

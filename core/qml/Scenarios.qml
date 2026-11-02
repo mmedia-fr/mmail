@@ -27,6 +27,38 @@ QtObject {
         return Math.round((Date.now() - depart) / 5000) * 5
     }
 
+    /// Scénario « orthographe » (0.6.36) : un mot fautif du corps est repéré
+    /// (et pas un mot juste, ni l'élision), le dictionnaire propose la bonne
+    /// forme, la suggestion choisie remplace le mot.
+    function etapeScenarioOrthographe(etape) {
+        if (etape === 0) {
+            var compte = boite.compteCourant > 0 ? boite.compteCourant : comptesConnus[0].compte
+            var r = ouvrirRedaction(compte)
+            r.pret()
+            r.remplir({ a: "deux@essai.test", objet: "Orthographe", mode: "nouveau",
+                        texte: "Bonjour, je vous envoie la factrue de l’école." })
+            essai.redactionOrtho = r
+            var pause = Qt.createQmlObject('import QtQuick; Timer { interval: 3000 }', fenetre)
+            pause.triggered.connect(function() { etapeScenarioOrthographe(1) })
+            pause.start()
+            return
+        }
+        var r1 = essai.redactionOrtho
+        var c = r1.correcteurOrtho
+        var texte = r1.mefCorps.texte()
+        var fautif = c.motA(texte.indexOf("factrue") + 2)
+        console.log("scenario: mot fautif |", fautif)
+        console.log("scenario: mot juste |", c.motA(texte.indexOf("Bonjour") + 2) === "",
+                    "| élision |", c.motA(texte.indexOf("école") + 2) === "")
+        console.log("scenario: suggestions |", JSON.stringify(suggestionsOrthographe("factrue")))
+        if (fautif.length > 0) {
+            var f = JSON.parse(fautif)
+            c.remplacer(f.debut, f.fin, "facture")
+        }
+        console.log("scenario: corrigé |", r1.mefCorps.texte().indexOf("la facture de") >= 0, "|", c.motA(texte.indexOf("Bonjour") + 2) === "")
+        Qt.quit()
+    }
+
     /// Scénario « import-csv » (0.6.35, banc CARNET=1) : MMAIL_DOSSIER désigne
     /// un export CSV d'Outlook ; ses contacts rejoignent le carnet « Personnel »
     /// du serveur, sauf celui dont une adresse y est déjà.

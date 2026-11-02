@@ -109,6 +109,52 @@ QtObject {
         }
     }
 
+    /// Scénario « hors-connexion » (0.6.34) : sans serveur d'envoi joignable,
+    /// le message reste caché dans la boîte d'envoi au lieu de revenir en
+    /// échec ; la barre d'état le compte. Le banc démarre ensuite son serveur
+    /// d'envoi (« scenario: demarrer-smtp ») ; au nouvel essai, le message part
+    /// et la rédaction se défait.
+    function etapeScenarioHorsConnexion(etape) {
+        var attendre = function(condition, ensuite) {
+            var essais = 60
+            var t = Qt.createQmlObject('import QtQuick; Timer { interval: 1000; repeat: true }', fenetre)
+            t.triggered.connect(function() {
+                if (condition() || --essais <= 0) {
+                    t.stop()
+                    ensuite()
+                }
+            })
+            t.start()
+        }
+        if (etape === 0) {
+            var compte = boite.compteCourant > 0 ? boite.compteCourant : comptesConnus[0].compte
+            var r = ouvrirRedaction(compte)
+            r.pret()
+            r.remplir({ a: "deux@essai.test", objet: "Hors connexion", mode: "nouveau", texte: "Partira au retour du réseau." })
+            essai.redactionAttente = r
+            r.envoyer(false)
+            attendre(function() { return r.enAttente || (!r.enEnvoi && r.conteneur.visible) },
+                     function() { etapeScenarioHorsConnexion(1) })
+        } else if (etape === 1) {
+            var r1 = essai.redactionAttente
+            console.log("scenario: sans serveur d'envoi | en attente", r1.enAttente, "| fenêtre", r1.conteneur.visible,
+                        "| en cours", envoisEnCours, "| en attente", envoisEnAttente, "| barre « " + etatSynchro() + " »")
+            console.log("scenario: demarrer-smtp")
+            var pause = Qt.createQmlObject('import QtQuick; Timer { interval: 4000 }', fenetre)
+            pause.triggered.connect(function() {
+                renvoyerEnAttente(0)
+                attendre(function() { return !redactions[r1.jeton] },
+                         function() { etapeScenarioHorsConnexion(2) })
+            })
+            pause.start()
+        } else {
+            var r2 = essai.redactionAttente
+            console.log("scenario: retour du réseau | rédaction défaite", !redactions[r2.jeton],
+                        "| en attente", envoisEnAttente, "| en cours", envoisEnCours, "| barre « " + etatSynchro() + " »")
+            Qt.quit()
+        }
+    }
+
     /// Scénario « double-clic » (0.6.16) : la fenêtre du message a reçu son
     /// corps. Marquage non lu puis lu depuis la fenêtre, fermeture ; puis
     /// l'option « Ouvrir une réponse », et les brouillons.

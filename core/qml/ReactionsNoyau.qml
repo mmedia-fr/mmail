@@ -77,6 +77,9 @@ Connections {
         if (fenetre.modificationEnCours && fenetre.modificationEnCours.id === compte)
             fenetre.modificationEnCours = null
         fenetre.finGeste(adresse)
+        // Le réseau est revenu pour ce compte : ses messages en attente
+        // repartent (0.6.34).
+        fenetre.renvoyerEnAttente(compte)
         if (reglagesSauvegarde.aChercher && !fenetre.rechercheSauvegarde) {
             fenetre.rechercheSauvegarde = true
             boite.chercherSauvegardes(compte)
@@ -524,6 +527,17 @@ Connections {
         }
         if (fenetre.essai && fenetre.essai.scenario === "agenda-ecriture")
             console.log("scenario: écriture", fenetre.essai.etape || 0, ok, JSON.stringify(message))
+    }
+
+    // Pas parti faute de réseau (0.6.34) : la rédaction attend, cachée.
+    function onEnvoiEnAttente(jeton, message) {
+        if (fenetre.essai && fenetre.essai.scenario)
+            console.log("scenario: envoi en attente :", message)
+        var r = fenetre.redactions[jeton]
+        if (r)
+            r.mettreEnAttente(message)
+        else
+            messageEtat.texte = message
     }
 
     function onEchecRedaction(jeton, message) {

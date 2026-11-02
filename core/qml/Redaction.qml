@@ -37,6 +37,10 @@ Page {
     // Envoyée, fenêtre fermée en attendant l'issue (0.6.22) : elle se défait
     // une fois le message parti, et revient, intacte, s'il n'a pas pu partir.
     property bool enEnvoi: false
+    // Pas parti faute de réseau (0.6.34) : la rédaction reste cachée, dans la
+    // boîte d'envoi, et repart seule au retour du réseau (cf. Main.qml,
+    // `renvoyerEnAttente`).
+    property bool enAttente: false
     property bool fermerApresEnregistrement: false
     property bool afficherCopies: false
     property bool miseEnForme: reglagesRedaction.miseEnForme
@@ -426,6 +430,42 @@ Page {
             echouer(boite.erreur.length > 0 ? boite.erreur : qsTr("Envoi impossible."))
     }
 
+    /// Le message n'est pas parti faute de réseau (0.6.34) : il attend, caché,
+    /// le retour du réseau ; rien n'est perdu si MMail se ferme d'ici là.
+    function mettreEnAttente(message) {
+        occupe = false
+        enEnvoi = false
+        enAttente = true
+        fenetre.fermetureApresEnvoi = false
+        garder(true)
+        fenetre.majEnvois()
+        var objet = champObjet.text.trim()
+        fenetre.annoncer(objet.length > 0
+                         ? qsTr("Hors connexion : « %1 » partira au retour du réseau.").arg(objet)
+                         : qsTr("Hors connexion : le message partira au retour du réseau."), false)
+        signaler(message, false)
+    }
+
+    /// Nouvel essai d'un message en attente du réseau.
+    function renvoyer() {
+        if (!enAttente || occupe)
+            return
+        enAttente = false
+        envoyer(true)
+    }
+
+    /// Sort le message de la boîte d'envoi : sa fenêtre revient, il ne
+    /// repart plus seul.
+    function sortirDeLAttente() {
+        if (!enAttente)
+            return
+        enAttente = false
+        conteneur.montrerRedaction()
+        fenetre.majEnvois()
+        garder(true)
+        signaler(qsTr("Envoi suspendu : le message ne repartira qu'à « Envoyer »."), false)
+    }
+
     /// `auto` : enregistrement périodique, et non demandé.
     function enregistrer(auto) {
         if (occupe)
@@ -516,7 +556,7 @@ Page {
         // `enEnvoi` : MMail fermé avant l'issue, la reprise prévient que le
         // message a pu partir.
         var etat = JSON.stringify({ compte: c ? c.compte : 0, miseEnForme: miseEnForme, enEnvoi: enEnvoi,
-                                    contenu: contenu() })
+                                    enAttente: enAttente, contenu: contenu() })
         if (etat !== etatGarde && boite.garderRedaction(idGarde, etat))
             etatGarde = etat
     }

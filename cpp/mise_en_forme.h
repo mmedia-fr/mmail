@@ -10,6 +10,8 @@
 
 #include <QtCore/QFileInfo>
 #include <QtCore/QHash>
+#include <QtCore/QList>
+#include <QtCore/QPair>
 #include <QtCore/QObject>
 #include <QtCore/QPointer>
 #include <QtCore/QString>
@@ -44,6 +46,12 @@ class MiseEnForme : public QObject
   Q_PROPERTY(bool souligne READ souligne NOTIFY etatChange)
   Q_PROPERTY(bool puces READ puces NOTIFY etatChange)
   Q_PROPERTY(bool numeros READ numeros NOTIFY etatChange)
+  // Couleur des liens d'un message lu (0.6.32) : sans elle, Qt prend celle
+  // de la palette du système, trop pâle sur la page blanche d'un message.
+  // Elle passe par la feuille de style par défaut du document, que les styles
+  // du message lui-même emportent : un lien que l'expéditeur a coloré garde
+  // sa couleur. Non posée : rien ne change (rédaction, signature).
+  Q_PROPERTY(QColor couleurLien READ couleurLien WRITE setCouleurLien NOTIFY couleurLienChange)
 
 public:
   using QObject::QObject;
@@ -54,8 +62,20 @@ public:
     if (m_document == document)
       return;
     m_document = document;
+    poserFeuilleLiens();
     Q_EMIT documentChange();
     Q_EMIT etatChange();
+  }
+  QColor couleurLien() const { return m_couleurLien; }
+  void setCouleurLien(const QColor& c)
+  {
+    if (c == m_couleurLien)
+      return;
+    const QColor avant = m_couleurLien;
+    m_couleurLien = c;
+    poserFeuilleLiens();
+    recolorerLiens(avant);
+    Q_EMIT couleurLienChange();
   }
   int curseurTexte() const { return m_curseur; }
   int debut() const { return m_debut; }
@@ -473,6 +493,7 @@ public:
 Q_SIGNALS:
   void documentChange();
   void etatChange();
+  void couleurLienChange();
 
 private:
   /// Taille d'une image telle que le message l'écrit, gardée sur son format
@@ -485,6 +506,44 @@ private:
   int m_largeurBornee = -1;
 
   QTextDocument* texte_() const { return m_document ? m_document->textDocument() : nullptr; }
+
+  /// Feuille de style par défaut du document : la couleur des liens, pour le
+  /// prochain HTML posé.
+  void poserFeuilleLiens()
+  {
+    QTextDocument* doc = texte_();
+    if (!doc || !m_couleurLien.isValid())
+      return;
+    doc->setDefaultStyleSheet(QStringLiteral("a[href] { color: %1; }").arg(m_couleurLien.name()));
+  }
+
+  /// Le message affiché suit tout de suite : ses liens à l'ancienne couleur
+  /// par défaut prennent la nouvelle, ceux que l'expéditeur a colorés restent.
+  void recolorerLiens(const QColor& avant)
+  {
+    QTextDocument* doc = texte_();
+    if (!doc || !avant.isValid() || !m_couleurLien.isValid())
+      return;
+    // Plages relevées d'abord : changer un format pendant le parcours
+    // invaliderait les fragments.
+    QList<QPair<int, int>> plages;
+    for (QTextBlock b = doc->begin(); b.isValid(); b = b.next()) {
+      for (auto it = b.begin(); !it.atEnd(); ++it) {
+        const QTextFragment fr = it.fragment();
+        const QTextCharFormat cf = fr.charFormat();
+        if (fr.isValid() && cf.isAnchor() && !cf.anchorHref().isEmpty() && cf.foreground().color() == avant)
+          plages.append({fr.position(), fr.position() + fr.length()});
+      }
+    }
+    QTextCharFormat f;
+    f.setForeground(m_couleurLien);
+    for (const auto& [debut, fin] : plages) {
+      QTextCursor c(doc);
+      c.setPosition(debut);
+      c.setPosition(fin, QTextCursor::KeepAnchor);
+      c.mergeCharFormat(f);
+    }
+  }
 
   /// Taille d'un GIF de plus d'une image, vide pour tout autre fichier ;
   /// gardée par fichier, date et poids.
@@ -561,6 +620,7 @@ private:
   }
 
   QPointer<QQuickTextDocument> m_document;
+  QColor m_couleurLien;
   int m_curseur = 0;
   int m_debut = 0;
   int m_fin = 0;

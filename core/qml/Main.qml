@@ -1769,6 +1769,15 @@ ApplicationWindow {
                 elide: Text.ElideMiddle
                 maximumLineCount: 1
                 Layout.maximumWidth: fenetre.width * 0.5
+                // Messages en attente du réseau : un clic les rouvre (0.6.34).
+                font.underline: fenetre.envoisEnAttente > 0
+                TapHandler {
+                    enabled: fenetre.envoisEnAttente > 0
+                    onTapped: fenetre.montrerEnAttente()
+                }
+                ToolTip.visible: survolAttente.hovered && fenetre.envoisEnAttente > 0
+                ToolTip.text: qsTr("Ces messages repartiront seuls au retour du réseau. Cliquez pour les rouvrir.")
+                HoverHandler { id: survolAttente }
             }
         }
     }
@@ -1789,6 +1798,8 @@ ApplicationWindow {
     // Rédactions fermées dès « Envoyer » dont l'envoi n'a pas encore
     // abouti (0.6.22), cf. Redaction.envoyer.
     property int envoisEnCours: 0
+    // Messages pas partis faute de réseau, qui repartiront seuls (0.6.34).
+    property int envoisEnAttente: 0
     // Fenêtre principale fermée pendant un envoi : MMail se ferme dès qu'il
     // a abouti (un second clic ferme tout de suite).
     property bool fermetureApresEnvoi: false
@@ -1926,6 +1937,13 @@ ApplicationWindow {
     }
 
     function etatSynchro() {
+        if (envoisEnAttente > 0)
+            return accord(envoisEnAttente, qsTr("message en attente du réseau"), qsTr("messages en attente du réseau"))
+                   + (envoisEnCours > 0 || activite.length > 0 ? "  ·  " + etatActivite() : "")
+        return etatActivite()
+    }
+
+    function etatActivite() {
         if (envoisEnCours > 0 && activite.length === 0)
             return accord(envoisEnCours, qsTr("message en cours d'envoi"), qsTr("messages en cours d'envoi"))
         if (activite.length > 0)
@@ -2292,7 +2310,7 @@ ApplicationWindow {
                 onLoaded: item.conteneur = voletRedaction
             }
             onClosed: {
-                if (redaction && redaction.enEnvoi)
+                if (redaction && (redaction.enEnvoi || redaction.enAttente))
                     return
                 fenetre.oublierRedaction(redaction ? redaction.jeton : "")
                 Qt.callLater(function() { voletRedaction.destroy() })
@@ -5092,10 +5110,35 @@ ApplicationWindow {
     function proposerReprise() {
         var liste = []
         try { liste = JSON.parse(boite.redactionsGardees()) } catch (e) { liste = [] }
-        if (liste.length === 0)
+        // Pas partis faute de réseau (0.6.34) : ils reprennent leur place dans
+        // la boîte d'envoi, sans rien demander ; on sait qu'ils ne sont pas
+        // partis.
+        var autres = []
+        for (var i = 0; i < liste.length; ++i) {
+            if (liste[i].enAttente === true && !liste[i].enEnvoi)
+                remettreEnAttente(liste[i])
+            else
+                autres.push(liste[i])
+        }
+        if (autres.length === 0)
             return
-        redactionsRetrouvees = liste
+        redactionsRetrouvees = autres
         dlgReprise.open()
+    }
+
+    /// Un message gardé en attente du réseau par la session précédente : sa
+    /// rédaction, cachée, rejoint la boîte d'envoi (0.6.34).
+    function remettreEnAttente(g) {
+        var r = ouvrirRedaction(g.compte || (comptesConnus.length > 0 ? comptesConnus[0].compte : 0))
+        r.idGarde = g.id
+        var p = g.contenu || {}
+        p.mode = "brouillon"
+        r.remplir(p)
+        r.modifie = true
+        r.enAttente = true
+        r.conteneur.cacherRedaction()
+        majEnvois()
+        r.signaler(qsTr("En attente du réseau depuis le %1.").arg(dateLongue(g.modifie * 1000)), false)
     }
 
     function rouvrirRedactions() {
@@ -5132,12 +5175,46 @@ ApplicationWindow {
     /// (0.6.22) ; la dernière partie, MMail se ferme si on l'a demandé.
     function majEnvois() {
         var n = 0
-        for (var jeton in redactions)
+        var attente = 0
+        for (var jeton in redactions) {
             if (redactions[jeton] && redactions[jeton].enEnvoi)
                 n += 1
+            if (redactions[jeton] && redactions[jeton].enAttente)
+                attente += 1
+        }
         envoisEnCours = n
+        envoisEnAttente = attente
         if (n === 0 && fermetureApresEnvoi)
             Qt.callLater(Qt.quit)
+    }
+
+    /// Nouvel essai des messages en attente du réseau (0.6.34) : ceux du
+    /// compte `compte`, qui vient de se connecter, ou tous (0).
+    function renvoyerEnAttente(compte) {
+        for (var jeton in redactions) {
+            var r = redactions[jeton]
+            var c = r && r.enAttente ? r.compteChoisi() : null
+            if (c && (compte === 0 || c.compte === compte))
+                r.renvoyer()
+        }
+    }
+
+    /// Clic sur « en attente du réseau » dans la barre d'état : les messages
+    /// reviennent, et ne repartent plus seuls.
+    function montrerEnAttente() {
+        for (var jeton in redactions)
+            if (redactions[jeton] && redactions[jeton].enAttente)
+                redactions[jeton].sortirDeLAttente()
+    }
+
+    // Toutes les minutes tant qu'un message attend le réseau ; la reconnexion
+    // d'un compte relance aussi les siens (cf. ReactionsNoyau, onConnecte).
+    Timer {
+        id: minuterieEnAttente
+        interval: 60 * 1000
+        repeat: true
+        running: fenetre.envoisEnAttente > 0
+        onTriggered: fenetre.renvoyerEnAttente(0)
     }
 
     /// `mode` : « nouveau », « repondre », « repondre_tous », « transferer »
@@ -5767,7 +5844,7 @@ ApplicationWindow {
         target: Qt.application
         function onAboutToQuit() {
             for (var jeton in fenetre.redactions)
-                fenetre.redactions[jeton].garder(fenetre.redactions[jeton].enEnvoi)
+                fenetre.redactions[jeton].garder(fenetre.redactions[jeton].enEnvoi || fenetre.redactions[jeton].enAttente)
         }
     }
 
@@ -6399,6 +6476,11 @@ ApplicationWindow {
                 var attenteCompte = Qt.createQmlObject('import QtQuick; Timer { interval: 8000 }', fenetre)
                 attenteCompte.triggered.connect(function() { scenarios.etapeScenarioBrouillonCompte(null, 0, 0, "") })
                 attenteCompte.start()
+            }
+            if (essai.scenario === "hors-connexion") {
+                var attenteHors = Qt.createQmlObject('import QtQuick; Timer { interval: 8000 }', fenetre)
+                attenteHors.triggered.connect(function() { scenarios.etapeScenarioHorsConnexion(0) })
+                attenteHors.start()
             }
             if (essai.scenario === "brouillon-auto") {
                 var attente = Qt.createQmlObject('import QtQuick; Timer { interval: 6000 }', fenetre)

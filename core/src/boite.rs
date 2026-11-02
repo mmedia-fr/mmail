@@ -1120,6 +1120,13 @@ pub mod qobject {
         #[cxx_name = "echecRedaction"]
         fn echec_redaction(self: Pin<&mut Boite>, jeton: &QString, message: &QString);
 
+        /// Envoi impossible faute de réseau, avant que le texte du message
+        /// ne parte (0.6.34) : il n'est pas parti, la rédaction attend le
+        /// retour du réseau pour repartir.
+        #[qsignal]
+        #[cxx_name = "envoiEnAttente"]
+        fn envoi_en_attente(self: Pin<&mut Boite>, jeton: &QString, message: &QString);
+
         /// Synchronisation des agendas terminée : `change` si la vue est à
         /// relire ; `erreurs` : une ligne par boîte en échec.
         #[qsignal]
@@ -1530,11 +1537,15 @@ enum Issue {
     Envoye { jeton: String, avertissement: String },
     /// Le fil d'envoi a fini : parti, ou `erreur`. Remise même si la session
     /// du compte a changé entre-temps — un message parti doit avoir sa suite.
-    Parti { redaction: Redaction, copie: Vec<u8>, erreur: Option<String> },
+    /// `hors_connexion` : l'erreur est une coupure du réseau d'avant la
+    /// remise du texte — le message n'est pas parti (0.6.34).
+    Parti { redaction: Redaction, copie: Vec<u8>, erreur: Option<String>, hors_connexion: bool },
     BrouillonEnregistre { jeton: String, uid: u32, compte: i64, chemin: String },
     Programme { jeton: String, echeance: i64 },
     DifferesEnvoyes { nombre: usize, erreurs: String },
     EchecRedaction { jeton: String, message: String },
+    /// Envoi impossible faute de réseau, le message n'est pas parti (0.6.34).
+    EnvoiEnAttente { jeton: String, message: String },
 }
 
 /// Session d'un compte, vue de l'interface.
@@ -5071,10 +5082,15 @@ impl qobject::Boite {
                 self.as_mut().reviser();
                 self.as_mut().envoye(&QString::from(&jeton), &QString::from(&avertissement));
             }
-            Issue::Parti { redaction, erreur: Some(message), .. } => {
-                self.as_mut().echec_redaction(&QString::from(&redaction.jeton), &QString::from(&message));
+            Issue::Parti { redaction, erreur: Some(message), hors_connexion, .. } => {
+                let jeton = QString::from(&redaction.jeton);
+                if hors_connexion {
+                    self.as_mut().envoi_en_attente(&jeton, &QString::from(&message));
+                } else {
+                    self.as_mut().echec_redaction(&jeton, &QString::from(&message));
+                }
             }
-            Issue::Parti { redaction, copie, erreur: None } => {
+            Issue::Parti { redaction, copie, erreur: None, .. } => {
                 // La suite passe par le fil du compte, rouvert au besoin.
                 let jeton = redaction.jeton.clone();
                 if !self.as_mut().envoyer(compte, Commande::ApresEnvoi { redaction, copie }) {
@@ -5088,6 +5104,9 @@ impl qobject::Boite {
             }
             Issue::EchecRedaction { jeton, message } => {
                 self.as_mut().echec_redaction(&QString::from(&jeton), &QString::from(&message));
+            }
+            Issue::EnvoiEnAttente { jeton, message } => {
+                self.as_mut().envoi_en_attente(&QString::from(&jeton), &QString::from(&message));
             }
             Issue::Vide { nombre } => {
                 // Le fil a déjà relu l'arborescence : les compteurs des dossiers
@@ -5660,8 +5679,15 @@ impl Travail {
     /// impossible, session perdue) : une rédaction ne doit pas rester « en
     /// cours d'envoi », ni une ligne masquée par un déplacement qui n'aura pas
     /// lieu, ni un marquage local que le serveur n'a pas reçu.
-    fn abandonner(&self, commande: Commande, motif: &str) {
+    /// `hors_connexion` : le serveur n'a pas pu être joint, ou la session a
+    /// été perdue — un message à envoyer attend alors le retour du réseau
+    /// (0.6.34) ; des identifiants refusés le rendent à la personne.
+    fn abandonner(&self, commande: Commande, motif: &str, hors_connexion: bool) {
         let issue = match commande {
+            Commande::Envoyer { redaction, .. } if hors_connexion => Issue::EnvoiEnAttente {
+                jeton: redaction.jeton,
+                message: format!("{motif} — le message n'est pas parti, il partira au retour du réseau"),
+            },
             Commande::Envoyer { redaction, .. } => Issue::EchecRedaction {
                 jeton: redaction.jeton,
                 message: format!("{motif} — le message n'est pas parti"),
@@ -5747,12 +5773,12 @@ impl Travail {
     }
 
     fn abandonner_toutes(&self, commandes: Vec<Commande>, cause: &Issue) {
-        let motif = match cause {
-            Issue::Echec { message, .. } => message.as_str(),
-            _ => "session perdue",
+        let (motif, hors_connexion) = match cause {
+            Issue::Echec { message, etape, .. } => (message.as_str(), *etape == "connexion" || *etape == "reseau"),
+            _ => ("session perdue", true),
         };
         for commande in commandes {
-            self.abandonner(commande, motif);
+            self.abandonner(commande, motif, hors_connexion);
         }
     }
 
@@ -6836,7 +6862,11 @@ impl Travail {
         };
         let retour = self.retour();
         let lance = thread::Builder::new().name("mmail-smtp".into()).spawn(move || {
-            let erreur = remettre_message(&id, &r.de, &f.destinataires, &f.envoi, r.accuse_remise).err().map(|x| {
+            let echec = remettre_message(&id, &r.de, &f.destinataires, &f.envoi, r.accuse_remise).err();
+            // Coupure du réseau avant le texte du message (0.6.34) : il n'est
+            // pas parti, il repartira seul.
+            let hors_connexion = echec.as_ref().is_some_and(|x| matches!(x, Erreur::Reseau(_)) && !smtp::incertain(x));
+            let erreur = echec.map(|x| {
                 // Coupure après le texte du message (0.6.22) : le dire, la
                 // rédaction rouverte proposerait sinon un double sans prévenir.
                 if smtp::incertain(&x) {
@@ -6845,7 +6875,7 @@ impl Travail {
                     format!("envoi : {x}")
                 }
             });
-            retour.remettre(Issue::Parti { redaction: r, copie: f.copie, erreur }, true);
+            retour.remettre(Issue::Parti { redaction: r, copie: f.copie, erreur, hors_connexion }, true);
         });
         match lance {
             Ok(_) => None,

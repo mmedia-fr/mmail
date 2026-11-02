@@ -39,6 +39,15 @@ de projet interne.
 - **mise en forme** à la rédaction — gras, italique, souligné, listes à
   puces ou numérotées, liens — envoyée en HTML avec sa version en texte brut ;
   « Mise en forme » décochée, le message part en texte brut ;
+- **envoi hors connexion** (0.6.34) : un message qui n'a pas pu partir faute
+  de réseau — serveur injoignable, connexion coupée avant que son texte ne
+  parte — reste dans la boîte d'envoi, sa fenêtre fermée, et repart seul au
+  retour du réseau : à la reconnexion de son compte, et toutes les minutes. La
+  barre d'état compte les messages en attente ; un clic les rouvre, et ils ne
+  repartent plus qu'à « Envoyer ». MMail fermé d'ici là, ils reprennent leur
+  place au lancement suivant. Une coupure après l'envoi du texte, qui laisse
+  ignorer s'il est parti, et un refus du serveur rouvrent la fenêtre avec le
+  motif, comme avant ;
 - **nom affiché et signature** par compte (menu « Comptes », « Nom et
   signature… »), ajoutée aux nouveaux messages, aux réponses, ou sur demande ;
 - **autres adresses d'envoi** d'un compte, proposées dans le champ « De » :

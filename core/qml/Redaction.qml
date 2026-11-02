@@ -938,7 +938,7 @@ Page {
                 Correcteur {
                     id: correcteurCorps
                     document: corpsRedaction.textDocument
-                    orthographe: orthographe
+                    orthographe: dictionnaire
                     actif: reglagesRedaction.orthographe && !redac.chargement
                     curseur: corpsRedaction.cursorPosition
                 }

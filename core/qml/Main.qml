@@ -365,8 +365,10 @@ ApplicationWindow {
     // Correcteur d'orthographe de la rédaction (0.6.36, cf. orthographe.rs et
     // cpp/correcteur.h) : le dictionnaire se lit dès le lancement, dans un fil
     // à part.
+    // Identifiant distinct du nom de la propriété « orthographe » du
+    // Correcteur : « orthographe: orthographe » s'y lierait à elle-même.
     Orthographe {
-        id: orthographe
+        id: dictionnaire
         Component.onCompleted: {
             poserAjoutes(reglagesRedaction.motsAjoutes)
             precharger()
@@ -375,7 +377,7 @@ ApplicationWindow {
 
     function suggestionsOrthographe(mot) {
         try {
-            return JSON.parse(orthographe.suggestions(mot))
+            return JSON.parse(dictionnaire.suggestions(mot))
         } catch (e) {
             return []
         }
@@ -388,7 +390,7 @@ ApplicationWindow {
         if (liste.indexOf(mot) < 0)
             liste.push(mot)
         reglagesRedaction.motsAjoutes = liste.join("\n")
-        orthographe.poserAjoutes(reglagesRedaction.motsAjoutes)
+        dictionnaire.poserAjoutes(reglagesRedaction.motsAjoutes)
         for (var jeton in redactions)
             if (redactions[jeton])
                 redactions[jeton].rafraichirOrthographe()

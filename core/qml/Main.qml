@@ -672,6 +672,12 @@ ApplicationWindow {
             j.texteAccent = lisibleSur(j.accent || j.surbrillance, j.base)
             j.rubrique = j.texteAccent
         }
+        // Liens (0.6.32) : la couleur choisie, sur la page blanche des
+        // messages (lienPage) et, rendue lisible, sur les surfaces de MMail.
+        if (p.lien) {
+            j.lienPage = p.lien
+            j.lien = lisibleSur(p.lien, j.base || "#ffffff")
+        }
         j.libelle = qsTr("Personnelle")
         var copie = Object.assign({}, jeux)
         copie["perso"] = j
@@ -691,6 +697,13 @@ ApplicationWindow {
     readonly property color accent: marque ? marque.accent : palette.highlight
     // Texte mis en valeur : objets non lus, jour courant, lien survolé.
     readonly property color texteAccent: marque ? marque.texteAccent : palette.highlight
+    // Liens d'un message, sur sa page blanche (0.6.32) : la couleur choisie
+    // dans « Créer mon apparence… », sinon celle de l'apparence si elle est
+    // faite pour un fond clair, sinon le bleu des liens d'Outlook et de Word
+    // (#0563c1, 6:1 sur blanc) ; ramenée au besoin à 4,5:1 au moins. Avant,
+    // Qt prenait celle du système, trop pâle (remarque de Manu, 02/11).
+    readonly property color couleurLienPage: lisibleSur(
+        valeurOu("lienPage", valeurOu("sombre", false) ? "" : valeurOu("lien", "")) || "#0563c1", "#ffffff")
     readonly property color couleurRubrique: marque ? marque.rubrique : palette.highlight
     readonly property color couleurAlerte: marque ? marque.alerte : "#c42b1c"
     readonly property string policeTitres: marque ? premierePolice(marque.titres) : font.family

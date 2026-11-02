@@ -577,6 +577,8 @@ ApplicationWindow {
                 MiseEnForme {
                     id: mef
                     document: vueCorps.textDocument
+                    // Liens lisibles sur la page blanche du message (0.6.32).
+                    couleurLien: fenetre.couleurLienPage
                 }
                 ImagesAnimees {
                     id: animationsFenetre

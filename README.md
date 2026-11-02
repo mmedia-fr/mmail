@@ -36,6 +36,15 @@ de projet interne.
   repris d'un double clic — un brouillon reste dans le compte où il a été écrit,
   même quand on change « De » (0.6.24) ; le dossier Brouillons affiche entre
   crochets le nombre de ses éléments, comme Outlook ;
+- **correcteur d'orthographe** (0.6.36) : à la rédaction, les mots inconnus du
+  dictionnaire sont soulignés en rouge — pas celui qu'on est en train de
+  taper —, et le clic droit sur l'un d'eux propose ses corrections et « Ajouter
+  au dictionnaire » (les mots ajoutés suivent la sauvegarde de la
+  configuration). Dictionnaire français de Grammalecte (version 7.7, licence
+  MPL 2.0, celui de LibreOffice et de Firefox), embarqué dans MMail : rien à
+  installer, rien ne quitte le poste. Sigles en capitales, mots à chiffres,
+  adresses web et de courriel ne sont pas vérifiés. « Réglages › Vérifier
+  l'orthographe en tapant » le coupe ;
 - **mise en forme** à la rédaction — gras, italique, souligné, listes à
   puces ou numérotées, liens — envoyée en HTML avec sa version en texte brut ;
   « Mise en forme » décochée, le message part en texte brut ;

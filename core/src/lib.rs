@@ -23,6 +23,7 @@ pub mod magasin;
 pub mod mise_a_jour;
 pub mod microsoft;
 pub mod oauth;
+pub mod orthographe;
 pub mod mise_en_page;
 pub mod pont_badge;
 pub mod pont_presse_papier;

@@ -15,7 +15,7 @@ fn main() {
     }
     let constructeur = CxxQtBuilder::new_qml_module(QmlModule::new("fr.mmedia.mmail").qml_files(qml))
         .qt_module("Qml")
-        .files(["src/socle.rs", "src/boite.rs", "src/pont_presse_papier.rs", "src/pont_badge.rs", "src/configuration.rs", "src/mise_a_jour.rs"]);
+        .files(["src/socle.rs", "src/boite.rs", "src/pont_presse_papier.rs", "src/pont_badge.rs", "src/configuration.rs", "src/mise_a_jour.rs", "src/orthographe.rs"]);
     // MSVC lit une source sans BOM dans la page de code du système (cp1252),
     // y compris le C++ que qmlcachegen tire du QML : un « é » des chaînes
     // compilées d'avance y devenait « Ã© » (« Deux Ã©tages », 0.6.20 sous

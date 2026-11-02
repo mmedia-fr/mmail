@@ -34,6 +34,13 @@ Menu {
         text: qsTr("Expéditeurs de confiance…")
         onTriggered: dlgExpediteursConfiance.open()
     }
+    // Correcteur d'orthographe de la rédaction (0.6.36).
+    MenuItem {
+        text: qsTr("Vérifier l'orthographe en tapant")
+        checkable: true
+        checked: reglagesRedaction.orthographe
+        onTriggered: reglagesRedaction.orthographe = checked
+    }
     MenuSeparator {}
     MenuItem {
         text: qsTr("Carnet d'adresses…")

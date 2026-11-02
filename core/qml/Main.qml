@@ -356,6 +356,42 @@ ApplicationWindow {
         property string signatures: "[]"
         property string adressesEnvoi: "{}"
         property bool miseEnForme: true
+        // Correcteur d'orthographe (0.6.36) : actif, et les mots ajoutés au
+        // dictionnaire, un par ligne — ils suivent la sauvegarde.
+        property bool orthographe: true
+        property string motsAjoutes: ""
+    }
+
+    // Correcteur d'orthographe de la rédaction (0.6.36, cf. orthographe.rs et
+    // cpp/correcteur.h) : le dictionnaire se lit dès le lancement, dans un fil
+    // à part.
+    Orthographe {
+        id: orthographe
+        Component.onCompleted: {
+            poserAjoutes(reglagesRedaction.motsAjoutes)
+            precharger()
+        }
+    }
+
+    function suggestionsOrthographe(mot) {
+        try {
+            return JSON.parse(orthographe.suggestions(mot))
+        } catch (e) {
+            return []
+        }
+    }
+
+    /// « Ajouter au dictionnaire » : le mot n'est plus souligné, dans aucune
+    /// rédaction ouverte.
+    function ajouterAuDictionnaire(mot) {
+        var liste = reglagesRedaction.motsAjoutes.split("\n").filter(function(m) { return m.length > 0 })
+        if (liste.indexOf(mot) < 0)
+            liste.push(mot)
+        reglagesRedaction.motsAjoutes = liste.join("\n")
+        orthographe.poserAjoutes(reglagesRedaction.motsAjoutes)
+        for (var jeton in redactions)
+            if (redactions[jeton])
+                redactions[jeton].rafraichirOrthographe()
     }
 
     // Sauvegarde de la configuration (0.5.10) : elle part chiffrée chez le
@@ -6399,6 +6435,11 @@ ApplicationWindow {
                 var attenteCompte = Qt.createQmlObject('import QtQuick; Timer { interval: 8000 }', fenetre)
                 attenteCompte.triggered.connect(function() { scenarios.etapeScenarioBrouillonCompte(null, 0, 0, "") })
                 attenteCompte.start()
+            }
+            if (essai.scenario === "orthographe") {
+                var attenteOrtho = Qt.createQmlObject('import QtQuick; Timer { interval: 8000 }', fenetre)
+                attenteOrtho.triggered.connect(function() { scenarios.etapeScenarioOrthographe(0) })
+                attenteOrtho.start()
             }
             if (essai.scenario === "brouillon-auto") {
                 var attente = Qt.createQmlObject('import QtQuick; Timer { interval: 6000 }', fenetre)

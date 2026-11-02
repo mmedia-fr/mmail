@@ -485,6 +485,13 @@ pub mod qobject {
         #[cxx_name = "repondreConfirmation"]
         fn repondre_confirmation(self: Pin<&mut Boite>, uid: i32, envoyer: bool) -> bool;
 
+        /// Désabonnement en un clic (RFC 8058, 0.6.30) : la demande part vers
+        /// `url` (https), sur un fil à part. Rend faux si l'adresse est
+        /// refusée. Issue : `desabonnementFait`.
+        #[qinvokable]
+        #[cxx_name = "desabonner"]
+        fn desabonner(self: Pin<&mut Boite>, url: &QString) -> bool;
+
         /// Envoie, sur chaque compte connecté, les messages différés arrivés à
         /// échéance. Issue : `differesEnvoyes`, s'il y en avait.
         #[qinvokable]
@@ -1138,6 +1145,12 @@ pub mod qobject {
         #[qsignal]
         #[cxx_name = "invitationRecue"]
         fn invitation_recue(self: Pin<&mut Boite>, uid: i32, invitation: &QString);
+
+        /// Demande de désabonnement en un clic terminée : `hote` est le
+        /// serveur qui l'a reçue ; `message` dit pourquoi elle a échoué.
+        #[qsignal]
+        #[cxx_name = "desabonnementFait"]
+        fn desabonnement_fait(self: Pin<&mut Boite>, ok: bool, hote: &QString, message: &QString);
 
         /// Sauvegarde la configuration du profil chez le service de M-Media
         /// (cf. `sauvegarde`) : une copie par compte connecté, chiffrée par
@@ -3481,6 +3494,27 @@ impl qobject::Boite {
             None
         };
         self.as_mut().envoyer(compte, Commande::Confirmer { chemin, uid: uid as u32, identifiants })
+    }
+
+    pub fn desabonner(mut self: Pin<&mut Self>, url: &QString) -> bool {
+        let url = url.to_string();
+        let Ok(cible) = crate::http::analyser_url(&url) else {
+            self.as_mut().set_erreur(QString::from(&format!("adresse de désabonnement refusée : {url}")));
+            return false;
+        };
+        let fil = self.qt_thread();
+        let lance = thread::Builder::new().name("mmail-desabonnement".into()).spawn(move || {
+            let issue = crate::desabonnement::demander(&url);
+            let _ = fil.queue(move |mut boite: Pin<&mut qobject::Boite>| {
+                let message = issue.as_ref().err().cloned().unwrap_or_default();
+                boite.as_mut().desabonnement_fait(issue.is_ok(), &QString::from(&cible.hote), &QString::from(&message));
+            });
+        });
+        if lance.is_err() {
+            self.as_mut().set_erreur(QString::from("impossible de lancer la demande de désabonnement"));
+            return false;
+        }
+        true
     }
 
     pub fn envoyer_differes(mut self: Pin<&mut Self>) {

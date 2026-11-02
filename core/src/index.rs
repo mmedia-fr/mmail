@@ -395,7 +395,7 @@ fn a_la_ligne(texte: &mut String) {
 
 /// Décode les entités HTML : numériques (`&#233;`, `&#xE9;`) et nommées les
 /// plus courantes. Une entité inconnue est laissée telle quelle.
-fn decoder_entites(texte: &str) -> String {
+pub(crate) fn decoder_entites(texte: &str) -> String {
     let mut sortie = String::with_capacity(texte.len());
     let mut reste = texte;
     while let Some(i) = reste.find('&') {
@@ -506,7 +506,7 @@ fn premier_contact(adresses: &Address<'_>) -> (String, String) {
 /// `{"de":…,"a":…,"cc":…,"date":…,"expediteur":…,"dmarcEchec":…}`.
 pub fn entete_affichable(brut: &[u8]) -> String {
     let Some(message) = MessageParser::default().parse(brut) else {
-        return r#"{"de":"","a":"","cc":"","date":"","expediteur":"","dmarcEchec":false}"#.to_string();
+        return r#"{"de":"","a":"","cc":"","date":"","expediteur":"","dmarcEchec":false,"desabonnement":null}"#.to_string();
     };
     let complets = |adresses: Option<&Address<'_>>| -> String {
         adresses
@@ -535,6 +535,8 @@ pub fn entete_affichable(brut: &[u8]) -> String {
         "date": message.date().map(|d| d.to_rfc3339()).unwrap_or_default(),
         "expediteur": message.from().map(premier_contact).map(|(_, a)| a.trim().to_lowercase()).unwrap_or_default(),
         "dmarcEchec": dmarc_echoue(brut),
+        // Le moyen de se désabonner d'une liste (0.6.30), s'il y en a un.
+        "desabonnement": crate::desabonnement::trouver(brut),
     })
     .to_string()
 }

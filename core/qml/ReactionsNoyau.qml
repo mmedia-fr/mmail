@@ -320,6 +320,14 @@ Connections {
         fenetre.rafraichirListe()
     }
 
+    // Désabonnement en un clic (0.6.30) : la réponse du serveur de la liste.
+    function onDesabonnementFait(ok, hote, message) {
+        messageEtat.texte = ok ? qsTr("Demande de désabonnement acceptée par %1.").arg(hote)
+                               : qsTr("Désabonnement impossible auprès de %1 : %2").arg(hote).arg(message)
+        if (fenetre.essai && fenetre.essai.scenario === "desabonnement")
+            fenetre.essai.desabonnement = { ok: ok, hote: hote, message: message }
+    }
+
     function onInvitationRecue(uid, invitation) {
         if (uid === fenetre.uidCourant)
             fenetre.invitation = invitation.length > 0 ? JSON.parse(invitation) : ({})

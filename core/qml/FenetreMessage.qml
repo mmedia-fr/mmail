@@ -437,6 +437,14 @@ ApplicationWindow {
             }
         }
 
+        // « Se désabonner… » (0.6.30), comme au volet de lecture.
+        BandeauDesabonnement {
+            Layout.fillWidth: true
+            entete: fenetreMessage.source ? ({}) : fenetreMessage.entete
+            compte: fenetreMessage.compte
+            pour: fenetreMessage
+        }
+
         // Images distantes (0.6.24), comme au volet de lecture : rien ne se
         // télécharge sans le demander, sauf pour un expéditeur de confiance.
         Pane {

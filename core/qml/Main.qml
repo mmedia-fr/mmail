@@ -475,6 +475,9 @@ ApplicationWindow {
         category: "apparence"
         property alias theme: fenetre.apparence
         property alias disposition: fenetre.disposition
+        // Apparence personnelle (0.6.37, « Créer mon apparence… ») : JSON
+        // {base, bandeau, accent, surbrillance, fond}, vide s'il n'y en a pas.
+        property string perso: ""
     }
     readonly property bool deuxEtages: !tactile && disposition === "etages"
     // Une seule ligne sur une fenêtre moyenne : libellés courts, Actualiser
@@ -483,7 +486,8 @@ ApplicationWindow {
     readonly property bool enteteSerree: !deuxEtages && width < 1180
     readonly property bool enteteEtroite: !deuxEtages && width < 940
 
-    readonly property var jeuxApparence: ({
+    readonly property var jeuxApparence: avecApparencePerso(jeuxDeBase, reglagesApparence.perso)
+    readonly property var jeuxDeBase: ({
         "classique": {
             libelle: qsTr("Classique (Windows 9x)"),
             fond: "#d4d0c8", texte: "#000000", base: "#ffffff",
@@ -546,9 +550,133 @@ ApplicationWindow {
             survolBandeau: 0.18, survolBande: 0.14, filetBandeau: 1,
             survolLigne: 0.07, encreAccent: "#ffffff",
             mouvement: true, materiau: "mica", opaciteBandeau: 0.8
+        },
+        // Apparence « Nuit » (0.6.37) : fonds sombres, texte clair, repères de
+        // la charte MMEDIA éclaircis pour rester lisibles (4,5:1 au moins sur
+        // le fond). Le corps d'un message HTML garde sa page blanche, comme
+        // sous les autres apparences (cf. VoletLecture), et la rédaction aussi
+        // (« sombre ») : une citation garde les couleurs de son expéditeur.
+        "nuit": {
+            libelle: qsTr("Nuit"),
+            fond: "#1b1d22", texte: "#e4e6eb", base: "#24272e",
+            bouton: "#2c3038", surbrillance: "#1f4f6e", texteSurbrillance: "#ffffff",
+            police: ["Segoe UI", "Noto Sans", "DejaVu Sans", "Arial"], taille: 10,
+            mono: ["Cascadia Mono", "Consolas", "DejaVu Sans Mono", "Courier New"],
+            bandeau: "#0b0d14", texteBandeau: "#e4e6eb", accent: "#21abe3",
+            texteAccent: "#5cc6f2", rubrique: "#7fb6cf", alerte: "#ff6b6b",
+            titres: ["Saira Condensed", "Segoe UI", "Noto Sans", "DejaVu Sans", "Arial"],
+            encreAccent: "#0b0d14",
+            // Rôles de la palette que les apparences claires laissent au
+            // système : sous fond sombre, ils doivent suivre.
+            baseAlternee: "#2a2e36", bulle: "#2c3038", texteBulle: "#e4e6eb",
+            texteIndication: "#8b919c", lien: "#5cc6f2", clair: "#3a3f49",
+            moyen: "#4a505b", sombreRole: "#111317", ombre: "#0a0b0d",
+            sombre: true
+        },
+        // Apparence « Outlook » (0.6.38) : l'affichage d'Outlook, d'après la
+        // palette publiée de Fluent 2 (Microsoft, licence MIT), celle d'Outlook
+        // depuis sa refonte de 2023 : bandeau au bleu de marque #0f6cbd,
+        // texte #242424, panneaux #f5f5f5, sélection bleu pâle, objets non lus
+        // au bleu de marque, Segoe UI en 9 points comme les listes d'Outlook,
+        // titres en semi-gras, pas de filet sous l'en-tête.
+        "outlook": {
+            libelle: qsTr("Outlook"),
+            fond: "#f5f5f5", texte: "#242424", base: "#ffffff",
+            bouton: "#ffffff", surbrillance: "#cfe4fa", texteSurbrillance: "#242424",
+            police: ["Segoe UI", "Selawik", "Noto Sans", "DejaVu Sans", "Arial"], taille: 9,
+            mono: ["Cascadia Mono", "Consolas", "DejaVu Sans Mono", "Courier New"],
+            bandeau: "#0f6cbd", texteBandeau: "#ffffff", accent: "#0f6cbd",
+            texteAccent: "#0f6cbd", rubrique: "#616161", alerte: "#c50f1f",
+            titres: ["Segoe UI Semibold", "Segoe UI", "Selawik", "Noto Sans", "DejaVu Sans", "Arial"],
+            encreAccent: "#ffffff", survolBandeau: 0.12, survolBande: 0.08, filetBandeau: 0,
+            survolLigne: 0.05, baseAlternee: "#fafafa", bulle: "#ffffff", texteBulle: "#242424",
+            texteIndication: "#707070", lien: "#0f6cbd", moyen: "#d1d1d1"
         }
     })
-    readonly property var nomsApparence: ["classique", "moderne", "systeme", "mmedia", "pomme"]
+    readonly property var nomsApparence: ["classique", "moderne", "systeme", "mmedia", "pomme", "outlook", "nuit"]
+                                         .concat(jeuxApparence["perso"] ? ["perso"] : [])
+
+    // ---- apparence personnelle (0.6.37, « Créer mon apparence… »)
+
+    /// Luminance relative (WCAG) d'une couleur.
+    function luminance(c) {
+        function lineaire(v) { return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4) }
+        return 0.2126 * lineaire(c.r) + 0.7152 * lineaire(c.g) + 0.0722 * lineaire(c.b)
+    }
+
+    function contraste(a, b) {
+        var la = luminance(Qt.color(a)), lb = luminance(Qt.color(b))
+        return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05)
+    }
+
+    /// Encre la plus lisible sur un fond : blanc, ou presque noir.
+    function encreSur(fond) {
+        return contraste(fond, "#ffffff") >= contraste(fond, "#111111") ? "#ffffff" : "#111111"
+    }
+
+    /// `couleur`, assombrie (fond clair) ou éclaircie (fond sombre) jusqu'à
+    /// 4,5:1 sur `fond` : du texte qui reste lisible.
+    function lisibleSur(couleur, fond) {
+        var c = Qt.color(couleur)
+        var fondSombre = luminance(Qt.color(fond)) < 0.4
+        for (var i = 0; i < 24 && contraste(c, fond) < 4.5; ++i)
+            c = fondSombre ? Qt.lighter(c, 1.12) : Qt.darker(c, 1.12)
+        return c.toString()
+    }
+
+    /// Les apparences, plus « perso » si elle est définie : l'apparence de
+    /// base, ses couleurs remplacées par celles choisies, les encres déduites
+    /// pour rester lisibles.
+    function avecApparencePerso(jeux, json) {
+        var p = null
+        try { p = json ? JSON.parse(json) : null } catch (e) { p = null }
+        if (!p || !jeux[p.base] || p.base === "systeme")
+            return jeux
+        var j = Object.assign({}, jeux[p.base])
+        // Un bandeau suppose les repères de marque : ceux de MMEDIA à défaut.
+        if (p.bandeau && !j.bandeau) {
+            var m = jeux["mmedia"]
+            j.texteAccent = m.texteAccent; j.rubrique = m.rubrique; j.alerte = m.alerte; j.titres = m.titres
+            j.accent = m.accent
+        }
+        if (p.fond) {
+            // Un fond sombre entraîne les surfaces, le texte et les rôles
+            // sombres de « Nuit » ; un fond clair les retire.
+            var sombre = luminance(Qt.color(p.fond)) < 0.2
+            var rolesSombres = ["baseAlternee", "bulle", "texteBulle", "texteIndication", "lien", "clair",
+                                "moyen", "sombreRole", "ombre", "sombre"]
+            j.fond = p.fond
+            j.base = sombre ? Qt.tint(Qt.color(p.fond), "#22ffffff").toString() : "#ffffff"
+            j.bouton = j.base
+            j.texte = sombre ? "#e4e6eb" : "#1d1d1f"
+            for (var k = 0; k < rolesSombres.length; ++k) {
+                if (sombre)
+                    j[rolesSombres[k]] = jeux["nuit"][rolesSombres[k]]
+                else
+                    delete j[rolesSombres[k]]
+            }
+        }
+        if (p.surbrillance) {
+            j.surbrillance = p.surbrillance
+            j.texteSurbrillance = encreSur(p.surbrillance)
+        }
+        if (p.bandeau) {
+            j.bandeau = p.bandeau
+            j.texteBandeau = encreSur(p.bandeau)
+        }
+        if (p.accent) {
+            j.accent = p.accent
+            j.encreAccent = encreSur(p.accent)
+        }
+        if (j.bandeau) {
+            j.texteAccent = lisibleSur(j.accent || j.surbrillance, j.base)
+            j.rubrique = j.texteAccent
+        }
+        j.libelle = qsTr("Personnelle")
+        var copie = Object.assign({}, jeux)
+        copie["perso"] = j
+        return copie
+    }
 
     // Nul pour « systeme » : c'est ce qui coupe les surcharges ci-dessous.
     readonly property var jeu: apparence === "systeme" || !jeuxApparence[apparence]
@@ -995,14 +1123,26 @@ ApplicationWindow {
             { propriete: "palette.highlight", clef: "surbrillance" },
             { propriete: "palette.highlightedText", clef: "texteSurbrillance" },
             { propriete: "font.family", clef: "police" },
-            { propriete: "font.pointSize", clef: "taille" }
+            { propriete: "font.pointSize", clef: "taille" },
+            // Rôles facultatifs (0.6.37, apparence « Nuit ») : posés seulement
+            // par une apparence qui porte la clé.
+            { propriete: "palette.alternateBase", clef: "baseAlternee" },
+            { propriete: "palette.toolTipBase", clef: "bulle" },
+            { propriete: "palette.toolTipText", clef: "texteBulle" },
+            { propriete: "palette.placeholderText", clef: "texteIndication" },
+            { propriete: "palette.link", clef: "lien" },
+            { propriete: "palette.light", clef: "clair" },
+            { propriete: "palette.midlight", clef: "clair" },
+            { propriete: "palette.mid", clef: "moyen" },
+            { propriete: "palette.dark", clef: "sombreRole" },
+            { propriete: "palette.shadow", clef: "ombre" }
         ]
         delegate: Binding {
             required property var modelData
             target: fenetre
             property: modelData.propriete
             value: fenetre.jeu ? fenetre.valeurJeu(modelData.clef) : ""
-            when: fenetre.jeu !== null
+            when: fenetre.jeu !== null && fenetre.jeu[modelData.clef] !== undefined
             restoreMode: Binding.RestoreBindingOrValue
         }
     }
@@ -2827,6 +2967,9 @@ ApplicationWindow {
     DialogueCategorie { id: dlgCategorie }
 
     DialogueCategories { id: dlgCategories }
+
+    // « Créer mon apparence… » (0.6.37).
+    DialogueApparence { id: dlgApparence }
 
     // ------------------------------------------------------ coffre et session
     Coffre {

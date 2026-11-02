@@ -298,10 +298,20 @@ de projet interne.
   — en-tête et corps —, pas les boutons : barre d'actions, pièces jointes,
   bandeaux des images et des invitations gardent la taille de l'apparence
   (0.6.29) ;
-- **quatre apparences**, celles de MMdedit : classique (Windows 9x), moderne
-  (M-Media), système, et MMEDIA, aux couleurs du site mmedia.fr — en-tête en
-  bandeau nuit, boutons en pastilles, non-lus en pastilles rouges, dossier et
-  message choisis sur un cyan pâle, marqués d'un filet — menu « Affichage » ;
+- **apparences** (menu « Affichage › Apparence ») : classique (Windows 9x),
+  moderne (M-Media), système, et MMEDIA, aux couleurs du site mmedia.fr —
+  en-tête en bandeau nuit, boutons en pastilles, non-lus en pastilles rouges,
+  dossier et message choisis sur un cyan pâle, marqués d'un filet — ; Pomme ;
+  **Outlook** (0.6.38), l'affichage d'Outlook d'après la palette publiée de
+  Fluent 2 (bandeau au bleu de marque, sélection bleu pâle, objets non lus en
+  bleu, Segoe UI en 9 points, titres en semi-gras) ;
+  **Nuit** (0.6.37), fonds sombres et texte clair, la page d'un message HTML
+  et celle de la rédaction restant blanches pour garder les couleurs de
+  l'expéditeur ; et **une apparence personnelle** (0.6.37, « Créer mon
+  apparence… ») : à partir de l'une d'elles, le fond, le bandeau, l'accent et
+  la sélection aux couleurs de chacun, le texte posé dessus réglé par MMail
+  pour rester lisible (4,5:1 au moins) ; elle suit la sauvegarde de la
+  configuration ;
 - mot de passe confié au **coffre du système**, jamais écrit par MMail ;
 - **synchronisation incrémentale** (QRESYNC) : seul ce qui a changé depuis la
   dernière visite est relu ; le dossier ouvert suit le serveur en temps réel

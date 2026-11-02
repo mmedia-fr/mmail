@@ -57,9 +57,12 @@
         </activity>
 
         <!-- Relève en arrière-plan (0.7.0, cf. src/fr/mmedia/mmail/Releve.java) :
-             tâche de JobScheduler, que seul le système peut lancer. -->
+             tâche de JobScheduler, que seul le système peut lancer, dans un
+             processus à part (« :releve ») : elle charge Qt sans activité, ce
+             qui ne doit pas arriver au processus de l'application. -->
         <service
             android:name="fr.mmedia.mmail.Releve"
+            android:process=":releve"
             android:permission="android.permission.BIND_JOB_SERVICE"
             android:exported="false" />
 

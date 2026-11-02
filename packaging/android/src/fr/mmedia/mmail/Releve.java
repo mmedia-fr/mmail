@@ -10,12 +10,20 @@
 // natives (cpp/releve_android.cpp) ; ici, la programmation, les secrets du
 // coffre (Coffre.java) et les notifications.
 //
+// La tâche tourne dans un processus à part (« :releve », cf. le manifeste) :
+// la bibliothèque de MMail ne se charge qu'après Qt Core, dont l'initialisation
+// JNI retient l'activité et le chargeur de classes du moment — aucune ici. Dans
+// le processus de l'application, un MMail ouvert ensuite serait parti sans
+// activité. D'où aussi des fichiers, relus à chaque passage, plutôt que des
+// préférences, qu'un processus garde en mémoire.
+//
 // MMail au premier plan, la tâche ne fait rien : MMail relève lui-même, et ses
 // notifications s'effacent (premierPlan, appelé par cpp/releve.h).
 package fr.mmedia.mmail;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.ActivityManager;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
@@ -37,6 +45,8 @@ import org.json.JSONObject;
 
 import java.io.File;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
 
 public class Releve extends JobService {
     private static final String JOURNAL = "MMail";
@@ -49,7 +59,6 @@ public class Releve extends JobService {
     /** Lignes détaillées au plus dans une notification. */
     private static final int LIGNES = 5;
 
-    private static volatile boolean premierPlan;
     private static boolean chargee;
 
     private static native byte[] comptes(byte[] index);
@@ -60,8 +69,15 @@ public class Releve extends JobService {
      * ou la retire ({@code actif} faux). Appelé par MMail à chaque lancement.
      */
     public static void programmer(Context contexte, String index, boolean actif) {
-        SharedPreferences p = contexte.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE);
-        p.edit().putString("index", index).putBoolean("actif", actif).apply();
+        try {
+            JSONObject reglage = new JSONObject();
+            reglage.put("index", index);
+            reglage.put("actif", actif);
+            ecrire(contexte, "reglage.json", reglage.toString());
+        } catch (Exception e) {
+            Log.w(JOURNAL, "relève : " + e);
+            return;
+        }
         JobScheduler ordonnanceur = contexte.getSystemService(JobScheduler.class);
         if (ordonnanceur == null)
             return;
@@ -102,9 +118,43 @@ public class Releve extends JobService {
 
     /** MMail au premier plan (ou non) ; au premier plan, ses notifications s'effacent. */
     public static void premierPlan(Context contexte, boolean oui) {
-        premierPlan = oui;
         if (oui)
             effacer(contexte);
+    }
+
+    /** Le processus de l'application est-il au premier plan ? Vu d'ici, un autre processus. */
+    private boolean mmailAuPremierPlan() {
+        ActivityManager am = getSystemService(ActivityManager.class);
+        if (am == null || am.getRunningAppProcesses() == null)
+            return false;
+        for (ActivityManager.RunningAppProcessInfo p : am.getRunningAppProcesses())
+            if (getPackageName().equals(p.processName)
+                    && p.importance <= ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND)
+                return true;
+        return false;
+    }
+
+    private static File dossier(Context contexte) {
+        File d = new File(contexte.getFilesDir(), "releve");
+        d.mkdirs();
+        return d;
+    }
+
+    /** Écrit un fichier de la tâche d'un bloc (fichier temporaire, puis renommage). */
+    private static void ecrire(Context contexte, String nom, String texte) throws Exception {
+        File d = dossier(contexte);
+        File provisoire = new File(d, nom + ".tmp");
+        Files.write(provisoire.toPath(), texte.getBytes(StandardCharsets.UTF_8));
+        Files.move(provisoire.toPath(), new File(d, nom).toPath(), StandardCopyOption.REPLACE_EXISTING,
+                   StandardCopyOption.ATOMIC_MOVE);
+    }
+
+    private static String lire(Context contexte, String nom, String defaut) {
+        try {
+            return new String(Files.readAllBytes(new File(dossier(contexte), nom).toPath()), StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            return defaut;
+        }
     }
 
     private static void effacer(Context contexte) {
@@ -115,7 +165,7 @@ public class Releve extends JobService {
 
     @Override
     public boolean onStartJob(JobParameters parametres) {
-        if (premierPlan)
+        if (mmailAuPremierPlan())
             return false;
         new Thread(() -> {
             try {
@@ -137,8 +187,11 @@ public class Releve extends JobService {
     }
 
     /**
-     * La bibliothèque de MMail : celle que Qt charge au lancement, déjà là si
-     * MMail tourne. Sinon, chargée ici, sans que Qt démarre.
+     * La bibliothèque de MMail, sans que l'application Qt démarre. Qt Core
+     * d'abord : son initialisation JNI (JNI_OnLoad) donne à QJniObject la
+     * machine virtuelle, dont les initialiseurs statiques de la bibliothèque
+     * de MMail ont besoin (constantes Java lues par QtKeychain) — sans elle, le
+     * processus s'arrête au chargement (constaté sur l'émulateur, 02/11/2026).
      */
     private static synchronized void charger() {
         if (chargee)
@@ -146,6 +199,7 @@ public class Releve extends JobService {
         UnsatisfiedLinkError derniere = null;
         for (String abi : Build.SUPPORTED_ABIS) {
             try {
+                System.loadLibrary("Qt6Core_" + abi);
                 System.loadLibrary("mmail_" + abi);
                 chargee = true;
                 return;
@@ -165,9 +219,9 @@ public class Releve extends JobService {
     }
 
     private void releverEtNotifier() throws Exception {
-        SharedPreferences p = getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE);
-        String index = p.getString("index", "");
-        if (!p.getBoolean("actif", true) || index.isEmpty() || !new File(index).isFile())
+        JSONObject reglage = new JSONObject(lire(this, "reglage.json", "{}"));
+        String index = reglage.optString("index");
+        if (!reglage.optBoolean("actif", true) || index.isEmpty() || !new File(index).isFile())
             return;
         charger();
         String liste = texte(comptes(octets(index)));
@@ -186,15 +240,15 @@ public class Releve extends JobService {
             if (secret != null)
                 secrets.put(cle, secret);
         }
-        String bilanTexte = texte(relever(octets(index), octets(secrets.toString()), octets(p.getString("etat", "{}"))));
+        String bilanTexte = texte(relever(octets(index), octets(secrets.toString()), octets(lire(this, "etat.json", "{}"))));
         JSONObject bilan = new JSONObject(bilanTexte);
         if (bilan.has("erreur")) {
             Log.w(JOURNAL, "relève : " + bilan.optString("erreur"));
             return;
         }
-        p.edit().putString("etat", bilan.getJSONObject("etat").toString()).apply();
+        ecrire(this, "etat.json", bilan.getJSONObject("etat").toString());
         // MMail revenu au premier plan pendant la relève : il montre lui-même.
-        if (premierPlan)
+        if (mmailAuPremierPlan())
             return;
         JSONArray arrivees = bilan.getJSONArray("comptes");
         for (int i = 0; i < arrivees.length(); i++) {

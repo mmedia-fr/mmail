@@ -146,6 +146,17 @@ class Pe:
             f.write(self.b)
 
 
+def outil(nom):
+    """Outil de MSVC par son chemin : sous Git Bash, « link » est celui de
+    coreutils, qui passe avant celui de MSVC dans le PATH."""
+    racine = os.environ.get("VCToolsInstallDir")
+    if racine:
+        chemin = os.path.join(racine, "bin", "Hostx64", "x64", nom + ".exe")
+        if os.path.isfile(chemin):
+            return chemin
+    return nom
+
+
 def construire(dossier, nom_cale, dll, fonctions, renvois, ecrites, travail):
     module = os.path.splitext(dll)[0]
     lignes = [f"LIBRARY {nom_cale}", "EXPORTS"]
@@ -161,9 +172,9 @@ def construire(dossier, nom_cale, dll, fonctions, renvois, ecrites, travail):
     with open(source, "w", encoding="ascii") as f:
         f.write(SOURCE_UIA if ecrites else "int mmail_cale_vide;\n")
     objet = os.path.join(travail, nom_cale + ".obj")
-    subprocess.run(["cl", "/nologo", "/c", "/O2", "/GS-", "/Fo" + objet, source], check=True)
+    subprocess.run([outil("cl"), "/nologo", "/c", "/O2", "/GS-", "/Fo" + objet, source], check=True)
     sortie = os.path.join(dossier, nom_cale + ".dll")
-    subprocess.run(["link", "/nologo", "/DLL", "/NOENTRY", "/NODEFAULTLIB", "/MACHINE:X64",
+    subprocess.run([outil("link"), "/nologo", "/DLL", "/NOENTRY", "/NODEFAULTLIB", "/MACHINE:X64",
                     "/DEF:" + definition, "/OUT:" + sortie, objet, "kernel32.lib"], check=True)
     return sortie
 

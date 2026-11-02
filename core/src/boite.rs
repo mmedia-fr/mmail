@@ -592,6 +592,16 @@ pub mod qobject {
         #[cxx_name = "ficheDeAdresse"]
         fn fiche_de_adresse(&self, adresse: &QString) -> i32;
 
+        /// Importe un carnet d'adresses exporté par Outlook en CSV (0.6.35,
+        /// cf. `carnet_csv`) dans le carnet `carnet` de l'index. Rend aussitôt
+        /// le bilan de la lecture en JSON `{lus, doublons, vides, retenus,
+        /// erreur}` ; l'écriture des fiches retenues sur le serveur suit, son
+        /// issue par `contactsEcrits`. Un contact dont une adresse de courriel
+        /// est déjà dans un carnet est écarté.
+        #[qinvokable]
+        #[cxx_name = "importerContacts"]
+        fn importer_contacts(self: Pin<&mut Boite>, carnet: i32, url: &QString) -> QString;
+
         /// Enregistre un contact sur le serveur (0.6.20) : `saisie`, le
         /// formulaire rempli, et `origine`, tel qu'il a été montré (JSON) ;
         /// seul ce qui les distingue est écrit. Issue : `contactsEcrits`.
@@ -3733,6 +3743,85 @@ impl qobject::Boite {
             return 0;
         }
         self.magasin.as_ref().and_then(|m| m.fiche_par_adresse(&adresse).ok().flatten()).unwrap_or(0) as i32
+    }
+
+    pub fn importer_contacts(mut self: Pin<&mut Self>, carnet: i32, url: &QString) -> QString {
+        let erreur = |m: &str| QString::from(&serde_json::json!({ "erreur": m }).to_string());
+        let url = url.to_string();
+        let chemin = crate::rendu::chemin_de_url(&url).unwrap_or_else(|| std::path::PathBuf::from(&url));
+        let octets = match std::fs::read(&chemin) {
+            Ok(o) => o,
+            Err(e) => return erreur(&format!("lecture de {} : {e}", chemin.display())),
+        };
+        let lecture = match crate::carnet_csv::lire(&octets) {
+            Ok(l) => l,
+            Err(m) => return erreur(&m),
+        };
+        let Some(magasin) = self.magasin.as_ref() else {
+            return erreur("le profil n'est pas ouvert");
+        };
+        let carnet_id = carnet as i64;
+        let Some(destination) = magasin.carnets_locaux().unwrap_or_default().into_iter().find(|c| c.id == carnet_id) else {
+            return erreur("carnet d'adresses introuvable");
+        };
+        let motif = self.motif_carnet(destination.compte, destination.ecriture);
+        if !motif.is_empty() {
+            return erreur(&format!("import impossible : {motif}"));
+        }
+        let lus = lecture.fiches.len();
+        let mut doublons = 0;
+        let mut fiches = Vec::new();
+        for mut f in lecture.fiches {
+            // Déjà dans un carnet sous l'une de ses adresses : pas de doublon.
+            if f.courriels.iter().any(|c| self.fiche_de_adresse(&QString::from(&c.valeur)) != 0) {
+                doublons += 1;
+                continue;
+            }
+            f.carnet = carnet_id;
+            fiches.push(f);
+        }
+        let bilan = serde_json::json!({
+            "lus": lus, "doublons": doublons, "vides": lecture.vides, "retenus": fiches.len(), "erreur": ""
+        })
+        .to_string();
+        if fiches.is_empty() {
+            return QString::from(&bilan);
+        }
+        let compte = destination.compte;
+        self.as_mut().lancer_contacts(
+            vec![compte],
+            Box::new(move |_, identites| {
+                let id = identites.get(&compte).ok_or(("boîte non connectée".to_string(), false))?;
+                let dav = crate::caldav::Acces { utilisateur: &id.utilisateur, mot_de_passe: &id.mot_de_passe };
+                let mut ecrites = 0usize;
+                let mut echecs: Vec<String> = Vec::new();
+                for f in &fiches {
+                    let uid = crate::saisie::nouvel_uid();
+                    let ecrite = crate::fiche::creer(f, &uid, chrono::Utc::now()).and_then(|vcard| {
+                        let url = format!("{}/{uid}.vcf", destination.adresse.trim_end_matches('/'));
+                        crate::carddav::deposer(&dav, &url, &vcard, None).map(|_| ()).map_err(|e| erreur_contacts(e).0)
+                    });
+                    match ecrite {
+                        Ok(()) => ecrites += 1,
+                        Err(e) => echecs.push(format!("« {} » ({e})", crate::fiche::nom_montre(f))),
+                    }
+                }
+                if ecrites == 0 {
+                    return Err((format!("aucun contact importé : {}", echecs.join(" ; ")), false));
+                }
+                let mut message = format!(
+                    "{ecrites} contact{} importé{} dans le carnet « {} ».",
+                    if ecrites > 1 { "s" } else { "" },
+                    if ecrites > 1 { "s" } else { "" },
+                    destination.nom
+                );
+                if !echecs.is_empty() {
+                    message.push_str(&format!(" Non importés : {}.", echecs.join(" ; ")));
+                }
+                Ok(message)
+            }),
+        );
+        QString::from(&bilan)
     }
 
     pub fn enregistrer_contact(mut self: Pin<&mut Self>, saisie: &QString, origine: &QString) {

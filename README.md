@@ -108,8 +108,13 @@ de projet interne.
 - **carnet d'adresses** (« Comptes › Carnet d'adresses… ») : les contacts des
   carnets du serveur (CardDAV — SOGo, le webmail des boîtes Mailcow), relus avec
   les agendas ; à chercher par nom, organisation ou adresse, et à qui écrire. Ils
-  viennent en tête des adresses proposées à la saisie. Lecture seule : un
-  contact se crée ou se modifie dans le webmail ;
+  viennent en tête des adresses proposées à la saisie. Un contact se crée, se
+  modifie ou se supprime dans MMail (0.6.20) ; « Importer d'Outlook (CSV)… »
+  (0.6.35) verse dans un carnet le dossier Contacts exporté par Outlook en
+  valeurs séparées par une virgule — colonnes en français ou en anglais,
+  fichier en Windows-1252 ou en UTF-8, virgules ou points-virgules —, sans
+  reprendre un contact dont une adresse de messagerie est déjà dans un
+  carnet ;
 - **filtres du courrier** (« Comptes › Filtres du courrier… », ou « Créer un
   filtre… » sur un message) : selon l'expéditeur — nom ou adresse — et l'objet
   (contient, est, commence par, se termine par ; toutes les conditions ou une

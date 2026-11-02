@@ -6,6 +6,8 @@
      Nom sous l'icône écrit en dur (android:label) : Qt 6.8.3 ignore
      QT_ANDROID_APP_NAME et mettait le nom du binaire, en minuscules.
      Les marqueurs « %%INSERT_… » sont remplis à la fabrication par androiddeployqt.
+     Relève en arrière-plan (0.7.0) : le service fr.mmedia.mmail.Releve ; ses
+     permissions (notifications, redémarrage) sont posées par CMakeLists.txt.
      À un changement de version de Qt, comparer avec le nouveau modèle. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="org.qtproject.example"
@@ -47,6 +49,13 @@
                 android:name="android.app.arguments"
                 android:value="-- %%INSERT_APP_ARGUMENTS%% --" />
         </activity>
+
+        <!-- Relève en arrière-plan (0.7.0, cf. src/fr/mmedia/mmail/Releve.java) :
+             tâche de JobScheduler, que seul le système peut lancer. -->
+        <service
+            android:name="fr.mmedia.mmail.Releve"
+            android:permission="android.permission.BIND_JOB_SERVICE"
+            android:exported="false" />
 
         <provider
             android:name="androidx.core.content.FileProvider"

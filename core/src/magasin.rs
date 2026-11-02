@@ -925,6 +925,22 @@ impl Magasin {
         Ok(self.comptes()?.into_iter().find(|c| c.id == id))
     }
 
+    /// Boîte de réception d'un compte, telle que l'index la connaît :
+    /// `UIDVALIDITY` et plus grand UID indexé (0 si aucun message). `None`
+    /// si le dossier n'a jamais été relevé (relève Android, cf. `releve`).
+    pub fn reception(&self, compte: i64) -> Resultat<Option<(u32, u32)>> {
+        let r = self
+            .base
+            .query_row(
+                "SELECT f.uidvalidity, COALESCE((SELECT MAX(m.uid) FROM messages m WHERE m.folder_id = f.id), 0)
+                 FROM folders f WHERE f.account_id = ?1 AND upper(f.chemin) = 'INBOX'",
+                params![compte],
+                |l| Ok((l.get::<_, u32>(0)?, l.get::<_, u32>(1)?)),
+            )
+            .optional()?;
+        Ok(r)
+    }
+
     /// Retire un compte du profil, avec son index. Rien n'est touché sur le
     /// serveur.
     pub fn retirer_compte(&self, id: i64) -> Resultat<()> {

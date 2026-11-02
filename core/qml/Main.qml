@@ -1739,7 +1739,7 @@ ApplicationWindow {
             anchors.rightMargin: 8
             spacing: 14
             Label {
-                text: fenetre.lienSurvole.length > 0 ? fenetre.lienSurvole : fenetre.infoDossier
+                text: fenetre.lienSurvole.length > 0 ? fenetre.libelleLien(fenetre.lienSurvole) : fenetre.infoDossier
                 color: fenetre.lienSurvole.length > 0 ? fenetre.texteAccent : fenetre.palette.windowText
                 elide: Text.ElideRight
                 maximumLineCount: 1
@@ -5265,8 +5265,24 @@ ApplicationWindow {
         onTriggered: fenetre.reposerHtml()
     }
 
+    /// Lien survolé, tel que la barre d'état le montre (0.6.32) : le numéro
+    /// à appeler, l'adresse cherchée sur la carte, sinon le lien lui-même.
+    function libelleLien(lien) {
+        if (lien.toLowerCase().indexOf("tel:") === 0)
+            return qsTr("Appeler le %1").arg(lien.substring(4))
+        var carte = "https://www.openstreetmap.org/search?query="
+        if (lien.indexOf(carte) === 0) {
+            try {
+                return qsTr("Voir sur la carte : %1").arg(decodeURIComponent(lien.substring(carte.length)))
+            } catch (e) {
+            }
+        }
+        return lien
+    }
+
     /// Un lien du message : une adresse de courriel ouvre une rédaction dans
-    /// MMail, une adresse web part au navigateur.
+    /// MMail, une adresse web part au navigateur, un numéro de téléphone au
+    /// logiciel d'appel du poste (`tel:`), une adresse postale à la carte.
     function ouvrirLien(lien) {
         if (lien.toLowerCase().indexOf("mailto:") !== 0) {
             Qt.openUrlExternally(lien)

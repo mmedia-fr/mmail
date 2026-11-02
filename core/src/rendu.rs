@@ -144,7 +144,7 @@ pub fn assainir(source: &str, resoudre: impl Fn(&str) -> Option<Image> + Send + 
                 ("a", HashSet::from(["href"])),
                 ("img", HashSet::from(["src"])),
             ]))
-            .url_schemes(HashSet::from(["http", "https", "mailto", "cid", "data"]))
+            .url_schemes(HashSet::from(["http", "https", "mailto", "tel", "cid", "data"]))
             // Les adresses relatives passent jusqu'au filtre, qui les confie à
             // `resoudre` (une image) ou les écarte (un lien).
             .url_relative(ammonia::UrlRelative::PassThrough)
@@ -225,6 +225,16 @@ fn filtrer(
                 // Lien écrit sans protocole : les navigateurs le lisent comme
                 // une adresse web, `ammonia` comme un chemin relatif (0.6.21).
                 return Some(format!("http://{}", valeur.trim()));
+            }
+            if let Some(numero) = minuscule.strip_prefix("tel:") {
+                // Lien d'appel d'une signature (0.6.32) : le numéro seul,
+                // chiffres et « + », séparateurs retirés ; tout autre contenu
+                // l'écarte.
+                let numero = numero.replace("%20", " ");
+                let admis = numero.chars().all(|c| c.is_ascii_digit() || matches!(c, '+' | ' ' | '.' | '-' | '(' | ')'));
+                let chiffres: String = numero.chars().filter(|c| c.is_ascii_digit() || *c == '+').collect();
+                return (admis && chiffres.chars().filter(char::is_ascii_digit).count() >= 3)
+                    .then(|| format!("tel:{chiffres}"));
             }
             ["http:", "https:", "mailto:"]
                 .iter()
@@ -691,12 +701,8 @@ pub(crate) fn lier_html(html: &str) -> String {
             break;
         };
         let (texte, suite) = reste.split_at(debut);
-        if dans_lien == 0 {
-            sortie.push_str(&lier_texte(texte));
-        } else {
-            sortie.push_str(texte);
-        }
         let Some(fin) = suite.find('>') else {
+            sortie.push_str(&if dans_lien == 0 { lier_texte(texte) } else { texte.to_string() });
             sortie.push_str(suite);
             break;
         };
@@ -706,6 +712,30 @@ pub(crate) fn lier_html(html: &str) -> String {
             .take_while(|c| c.is_ascii_alphanumeric() || *c == '/')
             .collect::<String>()
             .to_ascii_lowercase();
+        // Adresse postale coupée par un retour à la ligne (0.6.32) : la voie
+        // avant le `<br>`, le code postal et la commune après ; deux liens
+        // vers la même carte.
+        if dans_lien == 0 && nom == "br" {
+            let apres = &suite[fin + 1..];
+            let ligne = &apres[..apres.find('<').unwrap_or(apres.len())];
+            if let Some((debut_rue, fin_rue, ville, cible)) = adresse_sur_deux_lignes(texte, ligne) {
+                let blancs = ligne.len() - ligne.trim_start().len();
+                sortie.push_str(&lier_texte(&texte[..debut_rue]));
+                sortie.push_str(&format!("<a href=\"{cible}\">{}</a>", &texte[debut_rue..fin_rue]));
+                sortie.push_str(&texte[fin_rue..]);
+                sortie.push_str(balise);
+                sortie.push_str(&ligne[..blancs]);
+                sortie.push_str(&format!("<a href=\"{cible}\">{}</a>", &ligne[blancs..blancs + ville]));
+                sortie.push_str(&lier_texte(&ligne[blancs + ville..]));
+                reste = &apres[ligne.len()..];
+                continue;
+            }
+        }
+        if dans_lien == 0 {
+            sortie.push_str(&lier_texte(texte));
+        } else {
+            sortie.push_str(texte);
+        }
         match nom.as_str() {
             "a" if !balise.ends_with("/>") => dans_lien += 1,
             "/a" => dans_lien = dans_lien.saturating_sub(1),
@@ -736,8 +766,9 @@ const FINS_D_ADRESSE: &[&str] = &["&lt;", "&gt;", "&quot;", "&nbsp;", "&#"];
 
 /// Liens posés sur un texte déjà échappé pour HTML (`&amp;`, `&lt;`…) :
 /// adresses `http(s)://`, adresses commençant par `www.`, adresses de
-/// courriel. Le texte affiché ne change pas ; seuls `http`, `https` et
-/// `mailto` sont produits.
+/// courriel ; numéros de téléphone (`tel:`) et adresses postales (carte
+/// d'OpenStreetMap), 0.6.32. Le texte affiché ne change pas ; seuls `http`,
+/// `https`, `mailto` et `tel` sont produits.
 fn lier_texte(texte: &str) -> String {
     let mut sortie = String::with_capacity(texte.len());
     let mut precedent: Option<char> = None;
@@ -746,8 +777,19 @@ fn lier_texte(texte: &str) -> String {
         let reste = &texte[i..];
         let frontiere = precedent
             .is_none_or(|c| !c.is_alphanumeric() && !matches!(c, '/' | ':' | '@' | '.' | '-' | '_' | '%' | '+'));
-        if frontiere {
-            if let Some((longueur, cible)) = adresse_web(reste).or_else(|| adresse_courriel(reste)) {
+        // Un numéro suit volontiers « Tél. : » ou « Tél: », pas un chiffre,
+        // une lettre ni « + », « - », « / » (référence, plage, date).
+        let frontiere_numero = precedent.is_none_or(|c| {
+            !c.is_alphanumeric() && !matches!(c, '/' | '@' | '-' | '_' | '%' | '+' | '#' | '&')
+        });
+        let trouve = if frontiere {
+            adresse_web(reste).or_else(|| adresse_courriel(reste)).or_else(|| adresse_postale(reste))
+        } else {
+            None
+        };
+        let trouve = trouve.or_else(|| if frontiere_numero { numero_telephone(reste) } else { None });
+        {
+            if let Some((longueur, cible)) = trouve {
                 let vue = &reste[..longueur];
                 sortie.push_str(&format!("<a href=\"{cible}\">{vue}</a>"));
                 precedent = vue.chars().last();
@@ -839,6 +881,381 @@ fn adresse_courriel(texte: &str) -> Option<(usize, String)> {
     }
     let total = local + 1 + longueur;
     Some((total, format!("mailto:{}", &texte[..total])))
+}
+
+/// Séparateur entre deux groupes de chiffres d'un numéro de téléphone :
+/// espace, point, tiret, espace insécable (caractère ou entité). Rend sa
+/// longueur.
+fn separateur_numero(texte: &str) -> Option<usize> {
+    [" ", ".", "-", "\u{a0}", "\u{202f}", "&nbsp;", "&#160;"]
+        .iter()
+        .find(|s| texte.starts_with(**s))
+        .map(|s| s.len())
+}
+
+/// Longueur et cible (`tel:`) d'un numéro de téléphone en tête de `texte`
+/// (échappé), ou `None` (0.6.32). Numéro français à dix chiffres, d'un seul
+/// tenant ou par paires (« 05 57 00 00 00 », « 05.57.00.00.00 ») ; numéro
+/// international (« +33 5 57 00 00 00 », « +33 (0)5 57 00 00 00 »,
+/// « 0033… », « +41 22 000 00 00 »), de 8 à 15 chiffres par groupes de 4 au
+/// plus. Un seul séparateur entre deux groupes ; rien de collé à la fin.
+fn numero_telephone(texte: &str) -> Option<(usize, String)> {
+    let b = texte.as_bytes();
+    let non_nul = |c: &u8| c.is_ascii_digit() && *c != b'0';
+    let (mut i, international) = match b {
+        [b'+', c, ..] if non_nul(c) => (1, true),
+        [b'0', b'0', c, ..] if non_nul(c) => (2, true),
+        [b'0', c, ..] if non_nul(c) => (0, false),
+        _ => return None,
+    };
+    let mut groupes: Vec<&str> = Vec::new();
+    let mut fin = 0;
+    let mut zero_entre_parentheses = false;
+    loop {
+        let debut = i;
+        while i < b.len() && b[i].is_ascii_digit() {
+            i += 1;
+        }
+        if i == debut {
+            break;
+        }
+        groupes.push(&texte[debut..i]);
+        fin = i;
+        let mut j = i + separateur_numero(&texte[i..]).unwrap_or(0);
+        // « +33 (0)5… » : le zéro national entre parenthèses.
+        if international && groupes.len() == 1 && texte[j..].starts_with("(0)") {
+            zero_entre_parentheses = true;
+            j += 3;
+            j += separateur_numero(&texte[j..]).unwrap_or(0);
+        }
+        if j == i || !b.get(j).is_some_and(u8::is_ascii_digit) {
+            break;
+        }
+        i = j;
+    }
+    if texte[fin..].chars().next().is_some_and(|c| c.is_alphanumeric() || matches!(c, '@' | '/' | '_')) {
+        return None;
+    }
+    let chiffres = groupes.concat();
+    let cible = if !international {
+        let forme = groupes.len() == 1 || (groupes.len() == 5 && groupes.iter().all(|g| g.len() == 2));
+        (chiffres.len() == 10 && forme).then(|| format!("tel:{chiffres}"))?
+    } else if let Some(national) = chiffres.strip_prefix("33") {
+        // Le zéro national écrit après l'indicatif (« +33 05… ») tombe.
+        let national = if !zero_entre_parentheses && national.len() == 10 {
+            national.strip_prefix('0')?
+        } else {
+            national
+        };
+        (national.len() == 9 && !national.starts_with('0')).then(|| format!("tel:+33{national}"))?
+    } else {
+        let forme = groupes.len() == 1 || groupes.iter().all(|g| g.len() <= 4);
+        ((8..=15).contains(&chiffres.len()) && forme).then(|| format!("tel:+{chiffres}"))?
+    };
+    Some((fin, cible))
+}
+
+/// Types de voie d'une adresse postale, en minuscules.
+const VOIES: &[&str] = &[
+    "rue", "avenue", "av", "av.", "boulevard", "bd", "bld", "bvd", "place", "pl.", "allée", "allee",
+    "allées", "chemin", "ch.", "impasse", "imp.", "route", "rte", "quai", "cours", "square", "passage",
+    "lieu-dit", "lieudit", "lotissement", "lot.", "résidence", "residence", "zone", "za", "zi", "zac", "zae",
+    "parc", "rond-point", "esplanade", "faubourg", "fg", "voie", "sentier", "montée", "côte", "hameau",
+    "parvis", "promenade", "cité", "cite", "villa", "domaine", "traverse", "rampe", "ruelle", "venelle",
+    "galerie", "chaussée", "quartier",
+];
+
+/// Mots qui ne prolongent pas le nom d'une commune : ce qui suit souvent une
+/// adresse dans une signature.
+const APRES_COMMUNE: &[&str] = &[
+    "tél", "tél.", "tel", "tel.", "téléphone", "telephone", "fax", "mobile", "mob", "portable", "port",
+    "email", "e-mail", "mail", "courriel", "site", "web", "siret", "siren", "rcs", "tva",
+];
+
+/// Blanc entre les éléments d'une adresse postale : espace, tabulation,
+/// espaces insécables (caractère ou entité). Rend sa longueur.
+fn blanc_adresse(texte: &str) -> Option<usize> {
+    [" ", "\t", "\u{a0}", "\u{202f}", "&nbsp;", "&#160;"]
+        .iter()
+        .find(|s| texte.starts_with(**s))
+        .map(|s| s.len())
+}
+
+/// Longueur des blancs en tête de `texte`.
+fn blancs_adresse(texte: &str) -> usize {
+    let mut n = 0;
+    while let Some(l) = blanc_adresse(&texte[n..]) {
+        n += l;
+    }
+    n
+}
+
+/// Début d'une adresse postale en tête de `texte` : numéro (« 12 »,
+/// « 12 bis », « 12B »), virgule éventuelle, puis type de voie (« rue »,
+/// « avenue »…) ; sans numéro, seulement un type de voie à initiale
+/// capitale (« ZA des… », « Lieu-dit… »). Rend la longueur jusqu'au nom
+/// de la voie.
+fn debut_de_voie(texte: &str) -> Option<usize> {
+    let b = texte.as_bytes();
+    let mut i = 0;
+    while i < b.len() && i < 4 && b[i].is_ascii_digit() {
+        i += 1;
+    }
+    let numero = i > 0;
+    // Sans numéro, un type de voie à initiale capitale : les autres mots
+    // s'écartent sans rien calculer.
+    if !numero && !texte.chars().next().is_some_and(char::is_uppercase) {
+        return None;
+    }
+    if numero {
+        if b.get(i).is_some_and(u8::is_ascii_digit) {
+            return None;
+        }
+        if b.get(i).is_some_and(|&c| matches!(c, b'A'..=b'D' | b'a'..=b'd'))
+            && !b.get(i + 1).is_some_and(u8::is_ascii_alphanumeric)
+        {
+            i += 1;
+        }
+        let n = blancs_adresse(&texte[i..]);
+        let apres = &texte[i + n..];
+        for indice in ["bis", "ter", "quater"] {
+            let suivant = apres.get(indice.len()..).and_then(|r| r.chars().next());
+            if n > 0
+                && apres.get(..indice.len()).is_some_and(|m| m.eq_ignore_ascii_case(indice))
+                && !suivant.is_some_and(char::is_alphanumeric)
+            {
+                i += n + indice.len();
+                break;
+            }
+        }
+        if texte[i..].starts_with(',') {
+            i += 1;
+        }
+        let n = blancs_adresse(&texte[i..]);
+        if n == 0 {
+            return None;
+        }
+        i += n;
+    }
+    let fin_mot = texte[i..]
+        .find(|c: char| !(c.is_alphabetic() || c == '-' || c == '.'))
+        .map_or(texte.len(), |k| i + k);
+    let mot = &texte[i..fin_mot];
+    if !VOIES.contains(&mot.to_lowercase().as_str()) {
+        return None;
+    }
+    if !numero && !mot.chars().next().is_some_and(char::is_uppercase) {
+        return None;
+    }
+    let n = blancs_adresse(&texte[fin_mot..]);
+    (n > 0).then_some(fin_mot + n)
+}
+
+/// Caractère admis dans le nom d'une voie (« du 8 Mai 1945 », « de l'Église »,
+/// « Bât. B, »).
+fn car_voie(c: char) -> bool {
+    c.is_alphanumeric() || matches!(c, ' ' | '-' | '\'' | '’' | '.' | ',' | '(' | ')' | '\u{a0}' | '\u{202f}')
+}
+
+/// Entité admise dans le nom d'une voie : espace insécable, apostrophe,
+/// esperluette. Rend sa longueur.
+fn entite_voie(texte: &str) -> Option<usize> {
+    ["&nbsp;", "&#160;", "&#39;", "&#x27;", "&amp;"]
+        .iter()
+        .find(|s| texte.starts_with(**s))
+        .map(|s| s.len())
+}
+
+/// Code postal (5 chiffres, département 01 à 98) et commune en tête de
+/// `texte` : longueur jusqu'à la fin de la commune. La commune commence par
+/// une capitale ; ses mots se lient par un espace, un tiret ou une
+/// apostrophe, les petits mots (« sur », « de », « lès »…) entre deux ;
+/// « CEDEX » et son numéro en font partie.
+fn code_postal_et_commune(texte: &str) -> Option<usize> {
+    let b = texte.as_bytes();
+    if b.len() < 7 || !b[..5].iter().all(u8::is_ascii_digit) {
+        return None;
+    }
+    let departement = (b[0] - b'0') * 10 + (b[1] - b'0');
+    if departement == 0 || departement > 98 {
+        return None;
+    }
+    let n = blancs_adresse(&texte[5..]);
+    if n == 0 {
+        return None;
+    }
+    let debut = 5 + n;
+    let mut i = debut;
+    let mut fin = 0;
+    let mut mots = 0;
+    loop {
+        let t = &texte[i..];
+        let longueur = t
+            .find(|c: char| !(c.is_alphabetic() || matches!(c, '-' | '\'' | '’')))
+            .unwrap_or(t.len());
+        if longueur == 0 {
+            break;
+        }
+        let mot = &t[..longueur];
+        let minuscule = mot.to_lowercase();
+        if APRES_COMMUNE.contains(&minuscule.trim_end_matches('.')) {
+            break;
+        }
+        let capitale = mot.chars().next().is_some_and(char::is_uppercase);
+        let petit_mot = ["sur", "sous", "en", "de", "du", "des", "la", "le", "les", "lès", "lez", "et", "aux", "au"]
+            .contains(&minuscule.as_str());
+        if !capitale && !(mots > 0 && petit_mot) {
+            break;
+        }
+        i += longueur;
+        mots += 1;
+        if capitale {
+            fin = i;
+        }
+        if minuscule == "cedex" {
+            let n = blancs_adresse(&texte[i..]);
+            let chiffres = texte[i + n..].find(|c: char| !c.is_ascii_digit()).unwrap_or(texte.len() - i - n);
+            if n > 0 && (1..=2).contains(&chiffres) {
+                fin = i + n + chiffres;
+            }
+            break;
+        }
+        let n = blanc_adresse(&texte[i..]).unwrap_or(0);
+        if n == 0 || mots >= 6 || i - debut > 50 {
+            break;
+        }
+        i += n;
+    }
+    (fin > 0).then_some(fin)
+}
+
+/// Fin d'une adresse postale en tête de `texte`, juste après le nom de la
+/// voie : virgule, blancs, tiret, un seul retour à la ligne, boîte postale
+/// éventuelle (« BP 12 », « CS 30012 »), puis code postal et commune. Rend
+/// la longueur jusqu'à la fin de la commune.
+fn suite_postale(texte: &str) -> Option<usize> {
+    let mut i = 0;
+    let mut lignes = 0;
+    let mut vu = false;
+    loop {
+        if let Some(n) = blanc_adresse(&texte[i..]) {
+            i += n;
+            vu = true;
+            continue;
+        }
+        match texte[i..].chars().next() {
+            Some(',') => i += 1,
+            Some('\n') if lignes == 0 => {
+                i += 1;
+                lignes += 1;
+            }
+            Some('-') if vu => i += 1,
+            _ => break,
+        }
+        vu = true;
+    }
+    if !vu {
+        return None;
+    }
+    for boite in ["BP", "B.P.", "CS"] {
+        if let Some(apres) = texte[i..].strip_prefix(boite) {
+            let n = blancs_adresse(apres);
+            let chiffres = apres[n..].find(|c: char| !c.is_ascii_digit()).unwrap_or(apres.len() - n);
+            if n > 0 && (1..=5).contains(&chiffres) {
+                i += boite.len() + n + chiffres;
+                let apres = &texte[i..];
+                let virgule = usize::from(apres.starts_with(','));
+                let n = blancs_adresse(&apres[virgule..]);
+                if n == 0 {
+                    return None;
+                }
+                i += virgule + n;
+            }
+            break;
+        }
+    }
+    Some(i + code_postal_et_commune(&texte[i..])?)
+}
+
+/// Longueur et cible (carte d'OpenStreetMap) d'une adresse postale en tête
+/// de `texte` (échappé), ou `None` (0.6.32) : voie, puis code postal et
+/// commune sur la même ligne ou la suivante.
+fn adresse_postale(texte: &str) -> Option<(usize, String)> {
+    let nom = debut_de_voie(texte)?;
+    let mut k = nom;
+    let mut lettres = 0;
+    while k < texte.len() && k - nom <= 70 {
+        let t = &texte[k..];
+        let c = t.chars().next()?;
+        if lettres >= 2 && matches!(c, ' ' | ',' | '\n' | '-' | '&' | '\t' | '\u{a0}' | '\u{202f}') {
+            if let Some(longueur) = suite_postale(t) {
+                let fin = k + longueur;
+                return Some((fin, carte(&texte[..fin])));
+            }
+        }
+        if let Some(n) = entite_voie(t) {
+            k += n;
+            continue;
+        }
+        if !car_voie(c) {
+            return None;
+        }
+        if c.is_alphabetic() {
+            lettres += 1;
+        }
+        k += c.len_utf8();
+    }
+    None
+}
+
+/// Adresse postale coupée par un `<br>` (0.6.32) : la voie termine `avant`,
+/// le code postal et la commune ouvrent `ligne`. Rend le début et la fin de
+/// la voie dans `avant`, la longueur du code postal et de la commune dans
+/// `ligne` (après ses blancs), et la carte.
+fn adresse_sur_deux_lignes(avant: &str, ligne: &str) -> Option<(usize, usize, usize, String)> {
+    let blancs = ligne.len() - ligne.trim_start().len();
+    let ville = code_postal_et_commune(&ligne[blancs..])?;
+    let fin_rue = avant.trim_end().trim_end_matches(',').trim_end().len();
+    let rue = &avant[..fin_rue];
+    let mut precedent: Option<char> = None;
+    for (k, c) in rue.char_indices() {
+        if precedent.is_none_or(|p| !p.is_alphanumeric() && !matches!(p, '-' | '\'' | '’' | '&' | '#')) {
+            if let Some(nom) = debut_de_voie(&rue[k..]) {
+                let reste = &rue[k + nom..];
+                let lettres = reste.chars().filter(|c| c.is_alphabetic()).count();
+                let admis = reste.chars().all(|c| car_voie(c) || matches!(c, '&' | '#' | ';'));
+                if lettres >= 2 && admis && reste.len() <= 70 {
+                    let cible = carte(&format!("{}, {}", &rue[k..], &ligne[blancs..blancs + ville]));
+                    return Some((k, fin_rue, ville, cible));
+                }
+            }
+        }
+        precedent = Some(c);
+    }
+    None
+}
+
+/// Carte d'OpenStreetMap cherchant une adresse postale écrite dans un texte
+/// échappé : entités rendues, blancs ramenés à un espace, le reste encodé.
+fn carte(adresse: &str) -> String {
+    let clair = adresse
+        .replace("&nbsp;", " ")
+        .replace("&#160;", " ")
+        .replace("&#39;", "'")
+        .replace("&#x27;", "'")
+        .replace("&quot;", "\"")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&");
+    let clair = clair.split(char::is_whitespace).filter(|m| !m.is_empty()).collect::<Vec<_>>().join(" ");
+    let mut url = String::from("https://www.openstreetmap.org/search?query=");
+    for octet in clair.bytes() {
+        match octet {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => url.push(octet as char),
+            _ => url.push_str(&format!("%{octet:02X}")),
+        }
+    }
+    url
 }
 
 /// Adresse `file:` d'un fichier local, caractères réservés encodés : le
@@ -1199,5 +1616,81 @@ mod tests {
             "<style>a{x:url(https://x.fr)}</style><p>&lt;<a href=\"https://x.fr\">https://x.fr</a>&gt; \
              a&nbsp;<a href=\"http://www.y.fr\">www.y.fr</a></p>"
         );
+    }
+
+    const CARTE: &str = "https://www.openstreetmap.org/search?query=";
+
+    #[test]
+    fn numeros_de_telephone_lies() {
+        let html = texte_en_html(
+            "Tél. : 05 57 00 00 00, portable 06.12.34.56.78\n\
+             Suisse : +41 22 000 00 00 ; standard +33 (0)5 53 00 00 00.",
+        )
+        .unwrap();
+        assert_eq!(
+            html,
+            "<div style=\"white-space:pre-wrap\">Tél. : <a href=\"tel:0557000000\">05 57 00 00 00</a>, \
+             portable <a href=\"tel:0612345678\">06.12.34.56.78</a><br>\
+             Suisse : <a href=\"tel:+41220000000\">+41 22 000 00 00</a> ; \
+             standard <a href=\"tel:+33553000000\">+33 (0)5 53 00 00 00</a>.</div>"
+        );
+        // Le zéro national après l'indicatif tombe ; « 00 » vaut « + ».
+        assert_eq!(
+            lier_texte("+33 05 53 00 00 00 et 0033 5 53 00 00 00"),
+            "<a href=\"tel:+33553000000\">+33 05 53 00 00 00</a> et \
+             <a href=\"tel:+33553000000\">0033 5 53 00 00 00</a>"
+        );
+    }
+
+    #[test]
+    fn dates_montants_et_references_ne_sont_pas_des_numeros() {
+        let texte = "Facture 2026-0114 du 02.11.2026 : 1 234,56 €, SIRET 123 456 789 00012, \
+                     réf. 0612345678X, +3 points, 05 57 00 00 00 12";
+        assert_eq!(lier_texte(texte), texte);
+    }
+
+    #[test]
+    fn adresses_postales_liees_a_une_carte() {
+        let html = texte_en_html(
+            "Siège : 12 rue de la Paix, 75002 Paris.\nDépôt : ZA des Essais\n47000 Agen\n\
+             Au 3 rue Victor Hugo à Agen.",
+        )
+        .unwrap();
+        assert_eq!(
+            html,
+            format!(
+                "<div style=\"white-space:pre-wrap\">Siège : <a href=\"{CARTE}12%20rue%20de%20la%20Paix%2C%2075002%20Paris\">\
+                 12 rue de la Paix, 75002 Paris</a>.<br>Dépôt : <a href=\"{CARTE}ZA%20des%20Essais%2047000%20Agen\">\
+                 ZA des Essais<br>47000 Agen</a><br>Au 3 rue Victor Hugo à Agen.</div>"
+            )
+        );
+        assert_eq!(
+            lier_texte("5 avenue des Essais, CS 30012, 47916 Agen Cedex 9 - France"),
+            format!(
+                "<a href=\"{CARTE}5%20avenue%20des%20Essais%2C%20CS%2030012%2C%2047916%20Agen%20Cedex%209\">\
+                 5 avenue des Essais, CS 30012, 47916 Agen Cedex 9</a> - France"
+            )
+        );
+        // Sans numéro, une voie en minuscules n'est pas une adresse.
+        assert_eq!(lier_texte("la rue des Essais, 47000 Agen"), "la rue des Essais, 47000 Agen");
+    }
+
+    #[test]
+    fn adresse_sur_deux_lignes_du_html() {
+        let carte = format!("{CARTE}12%20rue%20des%20Essais%2C%2047000%20Agen");
+        assert_eq!(
+            lier_html("<p>MMEDIA<br>12 rue des Essais<br>47000 Agen<br>Tél : 05 53 00 00 00</p>"),
+            format!(
+                "<p>MMEDIA<br><a href=\"{carte}\">12 rue des Essais</a><br><a href=\"{carte}\">47000 Agen</a><br>\
+                 Tél : <a href=\"tel:0553000000\">05 53 00 00 00</a></p>"
+            )
+        );
+    }
+
+    #[test]
+    fn liens_d_appel_d_origine_gardes() {
+        let c = corps_html(&message("<a href=\"tel:+33-5-53-00-00-00\">Appeler</a><a href=\"tel:javascript:x\">b</a>"))
+            .unwrap();
+        assert_eq!(c.html, "<a href=\"tel:+33553000000\">Appeler</a><a>b</a>");
     }
 }

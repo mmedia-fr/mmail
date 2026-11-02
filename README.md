@@ -212,6 +212,18 @@ de projet interne.
   se télécharge pas ; une erreur de réseau vaut une seconde tentative. Une
   image demandée qui n'est pas venue est dite telle dans le bandeau, qui
   propose alors de réessayer ;
+- **numéros de téléphone et adresses postales cliquables** (0.6.32) : dans le
+  texte d'un message, en texte brut comme en HTML, un numéro de téléphone
+  ouvre le logiciel d'appel du poste (`tel:` — l'application de téléphonie
+  sous Windows, le composeur sous Android) et une adresse postale la carte
+  d'OpenStreetMap dans le navigateur ; la barre d'état dit, au survol, le
+  numéro ou l'adresse. Numéros repérés : français à dix chiffres, d'un seul
+  tenant ou par paires (« 05 57 00 00 00 », « 05.57.00.00.00 »), et
+  internationaux (« +33 5 57 00 00 00 », « +33 (0)5… », « 0033… »). Adresses
+  repérées : numéro et type de voie (« 12 rue… », « 3 bis avenue… », ou sans
+  numéro « ZA des… », « Lieu-dit… »), puis code postal et commune sur la même
+  ligne ou la suivante, boîte postale et CEDEX compris. Les liens d'appel
+  posés par l'expéditeur (`tel:`) restent cliquables ;
 - **se désabonner** (0.6.30) : une lettre d'information ou un message de liste
   de diffusion qui offre le moyen de s'en retirer porte un bandeau « Se
   désabonner… », dans le volet de lecture comme dans la fenêtre d'un message.

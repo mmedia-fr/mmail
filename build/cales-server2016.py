@@ -160,8 +160,9 @@ def outil(nom):
 def construire(dossier, nom_cale, dll, fonctions, renvois, ecrites, travail):
     module = os.path.splitext(dll)[0]
     # Exportations en options de l'éditeur de liens (/EXPORT), dans un fichier
-    # de réponse : la forme « nom=module.fonction » d'un .def n'y fait pas
-    # toujours un renvoi (refusée pour UIAutomationCore, LNK2001).
+    # de réponse, et la bibliothèque d'import du module visé : sans elle,
+    # l'éditeur de liens de MSVC tient « nom=module.fonction » pour un symbole
+    # à résoudre (LNK2001, vu pour UIAutomationCore).
     options = []
     for fn in sorted(set(fonctions)):
         cible = f"mmail_{fn}" if fn in ecrites else renvois.get(fn, module + "." + fn)
@@ -177,7 +178,7 @@ def construire(dossier, nom_cale, dll, fonctions, renvois, ecrites, travail):
     sortie = os.path.join(dossier, nom_cale + ".dll")
     subprocess.run([outil("link"), "/nologo", "/DLL", "/NOENTRY", "/NODEFAULTLIB", "/MACHINE:X64",
                     "/OUT:" + sortie, "/IMPLIB:" + os.path.join(travail, nom_cale + ".lib"),
-                    "@" + reponse, objet, "kernel32.lib"], check=True)
+                    "@" + reponse, objet, "kernel32.lib", module.lower() + ".lib"], check=True)
     return sortie
 
 

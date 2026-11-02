@@ -6473,6 +6473,9 @@ ApplicationWindow {
             // Scénario de la 0.6.20 : le carnet d'adresses modifiable.
             if (essai.scenario === "carnet" || essai.scenario === "carnet-fiche" || essai.scenario === "carnet-nettoyage")
                 scenarios.lancerScenarioCarnet()
+            // Scénario de la 0.6.35 : import d'un carnet exporté par Outlook.
+            if (essai.scenario === "import-csv")
+                scenarios.lancerScenarioImportCsv()
             // Le corps d'un long message à tableau, défilé aller-retour (0.6.20).
             if (essai.scenario === "corps-long")
                 scenarios.lancerScenarioCorpsLong()

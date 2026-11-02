@@ -27,6 +27,43 @@ QtObject {
         return Math.round((Date.now() - depart) / 5000) * 5
     }
 
+    /// Scénario « import-csv » (0.6.35, banc CARNET=1) : MMAIL_DOSSIER désigne
+    /// un export CSV d'Outlook ; ses contacts rejoignent le carnet « Personnel »
+    /// du serveur, sauf celui dont une adresse y est déjà.
+    function lancerScenarioImportCsv() {
+        var avant = 0
+        var surRelu = function(change, erreurs) {
+            boite.agendasSynchronises.disconnect(surRelu)
+            var fiches = JSON.parse(boite.carnet(""))
+            console.log("scenario: fiches |", avant, "→", fiches.length, "|",
+                        JSON.stringify(fiches.map(function(f) { return f.nom }).sort()))
+            var rene = JSON.parse(boite.carnet("rene.dupont"))
+            if (rene.length > 0)
+                console.log("scenario: fiche importée |", boite.ficheContact(rene[0].id))
+            Qt.quit()
+        }
+        var surEcrit = function(ok, message, conflit) {
+            boite.contactsEcrits.disconnect(surEcrit)
+            console.log("scenario: écriture |", ok, "|", message)
+            boite.agendasSynchronises.connect(surRelu)
+            boite.synchroniserAgendas(true)
+        }
+        var surSynchro = function(change, erreurs) {
+            boite.agendasSynchronises.disconnect(surSynchro)
+            var carnets = JSON.parse(boite.carnetsModifiables())
+            console.log("scenario: carnets modifiables |", carnets.map(function(c) { return c.nom }).join(", "))
+            if (carnets.length === 0) {
+                Qt.quit()
+                return
+            }
+            avant = JSON.parse(boite.carnet("")).length
+            boite.contactsEcrits.connect(surEcrit)
+            console.log("scenario: lecture |", boite.importerContacts(carnets[0].id, identifiantsEssai.dossier))
+        }
+        boite.agendasSynchronises.connect(surSynchro)
+        boite.synchroniserAgendas(true)
+    }
+
     /// Scénario « filtre-autre-boite » (0.6.33) : un filtre de un@ sur le
     /// destinataire (À) et l'objet range « Essai 2 » dans « Essais » de deux@ ;
     /// appliqué à la boîte de réception, le message passe d'une boîte à l'autre.

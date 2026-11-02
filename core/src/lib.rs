@@ -7,6 +7,7 @@ pub mod boite;
 pub mod cache;
 pub mod caldav;
 pub mod carddav;
+pub mod carnet_csv;
 pub mod categories;
 pub mod configuration;
 pub mod deplacement;

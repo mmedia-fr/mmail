@@ -159,15 +159,16 @@ def outil(nom):
 
 def construire(dossier, nom_cale, dll, fonctions, renvois, ecrites, travail):
     module = os.path.splitext(dll)[0]
-    lignes = [f"LIBRARY {nom_cale}", "EXPORTS"]
+    # Exportations en options de l'éditeur de liens (/EXPORT), dans un fichier
+    # de réponse : la forme « nom=module.fonction » d'un .def n'y fait pas
+    # toujours un renvoi (refusée pour UIAutomationCore, LNK2001).
+    options = []
     for fn in sorted(set(fonctions)):
-        if fn in ecrites:
-            lignes.append(f"    {fn}=mmail_{fn}")
-        else:
-            lignes.append(f"    {fn}={renvois.get(fn, module + '.' + fn)}")
-    definition = os.path.join(travail, nom_cale + ".def")
-    with open(definition, "w", encoding="ascii") as f:
-        f.write("\n".join(lignes) + "\n")
+        cible = f"mmail_{fn}" if fn in ecrites else renvois.get(fn, module + "." + fn)
+        options.append(f"/EXPORT:{fn}={cible}")
+    reponse = os.path.join(travail, nom_cale + ".rsp")
+    with open(reponse, "w", encoding="ascii") as f:
+        f.write("\n".join(options) + "\n")
     source = os.path.join(travail, nom_cale + ".c")
     with open(source, "w", encoding="ascii") as f:
         f.write(SOURCE_UIA if ecrites else "int mmail_cale_vide;\n")
@@ -175,8 +176,8 @@ def construire(dossier, nom_cale, dll, fonctions, renvois, ecrites, travail):
     subprocess.run([outil("cl"), "/nologo", "/c", "/O2", "/GS-", "/Fo" + objet, source], check=True)
     sortie = os.path.join(dossier, nom_cale + ".dll")
     subprocess.run([outil("link"), "/nologo", "/DLL", "/NOENTRY", "/NODEFAULTLIB", "/MACHINE:X64",
-                    "/DEF:" + definition, "/OUT:" + sortie, "/IMPLIB:" + os.path.join(travail, nom_cale + ".lib"),
-                    objet, "kernel32.lib"], check=True)
+                    "/OUT:" + sortie, "/IMPLIB:" + os.path.join(travail, nom_cale + ".lib"),
+                    "@" + reponse, objet, "kernel32.lib"], check=True)
     return sortie
 
 

@@ -5292,7 +5292,7 @@ ApplicationWindow {
     /// compte ouvert, l'objet portant la version et le système. Sans compte,
     /// la messagerie du poste prend le relais.
     function envoyerSuggestion() {
-        var systemes = { windows: "Windows", linux: "Linux", android: "Android", osx: "macOS", macos: "macOS" }
+        var systemes = { windows: "Windows", linux: "Linux", android: "Android" }
         var objet = qsTr("Suggestion pour MMail %1 (%2)").arg(Qt.application.version)
                                                           .arg(systemes[Qt.platform.os] || Qt.platform.os)
         var compte = boite.compteCourant > 0 ? boite.compteCourant

@@ -650,10 +650,10 @@ précédentes portaient une clé d'essai : passer de l'une à l'autre demande de
 désinstaller MMail une fois).
 
 **Ni macOS ni iOS.** Les systèmes d'Apple ne sont pas des cibles de MMail, et
-l'intégration continue n'en construit plus depuis le 02/11/2026 : la
-distribution par l'App Store est incompatible avec la licence GPL, et une
-distribution hors de l'App Store passe par une démarche lourde et payante
-(signature et notarisation par un compte de développeur Apple).
+leur prise en charge est retirée du code et de l'intégration continue depuis le
+02/11/2026 : la distribution par l'App Store est incompatible avec la licence
+GPL, et une distribution hors de l'App Store passe par une démarche lourde et
+payante (signature et notarisation par un compte de développeur Apple).
 
 L'interface est en QML, dans `core/qml/` : `Main.qml` porte la fenêtre, ses
 réglages, ses raccourcis et ses actions ; chaque élément a son fichier — les trois

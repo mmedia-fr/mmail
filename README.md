@@ -358,6 +358,17 @@ compte, son index et ses réglages. Un nouveau serveur de lecture reprend le
 mot de passe mémorisé, qui change de clé dans le coffre avec lui ; s'il est
 injoignable, la fenêtre revient avec le motif.
 
+**Compte en erreur** (0.6.31) : une connexion automatique refusée — au
+démarrage, au réveil du poste, à la reconnexion après une coupure — n'ouvre
+plus la fenêtre du compte. Le compte passe en « erreur » dans la liste, le
+motif s'affiche dans la barre d'état (mot de passe ou jeton refusé, secret
+absent du coffre du système), et un clic sur « erreur » ouvre la fenêtre du
+compte, motif compris, avec « Se reconnecter… » pour un compte Microsoft ou
+Google. Après un geste de la personne — ajout ou modification d'un compte,
+« Se connecter… », reconnexion à Microsoft ou à Google —, la fenêtre revient
+d'elle-même en cas de refus, comme avant. Sans « Mémoriser le mot de passe »,
+le mot de passe reste demandé à chaque lancement.
+
 **Autres adresses d'envoi** (0.6.7) : séparées par « ; », elles s'ajoutent à
 l'adresse du compte dans le champ « De » des messages. L'envoi passe par le
 serveur et les identifiants du compte, sous l'adresse choisie (`From` et

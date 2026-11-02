@@ -10,6 +10,7 @@ pub mod carddav;
 pub mod categories;
 pub mod configuration;
 pub mod deplacement;
+pub mod desabonnement;
 pub mod fiche;
 pub mod filtres;
 pub mod garde;

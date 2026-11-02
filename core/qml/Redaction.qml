@@ -706,6 +706,7 @@ Page {
             Label { text: qsTr("À :") }
             TextField {
                 id: champA
+                objectName: "champA"
                 MenuSaisie {}
                 onTextEdited: {
                     redac.modifie = true
@@ -748,6 +749,7 @@ Page {
             Label { text: qsTr("Objet :") }
             TextField {
                 id: champObjet
+                objectName: "champObjet"
                 MenuSaisie {}
                 Layout.fillWidth: true
                 onTextEdited: redac.modifie = true

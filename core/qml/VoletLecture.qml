@@ -250,6 +250,15 @@ ColumnLayout {
         }
     }
 
+    // Liste de diffusion ou lettre d'information : « Se désabonner… »
+    // (0.6.30), après confirmation.
+    BandeauDesabonnement {
+        Layout.fillWidth: true
+        entete: fenetre.uidCourant > 0 && !fenetre.sourceVisible ? fenetre.enteteCourant : ({})
+        compte: boite.compteCourant > 0 ? boite.compteCourant
+              : (fenetre.comptesConnus.length > 0 ? fenetre.comptesConnus[0].compte : 0)
+    }
+
     // Invitation, réponse ou annulation portée par le message : le
     // bandeau d'Outlook, avec de quoi y donner suite. Le serveur
     // d'agenda (SOGo) envoie lui-même la réponse à l'organisateur.

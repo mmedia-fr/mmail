@@ -935,14 +935,18 @@ Page {
                 font.pointSize: fenetre.tailleColonne("message")
                 enabled: !redac.chargement
                 placeholderText: qsTr("Votre message")
-                background: Rectangle { color: fenetre.palette.base }
+                // Sous une apparence sombre, la page reste blanche, comme à la
+                // lecture : une citation garde les couleurs de son expéditeur
+                // (0.6.37).
+                color: fenetre.valeurOu("sombre", false) ? "#1f1f1f" : fenetre.palette.text
+                background: Rectangle { color: fenetre.valeurOu("sombre", false) ? "#ffffff" : fenetre.palette.base }
                 onTextChanged: if (!redac.chargement) redac.modifie = true
                 // Le badge animé de la signature s'anime pendant la rédaction (0.6.18).
                 ImagesAnimees {
                     id: animationsRedaction
                     zone: corpsRedaction
                     miseEnForme: mef
-                    fond: fenetre.palette.base
+                    fond: fenetre.valeurOu("sombre", false) ? "#ffffff" : fenetre.palette.base
                 }
                 // Même blanc que la lecture sur une longue réponse qui cite un
                 // message à tableau (cf. cpp/rendu_complet.h).

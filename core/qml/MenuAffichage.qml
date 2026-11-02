@@ -33,6 +33,11 @@ Menu {
                 onTriggered: fenetre.choisirApparence(modelData)
             }
         }
+        MenuSeparator {}
+        MenuItem {
+            text: qsTr("Créer mon apparence…")
+            onTriggered: dlgApparence.ouvrir()
+        }
     }
     // La vue tactile garde la barre d'application d'Android : pas de
     // disposition à choisir (retirée à la création).

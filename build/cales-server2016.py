@@ -141,6 +141,20 @@ class Pe:
         self.b[self.repertoires + 11 * 8:self.repertoires + 12 * 8] = b"\0" * 8
         return fonctions
 
+    def retirer_signature(self):
+        """Une DLL modifiée garderait une signature Authenticode invalide, ce
+        qu'un antivirus peut tenir pour une altération : elle devient non
+        signée, comme MMail.exe. La table des certificats est en fin de
+        fichier."""
+        entree = self.repertoires + 4 * 8
+        position, taille = self.u32(entree), self.u32(entree + 4)
+        if position == 0:
+            return False
+        if position + taille == len(self.b):
+            del self.b[position:]
+        self.b[entree:entree + 8] = b"\0" * 8
+        return True
+
     def ecrire(self):
         with open(self.chemin, "wb") as f:
             f.write(self.b)
@@ -192,6 +206,8 @@ def main():
                 if fn not in fonctions:
                     raise SystemExit(f"{fichier} n'importe plus {fn} de {dll} : cale à revoir")
             construire(dossier, nom_cale, dll, fonctions, renvois, ecrites, travail)
+            if pe.retirer_signature():
+                print(f"{fichier} : signature retirée")
             pe.ecrire()
             print(f"{fichier} : {dll} → {nom_cale}.DLL ({len(fonctions)} fonctions)")
     # Contrôle : plus aucun import des deux fonctions depuis leur DLL d'origine.

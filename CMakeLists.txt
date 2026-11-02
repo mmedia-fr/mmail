@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # MMail — noyau Rust (core/), interface Qt 6 / QML, coffre des mots de passe natif.
 cmake_minimum_required(VERSION 3.24)
-project(mmail VERSION 0.6.30 LANGUAGES CXX)
+project(mmail VERSION 0.6.31 LANGUAGES CXX)
 
 # Ni macOS ni iOS (décision du 2026-11-02, motif au README).
 if(APPLE)
@@ -140,7 +140,7 @@ endif()
 # Le .h figure dans les sources pour qu'AUTOMOC le traite : sans cela, la classe
 # QObject qu'il declare n'a pas de metaobjet et l'edition de liens echoue.
 set(MMAIL_SOURCES cpp/main.cpp cpp/coffre.h cpp/fenetre.h cpp/installeur.h cpp/lanceur.h cpp/pastille.h cpp/notifieur.h cpp/impression.h cpp/presse_papier.h
-                  cpp/mise_en_forme.h cpp/rendu_complet.h)
+                  cpp/mise_en_forme.h cpp/rendu_complet.h cpp/correcteur.h)
 if(WIN32)
   # Icône et informations de version de l'exécutable (cf. build/mmail.rc.in).
   configure_file(build/mmail.rc.in ${CMAKE_CURRENT_BINARY_DIR}/mmail.rc @ONLY)

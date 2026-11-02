@@ -72,7 +72,7 @@ pub const AUTH_MICROSOFT: &str = "microsoft";
 pub const AUTH_GOOGLE: &str = "google";
 
 /// Version du schéma, portée par `PRAGMA user_version`.
-const VERSION_SCHEMA: i32 = 19;
+const VERSION_SCHEMA: i32 = 20;
 
 #[derive(Debug)]
 pub struct Erreur(pub String);
@@ -211,6 +211,10 @@ pub struct MessageLocal {
     /// Destinataires (`To`, à défaut `Cc`), affichés à la place de
     /// l'expéditeur dans les éléments envoyés (cf. `index::destinataires`).
     pub destinataires: String,
+    /// Destinataires `To` et `Cc`, un par ligne, « nom<TAB>adresse » : ce
+    /// que les filtres comparent (0.6.33, cf. `index::contacts`).
+    pub a: String,
+    pub cc: String,
     pub sujet: String,
     pub date: String,
     /// Date interne du serveur en secondes Unix : la clef de tri.
@@ -686,6 +690,14 @@ impl Magasin {
             self.ajouter_colonne("carnets", "ecriture", "INTEGER NOT NULL DEFAULT 1")?;
             self.base.execute_batch("UPDATE carnets SET ctag = ''; UPDATE fiches SET etag = '';")?;
         }
+        // Version 20 : les destinataires À et Cc de chaque message, pour les
+        // filtres (0.6.33). Remplis à l'indexation des messages qui arrivent ;
+        // ceux déjà indexés restent vides jusqu'à la relecture de leurs
+        // en-têtes.
+        if version < 20 {
+            self.ajouter_colonne("messages", "dest_a", "TEXT NOT NULL DEFAULT ''")?;
+            self.ajouter_colonne("messages", "dest_cc", "TEXT NOT NULL DEFAULT ''")?;
+        }
         self.base.pragma_update(None, "user_version", VERSION_SCHEMA)?;
         Ok(())
     }
@@ -762,7 +774,7 @@ impl Magasin {
             return Ok((0, Vec::new()));
         };
         let mut requete = self.base.prepare(
-            "SELECT uid, message_id, expediteur, adresse, sujet, lu FROM messages
+            "SELECT uid, message_id, expediteur, adresse, sujet, lu, dest_a, dest_cc FROM messages
              WHERE folder_id = ?1 AND uid > ?2 ORDER BY uid",
         )?;
         let recus = requete
@@ -774,6 +786,8 @@ impl Magasin {
                     adresse: l.get(3)?,
                     sujet: l.get(4)?,
                     lu: l.get::<_, i64>(5)? != 0,
+                    a: l.get(6)?,
+                    cc: l.get(7)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -1313,13 +1327,13 @@ impl Magasin {
                     "INSERT OR IGNORE INTO messages
                        (folder_id, uid, message_id, expediteur, adresse, sujet, date, horodatage,
                         taille, lu, repondu, pieces, suivi, importance, transfere, repondu_tous, destinataires,
-                        mots_cles)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+                        mots_cles, dest_a, dest_cc)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
                 )?;
                 let mut mise_a_jour = transaction.prepare(
                     "UPDATE messages SET lu = ?3, repondu = ?4, suivi = ?6, importance = ?7, transfere = ?8, repondu_tous = ?9,
                         pieces = CASE WHEN pieces_certain = 1 THEN pieces ELSE ?5 END, destinataires = ?10,
-                        mots_cles = ?11
+                        mots_cles = ?11, dest_a = ?12, dest_cc = ?13
                      WHERE folder_id = ?1 AND uid = ?2",
                 )?;
                 // Un expéditeur compte une fois par message nouveau dans l'index.
@@ -1347,7 +1361,9 @@ impl Magasin {
                         m.transfere as i32,
                         m.repondu_tous as i32,
                         m.destinataires,
-                        m.mots_cles
+                        m.mots_cles,
+                        m.a,
+                        m.cc
                     ])? == 1;
                     if nouveau {
                         if !m.adresse.is_empty() {
@@ -1365,7 +1381,9 @@ impl Magasin {
                             m.transfere as i32,
                             m.repondu_tous as i32,
                             m.destinataires,
-                            m.mots_cles
+                            m.mots_cles,
+                            m.a,
+                            m.cc
                         ])?;
                     }
                 }
@@ -2564,6 +2582,9 @@ fn lire_message(l: &rusqlite::Row<'_>) -> rusqlite::Result<MessageLocal> {
         repondu_tous: l.get::<_, i32>(14)? != 0,
         destinataires: l.get(15)?,
         mots_cles: l.get(16)?,
+        // Destinataires des filtres (0.6.33) : la liste n'en a pas besoin.
+        a: String::new(),
+        cc: String::new(),
     })
 }
 

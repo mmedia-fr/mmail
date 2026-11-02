@@ -36,9 +36,30 @@ de projet interne.
   repris d'un double clic — un brouillon reste dans le compte où il a été écrit,
   même quand on change « De » (0.6.24) ; le dossier Brouillons affiche entre
   crochets le nombre de ses éléments, comme Outlook ;
+- **correcteur d'orthographe** (0.6.36) : à la rédaction, les mots inconnus du
+  dictionnaire sont soulignés en rouge — pas celui qu'on est en train de
+  taper —, et le clic droit sur l'un d'eux propose ses corrections et « Ajouter
+  au dictionnaire » (les mots ajoutés suivent la sauvegarde de la
+  configuration). Dictionnaire français de Grammalecte (version 7.7, licence
+  MPL 2.0, celui de LibreOffice et de Firefox), embarqué dans MMail : rien à
+  installer, rien ne quitte le poste. Sigles en capitales, mots à chiffres,
+  adresses web et de courriel ne sont pas vérifiés. « Réglages › Vérifier
+  l'orthographe en tapant » le coupe ;
 - **mise en forme** à la rédaction — gras, italique, souligné, listes à
   puces ou numérotées, liens — envoyée en HTML avec sa version en texte brut ;
   « Mise en forme » décochée, le message part en texte brut ;
+- **envoi hors connexion** (0.6.34) : un message qui n'a pas pu partir faute
+  de réseau — serveur injoignable, connexion coupée avant que son texte ne
+  parte — reste dans la boîte d'envoi, sa fenêtre fermée, et repart seul au
+  retour du réseau : à la reconnexion de son compte, et toutes les minutes. La
+  barre d'état compte les messages en attente ; un clic les rouvre, et ils ne
+  repartent plus qu'à « Envoyer ». MMail fermé d'ici là, ils reprennent leur
+  place au lancement suivant. Une coupure après l'envoi du texte, qui laisse
+  ignorer s'il est parti, et un refus du serveur rouvrent la fenêtre avec le
+  motif, comme avant ; de même une coupure pendant l'envoi d'un compte
+  Microsoft 365, qui passe par Graph et ne dit pas si le message est parti
+  (un compte Microsoft qui ne se connecte pas du tout attend, lui, le
+  réseau) ;
 - **nom affiché et signature** par compte (menu « Comptes », « Nom et
   signature… »), ajoutée aux nouveaux messages, aux réponses, ou sur demande ;
 - **autres adresses d'envoi** d'un compte, proposées dans le champ « De » :
@@ -108,14 +129,23 @@ de projet interne.
 - **carnet d'adresses** (« Comptes › Carnet d'adresses… ») : les contacts des
   carnets du serveur (CardDAV — SOGo, le webmail des boîtes Mailcow), relus avec
   les agendas ; à chercher par nom, organisation ou adresse, et à qui écrire. Ils
-  viennent en tête des adresses proposées à la saisie. Lecture seule : un
-  contact se crée ou se modifie dans le webmail ;
+  viennent en tête des adresses proposées à la saisie. Un contact se crée, se
+  modifie ou se supprime dans MMail (0.6.20) ; « Importer d'Outlook (CSV)… »
+  (0.6.35) verse dans un carnet le dossier Contacts exporté par Outlook en
+  valeurs séparées par une virgule — colonnes en français ou en anglais,
+  fichier en Windows-1252 ou en UTF-8, virgules ou points-virgules —, sans
+  reprendre un contact dont une adresse de messagerie est déjà dans un
+  carnet ;
 - **filtres du courrier** (« Comptes › Filtres du courrier… », ou « Créer un
-  filtre… » sur un message) : selon l'expéditeur — nom ou adresse — et l'objet
-  (contient, est, commence par, se termine par ; toutes les conditions ou une
-  au moins), un message arrivé dans la boîte de réception est marqué lu, suivi,
-  rangé dans un dossier de son compte, mis à la corbeille ou classé
-  indésirable ; les filtres se lisent dans l'ordre. MMail les applique lui-même,
+  filtre… » sur un message) : selon l'expéditeur — nom ou adresse —, l'objet
+  et les destinataires (À, Cc, ou l'un ou l'autre, chacun par son nom ou son
+  adresse, 0.6.33) — contient, est, commence par, se termine par ; toutes les
+  conditions ou une au moins —, un message arrivé dans la boîte de réception
+  est marqué lu, suivi, rangé dans un dossier de son compte ou d'une autre
+  boîte du profil (0.6.33 ; si cette boîte n'est pas encore connectée, le
+  déplacement attend sa connexion), mis à la corbeille ou classé indésirable ;
+  les filtres se lisent dans l'ordre. Les destinataires ne sont connus que des
+  messages arrivés depuis la 0.6.33. MMail les applique lui-même,
   pour tous les comptes (Mailcow, Microsoft 365, Gmail…), aux messages qui
   arrivent pendant qu'il est ouvert — ou à toute la boîte sur demande. Un
   message ramené à la main n'est pas refiltré. Les filtres partent avec la
@@ -212,6 +242,18 @@ de projet interne.
   se télécharge pas ; une erreur de réseau vaut une seconde tentative. Une
   image demandée qui n'est pas venue est dite telle dans le bandeau, qui
   propose alors de réessayer ;
+- **numéros de téléphone et adresses postales cliquables** (0.6.32) : dans le
+  texte d'un message, en texte brut comme en HTML, un numéro de téléphone
+  ouvre le logiciel d'appel du poste (`tel:` — l'application de téléphonie
+  sous Windows, le composeur sous Android) et une adresse postale la carte
+  d'OpenStreetMap dans le navigateur ; la barre d'état dit, au survol, le
+  numéro ou l'adresse. Numéros repérés : français à dix chiffres, d'un seul
+  tenant ou par paires (« 05 57 00 00 00 », « 05.57.00.00.00 »), et
+  internationaux (« +33 5 57 00 00 00 », « +33 (0)5… », « 0033… »). Adresses
+  repérées : numéro et type de voie (« 12 rue… », « 3 bis avenue… », ou sans
+  numéro « ZA des… », « Lieu-dit… »), puis code postal et commune sur la même
+  ligne ou la suivante, boîte postale et CEDEX compris. Les liens d'appel
+  posés par l'expéditeur (`tel:`) restent cliquables ;
 - **se désabonner** (0.6.30) : une lettre d'information ou un message de liste
   de diffusion qui offre le moyen de s'en retirer porte un bandeau « Se
   désabonner… », dans le volet de lecture comme dans la fenêtre d'un message.
@@ -256,10 +298,20 @@ de projet interne.
   — en-tête et corps —, pas les boutons : barre d'actions, pièces jointes,
   bandeaux des images et des invitations gardent la taille de l'apparence
   (0.6.29) ;
-- **quatre apparences**, celles de MMdedit : classique (Windows 9x), moderne
-  (M-Media), système, et MMEDIA, aux couleurs du site mmedia.fr — en-tête en
-  bandeau nuit, boutons en pastilles, non-lus en pastilles rouges, dossier et
-  message choisis sur un cyan pâle, marqués d'un filet — menu « Affichage » ;
+- **apparences** (menu « Affichage › Apparence ») : classique (Windows 9x),
+  moderne (M-Media), système, et MMEDIA, aux couleurs du site mmedia.fr —
+  en-tête en bandeau nuit, boutons en pastilles, non-lus en pastilles rouges,
+  dossier et message choisis sur un cyan pâle, marqués d'un filet — ; Pomme ;
+  **Outlook** (0.6.38), l'affichage d'Outlook d'après la palette publiée de
+  Fluent 2 (bandeau au bleu de marque, sélection bleu pâle, objets non lus en
+  bleu, Segoe UI en 9 points, titres en semi-gras) ;
+  **Nuit** (0.6.37), fonds sombres et texte clair, la page d'un message HTML
+  et celle de la rédaction restant blanches pour garder les couleurs de
+  l'expéditeur ; et **une apparence personnelle** (0.6.37, « Créer mon
+  apparence… ») : à partir de l'une d'elles, le fond, le bandeau, l'accent et
+  la sélection aux couleurs de chacun, le texte posé dessus réglé par MMail
+  pour rester lisible (4,5:1 au moins) ; elle suit la sauvegarde de la
+  configuration ;
 - mot de passe confié au **coffre du système**, jamais écrit par MMail ;
 - **synchronisation incrémentale** (QRESYNC) : seul ce qui a changé depuis la
   dernière visite est relu ; le dossier ouvert suit le serveur en temps réel
@@ -357,6 +409,17 @@ là « Nom et signature… ». L'adresse ne change pas : c'est elle qui désigne
 compte, son index et ses réglages. Un nouveau serveur de lecture reprend le
 mot de passe mémorisé, qui change de clé dans le coffre avec lui ; s'il est
 injoignable, la fenêtre revient avec le motif.
+
+**Compte en erreur** (0.6.31) : une connexion automatique refusée — au
+démarrage, au réveil du poste, à la reconnexion après une coupure — n'ouvre
+plus la fenêtre du compte. Le compte passe en « erreur » dans la liste, le
+motif s'affiche dans la barre d'état (mot de passe ou jeton refusé, secret
+absent du coffre du système), et un clic sur « erreur » ouvre la fenêtre du
+compte, motif compris, avec « Se reconnecter… » pour un compte Microsoft ou
+Google. Après un geste de la personne — ajout ou modification d'un compte,
+« Se connecter… », reconnexion à Microsoft ou à Google —, la fenêtre revient
+d'elle-même en cas de refus, comme avant. Sans « Mémoriser le mot de passe »,
+le mot de passe reste demandé à chaque lancement.
 
 **Autres adresses d'envoi** (0.6.7) : séparées par « ; », elles s'ajoutent à
 l'adresse du compte dans le champ « De » des messages. L'envoi passe par le

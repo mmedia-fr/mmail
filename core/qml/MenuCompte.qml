@@ -39,7 +39,7 @@ Menu {
                 boite.deconnecter(menuCompte.compte)
             else
                 fenetre.connecterCompte({ id: menuCompte.compte, adresse: menuCompte.adresse,
-                                          hote: menuCompte.hote })
+                                          hote: menuCompte.hote }, true)
         }
     }
     MenuItem {

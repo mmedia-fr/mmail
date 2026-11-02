@@ -6,9 +6,11 @@
 //! webmail SOGo) restent possibles à côté, pour un tri quand aucun MMail
 //! n'est ouvert.
 //!
-//! Un filtre : des conditions sur l'expéditeur (nom ou adresse) et l'objet —
-//! toutes, ou une au moins —, puis des actions : marquer lu, suivre, et une
-//! destination (un dossier du compte, la corbeille, les indésirables). Les
+//! Un filtre : des conditions sur l'expéditeur (nom ou adresse), l'objet et,
+//! depuis la 0.6.33, les destinataires (À, Cc, ou l'un ou l'autre) — toutes,
+//! ou une au moins —, puis des actions : marquer lu, suivre, et une
+//! destination (un dossier du compte ou, depuis la 0.6.33, d'une autre boîte
+//! du profil ; la corbeille ; les indésirables). Les
 //! filtres se lisent dans l'ordre ; le premier qui donne une destination la
 //! fixe ; « arrêter » coupe la lecture des suivants. La liste part avec la
 //! sauvegarde de la configuration : elle suit l'utilisateur d'un poste à
@@ -40,16 +42,21 @@ pub struct Filtre {
     #[serde(default)]
     pub destination: String,
     /// Chemin du dossier, pour la destination `dossier` — un dossier du
-    /// compte visé.
+    /// compte visé, ou de `compte_destination`.
     #[serde(default)]
     pub dossier: String,
+    /// Adresse de la boîte du dossier de destination, quand ce n'est pas
+    /// celle du message (0.6.33) ; vide : la boîte du message.
+    #[serde(default)]
+    pub compte_destination: String,
     #[serde(default)]
     pub arreter: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Condition {
-    /// `expediteur` (nom ou adresse) ou `objet`.
+    /// `expediteur` (nom ou adresse), `objet`, `a`, `cc` ou `destinataires`
+    /// (À ou Cc) — chaque destinataire par son nom ou son adresse.
     pub champ: String,
     /// `contient`, `est`, `commence` ou `finit`.
     pub operateur: String,
@@ -61,8 +68,12 @@ fn vrai() -> bool {
 }
 
 /// Champs et comparaisons qu'une condition peut employer — dans un filtre
-/// comme dans une purge partielle (0.6.24, cf. `purge`).
+/// comme dans une purge partielle (0.6.24, cf. `purge`, qui ne relit que
+/// l'expéditeur et l'objet).
 pub const CHAMPS: [&str; 2] = ["expediteur", "objet"];
+/// Champs propres aux filtres (0.6.33) : les destinataires, que l'index
+/// garde pour chaque message reçu.
+pub const CHAMPS_FILTRES: [&str; 5] = ["expediteur", "objet", "a", "cc", "destinataires"];
 pub const OPERATEURS: [&str; 4] = ["contient", "est", "commence", "finit"];
 
 /// Un message reçu, tel que l'index le connaît.
@@ -73,6 +84,10 @@ pub struct Recu {
     pub expediteur: String,
     pub adresse: String,
     pub sujet: String,
+    /// Destinataires `To` et `Cc`, un par ligne, « nom<TAB>adresse »
+    /// (cf. `index::contacts`, 0.6.33).
+    pub a: String,
+    pub cc: String,
     /// Déjà lu à l'arrivée (lu ailleurs, ou envoyé à soi-même et marqué).
     pub lu: bool,
 }
@@ -82,8 +97,9 @@ pub struct Recu {
 pub struct Plan {
     pub lus: Vec<u32>,
     pub suivis: Vec<u32>,
-    /// Par dossier de destination, chemin du compte.
-    pub deplacements: BTreeMap<String, Vec<u32>>,
+    /// Par destination : adresse de la boîte (vide : celle du message) et
+    /// chemin du dossier.
+    pub deplacements: BTreeMap<(String, String), Vec<u32>>,
     pub corbeille: Vec<u32>,
     pub indesirables: Vec<u32>,
     /// Les messages qu'un filtre a touchés, par leur `Message-ID` (vide s'il
@@ -110,7 +126,7 @@ pub fn lire(json: &str) -> Result<Vec<Filtre>, String> {
             return Err(format!("le filtre {nom} n'a pas de condition"));
         }
         for c in &f.conditions {
-            if !CHAMPS.contains(&c.champ.as_str()) {
+            if !CHAMPS_FILTRES.contains(&c.champ.as_str()) {
                 return Err(format!("le filtre {nom} porte sur un champ inconnu : {}", c.champ));
             }
             if !OPERATEURS.contains(&c.operateur.as_str()) {
@@ -122,8 +138,13 @@ pub fn lire(json: &str) -> Result<Vec<Filtre>, String> {
         }
         match f.destination.as_str() {
             "" | "corbeille" | "indesirables" => {}
-            "dossier" if f.dossier.trim().is_empty() || f.compte.trim().is_empty() => {
-                return Err(format!("le filtre {nom} déplace vers un dossier sans le nommer, ou pour tous les comptes"));
+            "dossier"
+                if f.dossier.trim().is_empty()
+                    || (f.compte.trim().is_empty() && f.compte_destination.trim().is_empty()) =>
+            {
+                return Err(format!(
+                    "le filtre {nom} déplace vers un dossier sans le nommer, ou pour tous les comptes sans dire dans quelle boîte"
+                ));
             }
             "dossier" => {}
             autre => return Err(format!("le filtre {nom} a une destination inconnue : {autre}")),
@@ -141,7 +162,8 @@ pub fn lire(json: &str) -> Result<Vec<Filtre>, String> {
 pub fn suivre_renommage(json: &str, compte: &str, ancien: &str, nouveau: &str, separateur: &str) -> Option<String> {
     let mut filtres: Vec<Filtre> = serde_json::from_str(json).ok()?;
     let mut change = false;
-    for f in filtres.iter_mut().filter(|f| f.destination == "dossier" && f.compte.eq_ignore_ascii_case(compte)) {
+    let boite = |f: &Filtre| if f.compte_destination.is_empty() { f.compte.clone() } else { f.compte_destination.clone() };
+    for f in filtres.iter_mut().filter(|f| f.destination == "dossier" && boite(f).eq_ignore_ascii_case(compte)) {
         if let Some(chemin) = crate::protocole::chemin_apres_renommage(&f.dossier, ancien, nouveau, separateur) {
             f.dossier = chemin;
             change = true;
@@ -167,9 +189,19 @@ fn correspond(c: &Condition, m: &Recu) -> bool {
             _ => false,
         }
     };
+    // Un destinataire répond par son nom ou son adresse, comme l'expéditeur.
+    let liste = |contacts: &str| {
+        contacts.lines().any(|ligne| {
+            let (nom, adresse) = ligne.split_once('\t').unwrap_or(("", ligne));
+            (!nom.is_empty() && teste(nom)) || teste(adresse)
+        })
+    };
     match c.champ.as_str() {
         "expediteur" => teste(&m.expediteur) || teste(&m.adresse),
         "objet" => teste(&m.sujet),
+        "a" => liste(&m.a),
+        "cc" => liste(&m.cc),
+        "destinataires" => liste(&m.a) || liste(&m.cc),
         _ => false,
     }
 }
@@ -197,7 +229,7 @@ pub fn planifier(filtres: &[Filtre], compte: &str, recus: &[Recu], deja: &dyn Fn
             continue;
         }
         let (mut touche, mut lu, mut suivi) = (false, false, false);
-        let mut destination: Option<(&str, &str)> = None;
+        let mut destination: Option<(&str, &str, &str)> = None;
         for f in &actifs {
             if !conditions_remplies(f.tout, &f.conditions, m) {
                 continue;
@@ -206,7 +238,7 @@ pub fn planifier(filtres: &[Filtre], compte: &str, recus: &[Recu], deja: &dyn Fn
             lu |= f.lu;
             suivi |= f.suivi;
             if destination.is_none() && !f.destination.is_empty() {
-                destination = Some((f.destination.as_str(), f.dossier.as_str()));
+                destination = Some((f.destination.as_str(), f.dossier.as_str(), f.compte_destination.as_str()));
             }
             if f.arreter {
                 break;
@@ -223,9 +255,13 @@ pub fn planifier(filtres: &[Filtre], compte: &str, recus: &[Recu], deja: &dyn Fn
             plan.suivis.push(m.uid);
         }
         match destination {
-            Some(("dossier", dossier)) => plan.deplacements.entry(dossier.to_string()).or_default().push(m.uid),
-            Some(("corbeille", _)) => plan.corbeille.push(m.uid),
-            Some(("indesirables", _)) => plan.indesirables.push(m.uid),
+            Some(("dossier", dossier, boite)) => {
+                // La boîte du message, nommée comme destination, n'en est pas une autre.
+                let boite = if boite.eq_ignore_ascii_case(compte) { "" } else { boite };
+                plan.deplacements.entry((boite.to_string(), dossier.to_string())).or_default().push(m.uid)
+            }
+            Some(("corbeille", _, _)) => plan.corbeille.push(m.uid),
+            Some(("indesirables", _, _)) => plan.indesirables.push(m.uid),
             _ => {}
         }
     }
@@ -251,7 +287,14 @@ mod tests {
     use super::*;
 
     fn recu(uid: u32, expediteur: &str, adresse: &str, sujet: &str) -> Recu {
-        Recu { uid, message_id: format!("<{uid}@essai>"), expediteur: expediteur.into(), adresse: adresse.into(), sujet: sujet.into(), lu: false }
+        Recu {
+            uid,
+            message_id: format!("<{uid}@essai>"),
+            expediteur: expediteur.into(),
+            adresse: adresse.into(),
+            sujet: sujet.into(),
+            ..Default::default()
+        }
     }
 
     fn filtre(json: &str) -> Filtre {
@@ -271,6 +314,7 @@ mod tests {
             (r#"[{"nom":"A","conditions":[{"champ":"objet","operateur":"est","valeur":"  "}],"lu":true}]"#, "sans texte"),
             (r#"[{"nom":"A","conditions":[{"champ":"objet","operateur":"est","valeur":"x"}]}]"#, "pas d'action"),
             (r#"[{"nom":"A","conditions":[{"champ":"objet","operateur":"est","valeur":"x"}],"destination":"dossier","dossier":"F"}]"#, "pour tous les comptes"),
+            (r#"[{"nom":"A","conditions":[{"champ":"bcc","operateur":"est","valeur":"x"}],"lu":true}]"#, "champ inconnu"),
             (r#"[{"nom":"A","conditions":[{"champ":"objet","operateur":"est","valeur":"x"}],"destination":"lune"}]"#, "destination inconnue"),
             ("{", "illisibles"),
         ] {
@@ -295,7 +339,7 @@ mod tests {
         ];
         let plan = planifier(&filtres, "moi@x.fr", &recus, &|_| false);
         assert_eq!(plan.lus, vec![1]);
-        assert_eq!(plan.deplacements.get("INBOX/banque"), Some(&vec![1]));
+        assert_eq!(plan.deplacements.get(&(String::new(), "INBOX/banque".into())), Some(&vec![1]));
         assert_eq!(plan.indesirables, vec![2, 3]);
         assert_eq!(plan.suivis, vec![4]);
         assert!(plan.corbeille.is_empty());
@@ -335,5 +379,37 @@ mod tests {
         // Déjà touché : laissé tel quel.
         let deja = planifier(&filtres, "moi@x.fr", &recus, &|id| id == "<1@essai>");
         assert_eq!(deja.corbeille, vec![3]);
+    }
+
+    #[test]
+    fn destinataires_et_autre_boite() {
+        let filtres = vec![
+            filtre(r#"{"compte":"moi@x.fr","conditions":[{"champ":"a","operateur":"est","valeur":"compta@x.fr"}],"destination":"dossier","compte_destination":"archives@x.fr","dossier":"Compta"}"#),
+            filtre(r#"{"conditions":[{"champ":"cc","operateur":"contient","valeur":"Dupont"}],"suivi":true}"#),
+            filtre(r#"{"conditions":[{"champ":"destinataires","operateur":"finit","valeur":"@client.fr"}],"lu":true}"#),
+            filtre(r#"{"compte":"moi@x.fr","conditions":[{"champ":"objet","operateur":"contient","valeur":"ici"}],"destination":"dossier","compte_destination":"MOI@x.fr","dossier":"Ici"}"#),
+        ];
+        let mut recus = vec![
+            recu(1, "", "a@b.fr", "Facture"),
+            recu(2, "", "a@b.fr", "Réunion"),
+            recu(3, "", "a@b.fr", "Devis"),
+            recu(4, "", "a@b.fr", "Rangé ici"),
+        ];
+        recus[0].a = "Comptabilité\tcompta@x.fr\n\tmoi@x.fr".into();
+        recus[1].cc = "Jean Dupont\tj.dupont@y.fr".into();
+        recus[2].cc = "\tachat@client.fr".into();
+        let plan = planifier(&filtres, "moi@x.fr", &recus, &|_| false);
+        assert_eq!(plan.deplacements.get(&("archives@x.fr".into(), "Compta".into())), Some(&vec![1]));
+        assert_eq!(plan.suivis, vec![2]);
+        assert_eq!(plan.lus, vec![3]);
+        // La boîte du message, nommée comme destination : un déplacement ordinaire.
+        assert_eq!(plan.deplacements.get(&(String::new(), "Ici".into())), Some(&vec![4]));
+        // Un filtre de tous les comptes range dans une boîte nommée.
+        assert!(lire(r#"[{"conditions":[{"champ":"a","operateur":"est","valeur":"x"}],"destination":"dossier","compte_destination":"b@x.fr","dossier":"F"}]"#).is_ok());
+        // Dossier renommé dans la boîte de destination : le filtre suit.
+        let json = serde_json::to_string(&filtres).unwrap();
+        let suivi = suivre_renommage(&json, "archives@x.fr", "Compta", "Comptabilité", "/").unwrap();
+        assert!(suivi.contains("\"dossier\":\"Comptabilité\""), "{suivi}");
+        assert!(suivre_renommage(&json, "moi@x.fr", "Compta", "X", "/").is_none());
     }
 }

@@ -1362,6 +1362,17 @@ struct Cible {
     identifiants: Option<Identifiants>,
 }
 
+/// Déplacement d'un filtre vers une autre boîte, qui n'était pas connectée
+/// quand le filtre a joué (0.6.33) : au démarrage, l'ordre des connexions
+/// n'est pas fixé. Il part dès que source et cible sont connectées.
+struct DeplacementDiffere {
+    compte: i64,
+    source: String,
+    uids: Vec<u32>,
+    cible_compte: i64,
+    chemin: String,
+}
+
 /// Ce que l'interface demande au fil de travail d'un compte.
 #[derive(Clone)]
 enum Commande {
@@ -1640,6 +1651,9 @@ pub struct BoiteRust {
     /// antérieure — critères changés, nouveau « Compter » — est ignorée, le
     /// décompte gardé est toujours celui que l'interface montre.
     purge_numero: u64,
+    /// Déplacements des filtres en attente de la connexion de leur boîte
+    /// cible (0.6.33).
+    filtres_differes: Vec<DeplacementDiffere>,
 }
 
 /// Décompte d'un vidage partiel (0.6.24) : à la confirmation, ces messages-là
@@ -1730,6 +1744,7 @@ impl Default for BoiteRust {
             recherche: Arc::new(AtomicU64::new(0)),
             recherche_approchee: AtomicBool::new(false),
             purge: None,
+            filtres_differes: Vec::new(),
             purge_numero: 0,
         }
     }
@@ -4168,6 +4183,7 @@ impl qobject::Boite {
             return 0;
         }
         let dossiers = magasin.dossiers(compte).unwrap_or_default();
+        let comptes = magasin.comptes().unwrap_or_default();
         let corbeille = dossier_de_role(&dossiers, "Trash");
         let indesirables = dossier_indesirables(&dossiers).map(|j| if j == chemin { "INBOX".to_string() } else { j });
         let touches = plan.touches.len() as i32;
@@ -4178,21 +4194,59 @@ impl qobject::Boite {
         if !plan.suivis.is_empty() {
             self.as_mut().envoyer(compte, Commande::MarquerSuivi { chemin: source.clone(), uids: plan.suivis, suivi: true });
         }
-        let mut destinations: Vec<(String, Vec<u32>)> = plan.deplacements.into_iter().collect();
+        // Destinations : boîte (vide : celle du message) et dossier.
+        let mut destinations: Vec<(String, String, Vec<u32>)> =
+            plan.deplacements.into_iter().map(|((boite, dossier), uids)| (boite, dossier, uids)).collect();
         if let Some(c) = corbeille {
-            destinations.push((c, plan.corbeille));
+            destinations.push((String::new(), c, plan.corbeille));
         }
         if let Some(j) = indesirables {
-            destinations.push((j, plan.indesirables));
+            destinations.push((String::new(), j, plan.indesirables));
         }
         let mut lances = 0;
-        for (cible, uids) in destinations {
-            if uids.is_empty() || cible == source {
+        for (boite, chemin_cible, uids) in destinations {
+            if uids.is_empty() {
                 continue;
             }
-            let cible = Cible { compte, chemin: cible, identifiants: None };
-            if self.as_mut().envoyer(compte, Commande::Deplacer { source: source.clone(), uids, cible }) {
-                lances += 1;
+            let cible_compte = if boite.is_empty() {
+                compte
+            } else if let Some(c) = comptes.iter().find(|c| c.adresse.eq_ignore_ascii_case(&boite)) {
+                c.id
+            } else {
+                let message = format!(
+                    "filtres : la boîte {boite} n'est plus dans le profil — {} laissé(s) dans la boîte de réception",
+                    uids.len()
+                );
+                self.as_mut().set_erreur(QString::from(&message));
+                continue;
+            };
+            if cible_compte == compte {
+                if chemin_cible == source {
+                    continue;
+                }
+                let cible = Cible { compte, chemin: chemin_cible, identifiants: None };
+                if self.as_mut().envoyer(compte, Commande::Deplacer { source: source.clone(), uids, cible }) {
+                    lances += 1;
+                }
+                continue;
+            }
+            // Vers une autre boîte (0.6.33) : elle doit être connectée ; sinon
+            // le déplacement attend sa connexion.
+            let pret = self.etat(cible_compte) == Etat::Pret;
+            match self.identites.get(&cible_compte).filter(|_| pret).cloned() {
+                Some(identifiants) => {
+                    let cible = Cible { compte: cible_compte, chemin: chemin_cible, identifiants: Some(identifiants) };
+                    if self.as_mut().envoyer(compte, Commande::Deplacer { source: source.clone(), uids, cible }) {
+                        lances += 1;
+                    }
+                }
+                None => self.as_mut().rust_mut().filtres_differes.push(DeplacementDiffere {
+                    compte,
+                    source: source.clone(),
+                    uids,
+                    cible_compte,
+                    chemin: chemin_cible,
+                }),
             }
         }
         self.as_mut().filtres_appliques(compte as i32, touches, lances);
@@ -4200,6 +4254,27 @@ impl qobject::Boite {
             self.as_mut().nouveau_courrier(compte as i32, nombre, &QString::from(&qui), &QString::from(&sujet));
         }
         touches
+    }
+
+    /// Envoie les déplacements des filtres qui attendaient la connexion de
+    /// leur boîte cible, dès que source et cible sont connectées (0.6.33).
+    fn relancer_filtres_differes(mut self: Pin<&mut Self>) {
+        let differes = {
+            let mut noyau = self.as_mut().rust_mut();
+            std::mem::take(&mut noyau.filtres_differes)
+        };
+        let mut restants = Vec::new();
+        for d in differes {
+            let prets = self.etat(d.compte) == Etat::Pret && self.etat(d.cible_compte) == Etat::Pret;
+            match self.identites.get(&d.cible_compte).filter(|_| prets).cloned() {
+                Some(identifiants) => {
+                    let cible = Cible { compte: d.cible_compte, chemin: d.chemin, identifiants: Some(identifiants) };
+                    self.as_mut().envoyer(d.compte, Commande::Deplacer { source: d.source, uids: d.uids, cible });
+                }
+                None => restants.push(d),
+            }
+        }
+        self.as_mut().rust_mut().filtres_differes.extend(restants);
     }
 
     pub fn signaler_indesirable(mut self: Pin<&mut Self>, uids: &QString) -> bool {
@@ -4962,6 +5037,7 @@ impl qobject::Boite {
                 for c in connectes {
                     self.as_mut().envoyer(c, Commande::Reprendre(identites.clone()));
                 }
+                self.as_mut().relancer_filtres_differes();
                 self.as_mut().set_erreur(QString::from(""));
                 self.as_mut().reviser();
                 self.as_mut().connecte(compte_qt, &QString::from(&adresse));

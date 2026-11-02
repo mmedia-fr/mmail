@@ -46,6 +46,8 @@ pub fn ligne_index(entete: &Entete) -> MessageLocal {
         ligne.expediteur = if nom.is_empty() { ligne.adresse.clone() } else { nom };
     }
     ligne.destinataires = destinataires(&message);
+    ligne.a = contacts(message.to());
+    ligne.cc = contacts(message.cc());
     // La date interne du serveur sert de repli : un message peut arriver sans
     // en-tête Date, ou avec une date fantaisiste.
     ligne.date = match message.date() {
@@ -623,6 +625,24 @@ fn destinataires(message: &Message<'_>) -> String {
     liste.join("; ")
 }
 
+/// Destinataires d'un champ (`To`, `Cc`), un par ligne, « nom<TAB>adresse »
+/// — le nom vide s'il n'y en a pas : ce que les filtres comparent (0.6.33).
+/// Les groupes (« Équipe: a@x.fr, b@x.fr; ») donnent leurs membres.
+fn contacts(adresses: Option<&Address<'_>>) -> String {
+    let Some(adresses) = adresses else {
+        return String::new();
+    };
+    adresses
+        .iter()
+        .filter_map(|c| {
+            let adresse = c.address().unwrap_or_default().trim();
+            let nom = c.name().unwrap_or_default().trim();
+            (!adresse.is_empty() || !nom.is_empty()).then(|| format!("{}\t{}", nom.replace(['\t', '\n'], " "), adresse))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -741,6 +761,9 @@ mod tests {
              Cc: Copie <copie@exemple.fr>\r\n\r\n",
         ));
         assert_eq!(ligne.destinataires, "Dupont, Jean; marie@exemple.fr");
+        // Pour les filtres (0.6.33) : chacun, nom et adresse, À et Cc à part.
+        assert_eq!(ligne.a, "Dupont, Jean\tjean@exemple.fr\n\tmarie@exemple.fr");
+        assert_eq!(ligne.cc, "Copie\tcopie@exemple.fr");
         let ligne = ligne_index(&entete("From: moi@exemple.fr\r\nCc: =?UTF-8?Q?Ren=C3=A9?= <rene@exemple.fr>\r\n\r\n"));
         assert_eq!(ligne.destinataires, "René");
         // En copie cachée seulement : rien à montrer.

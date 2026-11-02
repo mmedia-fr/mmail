@@ -76,6 +76,10 @@ Connections {
     function onConnecte(compte, adresse) {
         if (fenetre.modificationEnCours && fenetre.modificationEnCours.id === compte)
             fenetre.modificationEnCours = null
+        fenetre.finGeste(adresse)
+        // Le réseau est revenu pour ce compte : ses messages en attente
+        // repartent (0.6.34).
+        fenetre.renvoyerEnAttente(compte)
         if (reglagesSauvegarde.aChercher && !fenetre.rechercheSauvegarde) {
             fenetre.rechercheSauvegarde = true
             boite.chercherSauvegardes(compte)
@@ -525,6 +529,17 @@ Connections {
             console.log("scenario: écriture", fenetre.essai.etape || 0, ok, JSON.stringify(message))
     }
 
+    // Pas parti faute de réseau (0.6.34) : la rédaction attend, cachée.
+    function onEnvoiEnAttente(jeton, message) {
+        if (fenetre.essai && fenetre.essai.scenario)
+            console.log("scenario: envoi en attente :", message)
+        var r = fenetre.redactions[jeton]
+        if (r)
+            r.mettreEnAttente(message)
+        else
+            messageEtat.texte = message
+    }
+
     function onEchecRedaction(jeton, message) {
         if (fenetre.essai && fenetre.essai.scenario)
             console.log("scenario: échec de la rédaction :", message)
@@ -874,12 +889,24 @@ Connections {
             // non ; un « tri » échoué peut aussi être un marquage.
             fenetre.rafraichirListe()
         } else if (etape === "identifiants") {
-            // Mot de passe refusé : on redemande, sans effacer d'office
-            // celui du coffre — il a pu changer côté serveur.
-            if (fenetre.modificationEnCours && fenetre.modificationEnCours.id === compte)
-                fenetre.modificationEnCours = null
+            // Mot de passe ou jeton refusé, sans effacer d'office celui du
+            // coffre — il a pu changer côté serveur. Après un geste de la
+            // personne (compte nouveau, modification, « Se connecter… »,
+            // reconnexion), la fenêtre du compte revient ; après une connexion
+            // automatique, le compte reste en « erreur » et la barre d'état dit
+            // quoi faire (0.6.31).
             var c = fenetre.compteParId(compte)
-            fenetre.demanderCompte(c ? c : fenetre.dernierDemande, message)
+            var modifie = fenetre.modificationEnCours && fenetre.modificationEnCours.id === compte
+            var geste = !c || modifie || fenetre.gesteEnCours(c.adresse)
+            if (modifie)
+                fenetre.modificationEnCours = null
+            if (c)
+                fenetre.finGeste(c.adresse)
+            if (geste)
+                fenetre.demanderCompte(c ? c : fenetre.dernierDemande, message)
+            else
+                // Le noyau commence le motif par l'adresse : une seule fois.
+                fenetre.signalerErreurCompte(c.adresse, message.replace(c.adresse + " : ", ""))
         } else if (etape === "connexion" && fenetre.modificationEnCours
                    && fenetre.modificationEnCours.id === compte) {
             // Nouveau serveur de lecture injoignable : la fenêtre de

@@ -27,6 +27,250 @@ QtObject {
         return Math.round((Date.now() - depart) / 5000) * 5
     }
 
+    /// Scénario « orthographe » (0.6.36) : un mot fautif du corps est repéré
+    /// (et pas un mot juste, ni l'élision), le dictionnaire propose la bonne
+    /// forme, la suggestion choisie remplace le mot.
+    function etapeScenarioOrthographe(etape) {
+        if (etape === 0) {
+            var compte = boite.compteCourant > 0 ? boite.compteCourant : comptesConnus[0].compte
+            var r = ouvrirRedaction(compte)
+            r.pret()
+            r.remplir({ a: "deux@essai.test", objet: "Orthographe", mode: "nouveau",
+                        texte: "Bonjour, je vous envoie la factrue de l’école." })
+            essai.redactionOrtho = r
+            var pause = Qt.createQmlObject('import QtQuick; Timer { interval: 3000 }', fenetre)
+            pause.triggered.connect(function() { etapeScenarioOrthographe(1) })
+            pause.start()
+            return
+        }
+        var r1 = essai.redactionOrtho
+        var c = r1.correcteurOrtho
+        var texte = r1.mefCorps.texte()
+        var fautif = c.motA(texte.indexOf("factrue") + 2)
+        console.log("scenario: mot fautif |", fautif)
+        console.log("scenario: mot juste |", c.motA(texte.indexOf("Bonjour") + 2) === "",
+                    "| élision |", c.motA(texte.indexOf("école") + 2) === "")
+        console.log("scenario: suggestions |", JSON.stringify(suggestionsOrthographe("factrue")))
+        if (fautif.length > 0) {
+            var f = JSON.parse(fautif)
+            c.remplacer(f.debut, f.fin, "facture")
+        }
+        console.log("scenario: corrigé |", r1.mefCorps.texte().indexOf("la facture de") >= 0, "|", c.motA(texte.indexOf("Bonjour") + 2) === "")
+        Qt.quit()
+    }
+
+    /// Scénario « import-csv » (0.6.35, banc CARNET=1) : MMAIL_DOSSIER désigne
+    /// un export CSV d'Outlook ; ses contacts rejoignent le carnet « Personnel »
+    /// du serveur, sauf celui dont une adresse y est déjà.
+    function lancerScenarioImportCsv() {
+        var avant = 0
+        var surRelu = function(change, erreurs) {
+            boite.agendasSynchronises.disconnect(surRelu)
+            var fiches = JSON.parse(boite.carnet(""))
+            console.log("scenario: fiches |", avant, "→", fiches.length, "|",
+                        JSON.stringify(fiches.map(function(f) { return f.nom }).sort()))
+            var rene = JSON.parse(boite.carnet("rene.dupont"))
+            if (rene.length > 0)
+                console.log("scenario: fiche importée |", boite.ficheContact(rene[0].id))
+            Qt.quit()
+        }
+        var surEcrit = function(ok, message, conflit) {
+            boite.contactsEcrits.disconnect(surEcrit)
+            console.log("scenario: écriture |", ok, "|", message)
+            boite.agendasSynchronises.connect(surRelu)
+            boite.synchroniserAgendas(true)
+        }
+        var surSynchro = function(change, erreurs) {
+            boite.agendasSynchronises.disconnect(surSynchro)
+            var carnets = JSON.parse(boite.carnetsModifiables())
+            console.log("scenario: carnets modifiables |", carnets.map(function(c) { return c.nom }).join(", "))
+            if (carnets.length === 0) {
+                Qt.quit()
+                return
+            }
+            avant = JSON.parse(boite.carnet("")).length
+            boite.contactsEcrits.connect(surEcrit)
+            console.log("scenario: lecture |", boite.importerContacts(carnets[0].id, identifiantsEssai.dossier))
+        }
+        boite.agendasSynchronises.connect(surSynchro)
+        boite.synchroniserAgendas(true)
+    }
+
+    /// Scénario « filtre-autre-boite » (0.6.33) : un filtre de un@ sur le
+    /// destinataire (À) et l'objet range « Essai 2 » dans « Essais » de deux@ ;
+    /// appliqué à la boîte de réception, le message passe d'une boîte à l'autre.
+    function etapeScenarioFiltreAutreBoite(etape) {
+        var un = null, deux = null
+        var comptes = fenetre.listeComptes()
+        for (var i = 0; i < comptes.length; ++i) {
+            if (comptes[i].adresse === "un@essai.test") un = comptes[i]
+            if (comptes[i].adresse === "deux@essai.test") deux = comptes[i]
+        }
+        if (!un || !deux) {
+            console.log("scenario: ECHEC deux comptes attendus")
+            Qt.quit()
+            return
+        }
+        var suite = function(n, delai) {
+            var t = Qt.createQmlObject('import QtQuick; Timer { interval: ' + delai + ' }', fenetre)
+            t.triggered.connect(function() { etapeScenarioFiltreAutreBoite(n) })
+            t.start()
+        }
+        if (etape === 0) {
+            var filtres = [{ nom: "Vers deux", compte: "un@essai.test", tout: true,
+                             conditions: [{ champ: "a", operateur: "contient", valeur: "un@essai" },
+                                          { champ: "objet", operateur: "est", valeur: "Essai 2" }],
+                             destination: "dossier", compte_destination: "deux@essai.test", dossier: "Essais" }]
+            console.log("scenario: filtres posés |", boite.poserFiltres(JSON.stringify(filtres)), "|", boite.erreur)
+            console.log("scenario: filtres appliqués |", boite.appliquerFiltres(un.id), "message(s) touché(s)")
+            suite(1, 10000)
+        } else if (etape === 1) {
+            ouvrirDossier(deux.id, "Essais")
+            suite(2, 6000)
+        } else if (etape === 2) {
+            var sujets = []
+            for (var k = 0; k < modeleMessages.count; ++k)
+                sujets.push(modeleMessages.get(k).sujet)
+            console.log("scenario: Essais de deux@ |", JSON.stringify(sujets))
+            ouvrirDossier(un.id, "INBOX")
+            suite(3, 6000)
+        } else {
+            var restants = []
+            for (var j = 0; j < modeleMessages.count; ++j)
+                restants.push(modeleMessages.get(j).sujet)
+            console.log("scenario: boîte de réception de un@ |", JSON.stringify(restants))
+            Qt.quit()
+        }
+    }
+
+    /// Scénario « compte-erreur » (0.6.31) : une connexion automatique en
+    /// échec — secret absent du coffre au démarrage, mot de passe refusé —
+    /// laisse le compte en « erreur » sans ouvrir sa fenêtre ; un appui sur
+    /// la mention l'ouvre ; après un geste de la personne, un refus la fait
+    /// revenir, comme avant ; le bon mot de passe reconnecte le compte.
+    function etapeScenarioCompteErreur(etape) {
+        var comptes = fenetre.listeComptes()
+        var c = null
+        for (var i = 0; i < comptes.length; ++i)
+            if (comptes[i].adresse === identifiantsEssai.utilisateur)
+                c = comptes[i]
+        if (!c) {
+            console.log("scenario: ECHEC compte d'essai absent")
+            Qt.quit()
+            return
+        }
+        var ligne = function() {
+            for (var k = 0; k < modeleArborescence.count; ++k) {
+                var l = modeleArborescence.get(k)
+                if (l.genre === "compte" && l.compte === c.id)
+                    return l
+            }
+            return null
+        }
+        var decrire = function() {
+            var l = ligne()
+            return l ? l.etat + " | motif « " + l.motif + " »" : "ligne absente"
+        }
+        // Chaque étape attend l'état qu'elle vérifie (une seconde par essai,
+        // 40 au plus) : un serveur retarde de plus en plus ses refus
+        // d'identifiants successifs (Dovecot : 2 s, puis 6 s…).
+        var suite = function(n, condition) {
+            var essais = 40
+            var t = Qt.createQmlObject('import QtQuick; Timer { interval: 1000; repeat: true }', fenetre)
+            t.triggered.connect(function() {
+                if (condition() || --essais <= 0) {
+                    t.stop()
+                    etapeScenarioCompteErreur(n)
+                }
+            })
+            t.start()
+        }
+        var motif = function() {
+            var l = ligne()
+            return l ? l.motif : ""
+        }
+        if (etape === 0) {
+            // Démarrage simulé : session fermée, secret relu au coffre — que
+            // le banc n'a pas.
+            boite.deconnecter(c.id)
+            reglages.memoriser = true
+            fenetre.connecterCompte(c)
+            suite(1, function() { var l = ligne(); return l && l.etat === "erreur" })
+        } else if (etape === 1) {
+            console.log("scenario: démarrage sans secret | fenêtre", dlgCompte.visible, "|", decrire())
+            // Refus du serveur pendant une connexion automatique.
+            boite.connecter(c.hote, c.adresse, "mauvais-mot-de-passe")
+            suite(2, function() { return motif().indexOf("identifiants") === 0 })
+        } else if (etape === 2) {
+            console.log("scenario: refus automatique | fenêtre", dlgCompte.visible, "|", decrire(),
+                        "| barre « " + messageEtat.texte + " »")
+            var l = ligne()
+            fenetre.ouvrirErreurCompte(c.id, l ? l.motif : "")
+            console.log("scenario: appui sur « erreur » | fenêtre", dlgCompte.visible,
+                        "| note « " + dlgCompte.noteCompte.text + " »")
+            // Geste de la personne : un mot de passe encore faux.
+            dlgCompte.champMotDePasse.text = "encore-faux"
+            dlgCompte.accept()
+            suite(3, function() { return dlgCompte.visible })
+        } else if (etape === 3) {
+            console.log("scenario: refus après un geste | fenêtre", dlgCompte.visible,
+                        "| note « " + dlgCompte.noteCompte.text + " »")
+            dlgCompte.champMotDePasse.text = identifiantsEssai.motDePasse
+            dlgCompte.accept()
+            suite(4, function() { var l = ligne(); return l && l.etat === "pret" })
+        } else {
+            console.log("scenario: reconnecté | fenêtre", dlgCompte.visible, "|", decrire(),
+                        "| gestes", JSON.stringify(fenetre.gestesCompte))
+            Qt.quit()
+        }
+    }
+
+    /// Scénario « hors-connexion » (0.6.34) : sans serveur d'envoi joignable,
+    /// le message reste caché dans la boîte d'envoi au lieu de revenir en
+    /// échec ; la barre d'état le compte. Le banc démarre ensuite son serveur
+    /// d'envoi (« scenario: demarrer-smtp ») ; au nouvel essai, le message part
+    /// et la rédaction se défait.
+    function etapeScenarioHorsConnexion(etape) {
+        var attendre = function(condition, ensuite) {
+            var essais = 60
+            var t = Qt.createQmlObject('import QtQuick; Timer { interval: 1000; repeat: true }', fenetre)
+            t.triggered.connect(function() {
+                if (condition() || --essais <= 0) {
+                    t.stop()
+                    ensuite()
+                }
+            })
+            t.start()
+        }
+        if (etape === 0) {
+            var compte = boite.compteCourant > 0 ? boite.compteCourant : comptesConnus[0].compte
+            var r = ouvrirRedaction(compte)
+            r.pret()
+            r.remplir({ a: "deux@essai.test", objet: "Hors connexion", mode: "nouveau", texte: "Partira au retour du réseau." })
+            essai.redactionAttente = r
+            r.envoyer(false)
+            attendre(function() { return r.enAttente || (!r.enEnvoi && r.conteneur.visible) },
+                     function() { etapeScenarioHorsConnexion(1) })
+        } else if (etape === 1) {
+            var r1 = essai.redactionAttente
+            console.log("scenario: sans serveur d'envoi | en attente", r1.enAttente, "| fenêtre", r1.conteneur.visible,
+                        "| en cours", envoisEnCours, "| en attente", envoisEnAttente, "| barre « " + etatSynchro() + " »")
+            console.log("scenario: demarrer-smtp")
+            var pause = Qt.createQmlObject('import QtQuick; Timer { interval: 4000 }', fenetre)
+            pause.triggered.connect(function() {
+                renvoyerEnAttente(0)
+                attendre(function() { return !redactions[r1.jeton] },
+                         function() { etapeScenarioHorsConnexion(2) })
+            })
+            pause.start()
+        } else {
+            var r2 = essai.redactionAttente
+            console.log("scenario: retour du réseau | rédaction défaite", !redactions[r2.jeton],
+                        "| en attente", envoisEnAttente, "| en cours", envoisEnCours, "| barre « " + etatSynchro() + " »")
+            Qt.quit()
+        }
+    }
+
     /// Scénario « double-clic » (0.6.16) : la fenêtre du message a reçu son
     /// corps. Marquage non lu puis lu depuis la fenêtre, fermeture ; puis
     /// l'option « Ouvrir une réponse », et les brouillons.

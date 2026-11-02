@@ -592,6 +592,16 @@ pub mod qobject {
         #[cxx_name = "ficheDeAdresse"]
         fn fiche_de_adresse(&self, adresse: &QString) -> i32;
 
+        /// Importe un carnet d'adresses exporté par Outlook en CSV (0.6.35,
+        /// cf. `carnet_csv`) dans le carnet `carnet` de l'index. Rend aussitôt
+        /// le bilan de la lecture en JSON `{lus, doublons, vides, retenus,
+        /// erreur}` ; l'écriture des fiches retenues sur le serveur suit, son
+        /// issue par `contactsEcrits`. Un contact dont une adresse de courriel
+        /// est déjà dans un carnet est écarté.
+        #[qinvokable]
+        #[cxx_name = "importerContacts"]
+        fn importer_contacts(self: Pin<&mut Boite>, carnet: i32, url: &QString) -> QString;
+
         /// Enregistre un contact sur le serveur (0.6.20) : `saisie`, le
         /// formulaire rempli, et `origine`, tel qu'il a été montré (JSON) ;
         /// seul ce qui les distingue est écrit. Issue : `contactsEcrits`.
@@ -705,6 +715,13 @@ pub mod qobject {
         #[qinvokable]
         #[cxx_name = "reconnecter"]
         fn reconnecter(self: Pin<&mut Boite>);
+
+        /// Passe un compte sans session en « erreur », avec son motif, sans
+        /// tenter de connexion : secret absent du coffre au démarrage. La
+        /// fenêtre du compte ne s'ouvre qu'à l'appui sur « erreur » (0.6.31).
+        #[qinvokable]
+        #[cxx_name = "marquerErreur"]
+        fn marquer_erreur(self: Pin<&mut Boite>, compte: i32, motif: &QString);
 
         /// Prépare une rédaction à partir d'un message du dossier ouvert.
         /// `mode` : « repondre », « repondre_tous », « transferer » ou
@@ -1120,6 +1137,13 @@ pub mod qobject {
         #[cxx_name = "echecRedaction"]
         fn echec_redaction(self: Pin<&mut Boite>, jeton: &QString, message: &QString);
 
+        /// Envoi impossible faute de réseau, avant que le texte du message
+        /// ne parte (0.6.34) : il n'est pas parti, la rédaction attend le
+        /// retour du réseau pour repartir.
+        #[qsignal]
+        #[cxx_name = "envoiEnAttente"]
+        fn envoi_en_attente(self: Pin<&mut Boite>, jeton: &QString, message: &QString);
+
         /// Synchronisation des agendas terminée : `change` si la vue est à
         /// relire ; `erreurs` : une ligne par boîte en échec.
         #[qsignal]
@@ -1348,6 +1372,17 @@ struct Cible {
     identifiants: Option<Identifiants>,
 }
 
+/// Déplacement d'un filtre vers une autre boîte, qui n'était pas connectée
+/// quand le filtre a joué (0.6.33) : au démarrage, l'ordre des connexions
+/// n'est pas fixé. Il part dès que source et cible sont connectées.
+struct DeplacementDiffere {
+    compte: i64,
+    source: String,
+    uids: Vec<u32>,
+    cible_compte: i64,
+    chemin: String,
+}
+
 /// Ce que l'interface demande au fil de travail d'un compte.
 #[derive(Clone)]
 enum Commande {
@@ -1530,11 +1565,15 @@ enum Issue {
     Envoye { jeton: String, avertissement: String },
     /// Le fil d'envoi a fini : parti, ou `erreur`. Remise même si la session
     /// du compte a changé entre-temps — un message parti doit avoir sa suite.
-    Parti { redaction: Redaction, copie: Vec<u8>, erreur: Option<String> },
+    /// `hors_connexion` : l'erreur est une coupure du réseau d'avant la
+    /// remise du texte — le message n'est pas parti (0.6.34).
+    Parti { redaction: Redaction, copie: Vec<u8>, erreur: Option<String>, hors_connexion: bool },
     BrouillonEnregistre { jeton: String, uid: u32, compte: i64, chemin: String },
     Programme { jeton: String, echeance: i64 },
     DifferesEnvoyes { nombre: usize, erreurs: String },
     EchecRedaction { jeton: String, message: String },
+    /// Envoi impossible faute de réseau, le message n'est pas parti (0.6.34).
+    EnvoiEnAttente { jeton: String, message: String },
 }
 
 /// Session d'un compte, vue de l'interface.
@@ -1622,6 +1661,9 @@ pub struct BoiteRust {
     /// antérieure — critères changés, nouveau « Compter » — est ignorée, le
     /// décompte gardé est toujours celui que l'interface montre.
     purge_numero: u64,
+    /// Déplacements des filtres en attente de la connexion de leur boîte
+    /// cible (0.6.33).
+    filtres_differes: Vec<DeplacementDiffere>,
 }
 
 /// Décompte d'un vidage partiel (0.6.24) : à la confirmation, ces messages-là
@@ -1712,6 +1754,7 @@ impl Default for BoiteRust {
             recherche: Arc::new(AtomicU64::new(0)),
             recherche_approchee: AtomicBool::new(false),
             purge: None,
+            filtres_differes: Vec::new(),
             purge_numero: 0,
         }
     }
@@ -3735,6 +3778,85 @@ impl qobject::Boite {
         self.magasin.as_ref().and_then(|m| m.fiche_par_adresse(&adresse).ok().flatten()).unwrap_or(0) as i32
     }
 
+    pub fn importer_contacts(mut self: Pin<&mut Self>, carnet: i32, url: &QString) -> QString {
+        let erreur = |m: &str| QString::from(&serde_json::json!({ "erreur": m }).to_string());
+        let url = url.to_string();
+        let chemin = crate::rendu::chemin_de_url(&url).unwrap_or_else(|| std::path::PathBuf::from(&url));
+        let octets = match std::fs::read(&chemin) {
+            Ok(o) => o,
+            Err(e) => return erreur(&format!("lecture de {} : {e}", chemin.display())),
+        };
+        let lecture = match crate::carnet_csv::lire(&octets) {
+            Ok(l) => l,
+            Err(m) => return erreur(&m),
+        };
+        let Some(magasin) = self.magasin.as_ref() else {
+            return erreur("le profil n'est pas ouvert");
+        };
+        let carnet_id = carnet as i64;
+        let Some(destination) = magasin.carnets_locaux().unwrap_or_default().into_iter().find(|c| c.id == carnet_id) else {
+            return erreur("carnet d'adresses introuvable");
+        };
+        let motif = self.motif_carnet(destination.compte, destination.ecriture);
+        if !motif.is_empty() {
+            return erreur(&format!("import impossible : {motif}"));
+        }
+        let lus = lecture.fiches.len();
+        let mut doublons = 0;
+        let mut fiches = Vec::new();
+        for mut f in lecture.fiches {
+            // Déjà dans un carnet sous l'une de ses adresses : pas de doublon.
+            if f.courriels.iter().any(|c| self.fiche_de_adresse(&QString::from(&c.valeur)) != 0) {
+                doublons += 1;
+                continue;
+            }
+            f.carnet = carnet_id;
+            fiches.push(f);
+        }
+        let bilan = serde_json::json!({
+            "lus": lus, "doublons": doublons, "vides": lecture.vides, "retenus": fiches.len(), "erreur": ""
+        })
+        .to_string();
+        if fiches.is_empty() {
+            return QString::from(&bilan);
+        }
+        let compte = destination.compte;
+        self.as_mut().lancer_contacts(
+            vec![compte],
+            Box::new(move |_, identites| {
+                let id = identites.get(&compte).ok_or(("boîte non connectée".to_string(), false))?;
+                let dav = crate::caldav::Acces { utilisateur: &id.utilisateur, mot_de_passe: &id.mot_de_passe };
+                let mut ecrites = 0usize;
+                let mut echecs: Vec<String> = Vec::new();
+                for f in &fiches {
+                    let uid = crate::saisie::nouvel_uid();
+                    let ecrite = crate::fiche::creer(f, &uid, chrono::Utc::now()).and_then(|vcard| {
+                        let url = format!("{}/{uid}.vcf", destination.adresse.trim_end_matches('/'));
+                        crate::carddav::deposer(&dav, &url, &vcard, None).map(|_| ()).map_err(|e| erreur_contacts(e).0)
+                    });
+                    match ecrite {
+                        Ok(()) => ecrites += 1,
+                        Err(e) => echecs.push(format!("« {} » ({e})", crate::fiche::nom_montre(f))),
+                    }
+                }
+                if ecrites == 0 {
+                    return Err((format!("aucun contact importé : {}", echecs.join(" ; ")), false));
+                }
+                let mut message = format!(
+                    "{ecrites} contact{} importé{} dans le carnet « {} ».",
+                    if ecrites > 1 { "s" } else { "" },
+                    if ecrites > 1 { "s" } else { "" },
+                    destination.nom
+                );
+                if !echecs.is_empty() {
+                    message.push_str(&format!(" Non importés : {}.", echecs.join(" ; ")));
+                }
+                Ok(message)
+            }),
+        );
+        QString::from(&bilan)
+    }
+
     pub fn enregistrer_contact(mut self: Pin<&mut Self>, saisie: &QString, origine: &QString) {
         let lire = |t: &QString| serde_json::from_str::<crate::fiche::Fiche>(&t.to_string());
         let (saisie, origine) = match (lire(saisie), lire(origine)) {
@@ -4150,6 +4272,7 @@ impl qobject::Boite {
             return 0;
         }
         let dossiers = magasin.dossiers(compte).unwrap_or_default();
+        let comptes = magasin.comptes().unwrap_or_default();
         let corbeille = dossier_de_role(&dossiers, "Trash");
         let indesirables = dossier_indesirables(&dossiers).map(|j| if j == chemin { "INBOX".to_string() } else { j });
         let touches = plan.touches.len() as i32;
@@ -4160,21 +4283,59 @@ impl qobject::Boite {
         if !plan.suivis.is_empty() {
             self.as_mut().envoyer(compte, Commande::MarquerSuivi { chemin: source.clone(), uids: plan.suivis, suivi: true });
         }
-        let mut destinations: Vec<(String, Vec<u32>)> = plan.deplacements.into_iter().collect();
+        // Destinations : boîte (vide : celle du message) et dossier.
+        let mut destinations: Vec<(String, String, Vec<u32>)> =
+            plan.deplacements.into_iter().map(|((boite, dossier), uids)| (boite, dossier, uids)).collect();
         if let Some(c) = corbeille {
-            destinations.push((c, plan.corbeille));
+            destinations.push((String::new(), c, plan.corbeille));
         }
         if let Some(j) = indesirables {
-            destinations.push((j, plan.indesirables));
+            destinations.push((String::new(), j, plan.indesirables));
         }
         let mut lances = 0;
-        for (cible, uids) in destinations {
-            if uids.is_empty() || cible == source {
+        for (boite, chemin_cible, uids) in destinations {
+            if uids.is_empty() {
                 continue;
             }
-            let cible = Cible { compte, chemin: cible, identifiants: None };
-            if self.as_mut().envoyer(compte, Commande::Deplacer { source: source.clone(), uids, cible }) {
-                lances += 1;
+            let cible_compte = if boite.is_empty() {
+                compte
+            } else if let Some(c) = comptes.iter().find(|c| c.adresse.eq_ignore_ascii_case(&boite)) {
+                c.id
+            } else {
+                let message = format!(
+                    "filtres : la boîte {boite} n'est plus dans le profil — {} laissé(s) dans la boîte de réception",
+                    uids.len()
+                );
+                self.as_mut().set_erreur(QString::from(&message));
+                continue;
+            };
+            if cible_compte == compte {
+                if chemin_cible == source {
+                    continue;
+                }
+                let cible = Cible { compte, chemin: chemin_cible, identifiants: None };
+                if self.as_mut().envoyer(compte, Commande::Deplacer { source: source.clone(), uids, cible }) {
+                    lances += 1;
+                }
+                continue;
+            }
+            // Vers une autre boîte (0.6.33) : elle doit être connectée ; sinon
+            // le déplacement attend sa connexion.
+            let pret = self.etat(cible_compte) == Etat::Pret;
+            match self.identites.get(&cible_compte).filter(|_| pret).cloned() {
+                Some(identifiants) => {
+                    let cible = Cible { compte: cible_compte, chemin: chemin_cible, identifiants: Some(identifiants) };
+                    if self.as_mut().envoyer(compte, Commande::Deplacer { source: source.clone(), uids, cible }) {
+                        lances += 1;
+                    }
+                }
+                None => self.as_mut().rust_mut().filtres_differes.push(DeplacementDiffere {
+                    compte,
+                    source: source.clone(),
+                    uids,
+                    cible_compte,
+                    chemin: chemin_cible,
+                }),
             }
         }
         self.as_mut().filtres_appliques(compte as i32, touches, lances);
@@ -4182,6 +4343,27 @@ impl qobject::Boite {
             self.as_mut().nouveau_courrier(compte as i32, nombre, &QString::from(&qui), &QString::from(&sujet));
         }
         touches
+    }
+
+    /// Envoie les déplacements des filtres qui attendaient la connexion de
+    /// leur boîte cible, dès que source et cible sont connectées (0.6.33).
+    fn relancer_filtres_differes(mut self: Pin<&mut Self>) {
+        let differes = {
+            let mut noyau = self.as_mut().rust_mut();
+            std::mem::take(&mut noyau.filtres_differes)
+        };
+        let mut restants = Vec::new();
+        for d in differes {
+            let prets = self.etat(d.compte) == Etat::Pret && self.etat(d.cible_compte) == Etat::Pret;
+            match self.identites.get(&d.cible_compte).filter(|_| prets).cloned() {
+                Some(identifiants) => {
+                    let cible = Cible { compte: d.cible_compte, chemin: d.chemin, identifiants: Some(identifiants) };
+                    self.as_mut().envoyer(d.compte, Commande::Deplacer { source: d.source, uids: d.uids, cible });
+                }
+                None => restants.push(d),
+            }
+        }
+        self.as_mut().rust_mut().filtres_differes.extend(restants);
     }
 
     pub fn signaler_indesirable(mut self: Pin<&mut Self>, uids: &QString) -> bool {
@@ -4385,6 +4567,20 @@ impl qobject::Boite {
             };
             self.as_mut().lancer(compte, commandes);
         }
+    }
+
+    pub fn marquer_erreur(mut self: Pin<&mut Self>, compte: i32, motif: &QString) {
+        let compte = compte as i64;
+        // Une session ouverte entre-temps l'emporte : le compte est prêt.
+        if self.sessions.contains_key(&compte) {
+            return;
+        }
+        {
+            let mut noyau = self.as_mut().rust_mut();
+            noyau.etats.insert(compte, Etat::Erreur);
+            noyau.motifs.insert(compte, motif.to_string());
+        }
+        self.as_mut().reviser();
     }
 
     pub fn preparer(self: Pin<&mut Self>, uid: i32, mode: &QString, jeton: &QString, adresses: &QString) -> bool {
@@ -4930,6 +5126,7 @@ impl qobject::Boite {
                 for c in connectes {
                     self.as_mut().envoyer(c, Commande::Reprendre(identites.clone()));
                 }
+                self.as_mut().relancer_filtres_differes();
                 self.as_mut().set_erreur(QString::from(""));
                 self.as_mut().reviser();
                 self.as_mut().connecte(compte_qt, &QString::from(&adresse));
@@ -5071,10 +5268,15 @@ impl qobject::Boite {
                 self.as_mut().reviser();
                 self.as_mut().envoye(&QString::from(&jeton), &QString::from(&avertissement));
             }
-            Issue::Parti { redaction, erreur: Some(message), .. } => {
-                self.as_mut().echec_redaction(&QString::from(&redaction.jeton), &QString::from(&message));
+            Issue::Parti { redaction, erreur: Some(message), hors_connexion, .. } => {
+                let jeton = QString::from(&redaction.jeton);
+                if hors_connexion {
+                    self.as_mut().envoi_en_attente(&jeton, &QString::from(&message));
+                } else {
+                    self.as_mut().echec_redaction(&jeton, &QString::from(&message));
+                }
             }
-            Issue::Parti { redaction, copie, erreur: None } => {
+            Issue::Parti { redaction, copie, erreur: None, .. } => {
                 // La suite passe par le fil du compte, rouvert au besoin.
                 let jeton = redaction.jeton.clone();
                 if !self.as_mut().envoyer(compte, Commande::ApresEnvoi { redaction, copie }) {
@@ -5088,6 +5290,9 @@ impl qobject::Boite {
             }
             Issue::EchecRedaction { jeton, message } => {
                 self.as_mut().echec_redaction(&QString::from(&jeton), &QString::from(&message));
+            }
+            Issue::EnvoiEnAttente { jeton, message } => {
+                self.as_mut().envoi_en_attente(&QString::from(&jeton), &QString::from(&message));
             }
             Issue::Vide { nombre } => {
                 // Le fil a déjà relu l'arborescence : les compteurs des dossiers
@@ -5660,8 +5865,15 @@ impl Travail {
     /// impossible, session perdue) : une rédaction ne doit pas rester « en
     /// cours d'envoi », ni une ligne masquée par un déplacement qui n'aura pas
     /// lieu, ni un marquage local que le serveur n'a pas reçu.
-    fn abandonner(&self, commande: Commande, motif: &str) {
+    /// `hors_connexion` : le serveur n'a pas pu être joint, ou la session a
+    /// été perdue — un message à envoyer attend alors le retour du réseau
+    /// (0.6.34) ; des identifiants refusés le rendent à la personne.
+    fn abandonner(&self, commande: Commande, motif: &str, hors_connexion: bool) {
         let issue = match commande {
+            Commande::Envoyer { redaction, .. } if hors_connexion => Issue::EnvoiEnAttente {
+                jeton: redaction.jeton,
+                message: format!("{motif} — le message n'est pas parti, il partira au retour du réseau"),
+            },
             Commande::Envoyer { redaction, .. } => Issue::EchecRedaction {
                 jeton: redaction.jeton,
                 message: format!("{motif} — le message n'est pas parti"),
@@ -5747,12 +5959,12 @@ impl Travail {
     }
 
     fn abandonner_toutes(&self, commandes: Vec<Commande>, cause: &Issue) {
-        let motif = match cause {
-            Issue::Echec { message, .. } => message.as_str(),
-            _ => "session perdue",
+        let (motif, hors_connexion) = match cause {
+            Issue::Echec { message, etape, .. } => (message.as_str(), *etape == "connexion" || *etape == "reseau"),
+            _ => ("session perdue", true),
         };
         for commande in commandes {
-            self.abandonner(commande, motif);
+            self.abandonner(commande, motif, hors_connexion);
         }
     }
 
@@ -6835,8 +7047,19 @@ impl Travail {
             Err(message) => return Some(Issue::EchecRedaction { jeton, message }),
         };
         let retour = self.retour();
+        // Microsoft 365 envoie par Graph (une requête HTTP) : une coupure n'y
+        // dit pas si le message est parti — pas de nouvel essai automatique.
+        let par_graph = id
+            .oauth
+            .as_ref()
+            .is_some_and(|j| crate::oauth::fournisseur(j) != crate::oauth::Fournisseur::Google);
         let lance = thread::Builder::new().name("mmail-smtp".into()).spawn(move || {
-            let erreur = remettre_message(&id, &r.de, &f.destinataires, &f.envoi, r.accuse_remise).err().map(|x| {
+            let echec = remettre_message(&id, &r.de, &f.destinataires, &f.envoi, r.accuse_remise).err();
+            // Coupure du réseau avant le texte du message (0.6.34) : il n'est
+            // pas parti, il repartira seul.
+            let hors_connexion =
+                !par_graph && echec.as_ref().is_some_and(|x| matches!(x, Erreur::Reseau(_)) && !smtp::incertain(x));
+            let erreur = echec.map(|x| {
                 // Coupure après le texte du message (0.6.22) : le dire, la
                 // rédaction rouverte proposerait sinon un double sans prévenir.
                 if smtp::incertain(&x) {
@@ -6845,7 +7068,7 @@ impl Travail {
                     format!("envoi : {x}")
                 }
             });
-            retour.remettre(Issue::Parti { redaction: r, copie: f.copie, erreur }, true);
+            retour.remettre(Issue::Parti { redaction: r, copie: f.copie, erreur, hors_connexion }, true);
         });
         match lance {
             Ok(_) => None,

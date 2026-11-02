@@ -9,6 +9,7 @@
 // Main.qml, où « DialogueCarnet { id: dlgCarnet } » l'instancie.
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Dialogs
 import QtQuick.Layouts
 
 Dialog {
@@ -26,6 +27,8 @@ Dialog {
     // Vrai entre une suppression demandée d'ici et la réponse du serveur.
     property bool attente: false
     property bool creationPossible: false
+    // Vrai entre un import lancé d'ici et la fin de son écriture (0.6.35).
+    property bool attenteImport: false
 
     /// Ouvre le carnet sur une recherche (une adresse, depuis un message).
     function ouvrirSur(texte) {
@@ -41,6 +44,11 @@ Dialog {
     Connections {
         target: boite
         function onContactsEcrits(ok, message, conflit) {
+            if (dlgCarnet.attenteImport) {
+                dlgCarnet.attenteImport = false
+                dlgImport.bilan = ok ? message : qsTr("Import interrompu : %1").arg(message)
+                fenetre.annoncer(dlgImport.bilan, !ok)
+            }
             if (!dlgCarnet.visible)
                 return
             var ouvertAvant = dlgCarnet.ouvert >= 0 ? dlgCarnet.contacts[dlgCarnet.ouvert].id : 0
@@ -82,6 +90,84 @@ Dialog {
             dlgCarnet.attente = true
             boite.supprimerContacts(JSON.stringify([confirmation.contact.id]))
         }
+    }
+
+    // ---- import d'un carnet exporté par Outlook en CSV (0.6.35)
+    Dialog {
+        id: dlgImport
+        title: qsTr("Importer des contacts d'Outlook")
+        modal: true
+        anchors.centerIn: Overlay.overlay
+        width: Math.min(560, fenetre.width - 24)
+        standardButtons: Dialog.Close
+        property var carnets: []
+        property string bilan: ""
+        onOpened: {
+            try { carnets = JSON.parse(boite.carnetsModifiables()) } catch (e) { carnets = [] }
+            var defaut = 0
+            for (var i = 0; i < carnets.length; ++i)
+                if (carnets[i].defaut)
+                    defaut = i
+            choixCarnetImport.currentIndex = defaut
+            if (!dlgCarnet.attenteImport)
+                bilan = ""
+        }
+        ColumnLayout {
+            width: dlgImport.availableWidth
+            spacing: 8
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                text: qsTr("Dans Outlook : Fichier › Ouvrir et exporter › Importer/Exporter › Exporter des données vers un fichier › Valeurs séparées par une virgule, puis le dossier Contacts. Un contact dont une adresse de messagerie est déjà dans un carnet est écarté.")
+            }
+            Label { text: qsTr("Carnet où les ajouter :") }
+            ComboBox {
+                id: choixCarnetImport
+                Layout.fillWidth: true
+                model: dlgImport.carnets.map(function(c) { return c.nom + " — " + c.boite })
+            }
+            Button {
+                text: qsTr("Choisir le fichier CSV…")
+                enabled: dlgImport.carnets.length > 0 && !boite.contactsOccupe
+                onClicked: fichierImport.open()
+            }
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                visible: text.length > 0
+                text: dlgImport.bilan
+            }
+        }
+    }
+
+    FileDialog {
+        id: fichierImport
+        title: qsTr("Carnet d'adresses exporté par Outlook")
+        nameFilters: [qsTr("Valeurs séparées par une virgule (*.csv *.CSV)"), qsTr("Tous les fichiers (*)")]
+        onAccepted: dlgCarnet.importer(selectedFile.toString())
+    }
+
+    /// Lit le fichier et lance l'écriture des contacts retenus ; le bilan de
+    /// la lecture s'affiche aussitôt, celui de l'écriture à son issue.
+    function importer(fichier) {
+        var c = dlgImport.carnets[choixCarnetImport.currentIndex]
+        if (!c)
+            return
+        var b = {}
+        try { b = JSON.parse(boite.importerContacts(c.id, fichier)) } catch (e) { b = { erreur: String(e) } }
+        if (b.erreur) {
+            dlgImport.bilan = qsTr("Import impossible : %1").arg(b.erreur)
+            return
+        }
+        var parties = [fenetre.accord(b.lus, qsTr("contact lu"), qsTr("contacts lus"))]
+        if (b.doublons > 0)
+            parties.push(qsTr("%1 déjà dans un carnet, écarté(s)").arg(b.doublons))
+        if (b.vides > 0)
+            parties.push(qsTr("%1 ligne(s) sans nom, adresse ni numéro, écartée(s)").arg(b.vides))
+        parties.push(b.retenus > 0 ? qsTr("%1 à ajouter au carnet « %2 » : écriture en cours…").arg(b.retenus).arg(c.nom)
+                                   : qsTr("rien à ajouter"))
+        dlgImport.bilan = parties.join(" ; ") + "."
+        dlgCarnet.attenteImport = b.retenus > 0
     }
 
     function chercher() {
@@ -232,6 +318,11 @@ Dialog {
                 text: qsTr("Fiches vides et doublons…")
                 enabled: !boite.contactsOccupe
                 onClicked: dlgNettoyage.ouvrir()
+            }
+            Button {
+                text: qsTr("Importer d'Outlook (CSV)…")
+                enabled: dlgCarnet.creationPossible && !boite.contactsOccupe
+                onClicked: dlgImport.open()
             }
             Item { Layout.fillWidth: true }
             Label {

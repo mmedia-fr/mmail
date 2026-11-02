@@ -356,6 +356,44 @@ ApplicationWindow {
         property string signatures: "[]"
         property string adressesEnvoi: "{}"
         property bool miseEnForme: true
+        // Correcteur d'orthographe (0.6.36) : actif, et les mots ajoutés au
+        // dictionnaire, un par ligne — ils suivent la sauvegarde.
+        property bool orthographe: true
+        property string motsAjoutes: ""
+    }
+
+    // Correcteur d'orthographe de la rédaction (0.6.36, cf. orthographe.rs et
+    // cpp/correcteur.h) : le dictionnaire se lit dès le lancement, dans un fil
+    // à part.
+    // Identifiant distinct du nom de la propriété « orthographe » du
+    // Correcteur : « orthographe: orthographe » s'y lierait à elle-même.
+    Orthographe {
+        id: dictionnaire
+        Component.onCompleted: {
+            poserAjoutes(reglagesRedaction.motsAjoutes)
+            precharger()
+        }
+    }
+
+    function suggestionsOrthographe(mot) {
+        try {
+            return JSON.parse(dictionnaire.suggestions(mot))
+        } catch (e) {
+            return []
+        }
+    }
+
+    /// « Ajouter au dictionnaire » : le mot n'est plus souligné, dans aucune
+    /// rédaction ouverte.
+    function ajouterAuDictionnaire(mot) {
+        var liste = reglagesRedaction.motsAjoutes.split("\n").filter(function(m) { return m.length > 0 })
+        if (liste.indexOf(mot) < 0)
+            liste.push(mot)
+        reglagesRedaction.motsAjoutes = liste.join("\n")
+        dictionnaire.poserAjoutes(reglagesRedaction.motsAjoutes)
+        for (var jeton in redactions)
+            if (redactions[jeton])
+                redactions[jeton].rafraichirOrthographe()
     }
 
     // Sauvegarde de la configuration (0.5.10) : elle part chiffrée chez le
@@ -437,6 +475,9 @@ ApplicationWindow {
         category: "apparence"
         property alias theme: fenetre.apparence
         property alias disposition: fenetre.disposition
+        // Apparence personnelle (0.6.37, « Créer mon apparence… ») : JSON
+        // {base, bandeau, accent, surbrillance, fond}, vide s'il n'y en a pas.
+        property string perso: ""
     }
     readonly property bool deuxEtages: !tactile && disposition === "etages"
     // Une seule ligne sur une fenêtre moyenne : libellés courts, Actualiser
@@ -445,7 +486,8 @@ ApplicationWindow {
     readonly property bool enteteSerree: !deuxEtages && width < 1180
     readonly property bool enteteEtroite: !deuxEtages && width < 940
 
-    readonly property var jeuxApparence: ({
+    readonly property var jeuxApparence: avecApparencePerso(jeuxDeBase, reglagesApparence.perso)
+    readonly property var jeuxDeBase: ({
         "classique": {
             libelle: qsTr("Classique (Windows 9x)"),
             fond: "#d4d0c8", texte: "#000000", base: "#ffffff",
@@ -508,9 +550,133 @@ ApplicationWindow {
             survolBandeau: 0.18, survolBande: 0.14, filetBandeau: 1,
             survolLigne: 0.07, encreAccent: "#ffffff",
             mouvement: true, materiau: "mica", opaciteBandeau: 0.8
+        },
+        // Apparence « Nuit » (0.6.37) : fonds sombres, texte clair, repères de
+        // la charte MMEDIA éclaircis pour rester lisibles (4,5:1 au moins sur
+        // le fond). Le corps d'un message HTML garde sa page blanche, comme
+        // sous les autres apparences (cf. VoletLecture), et la rédaction aussi
+        // (« sombre ») : une citation garde les couleurs de son expéditeur.
+        "nuit": {
+            libelle: qsTr("Nuit"),
+            fond: "#1b1d22", texte: "#e4e6eb", base: "#24272e",
+            bouton: "#2c3038", surbrillance: "#1f4f6e", texteSurbrillance: "#ffffff",
+            police: ["Segoe UI", "Noto Sans", "DejaVu Sans", "Arial"], taille: 10,
+            mono: ["Cascadia Mono", "Consolas", "DejaVu Sans Mono", "Courier New"],
+            bandeau: "#0b0d14", texteBandeau: "#e4e6eb", accent: "#21abe3",
+            texteAccent: "#5cc6f2", rubrique: "#7fb6cf", alerte: "#ff6b6b",
+            titres: ["Saira Condensed", "Segoe UI", "Noto Sans", "DejaVu Sans", "Arial"],
+            encreAccent: "#0b0d14",
+            // Rôles de la palette que les apparences claires laissent au
+            // système : sous fond sombre, ils doivent suivre.
+            baseAlternee: "#2a2e36", bulle: "#2c3038", texteBulle: "#e4e6eb",
+            texteIndication: "#8b919c", lien: "#5cc6f2", clair: "#3a3f49",
+            moyen: "#4a505b", sombreRole: "#111317", ombre: "#0a0b0d",
+            sombre: true
+        },
+        // Apparence « Outlook » (0.6.38) : l'affichage d'Outlook, d'après la
+        // palette publiée de Fluent 2 (Microsoft, licence MIT), celle d'Outlook
+        // depuis sa refonte de 2023 : bandeau au bleu de marque #0f6cbd,
+        // texte #242424, panneaux #f5f5f5, sélection bleu pâle, objets non lus
+        // au bleu de marque, Segoe UI en 9 points comme les listes d'Outlook,
+        // titres en semi-gras, pas de filet sous l'en-tête.
+        "outlook": {
+            libelle: qsTr("Outlook"),
+            fond: "#f5f5f5", texte: "#242424", base: "#ffffff",
+            bouton: "#ffffff", surbrillance: "#cfe4fa", texteSurbrillance: "#242424",
+            police: ["Segoe UI", "Selawik", "Noto Sans", "DejaVu Sans", "Arial"], taille: 9,
+            mono: ["Cascadia Mono", "Consolas", "DejaVu Sans Mono", "Courier New"],
+            bandeau: "#0f6cbd", texteBandeau: "#ffffff", accent: "#0f6cbd",
+            texteAccent: "#0f6cbd", rubrique: "#616161", alerte: "#c50f1f",
+            titres: ["Segoe UI Semibold", "Segoe UI", "Selawik", "Noto Sans", "DejaVu Sans", "Arial"],
+            encreAccent: "#ffffff", survolBandeau: 0.12, survolBande: 0.08, filetBandeau: 0,
+            survolLigne: 0.05, baseAlternee: "#fafafa", bulle: "#ffffff", texteBulle: "#242424",
+            texteIndication: "#707070", lien: "#0f6cbd", moyen: "#d1d1d1"
         }
     })
-    readonly property var nomsApparence: ["classique", "moderne", "systeme", "mmedia", "pomme"]
+    readonly property var nomsApparence: ["classique", "moderne", "systeme", "mmedia", "pomme", "outlook", "nuit"]
+                                         .concat(jeuxApparence["perso"] ? ["perso"] : [])
+
+    // ---- apparence personnelle (0.6.37, « Créer mon apparence… »)
+
+    /// Luminance relative (WCAG) d'une couleur.
+    function luminance(c) {
+        function lineaire(v) { return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4) }
+        return 0.2126 * lineaire(c.r) + 0.7152 * lineaire(c.g) + 0.0722 * lineaire(c.b)
+    }
+
+    function contraste(a, b) {
+        var la = luminance(Qt.color(a)), lb = luminance(Qt.color(b))
+        return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05)
+    }
+
+    /// Encre la plus lisible sur un fond : blanc, ou presque noir.
+    function encreSur(fond) {
+        return contraste(fond, "#ffffff") >= contraste(fond, "#111111") ? "#ffffff" : "#111111"
+    }
+
+    /// `couleur`, assombrie (fond clair) ou éclaircie (fond sombre) jusqu'à
+    /// 4,5:1 sur `fond` : du texte qui reste lisible.
+    function lisibleSur(couleur, fond) {
+        var c = Qt.color(couleur)
+        var fondSombre = luminance(Qt.color(fond)) < 0.4
+        for (var i = 0; i < 24 && contraste(c, fond) < 4.5; ++i)
+            c = fondSombre ? Qt.lighter(c, 1.12) : Qt.darker(c, 1.12)
+        return c.toString()
+    }
+
+    /// Les apparences, plus « perso » si elle est définie : l'apparence de
+    /// base, ses couleurs remplacées par celles choisies, les encres déduites
+    /// pour rester lisibles.
+    function avecApparencePerso(jeux, json) {
+        var p = null
+        try { p = json ? JSON.parse(json) : null } catch (e) { p = null }
+        if (!p || !jeux[p.base] || p.base === "systeme")
+            return jeux
+        var j = Object.assign({}, jeux[p.base])
+        // Un bandeau suppose les repères de marque : ceux de MMEDIA à défaut.
+        if (p.bandeau && !j.bandeau) {
+            var m = jeux["mmedia"]
+            j.texteAccent = m.texteAccent; j.rubrique = m.rubrique; j.alerte = m.alerte; j.titres = m.titres
+            j.accent = m.accent
+        }
+        if (p.fond) {
+            // Un fond sombre entraîne les surfaces, le texte et les rôles
+            // sombres de « Nuit » ; un fond clair les retire.
+            var sombre = luminance(Qt.color(p.fond)) < 0.2
+            var rolesSombres = ["baseAlternee", "bulle", "texteBulle", "texteIndication", "lien", "clair",
+                                "moyen", "sombreRole", "ombre", "sombre"]
+            j.fond = p.fond
+            j.base = sombre ? Qt.tint(Qt.color(p.fond), "#22ffffff").toString() : "#ffffff"
+            j.bouton = j.base
+            j.texte = sombre ? "#e4e6eb" : "#1d1d1f"
+            for (var k = 0; k < rolesSombres.length; ++k) {
+                if (sombre)
+                    j[rolesSombres[k]] = jeux["nuit"][rolesSombres[k]]
+                else
+                    delete j[rolesSombres[k]]
+            }
+        }
+        if (p.surbrillance) {
+            j.surbrillance = p.surbrillance
+            j.texteSurbrillance = encreSur(p.surbrillance)
+        }
+        if (p.bandeau) {
+            j.bandeau = p.bandeau
+            j.texteBandeau = encreSur(p.bandeau)
+        }
+        if (p.accent) {
+            j.accent = p.accent
+            j.encreAccent = encreSur(p.accent)
+        }
+        if (j.bandeau) {
+            j.texteAccent = lisibleSur(j.accent || j.surbrillance, j.base)
+            j.rubrique = j.texteAccent
+        }
+        j.libelle = qsTr("Personnelle")
+        var copie = Object.assign({}, jeux)
+        copie["perso"] = j
+        return copie
+    }
 
     // Nul pour « systeme » : c'est ce qui coupe les surcharges ci-dessous.
     readonly property var jeu: apparence === "systeme" || !jeuxApparence[apparence]
@@ -957,14 +1123,26 @@ ApplicationWindow {
             { propriete: "palette.highlight", clef: "surbrillance" },
             { propriete: "palette.highlightedText", clef: "texteSurbrillance" },
             { propriete: "font.family", clef: "police" },
-            { propriete: "font.pointSize", clef: "taille" }
+            { propriete: "font.pointSize", clef: "taille" },
+            // Rôles facultatifs (0.6.37, apparence « Nuit ») : posés seulement
+            // par une apparence qui porte la clé.
+            { propriete: "palette.alternateBase", clef: "baseAlternee" },
+            { propriete: "palette.toolTipBase", clef: "bulle" },
+            { propriete: "palette.toolTipText", clef: "texteBulle" },
+            { propriete: "palette.placeholderText", clef: "texteIndication" },
+            { propriete: "palette.link", clef: "lien" },
+            { propriete: "palette.light", clef: "clair" },
+            { propriete: "palette.midlight", clef: "clair" },
+            { propriete: "palette.mid", clef: "moyen" },
+            { propriete: "palette.dark", clef: "sombreRole" },
+            { propriete: "palette.shadow", clef: "ombre" }
         ]
         delegate: Binding {
             required property var modelData
             target: fenetre
             property: modelData.propriete
             value: fenetre.jeu ? fenetre.valeurJeu(modelData.clef) : ""
-            when: fenetre.jeu !== null
+            when: fenetre.jeu !== null && fenetre.jeu[modelData.clef] !== undefined
             restoreMode: Binding.RestoreBindingOrValue
         }
     }
@@ -1739,7 +1917,7 @@ ApplicationWindow {
             anchors.rightMargin: 8
             spacing: 14
             Label {
-                text: fenetre.lienSurvole.length > 0 ? fenetre.lienSurvole : fenetre.infoDossier
+                text: fenetre.lienSurvole.length > 0 ? fenetre.libelleLien(fenetre.lienSurvole) : fenetre.infoDossier
                 color: fenetre.lienSurvole.length > 0 ? fenetre.texteAccent : fenetre.palette.windowText
                 elide: Text.ElideRight
                 maximumLineCount: 1
@@ -1769,6 +1947,15 @@ ApplicationWindow {
                 elide: Text.ElideMiddle
                 maximumLineCount: 1
                 Layout.maximumWidth: fenetre.width * 0.5
+                // Messages en attente du réseau : un clic les rouvre (0.6.34).
+                font.underline: fenetre.envoisEnAttente > 0
+                TapHandler {
+                    enabled: fenetre.envoisEnAttente > 0
+                    onTapped: fenetre.montrerEnAttente()
+                }
+                ToolTip.visible: survolAttente.hovered && fenetre.envoisEnAttente > 0
+                ToolTip.text: qsTr("Ces messages repartiront seuls au retour du réseau. Cliquez pour les rouvrir.")
+                HoverHandler { id: survolAttente }
             }
         }
     }
@@ -1789,6 +1976,8 @@ ApplicationWindow {
     // Rédactions fermées dès « Envoyer » dont l'envoi n'a pas encore
     // abouti (0.6.22), cf. Redaction.envoyer.
     property int envoisEnCours: 0
+    // Messages pas partis faute de réseau, qui repartiront seuls (0.6.34).
+    property int envoisEnAttente: 0
     // Fenêtre principale fermée pendant un envoi : MMail se ferme dès qu'il
     // a abouti (un second clic ferme tout de suite).
     property bool fermetureApresEnvoi: false
@@ -1926,6 +2115,13 @@ ApplicationWindow {
     }
 
     function etatSynchro() {
+        if (envoisEnAttente > 0)
+            return accord(envoisEnAttente, qsTr("message en attente du réseau"), qsTr("messages en attente du réseau"))
+                   + (envoisEnCours > 0 || activite.length > 0 ? "  ·  " + etatActivite() : "")
+        return etatActivite()
+    }
+
+    function etatActivite() {
         if (envoisEnCours > 0 && activite.length === 0)
             return accord(envoisEnCours, qsTr("message en cours d'envoi"), qsTr("messages en cours d'envoi"))
         if (activite.length > 0)
@@ -2292,7 +2488,7 @@ ApplicationWindow {
                 onLoaded: item.conteneur = voletRedaction
             }
             onClosed: {
-                if (redaction && redaction.enEnvoi)
+                if (redaction && (redaction.enEnvoi || redaction.enAttente))
                     return
                 fenetre.oublierRedaction(redaction ? redaction.jeton : "")
                 Qt.callLater(function() { voletRedaction.destroy() })
@@ -2772,6 +2968,9 @@ ApplicationWindow {
 
     DialogueCategories { id: dlgCategories }
 
+    // « Créer mon apparence… » (0.6.37).
+    DialogueApparence { id: dlgApparence }
+
     // ------------------------------------------------------ coffre et session
     Coffre {
         id: coffre
@@ -2803,9 +3002,21 @@ ApplicationWindow {
                 boite.connecter(compte.hote, compte.adresse, secret)
                 return
             }
-            if (erreur.length > 0)
-                messageEtat.texte = qsTr("Coffre du système indisponible : %1").arg(erreur)
-            fenetre.demanderCompte(compte, "")
+            // « Se connecter… » : la fenêtre, comme avant. Au démarrage, le
+            // compte passe en « erreur », sans fenêtre (0.6.31) : un appui sur
+            // la mention l'ouvre.
+            if (fenetre.gesteEnCours(compte.adresse)) {
+                if (erreur.length > 0)
+                    messageEtat.texte = qsTr("Coffre du système indisponible : %1").arg(erreur)
+                fenetre.finGeste(compte.adresse)
+                fenetre.demanderCompte(compte, "")
+                return
+            }
+            var motif = erreur.length > 0 ? qsTr("coffre du système indisponible (%1)").arg(erreur)
+                      : fenetre.compteOAuth(compte.auth) ? qsTr("connexion absente du coffre du système")
+                      : qsTr("mot de passe absent du coffre du système")
+            boite.marquerErreur(compte.id, motif)
+            fenetre.signalerErreurCompte(compte.adresse, motif)
         }
         onEcrit: function(cle, ok, erreur) {
             if (!ok)
@@ -2840,6 +3051,48 @@ ApplicationWindow {
 
     // ------------------------------------------------------------- logique
     property var dernierDemande: null
+
+    // Connexions lancées par la personne (ajout ou modification d'un compte,
+    // « Se connecter… », reconnexion à Microsoft ou à Google), par adresse :
+    // un refus y rouvre la fenêtre du compte. Une connexion automatique
+    // (démarrage, réveil, reconnexion après une coupure) ne fait que passer
+    // le compte en « erreur » ; un appui sur la mention ouvre sa fenêtre
+    // (0.6.31, note de Manu du 28/10 : la fenêtre revenait à chaque lancement).
+    property var gestesCompte: ({})
+
+    function marquerGeste(adresse) {
+        if (adresse)
+            gestesCompte[adresse.toLowerCase()] = true
+    }
+
+    function gesteEnCours(adresse) {
+        return !!adresse && gestesCompte[adresse.toLowerCase()] === true
+    }
+
+    function finGeste(adresse) {
+        if (adresse)
+            delete gestesCompte[adresse.toLowerCase()]
+    }
+
+    /// Connexion automatique en échec : le motif dans la barre d'état, et
+    /// ce que la personne peut y faire.
+    function signalerErreurCompte(adresse, motif) {
+        messageEtat.texte = qsTr("%1 : %2. Cliquez sur « erreur » à côté du compte pour vous reconnecter.")
+                .arg(adresse).arg(motif)
+        if (essai)
+            console.log("scenario: erreur signalée |", adresse, "|", motif)
+    }
+
+    /// Appui sur la mention « erreur » d'un compte : sa fenêtre, motif
+    /// compris (« Se reconnecter… » pour un compte Microsoft ou Google).
+    function ouvrirErreurCompte(id, motif) {
+        var c = compteParId(id)
+        if (!c)
+            return
+        // Le noyau note « étape — motif » : l'étape ne dit rien à la personne.
+        var note = motif.replace(/^(identifiants|connexion|reseau) — /, "")
+        demanderCompte(c, note)
+    }
 
     function cle(adresse, hote) {
         return adresse + "@" + hote
@@ -3467,6 +3720,7 @@ ApplicationWindow {
             return
         }
         dernierDemande = { id: dlgCompte.compteId, adresse: adresse, hote: hote }
+        marquerGeste(adresse)
         if (dlgCompte.caseMemoriser.checked)
             secretsAConserver[adresse] = { cle: cle(adresse, hote), motDePasse: motDePasse }
         else
@@ -3528,6 +3782,7 @@ ApplicationWindow {
                     effacerDiscretement(nouvelle)
             }
             messageEtat.texte = qsTr("Connexion de %1…").arg(adresse)
+            marquerGeste(adresse)
             boite.connecter(hote, adresse, motDePasse)
             return
         }
@@ -3542,6 +3797,7 @@ ApplicationWindow {
         if (reglages.memoriser) {
             changementsServeur[adresse] = hote
             messageEtat.texte = qsTr("Connexion de %1 à %2…").arg(adresse).arg(hote)
+            marquerGeste(adresse)
             coffre.lire(ancienne)
         } else {
             demanderCompte({ id: id, adresse: adresse, hote: hote, hoteEnvoi: hoteEnvoi },
@@ -3806,7 +4062,11 @@ ApplicationWindow {
         }
     }
 
-    function connecterCompte(compte) {
+    /// `geste` : « Se connecter… », un refus rouvre la fenêtre du compte ;
+    /// sans lui (démarrage), le compte passe en « erreur ».
+    function connecterCompte(compte, geste) {
+        if (geste)
+            marquerGeste(compte.adresse)
         var connu = compte.id > 0 ? compteParId(compte.id) : null
         // Un compte Microsoft ou Google ne vit que par son jeton au coffre.
         if (reglages.memoriser || (connu && compteOAuth(connu.auth)))
@@ -3881,6 +4141,7 @@ ApplicationWindow {
 
     /// La page de Google, dans le navigateur.
     function ouvrirGoogle(indice) {
+        marquerGeste(indice)
         var url = boite.connecterGoogle(indice)
         if (url.length === 0) {
             messageEtat.texte = qsTr("Connexion à Google impossible : %1").arg(boite.erreur)
@@ -3942,6 +4203,7 @@ ApplicationWindow {
             messageEtat.texte = qsTr("Comptes Microsoft indisponibles dans cette version de MMail.")
             return
         }
+        marquerGeste(indice)
         var url = boite.connecterMicrosoft(indice)
         if (url.length === 0) {
             messageEtat.texte = qsTr("Connexion à Microsoft impossible : %1").arg(boite.erreur)
@@ -5092,10 +5354,35 @@ ApplicationWindow {
     function proposerReprise() {
         var liste = []
         try { liste = JSON.parse(boite.redactionsGardees()) } catch (e) { liste = [] }
-        if (liste.length === 0)
+        // Pas partis faute de réseau (0.6.34) : ils reprennent leur place dans
+        // la boîte d'envoi, sans rien demander ; on sait qu'ils ne sont pas
+        // partis.
+        var autres = []
+        for (var i = 0; i < liste.length; ++i) {
+            if (liste[i].enAttente === true && !liste[i].enEnvoi)
+                remettreEnAttente(liste[i])
+            else
+                autres.push(liste[i])
+        }
+        if (autres.length === 0)
             return
-        redactionsRetrouvees = liste
+        redactionsRetrouvees = autres
         dlgReprise.open()
+    }
+
+    /// Un message gardé en attente du réseau par la session précédente : sa
+    /// rédaction, cachée, rejoint la boîte d'envoi (0.6.34).
+    function remettreEnAttente(g) {
+        var r = ouvrirRedaction(g.compte || (comptesConnus.length > 0 ? comptesConnus[0].compte : 0))
+        r.idGarde = g.id
+        var p = g.contenu || {}
+        p.mode = "brouillon"
+        r.remplir(p)
+        r.modifie = true
+        r.enAttente = true
+        r.conteneur.cacherRedaction()
+        majEnvois()
+        r.signaler(qsTr("En attente du réseau depuis le %1.").arg(dateLongue(g.modifie * 1000)), false)
     }
 
     function rouvrirRedactions() {
@@ -5132,12 +5419,46 @@ ApplicationWindow {
     /// (0.6.22) ; la dernière partie, MMail se ferme si on l'a demandé.
     function majEnvois() {
         var n = 0
-        for (var jeton in redactions)
+        var attente = 0
+        for (var jeton in redactions) {
             if (redactions[jeton] && redactions[jeton].enEnvoi)
                 n += 1
+            if (redactions[jeton] && redactions[jeton].enAttente)
+                attente += 1
+        }
         envoisEnCours = n
+        envoisEnAttente = attente
         if (n === 0 && fermetureApresEnvoi)
             Qt.callLater(Qt.quit)
+    }
+
+    /// Nouvel essai des messages en attente du réseau (0.6.34) : ceux du
+    /// compte `compte`, qui vient de se connecter, ou tous (0).
+    function renvoyerEnAttente(compte) {
+        for (var jeton in redactions) {
+            var r = redactions[jeton]
+            var c = r && r.enAttente ? r.compteChoisi() : null
+            if (c && (compte === 0 || c.compte === compte))
+                r.renvoyer()
+        }
+    }
+
+    /// Clic sur « en attente du réseau » dans la barre d'état : les messages
+    /// reviennent, et ne repartent plus seuls.
+    function montrerEnAttente() {
+        for (var jeton in redactions)
+            if (redactions[jeton] && redactions[jeton].enAttente)
+                redactions[jeton].sortirDeLAttente()
+    }
+
+    // Toutes les minutes tant qu'un message attend le réseau ; la reconnexion
+    // d'un compte relance aussi les siens (cf. ReactionsNoyau, onConnecte).
+    Timer {
+        id: minuterieEnAttente
+        interval: 60 * 1000
+        repeat: true
+        running: fenetre.envoisEnAttente > 0
+        onTriggered: fenetre.renvoyerEnAttente(0)
     }
 
     /// `mode` : « nouveau », « repondre », « repondre_tous », « transferer »
@@ -5265,8 +5586,24 @@ ApplicationWindow {
         onTriggered: fenetre.reposerHtml()
     }
 
+    /// Lien survolé, tel que la barre d'état le montre (0.6.32) : le numéro
+    /// à appeler, l'adresse cherchée sur la carte, sinon le lien lui-même.
+    function libelleLien(lien) {
+        if (lien.toLowerCase().indexOf("tel:") === 0)
+            return qsTr("Appeler le %1").arg(lien.substring(4))
+        var carte = "https://www.openstreetmap.org/search?query="
+        if (lien.indexOf(carte) === 0) {
+            try {
+                return qsTr("Voir sur la carte : %1").arg(decodeURIComponent(lien.substring(carte.length)))
+            } catch (e) {
+            }
+        }
+        return lien
+    }
+
     /// Un lien du message : une adresse de courriel ouvre une rédaction dans
-    /// MMail, une adresse web part au navigateur.
+    /// MMail, une adresse web part au navigateur, un numéro de téléphone au
+    /// logiciel d'appel du poste (`tel:`), une adresse postale à la carte.
     function ouvrirLien(lien) {
         if (lien.toLowerCase().indexOf("mailto:") !== 0) {
             Qt.openUrlExternally(lien)
@@ -5767,7 +6104,7 @@ ApplicationWindow {
         target: Qt.application
         function onAboutToQuit() {
             for (var jeton in fenetre.redactions)
-                fenetre.redactions[jeton].garder(fenetre.redactions[jeton].enEnvoi)
+                fenetre.redactions[jeton].garder(fenetre.redactions[jeton].enEnvoi || fenetre.redactions[jeton].enAttente)
         }
     }
 
@@ -6317,6 +6654,9 @@ ApplicationWindow {
             // Scénario de la 0.6.20 : le carnet d'adresses modifiable.
             if (essai.scenario === "carnet" || essai.scenario === "carnet-fiche" || essai.scenario === "carnet-nettoyage")
                 scenarios.lancerScenarioCarnet()
+            // Scénario de la 0.6.35 : import d'un carnet exporté par Outlook.
+            if (essai.scenario === "import-csv")
+                scenarios.lancerScenarioImportCsv()
             // Le corps d'un long message à tableau, défilé aller-retour (0.6.20).
             if (essai.scenario === "corps-long")
                 scenarios.lancerScenarioCorpsLong()
@@ -6400,10 +6740,30 @@ ApplicationWindow {
                 attenteCompte.triggered.connect(function() { scenarios.etapeScenarioBrouillonCompte(null, 0, 0, "") })
                 attenteCompte.start()
             }
+            if (essai.scenario === "hors-connexion") {
+                var attenteHors = Qt.createQmlObject('import QtQuick; Timer { interval: 8000 }', fenetre)
+                attenteHors.triggered.connect(function() { scenarios.etapeScenarioHorsConnexion(0) })
+                attenteHors.start()
+            }
+            if (essai.scenario === "filtre-autre-boite") {
+                var attenteFiltre = Qt.createQmlObject('import QtQuick; Timer { interval: 12000 }', fenetre)
+                attenteFiltre.triggered.connect(function() { scenarios.etapeScenarioFiltreAutreBoite(0) })
+                attenteFiltre.start()
+            }
+            if (essai.scenario === "orthographe") {
+                var attenteOrtho = Qt.createQmlObject('import QtQuick; Timer { interval: 8000 }', fenetre)
+                attenteOrtho.triggered.connect(function() { scenarios.etapeScenarioOrthographe(0) })
+                attenteOrtho.start()
+            }
             if (essai.scenario === "brouillon-auto") {
                 var attente = Qt.createQmlObject('import QtQuick; Timer { interval: 6000 }', fenetre)
                 attente.triggered.connect(function() { scenarios.etapeScenarioBrouillonAuto(null, 0) })
                 attente.start()
+            }
+            if (essai.scenario === "compte-erreur") {
+                var attenteErreur = Qt.createQmlObject('import QtQuick; Timer { interval: 8000 }', fenetre)
+                attenteErreur.triggered.connect(function() { scenarios.etapeScenarioCompteErreur(0) })
+                attenteErreur.start()
             }
             // Scénario « horsligne » : aucune connexion ; le profil d'une
             // session précédente doit suffire à lire la boîte de réception.

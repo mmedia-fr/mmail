@@ -37,12 +37,17 @@ Page {
     // Envoyée, fenêtre fermée en attendant l'issue (0.6.22) : elle se défait
     // une fois le message parti, et revient, intacte, s'il n'a pas pu partir.
     property bool enEnvoi: false
+    // Pas parti faute de réseau (0.6.34) : la rédaction reste cachée, dans la
+    // boîte d'envoi, et repart seule au retour du réseau (cf. Main.qml,
+    // `renvoyerEnAttente`).
+    property bool enAttente: false
     property bool fermerApresEnregistrement: false
     property bool afficherCopies: false
     property bool miseEnForme: reglagesRedaction.miseEnForme
     // Lus par les scénarios d'essai (cf. Scenarios.qml, « majuscule »).
     readonly property alias corps: corpsRedaction
     readonly property alias mefCorps: mef
+    readonly property alias correcteurOrtho: correcteurCorps
     readonly property alias animations: animationsRedaction
     readonly property alias boutonSignature: boutonSignature
     property string brouillonChemin: ""
@@ -426,6 +431,47 @@ Page {
             echouer(boite.erreur.length > 0 ? boite.erreur : qsTr("Envoi impossible."))
     }
 
+    /// Le message n'est pas parti faute de réseau (0.6.34) : il attend, caché,
+    /// le retour du réseau ; rien n'est perdu si MMail se ferme d'ici là.
+    function mettreEnAttente(message) {
+        occupe = false
+        enEnvoi = false
+        enAttente = true
+        fenetre.fermetureApresEnvoi = false
+        garder(true)
+        fenetre.majEnvois()
+        var objet = champObjet.text.trim()
+        fenetre.annoncer(objet.length > 0
+                         ? qsTr("Hors connexion : « %1 » partira au retour du réseau.").arg(objet)
+                         : qsTr("Hors connexion : le message partira au retour du réseau."), false)
+        signaler(message, false)
+    }
+
+    /// Nouvel essai d'un message en attente du réseau.
+    function renvoyer() {
+        if (!enAttente || occupe)
+            return
+        enAttente = false
+        envoyer(true)
+    }
+
+    /// Sort le message de la boîte d'envoi : sa fenêtre revient, il ne
+    /// repart plus seul.
+    function sortirDeLAttente() {
+        if (!enAttente)
+            return
+        enAttente = false
+        conteneur.montrerRedaction()
+        fenetre.majEnvois()
+        garder(true)
+        signaler(qsTr("Envoi suspendu : le message ne repartira qu'à « Envoyer »."), false)
+    }
+
+    /// Relit l'orthographe de tout le corps : un mot ajouté au dictionnaire.
+    function rafraichirOrthographe() {
+        correcteurCorps.rafraichir()
+    }
+
     /// `auto` : enregistrement périodique, et non demandé.
     function enregistrer(auto) {
         if (occupe)
@@ -516,7 +562,7 @@ Page {
         // `enEnvoi` : MMail fermé avant l'issue, la reprise prévient que le
         // message a pu partir.
         var etat = JSON.stringify({ compte: c ? c.compte : 0, miseEnForme: miseEnForme, enEnvoi: enEnvoi,
-                                    contenu: contenu() })
+                                    enAttente: enAttente, contenu: contenu() })
         if (etat !== etatGarde && boite.garderRedaction(idGarde, etat))
             etatGarde = etat
     }
@@ -918,12 +964,23 @@ Page {
             }
             TextArea {
                 id: corpsRedaction
-                // « Coller » colle aussi une image ou des fichiers, comme Ctrl+V.
+                // « Coller » colle aussi une image ou des fichiers, comme Ctrl+V ;
+                // sur un mot souligné, ses suggestions (0.6.36).
                 MenuSaisie {
+                    correcteur: correcteurCorps
                     coller: function() {
                         if (!redac.collerImage())
                             corpsRedaction.paste()
                     }
+                }
+                // Correcteur d'orthographe (0.6.36) : les mots inconnus du
+                // dictionnaire, soulignés en rouge, sans toucher au texte.
+                Correcteur {
+                    id: correcteurCorps
+                    document: corpsRedaction.textDocument
+                    orthographe: dictionnaire
+                    actif: reglagesRedaction.orthographe && !redac.chargement
+                    curseur: corpsRedaction.cursorPosition
                 }
                 textFormat: TextEdit.RichText
                 wrapMode: TextEdit.Wrap
@@ -935,14 +992,18 @@ Page {
                 font.pointSize: fenetre.tailleColonne("message")
                 enabled: !redac.chargement
                 placeholderText: qsTr("Votre message")
-                background: Rectangle { color: fenetre.palette.base }
+                // Sous une apparence sombre, la page reste blanche, comme à la
+                // lecture : une citation garde les couleurs de son expéditeur
+                // (0.6.37).
+                color: fenetre.valeurOu("sombre", false) ? "#1f1f1f" : fenetre.palette.text
+                background: Rectangle { color: fenetre.valeurOu("sombre", false) ? "#ffffff" : fenetre.palette.base }
                 onTextChanged: if (!redac.chargement) redac.modifie = true
                 // Le badge animé de la signature s'anime pendant la rédaction (0.6.18).
                 ImagesAnimees {
                     id: animationsRedaction
                     zone: corpsRedaction
                     miseEnForme: mef
-                    fond: fenetre.palette.base
+                    fond: fenetre.valeurOu("sombre", false) ? "#ffffff" : fenetre.palette.base
                 }
                 // Même blanc que la lecture sur une longue réponse qui cite un
                 // message à tableau (cf. cpp/rendu_complet.h).

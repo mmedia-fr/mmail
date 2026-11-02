@@ -88,6 +88,15 @@ ItemDelegate {
         return Math.abs(x - centre.x) <= chevronDossier.width / 2 + 6
     }
 
+    /// Vrai si le clic tombe sur la mention « erreur » d'un compte (marge
+    /// comprise, pour le doigt) : elle ouvre la fenêtre du compte (0.6.31).
+    function surErreur(x) {
+        if (!etatCompte.visible || model.etat !== "erreur")
+            return false
+        var gauche = etatCompte.mapToItem(zoneLigne, 0, 0).x
+        return x >= gauche - 6 && x <= gauche + etatCompte.width + 6
+    }
+
     // La rubrique Favoris sur un fond plus soutenu que celui des
     // comptes. Au-dessus du fond propre à la ligne (z -1, opaque dans
     // le style Fusion), sauf quand la ligne est choisie ou pressée.
@@ -207,6 +216,8 @@ ItemDelegate {
                 ligne.menuLigne(souris.x, souris.y)
             else if (ligne.surChevron(souris.x))
                 boite.replierDossier(model.compte, model.chemin, !model.replie)
+            else if (ligne.surErreur(souris.x))
+                fenetre.ouvrirErreurCompte(model.compte, model.motif)
             else
                 ligne.cliquer()
         }
@@ -269,17 +280,22 @@ ItemDelegate {
             Layout.fillWidth: true
         }
         Label {
+            id: etatCompte
             visible: model.genre === "compte" && model.etat !== "pret"
             text: model.etat === "connexion" ? qsTr("connexion…")
                 : model.etat === "erreur" ? qsTr("erreur") : qsTr("hors ligne")
             color: model.etat === "erreur" ? "#b00020" : fenetre.palette.windowText
             opacity: 0.7
             font.pointSize: fenetre.tailleArborescence * 0.85
+            // « erreur » se clique (cf. surErreur) : souligné comme un lien.
+            font.underline: model.etat === "erreur"
             // Le motif de l'erreur reste lisible au survol, une fois le
             // message passager effacé.
             HoverHandler { id: survolEtat }
             ToolTip.visible: survolEtat.hovered && model.motif.length > 0
-            ToolTip.text: model.motif
+            ToolTip.text: model.etat === "erreur"
+                          ? model.motif + "\n" + qsTr("Cliquez pour ouvrir le compte et vous reconnecter.")
+                          : model.motif
         }
         Label {
             visible: ligne.estDossier && !ligne.brouillons && model.nonLus > 0 && fenetre.marque === null

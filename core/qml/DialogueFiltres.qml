@@ -26,8 +26,9 @@ Dialog {
     readonly property var filtre: choisi >= 0 && choisi < liste.length ? liste[choisi] : null
     readonly property var adresses: fenetre.comptesConnus.map(function(c) { return c.adresse })
 
-    readonly property var champs: ["expediteur", "objet"]
-    readonly property var nomsChamps: [qsTr("Expéditeur"), qsTr("Objet")]
+    // À, Cc et « À ou Cc » : 0.6.33.
+    readonly property var champs: ["expediteur", "objet", "a", "cc", "destinataires"]
+    readonly property var nomsChamps: [qsTr("Expéditeur"), qsTr("Objet"), qsTr("À"), qsTr("Cc"), qsTr("À ou Cc")]
     readonly property var operateurs: ["contient", "est", "commence", "finit"]
     readonly property var nomsOperateurs: [qsTr("contient"), qsTr("est"), qsTr("commence par"), qsTr("se termine par")]
     readonly property var destinations: ["", "dossier", "corbeille", "indesirables"]
@@ -50,7 +51,7 @@ Dialog {
     function vierge() {
         return { nom: qsTr("Nouveau filtre"), actif: true, compte: "", tout: true,
                  conditions: [{ champ: "expediteur", operateur: "contient", valeur: "" }],
-                 lu: false, suivi: false, destination: "", dossier: "", arreter: false }
+                 lu: false, suivi: false, destination: "", dossier: "", compte_destination: "", arreter: false }
     }
     function modifier(cle, valeur) {
         if (!filtre)
@@ -86,7 +87,7 @@ Dialog {
         if (f.suivi)
             actions.push(qsTr("suivi"))
         if (f.destination === "dossier")
-            actions.push("→ " + (f.dossier || "?"))
+            actions.push("→ " + (f.compte_destination ? f.compte_destination + " › " : "") + (f.dossier || "?"))
         else if (f.destination === "corbeille")
             actions.push("→ " + qsTr("corbeille"))
         else if (f.destination === "indesirables")
@@ -96,6 +97,19 @@ Dialog {
     }
     function dossiersDuCompte(adresse) {
         return cibles.filter(function(c) { return c.adresse === adresse })
+    }
+    /// Boîte du dossier de destination (0.6.33) : celle du message, ou une
+    /// autre du profil ; vide : celle du message.
+    function boiteDestination(f) {
+        return f ? (f.compte_destination || f.compte || "") : ""
+    }
+    /// Boîtes proposées comme destination : « sa boîte » (le compte visé),
+    /// puis les autres ; pour tous les comptes, une boîte nommée seulement.
+    function boitesDestination(f) {
+        if (!f)
+            return []
+        var autres = adresses.filter(function(a) { return a !== f.compte })
+        return f.compte ? [""].concat(autres) : autres
     }
     function enregistrer() {
         dlgFiltres.forceActiveFocus()
@@ -302,9 +316,27 @@ Dialog {
                     onActivated: function(i) { dlgFiltres.modifier("destination", dlgFiltres.destinations[i]) }
                 }
                 ComboBox {
+                    id: choixBoite
+                    readonly property var boites: dlgFiltres.boitesDestination(dlgFiltres.filtre)
+                    visible: dlgFiltres.filtre !== null && dlgFiltres.filtre.destination === "dossier"
+                    Layout.fillWidth: true
+                    model: boites.map(function(b) {
+                        return b === "" ? qsTr("dans sa boîte (%1)").arg(dlgFiltres.filtre.compte)
+                                        : qsTr("dans la boîte %1").arg(b)
+                    })
+                    currentIndex: dlgFiltres.filtre ? boites.indexOf(dlgFiltres.filtre.compte_destination || "") : -1
+                    displayText: currentIndex < 0 ? qsTr("Choisir la boîte…") : currentText
+                    onActivated: function(i) {
+                        if ((dlgFiltres.filtre.compte_destination || "") === boites[i])
+                            return
+                        dlgFiltres.modifier("compte_destination", boites[i])
+                        dlgFiltres.modifier("dossier", "")
+                    }
+                }
+                ComboBox {
                     id: choixDossier
-                    readonly property var dossiers: dlgFiltres.filtre ? dlgFiltres.dossiersDuCompte(dlgFiltres.filtre.compte) : []
-                    visible: dlgFiltres.filtre !== null && dlgFiltres.filtre.destination === "dossier" && dlgFiltres.filtre.compte !== ""
+                    readonly property var dossiers: dlgFiltres.filtre ? dlgFiltres.dossiersDuCompte(dlgFiltres.boiteDestination(dlgFiltres.filtre)) : []
+                    visible: dlgFiltres.filtre !== null && dlgFiltres.filtre.destination === "dossier" && dlgFiltres.boiteDestination(dlgFiltres.filtre) !== ""
                     Layout.fillWidth: true
                     model: dossiers.map(function(d) { return fenetre.libelleLigne(d) + "  (" + d.chemin + ")" })
                     currentIndex: dlgFiltres.filtre ? dossiers.map(function(d) { return d.chemin }).indexOf(dlgFiltres.filtre.dossier) : -1
@@ -312,8 +344,8 @@ Dialog {
                     onActivated: function(i) { dlgFiltres.modifier("dossier", dossiers[i].chemin) }
                 }
                 Label {
-                    visible: dlgFiltres.filtre !== null && dlgFiltres.filtre.destination === "dossier" && dlgFiltres.filtre.compte === ""
-                    text: qsTr("Pour déplacer vers un dossier, choisissez d'abord le compte.")
+                    visible: dlgFiltres.filtre !== null && dlgFiltres.filtre.destination === "dossier" && dlgFiltres.boiteDestination(dlgFiltres.filtre) === ""
+                    text: qsTr("Pour déplacer vers un dossier, choisissez la boîte où il se trouve.")
                     wrapMode: Text.Wrap
                     Layout.fillWidth: true
                     opacity: 0.75

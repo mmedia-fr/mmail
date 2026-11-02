@@ -534,9 +534,28 @@ ApplicationWindow {
             texteIndication: "#8b919c", lien: "#5cc6f2", clair: "#3a3f49",
             moyen: "#4a505b", sombreRole: "#111317", ombre: "#0a0b0d",
             sombre: true
+        },
+        // Apparence « Outlook » (0.6.38) : l'affichage d'Outlook, d'après la
+        // palette publiée de Fluent 2 (Microsoft, licence MIT), celle d'Outlook
+        // depuis sa refonte de 2023 : bandeau au bleu de marque #0f6cbd,
+        // texte #242424, panneaux #f5f5f5, sélection bleu pâle, objets non lus
+        // au bleu de marque, Segoe UI en 9 points comme les listes d'Outlook,
+        // titres en semi-gras, pas de filet sous l'en-tête.
+        "outlook": {
+            libelle: qsTr("Outlook"),
+            fond: "#f5f5f5", texte: "#242424", base: "#ffffff",
+            bouton: "#ffffff", surbrillance: "#cfe4fa", texteSurbrillance: "#242424",
+            police: ["Segoe UI", "Selawik", "Noto Sans", "DejaVu Sans", "Arial"], taille: 9,
+            mono: ["Cascadia Mono", "Consolas", "DejaVu Sans Mono", "Courier New"],
+            bandeau: "#0f6cbd", texteBandeau: "#ffffff", accent: "#0f6cbd",
+            texteAccent: "#0f6cbd", rubrique: "#616161", alerte: "#c50f1f",
+            titres: ["Segoe UI Semibold", "Segoe UI", "Selawik", "Noto Sans", "DejaVu Sans", "Arial"],
+            encreAccent: "#ffffff", survolBandeau: 0.12, survolBande: 0.08, filetBandeau: 0,
+            survolLigne: 0.05, baseAlternee: "#fafafa", bulle: "#ffffff", texteBulle: "#242424",
+            texteIndication: "#707070", lien: "#0f6cbd", moyen: "#d1d1d1"
         }
     })
-    readonly property var nomsApparence: ["classique", "moderne", "systeme", "mmedia", "pomme", "nuit"]
+    readonly property var nomsApparence: ["classique", "moderne", "systeme", "mmedia", "pomme", "outlook", "nuit"]
                                          .concat(jeuxApparence["perso"] ? ["perso"] : [])
 
     // ---- apparence personnelle (0.6.37, « Créer mon apparence… »)

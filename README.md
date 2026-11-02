@@ -260,6 +260,9 @@ de projet interne.
   moderne (M-Media), système, et MMEDIA, aux couleurs du site mmedia.fr —
   en-tête en bandeau nuit, boutons en pastilles, non-lus en pastilles rouges,
   dossier et message choisis sur un cyan pâle, marqués d'un filet — ; Pomme ;
+  **Outlook** (0.6.38), l'affichage d'Outlook d'après la palette publiée de
+  Fluent 2 (bandeau au bleu de marque, sélection bleu pâle, objets non lus en
+  bleu, Segoe UI en 9 points, titres en semi-gras) ;
   **Nuit** (0.6.37), fonds sombres et texte clair, la page d'un message HTML
   et celle de la rédaction restant blanches pour garder les couleurs de
   l'expéditeur ; et **une apparence personnelle** (0.6.37, « Créer mon

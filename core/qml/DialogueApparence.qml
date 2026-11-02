@@ -21,7 +21,7 @@ Dialog {
     width: Math.min(520, fenetre.width - 24)
     standardButtons: Dialog.Ok | Dialog.Cancel
 
-    readonly property var bases: ["mmedia", "pomme", "moderne", "nuit"]
+    readonly property var bases: ["mmedia", "pomme", "outlook", "moderne", "nuit"]
     property string base: "mmedia"
     // Couleurs choisies ; vide : celle de l'apparence de base.
     property var choix: ({ fond: "", bandeau: "", accent: "", surbrillance: "" })

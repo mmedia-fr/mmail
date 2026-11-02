@@ -449,7 +449,7 @@ de la configuration garde le compte, pas son jeton.
 
 **Ajout ouvert sur le bureau, masqué sous Android.** L'application Google est
 en production depuis le 19/10/2026 : « Ajouter un compte Google (Gmail)… »
-s'affiche sous Windows, Linux et macOS. Sous Android, où la connexion par le
+s'affiche sous Windows et Linux. Sous Android, où la connexion par le
 navigateur n'a pas été éprouvée, il ne s'affiche que si la variable
 `MMAIL_GOOGLE_ESSAI` est posée (n'importe quelle valeur non vide) ; un compte
 Gmail déjà ajouté reste utilisable et se reconnecte normalement (constante
@@ -553,7 +553,7 @@ jour, arrêt du poste), il est proposé à la reprise au démarrage suivant.
 
 **Présentation au serveur.** Après la connexion, MMail se présente au serveur
 IMAP qui l'accepte (commande `ID`, RFC 2971) : `name` (MMail), `version`, `os`
-(Windows, Linux, Android, macOS), `os-version` (le système et sa version, tels
+(Windows, Linux, Android), `os-version` (le système et sa version, tels
 que Qt les nomme) et `x-poste` (le nom de l'ordinateur ; « Android » sur un
 téléphone). Le serveur peut l'inscrire à son journal : c'est ce qui permet de
 compter les postes où MMail fonctionne.
@@ -648,6 +648,12 @@ installeur Windows, AppImage, APK — sont produits par l'intégration continue
 (empreinte du certificat `D4:97:9E:5F…:D7:75` depuis la 0.5.17 ; les versions
 précédentes portaient une clé d'essai : passer de l'une à l'autre demande de
 désinstaller MMail une fois).
+
+**Ni macOS ni iOS.** Les systèmes d'Apple ne sont pas des cibles de MMail, et
+leur prise en charge est retirée du code et de l'intégration continue depuis le
+02/11/2026 : la distribution par l'App Store est incompatible avec la licence
+GPL, et une distribution hors de l'App Store passe par une démarche lourde et
+payante (signature et notarisation par un compte de développeur Apple).
 
 L'interface est en QML, dans `core/qml/` : `Main.qml` porte la fenêtre, ses
 réglages, ses raccourcis et ses actions ; chaque élément a son fichier — les trois

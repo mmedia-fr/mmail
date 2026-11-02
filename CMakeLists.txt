@@ -3,6 +3,11 @@
 cmake_minimum_required(VERSION 3.24)
 project(mmail VERSION 0.6.29 LANGUAGES CXX)
 
+# Ni macOS ni iOS (décision du 2026-11-02, motif au README).
+if(APPLE)
+  message(FATAL_ERROR "MMail ne se construit pas pour les systèmes d'Apple (cf. README).")
+endif()
+
 if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
   set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreadedDLL")
   # Sources en UTF-8 (sans BOM) : sans /utf-8, MSVC les lit en cp1252 et les
@@ -97,9 +102,6 @@ elseif(ANDROID)
   list(APPEND COFFRE_SOURCES ${QTK}/keychain_android.cpp ${QTK}/androidkeystore.cpp
                              ${QTK}/androidkeystore_p.h ${QTK}/plaintextstore.cpp
                              ${QTK}/plaintextstore_p.h)
-elseif(APPLE)
-  enable_language(OBJCXX)
-  list(APPEND COFFRE_SOURCES ${QTK}/keychain_apple.mm)
 else()
   # Secret Service par libsecret, KWallet par D-Bus : QtKeychain choisit à
   # l'exécution selon le bureau.
@@ -127,8 +129,6 @@ if(WIN32)
   target_compile_definitions(coffre PRIVATE USE_CREDENTIAL_STORE=1 USE_COMPAT_NAMING_SCHEME=1
                                             UNICODE _UNICODE)
   target_link_libraries(coffre PRIVATE crypt32 advapi32)
-elseif(APPLE)
-  target_link_libraries(coffre PRIVATE "-framework Foundation" "-framework Security")
 elseif(NOT ANDROID)
   target_compile_definitions(coffre PRIVATE KEYCHAIN_DBUS=1 HAVE_LIBSECRET=1)
   target_link_libraries(coffre PRIVATE Qt6::DBus PkgConfig::LIBSECRET)
@@ -211,24 +211,12 @@ if(WIN32)
 endif()
 
 # Compteur du lanceur sous Linux (cf. cpp/pastille.h) : un signal D-Bus.
-if(NOT WIN32 AND NOT APPLE AND NOT ANDROID)
+if(NOT WIN32 AND NOT ANDROID)
   target_link_libraries(mmail PRIVATE Qt6::DBus)
-endif()
-
-# Le vérificateur de certificats de la plateforme s'appuie sur le Security
-# Framework sous macOS : sans ces deux bibliothèques, l'édition de liens
-# s'arrête sur « _kSecValueRef, symbol(s) not found ».
-if(APPLE)
-  target_link_libraries(mmail PRIVATE "-framework Security" "-framework CoreFoundation")
 endif()
 
 set_target_properties(mmail PROPERTIES
   WIN32_EXECUTABLE ON
-  MACOSX_BUNDLE ON
-  MACOSX_BUNDLE_GUI_IDENTIFIER fr.mmedia.mmail
-  MACOSX_BUNDLE_BUNDLE_NAME MMail
-  MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}
-  MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION}
   QT_ANDROID_PACKAGE_NAME fr.mmedia.mmail
   QT_ANDROID_APP_NAME MMail
   QT_ANDROID_VERSION_NAME ${PROJECT_VERSION}

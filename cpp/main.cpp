@@ -187,8 +187,7 @@ static QString dossierProfil(bool* impose = nullptr)
 /// (Paramètres, Accessibilité, Effets visuels). C'est l'équivalent du
 /// « prefers-reduced-motion » du web, et l'interface doit l'honorer : une
 /// animation qu'on ne peut pas couper est une animation de trop. Vrai partout
-/// ailleurs, ni macOS ni les bureaux Linux ne l'exposant par une voie que Qt
-/// relaie.
+/// ailleurs, les bureaux Linux ne l'exposant pas par une voie que Qt relaie.
 static bool animationsClientes()
 {
 #ifdef Q_OS_WIN

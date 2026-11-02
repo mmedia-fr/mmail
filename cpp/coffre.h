@@ -11,13 +11,12 @@
 //     KWallet par D-Bus ;
 //   - Android : Android Keystore (secret chiffré en AES, la clé AES par une
 //     clé RSA du Keystore, depuis QtKeychain 0.17.0) ;
-//   - macOS   : Trousseau (construit par portabilité, non distribué).
 //
 // Aucun repli en clair : si le système n'offre pas de coffre, l'opération
 // échoue et l'interface le dit — le mot de passe sera redemandé.
 //
-// Toutes les opérations sont asynchrones : le Trousseau, KWallet ou le
-// déverrouillage d'un coffre GNOME peuvent solliciter l'utilisateur.
+// Toutes les opérations sont asynchrones : KWallet ou le déverrouillage d'un
+// coffre GNOME peuvent solliciter l'utilisateur.
 
 #include <QtCore/QObject>
 #include <QtCore/QString>

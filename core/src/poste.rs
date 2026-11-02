@@ -17,13 +17,12 @@ pub fn nom() -> String {
         .unwrap_or_else(|| "poste".to_string())
 }
 
-/// Famille du système : Windows, Linux, Android, macOS.
+/// Famille du système : Windows, Linux, Android.
 pub fn famille() -> &'static str {
     match std::env::consts::OS {
         "windows" => "Windows",
         "linux" => "Linux",
         "android" => "Android",
-        "macos" => "macOS",
         autre => autre,
     }
 }

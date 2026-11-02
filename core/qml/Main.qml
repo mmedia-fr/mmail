@@ -6320,6 +6320,9 @@ ApplicationWindow {
             // Le corps d'un long message à tableau, défilé aller-retour (0.6.20).
             if (essai.scenario === "corps-long")
                 scenarios.lancerScenarioCorpsLong()
+            // Scénario « desabonnement » (0.6.30, banc DESABO=1).
+            if (essai.scenario === "desabonnement")
+                scenarios.lancerScenarioDesabonnement()
             // Scénario « zoom-lecture » (0.6.29) : le zoom du volet de lecture
             // laisse les boutons à leur taille (banc PIECE=1).
             if (essai.scenario === "zoom-lecture")

@@ -3085,6 +3085,101 @@ QtObject {
         attente.start()
     }
 
+    /// Scénario « desabonnement » (0.6.30, banc DESABO=1 : quatre lettres dans
+    /// la boîte de réception de un@ et un serveur HTTPS sur localhost qui note
+    /// les demandes). « Lettre un clic » : bandeau, demande envoyée après
+    /// confirmation seulement, acceptée ; « Lettre par courriel » : rédaction
+    /// préparée vers l'adresse de la liste ; « Lettre lien du corps » : lien
+    /// repéré dans le corps ; « TR : Lettre transférée » et « Essai 1 » : pas
+    /// de bandeau.
+    function lancerScenarioDesabonnement() {
+        var suivi = { echecs: 0 }
+        var bilan = function(texte, bon) {
+            if (!bon)
+                suivi.echecs += 1
+            console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
+        }
+        var bandeau = function() { return objetNomme(colonneLecture, "bandeauDesabonnement") }
+        var rang = function(sujet) {
+            for (var k = 0; k < modeleMessages.count; ++k)
+                if (modeleMessages.get(k).sujet === sujet)
+                    return k
+            return -1
+        }
+        // Les messages, dans l'ordre ; chacun dit ce qu'il attend.
+        var etapes = [
+            { sujet: "Lettre un clic", methode: "un-clic", source: "entete", hote: "localhost" },
+            { sujet: "Lettre par courriel", methode: "courriel", source: "entete", hote: "desabo@essai.test" },
+            { sujet: "Lettre lien du corps", methode: "lien", source: "corps", hote: "localhost" },
+            { sujet: "TR : Lettre transférée", methode: "" },
+            { sujet: "Essai 1", methode: "" }
+        ]
+        var finir = function() {
+            console.log("scenario: desabonnement " + (suivi.echecs === 0 ? "OK" : "ECHEC (" + suivi.echecs + ")"))
+            Qt.quit()
+        }
+        var suivante = function(n) {
+            if (n >= etapes.length) {
+                finir()
+                return
+            }
+            var e = etapes[n]
+            var i = rang(e.sujet)
+            if (i < 0) {
+                bilan("« " + e.sujet + " » absent (banc DESABO=1 ?)", false)
+                suivante(n + 1)
+                return
+            }
+            choisir(i, 0)
+            plusTard(3000, function() {
+                var b = bandeau()
+                var d = fenetre.enteteCourant.desabonnement || null
+                console.log("scenario: « " + e.sujet + " » :", JSON.stringify(d))
+                if (e.methode === "") {
+                    bilan("« " + e.sujet + " » sans bandeau", d === null && b && !b.visible)
+                    suivante(n + 1)
+                    return
+                }
+                bilan("« " + e.sujet + " » : bandeau visible, " + e.methode + " (" + e.source + ") vers " + e.hote,
+                      b && b.visible && d && d.methode === e.methode && d.source === e.source && d.hote === e.hote)
+                if (!d || !b) {
+                    suivante(n + 1)
+                    return
+                }
+                b.dialogue.d = d
+                b.dialogue.compte = comptesConnus[0].compte
+                if (e.methode === "un-clic") {
+                    console.log("scenario: demande de désabonnement (confirmation simulée)")
+                    bilan("demande lancée", b.dialogue.executer() === true)
+                    plusTard(5000, function() {
+                        var r = fenetre.essai.desabonnement
+                        bilan("réponse du serveur : " + JSON.stringify(r), r && r.ok && r.hote === "localhost")
+                        suivante(n + 1)
+                    })
+                } else if (e.methode === "courriel") {
+                    var r = b.dialogue.executer()
+                    plusTard(1500, function() {
+                        var a = r ? objetNomme(r, "champA") : null
+                        var o = r ? objetNomme(r, "champObjet") : null
+                        bilan("rédaction préparée : À « " + (a ? a.text : "?") + " », objet « " + (o ? o.text : "?") + " »",
+                              a && a.text === "desabo@essai.test" && o && o.text === "Désabonnement demandé")
+                        if (r)
+                            r.conteneur.fermerRedaction()
+                        suivante(n + 1)
+                    })
+                } else {
+                    // Le navigateur ne s'ouvre pas au banc.
+                    bilan("adresse du lien : " + d.url, d.url === "https://localhost/desinscription?u=7&l=2")
+                    suivante(n + 1)
+                }
+            })
+        }
+        plusTard(8000, function() {
+            ouvrirDossier(comptesConnus[0].compte, "INBOX")
+            plusTard(4000, function() { suivante(0) })
+        })
+    }
+
     /// Scénario « zoom-lecture » (0.6.29) : le zoom du volet de lecture grossit
     /// le message, pas les boutons. « Devis joint » (banc PIECE=1) affiché, le
     /// zoom passe à 1,5 : le corps et l'objet grossissent d'autant ; le bouton

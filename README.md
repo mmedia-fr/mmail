@@ -212,6 +212,18 @@ de projet interne.
   se télécharge pas ; une erreur de réseau vaut une seconde tentative. Une
   image demandée qui n'est pas venue est dite telle dans le bandeau, qui
   propose alors de réessayer ;
+- **se désabonner** (0.6.30) : une lettre d'information ou un message de liste
+  de diffusion qui offre le moyen de s'en retirer porte un bandeau « Se
+  désabonner… », dans le volet de lecture comme dans la fenêtre d'un message.
+  Rien ne part sans confirmation, qui nomme le serveur ou l'adresse visés.
+  Désabonnement en un clic quand l'expéditeur l'annonce (RFC 8058) : MMail
+  envoie lui-même la demande, sans ouvrir de page ; sinon, d'après l'en-tête
+  `List-Unsubscribe`, un courriel de désabonnement préparé (il ne part qu'à
+  « Envoyer ») ou la page de l'expéditeur ouverte dans le navigateur ; à
+  défaut d'en-tête, le lien de désinscription du corps, ouvert dans le
+  navigateur — jamais celui d'une réponse ou d'un transfert, qui désabonnerait
+  le premier destinataire. Aucun bandeau quand le serveur a noté l'échec de
+  l'authentification de l'expéditeur (DMARC) ;
 - **masquage local** des dossiers peu utilisés, réaffichage en un clic ;
 - affichage du **message brut** (bouton « Source ») ;
 - **copie automatique de la sélection**, comme dans MMdedit : un texte

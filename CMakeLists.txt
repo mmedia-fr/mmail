@@ -247,11 +247,11 @@ endif()
 if(ANDROID AND COMMAND qt_add_android_permission)
   qt_add_android_permission(mmail NAME android.permission.INTERNET)
   qt_add_android_permission(mmail NAME android.permission.ACCESS_NETWORK_STATE)
-  # Relève en arrière-plan (0.7.0) : notifier (Android 13 et au-delà, accordée
-  # par la personne), et garder la tâche au redémarrage du téléphone.
-  qt_add_android_permission(mmail NAME android.permission.POST_NOTIFICATIONS)
-  qt_add_android_permission(mmail NAME android.permission.RECEIVE_BOOT_COMPLETED)
 endif()
+# Permissions de la relève en arrière-plan (0.7.0) : dans
+# packaging/android/AndroidManifest.xml. qt_add_android_permission n'existe
+# qu'à partir de Qt 6.9 : avec Qt 6.8.3, le bloc ci-dessus ne s'exécute pas, et
+# INTERNET vient des modules de Qt (constaté sur l'émulateur, 02/11/2026).
 if(ANDROID)
   # Méthodes natives de la tâche de relève (cpp/releve_android.cpp), appelées
   # par Java : rien ne les référence dans le programme, et l'éditeur de liens

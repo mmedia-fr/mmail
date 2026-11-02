@@ -77,8 +77,12 @@ public class Releve extends JobService {
                 .setPeriodic(PERIODE)
                 .setPersisted(true)
                 .build();
-        if (ordonnanceur.schedule(tache) != JobScheduler.RESULT_SUCCESS)
-            Log.w(JOURNAL, "relève : tâche refusée par le système");
+        try {
+            if (ordonnanceur.schedule(tache) != JobScheduler.RESULT_SUCCESS)
+                Log.w(JOURNAL, "relève : tâche refusée par le système");
+        } catch (RuntimeException e) {
+            Log.w(JOURNAL, "relève : tâche refusée par le système : " + e);
+        }
     }
 
     /** Android 13 et au-delà : notifier demande une permission, accordée par la personne. */

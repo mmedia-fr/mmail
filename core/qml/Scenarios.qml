@@ -55,10 +55,23 @@ QtObject {
             var l = ligne()
             return l ? l.etat + " | motif « " + l.motif + " »" : "ligne absente"
         }
-        var suite = function(n, delai) {
-            var t = Qt.createQmlObject('import QtQuick; Timer { interval: ' + delai + ' }', fenetre)
-            t.triggered.connect(function() { etapeScenarioCompteErreur(n) })
+        // Chaque étape attend l'état qu'elle vérifie (une seconde par essai,
+        // 40 au plus) : un serveur retarde de plus en plus ses refus
+        // d'identifiants successifs (Dovecot : 2 s, puis 6 s…).
+        var suite = function(n, condition) {
+            var essais = 40
+            var t = Qt.createQmlObject('import QtQuick; Timer { interval: 1000; repeat: true }', fenetre)
+            t.triggered.connect(function() {
+                if (condition() || --essais <= 0) {
+                    t.stop()
+                    etapeScenarioCompteErreur(n)
+                }
+            })
             t.start()
+        }
+        var motif = function() {
+            var l = ligne()
+            return l ? l.motif : ""
         }
         if (etape === 0) {
             // Démarrage simulé : session fermée, secret relu au coffre — que
@@ -66,12 +79,12 @@ QtObject {
             boite.deconnecter(c.id)
             reglages.memoriser = true
             fenetre.connecterCompte(c)
-            suite(1, 3000)
+            suite(1, function() { var l = ligne(); return l && l.etat === "erreur" })
         } else if (etape === 1) {
             console.log("scenario: démarrage sans secret | fenêtre", dlgCompte.visible, "|", decrire())
             // Refus du serveur pendant une connexion automatique.
             boite.connecter(c.hote, c.adresse, "mauvais-mot-de-passe")
-            suite(2, 5000)
+            suite(2, function() { return motif().indexOf("identifiants") === 0 })
         } else if (etape === 2) {
             console.log("scenario: refus automatique | fenêtre", dlgCompte.visible, "|", decrire(),
                         "| barre « " + messageEtat.texte + " »")
@@ -82,13 +95,13 @@ QtObject {
             // Geste de la personne : un mot de passe encore faux.
             dlgCompte.champMotDePasse.text = "encore-faux"
             dlgCompte.accept()
-            suite(3, 5000)
+            suite(3, function() { return dlgCompte.visible })
         } else if (etape === 3) {
             console.log("scenario: refus après un geste | fenêtre", dlgCompte.visible,
                         "| note « " + dlgCompte.noteCompte.text + " »")
             dlgCompte.champMotDePasse.text = identifiantsEssai.motDePasse
             dlgCompte.accept()
-            suite(4, 5000)
+            suite(4, function() { var l = ligne(); return l && l.etat === "pret" })
         } else {
             console.log("scenario: reconnecté | fenêtre", dlgCompte.visible, "|", decrire(),
                         "| gestes", JSON.stringify(fenetre.gestesCompte))

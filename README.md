@@ -111,11 +111,15 @@ de projet interne.
   viennent en tête des adresses proposées à la saisie. Lecture seule : un
   contact se crée ou se modifie dans le webmail ;
 - **filtres du courrier** (« Comptes › Filtres du courrier… », ou « Créer un
-  filtre… » sur un message) : selon l'expéditeur — nom ou adresse — et l'objet
-  (contient, est, commence par, se termine par ; toutes les conditions ou une
-  au moins), un message arrivé dans la boîte de réception est marqué lu, suivi,
-  rangé dans un dossier de son compte, mis à la corbeille ou classé
-  indésirable ; les filtres se lisent dans l'ordre. MMail les applique lui-même,
+  filtre… » sur un message) : selon l'expéditeur — nom ou adresse —, l'objet
+  et les destinataires (À, Cc, ou l'un ou l'autre, chacun par son nom ou son
+  adresse, 0.6.33) — contient, est, commence par, se termine par ; toutes les
+  conditions ou une au moins —, un message arrivé dans la boîte de réception
+  est marqué lu, suivi, rangé dans un dossier de son compte ou d'une autre
+  boîte du profil (0.6.33 ; si cette boîte n'est pas encore connectée, le
+  déplacement attend sa connexion), mis à la corbeille ou classé indésirable ;
+  les filtres se lisent dans l'ordre. Les destinataires ne sont connus que des
+  messages arrivés depuis la 0.6.33. MMail les applique lui-même,
   pour tous les comptes (Mailcow, Microsoft 365, Gmail…), aux messages qui
   arrivent pendant qu'il est ouvert — ou à toute la boîte sur demande. Un
   message ramené à la main n'est pas refiltré. Les filtres partent avec la

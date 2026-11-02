@@ -2582,6 +2582,9 @@ fn lire_message(l: &rusqlite::Row<'_>) -> rusqlite::Result<MessageLocal> {
         repondu_tous: l.get::<_, i32>(14)? != 0,
         destinataires: l.get(15)?,
         mots_cles: l.get(16)?,
+        // Destinataires des filtres (0.6.33) : la liste n'en a pas besoin.
+        a: String::new(),
+        cc: String::new(),
     })
 }
 

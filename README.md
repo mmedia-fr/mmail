@@ -47,7 +47,10 @@ de projet interne.
   repartent plus qu'à « Envoyer ». MMail fermé d'ici là, ils reprennent leur
   place au lancement suivant. Une coupure après l'envoi du texte, qui laisse
   ignorer s'il est parti, et un refus du serveur rouvrent la fenêtre avec le
-  motif, comme avant ;
+  motif, comme avant ; de même une coupure pendant l'envoi d'un compte
+  Microsoft 365, qui passe par Graph et ne dit pas si le message est parti
+  (un compte Microsoft qui ne se connecte pas du tout attend, lui, le
+  réseau) ;
 - **nom affiché et signature** par compte (menu « Comptes », « Nom et
   signature… »), ajoutée aux nouveaux messages, aux réponses, ou sur demande ;
 - **autres adresses d'envoi** d'un compte, proposées dans le champ « De » :

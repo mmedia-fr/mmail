@@ -6861,11 +6861,18 @@ impl Travail {
             Err(message) => return Some(Issue::EchecRedaction { jeton, message }),
         };
         let retour = self.retour();
+        // Microsoft 365 envoie par Graph (une requête HTTP) : une coupure n'y
+        // dit pas si le message est parti — pas de nouvel essai automatique.
+        let par_graph = id
+            .oauth
+            .as_ref()
+            .is_some_and(|j| crate::oauth::fournisseur(j) != crate::oauth::Fournisseur::Google);
         let lance = thread::Builder::new().name("mmail-smtp".into()).spawn(move || {
             let echec = remettre_message(&id, &r.de, &f.destinataires, &f.envoi, r.accuse_remise).err();
             // Coupure du réseau avant le texte du message (0.6.34) : il n'est
             // pas parti, il repartira seul.
-            let hors_connexion = echec.as_ref().is_some_and(|x| matches!(x, Erreur::Reseau(_)) && !smtp::incertain(x));
+            let hors_connexion =
+                !par_graph && echec.as_ref().is_some_and(|x| matches!(x, Erreur::Reseau(_)) && !smtp::incertain(x));
             let erreur = echec.map(|x| {
                 // Coupure après le texte du message (0.6.22) : le dire, la
                 // rédaction rouverte proposerait sinon un double sans prévenir.

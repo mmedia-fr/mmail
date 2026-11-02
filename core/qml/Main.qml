@@ -6400,6 +6400,11 @@ ApplicationWindow {
                 attenteCompte.triggered.connect(function() { scenarios.etapeScenarioBrouillonCompte(null, 0, 0, "") })
                 attenteCompte.start()
             }
+            if (essai.scenario === "filtre-autre-boite") {
+                var attenteFiltre = Qt.createQmlObject('import QtQuick; Timer { interval: 12000 }', fenetre)
+                attenteFiltre.triggered.connect(function() { scenarios.etapeScenarioFiltreAutreBoite(0) })
+                attenteFiltre.start()
+            }
             if (essai.scenario === "brouillon-auto") {
                 var attente = Qt.createQmlObject('import QtQuick; Timer { interval: 6000 }', fenetre)
                 attente.triggered.connect(function() { scenarios.etapeScenarioBrouillonAuto(null, 0) })

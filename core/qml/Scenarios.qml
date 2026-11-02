@@ -27,6 +27,53 @@ QtObject {
         return Math.round((Date.now() - depart) / 5000) * 5
     }
 
+    /// Scénario « filtre-autre-boite » (0.6.33) : un filtre de un@ sur le
+    /// destinataire (À) et l'objet range « Essai 2 » dans « Essais » de deux@ ;
+    /// appliqué à la boîte de réception, le message passe d'une boîte à l'autre.
+    function etapeScenarioFiltreAutreBoite(etape) {
+        var un = null, deux = null
+        var comptes = fenetre.listeComptes()
+        for (var i = 0; i < comptes.length; ++i) {
+            if (comptes[i].adresse === "un@essai.test") un = comptes[i]
+            if (comptes[i].adresse === "deux@essai.test") deux = comptes[i]
+        }
+        if (!un || !deux) {
+            console.log("scenario: ECHEC deux comptes attendus")
+            Qt.quit()
+            return
+        }
+        var suite = function(n, delai) {
+            var t = Qt.createQmlObject('import QtQuick; Timer { interval: ' + delai + ' }', fenetre)
+            t.triggered.connect(function() { etapeScenarioFiltreAutreBoite(n) })
+            t.start()
+        }
+        if (etape === 0) {
+            var filtres = [{ nom: "Vers deux", compte: "un@essai.test", tout: true,
+                             conditions: [{ champ: "a", operateur: "contient", valeur: "un@essai" },
+                                          { champ: "objet", operateur: "est", valeur: "Essai 2" }],
+                             destination: "dossier", compte_destination: "deux@essai.test", dossier: "Essais" }]
+            console.log("scenario: filtres posés |", boite.poserFiltres(JSON.stringify(filtres)), "|", boite.erreur)
+            console.log("scenario: filtres appliqués |", boite.appliquerFiltres(un.id), "message(s) touché(s)")
+            suite(1, 10000)
+        } else if (etape === 1) {
+            ouvrirDossier(deux.id, "Essais")
+            suite(2, 6000)
+        } else if (etape === 2) {
+            var sujets = []
+            for (var k = 0; k < modeleMessages.count; ++k)
+                sujets.push(modeleMessages.get(k).sujet)
+            console.log("scenario: Essais de deux@ |", JSON.stringify(sujets))
+            ouvrirDossier(un.id, "INBOX")
+            suite(3, 6000)
+        } else {
+            var restants = []
+            for (var j = 0; j < modeleMessages.count; ++j)
+                restants.push(modeleMessages.get(j).sujet)
+            console.log("scenario: boîte de réception de un@ |", JSON.stringify(restants))
+            Qt.quit()
+        }
+    }
+
     /// Scénario « double-clic » (0.6.16) : la fenêtre du message a reçu son
     /// corps. Marquage non lu puis lu depuis la fenêtre, fermeture ; puis
     /// l'option « Ouvrir une réponse », et les brouillons.

@@ -31,7 +31,12 @@ use aws_lc_rs::rsa::{
 use aws_lc_rs::signature::{self as sig, UnparsedPublicKey, VerificationAlgorithm};
 use cms::cert::CertificateChoices;
 use cms::content_info::ContentInfo;
-use cms::enveloped_data::{EnvelopedData, RecipientIdentifier, RecipientInfo};
+use cms::authenveloped_data::AuthEnvelopedData;
+use cms::cert::IssuerAndSerialNumber;
+use cms::enveloped_data::{
+    EncryptedContentInfo, EnvelopedData, KeyAgreeRecipientIdentifier, KeyAgreeRecipientInfo, OriginatorIdentifierOrKey,
+    RecipientIdentifier, RecipientInfo, RecipientInfos,
+};
 use cms::signed_data::{SignedData, SignerIdentifier};
 use der::asn1::OctetString;
 use der::oid::ObjectIdentifier;
@@ -71,11 +76,26 @@ const ECDSA_SHA384: ObjectIdentifier = oid("1.2.840.10045.4.3.3");
 const ECDSA_SHA512: ObjectIdentifier = oid("1.2.840.10045.4.3.4");
 const P256: ObjectIdentifier = oid("1.2.840.10045.3.1.7");
 const P384: ObjectIdentifier = oid("1.3.132.0.34");
+const P521: ObjectIdentifier = oid("1.3.132.0.35");
 
 const AES128_CBC: ObjectIdentifier = oid("2.16.840.1.101.3.4.1.2");
 const AES192_CBC: ObjectIdentifier = oid("2.16.840.1.101.3.4.1.22");
 const AES256_CBC: ObjectIdentifier = oid("2.16.840.1.101.3.4.1.42");
 const DES_EDE3_CBC: ObjectIdentifier = oid("1.2.840.113549.3.7");
+// AES-GCM (S/MIME 4.0, RFC 5084) et emballage de clé AES (RFC 3394).
+const AES128_GCM: ObjectIdentifier = oid("2.16.840.1.101.3.4.1.6");
+const AES192_GCM: ObjectIdentifier = oid("2.16.840.1.101.3.4.1.26");
+const AES256_GCM: ObjectIdentifier = oid("2.16.840.1.101.3.4.1.46");
+const AES128_WRAP: ObjectIdentifier = oid("2.16.840.1.101.3.4.1.5");
+const AES256_WRAP: ObjectIdentifier = oid("2.16.840.1.101.3.4.1.45");
+// Accord de clé ECDH (RFC 5753) : le procédé et l'empreinte de sa
+// dérivation (X9.63). Sur P-256, P-384 et P-521, le cofacteur vaut 1 : les
+// variantes « cofactor » se calculent de même.
+const ECDH_SHA1: [ObjectIdentifier; 2] = [oid("1.3.133.16.840.63.0.2"), oid("1.3.133.16.840.63.0.3")];
+const ECDH_SHA224: [ObjectIdentifier; 2] = [oid("1.3.132.1.11.0"), oid("1.3.132.1.14.0")];
+const ECDH_SHA256: [ObjectIdentifier; 2] = [oid("1.3.132.1.11.1"), oid("1.3.132.1.14.1")];
+const ECDH_SHA384: [ObjectIdentifier; 2] = [oid("1.3.132.1.11.2"), oid("1.3.132.1.14.2")];
+const ECDH_SHA512: [ObjectIdentifier; 2] = [oid("1.3.132.1.11.3"), oid("1.3.132.1.14.3")];
 
 /// Usage `emailProtection` (1.3.6.1.5.5.7.3.4), sous la forme qu'attend
 /// webpki : le contenu de l'OID, sans étiquette ni longueur.
@@ -119,8 +139,11 @@ impl Cle {
             intermediaires: reste.iter().map(|c| c.as_der().to_vec()).filter(|c| !auto_signe(c)).collect(),
             privee: chaine.key().as_der().to_vec(),
         };
-        PrivateDecryptingKey::from_pkcs8(&cle.privee)
-            .map_err(|_| "clé privée d'un type non pris en charge (RSA seulement)".to_string())?;
+        // RSA, ou une courbe elliptique que l'accord de clé ECDH sait servir.
+        let rsa = PrivateDecryptingKey::from_pkcs8(&cle.privee).is_ok();
+        if !rsa && courbe_de(&cle.certificat).is_none() {
+            return Err("clé privée d'un type non pris en charge (RSA, ou courbe P-256, P-384, P-521)".to_string());
+        }
         Ok(cle)
     }
 
@@ -332,7 +355,7 @@ pub fn ouvrir(brut: &[u8], cles: &[Cle], autorites: &Autorites, maintenant: i64)
                 entite = contenu;
             }
             Forme::Pkcs7(der) => match ContentInfo::from_ber(&der) {
-                Ok(ci) if ci.content_type == ID_ENVELOPED_DATA => {
+                Ok(ci) if ci.content_type == ID_ENVELOPED_DATA || ci.content_type == ID_AUTH_ENVELOPED_DATA => {
                     securite.chiffre = true;
                     match dechiffrer(&ci, cles) {
                         Ok((contenu, ancien)) => {
@@ -348,15 +371,6 @@ pub fn ouvrir(brut: &[u8], cles: &[Cle], autorites: &Autorites, maintenant: i64)
                             break;
                         }
                     }
-                }
-                Ok(ci) if ci.content_type == ID_AUTH_ENVELOPED_DATA => {
-                    securite.chiffre = true;
-                    securite.illisible = "chiffrement AES-GCM (S/MIME 4.0), pas encore pris en charge".into();
-                    entite = texte_seul(&format!(
-                        "Ce message est chiffré, et MMail ne peut pas le lire : {}.",
-                        securite.illisible
-                    ));
-                    break;
                 }
                 Ok(ci) if ci.content_type == ID_SIGNED_DATA => {
                     let (s, contenu) = verifier(&der, None, expediteur.as_deref(), autorites, maintenant);
@@ -812,6 +826,7 @@ fn verifier_signature(
                 Some(P256) => &sig::ECDSA_P256_SHA256_ASN1,
                 Some(P384) if hachage == &digest::SHA256 => &sig::ECDSA_P384_SHA256_ASN1,
                 Some(P384) => &sig::ECDSA_P384_SHA384_ASN1,
+                Some(P521) => par_hachage(&sig::ECDSA_P521_SHA256_ASN1, &sig::ECDSA_P521_SHA384_ASN1, &sig::ECDSA_P521_SHA512_ASN1),
                 _ => return false,
             }
         }
@@ -830,6 +845,25 @@ fn date(secondes: i64) -> String {
 /// Déchiffre une enveloppe CMS par l'une des clés : le contenu, et s'il
 /// était chiffré par un algorithme ancien.
 fn dechiffrer(ci: &ContentInfo, cles: &[Cle]) -> Result<(Vec<u8>, bool), String> {
+    // S/MIME 4.0 : AES-GCM, dans une enveloppe authentifiée.
+    if ci.content_type == ID_AUTH_ENVELOPED_DATA {
+        let ad = ci
+            .content
+            .decode_as_encoding::<AuthEnvelopedData>(EncodingRules::Ber)
+            .map_err(|_| "enveloppe illisible".to_string())?;
+        if cles.is_empty() {
+            return Err("aucun certificat S/MIME n'est installé pour ce compte".into());
+        }
+        let cle_contenu = cle_de_contenu(&ad.recip_infos, cles)?;
+        // Attributs authentifiés : leur encodage DER, en SET OF, est la
+        // donnée associée (RFC 5083).
+        let associee = match &ad.auth_attrs {
+            Some(a) => a.to_der().map_err(|_| "attributs authentifiés illisibles".to_string())?,
+            None => Vec::new(),
+        };
+        let clair = dechiffrer_gcm(&ad.auth_encrypted_content_info, &cle_contenu, ad.mac.as_bytes(), &associee)?;
+        return Ok((clair, false));
+    }
     let ed = ci
         .content
         .decode_as_encoding::<EnvelopedData>(EncodingRules::Ber)
@@ -837,44 +871,7 @@ fn dechiffrer(ci: &ContentInfo, cles: &[Cle]) -> Result<(Vec<u8>, bool), String>
     if cles.is_empty() {
         return Err("aucun certificat S/MIME n'est installé pour ce compte".into());
     }
-    let mut elliptique = false;
-    let mut cle_contenu: Option<Vec<u8>> = None;
-    'destinataires: for ri in ed.recip_infos.0.iter() {
-        let ktri = match ri {
-            RecipientInfo::Ktri(k) => k,
-            RecipientInfo::Kari(_) => {
-                elliptique = true;
-                continue;
-            }
-            _ => continue,
-        };
-        for cle in cles {
-            let Ok(cert) = Certificate::from_der(&cle.certificat) else {
-                continue;
-            };
-            let tbs = cert.tbs_certificate();
-            let pour_elle = match &ktri.rid {
-                RecipientIdentifier::IssuerAndSerialNumber(ias) => {
-                    ias.issuer == *tbs.issuer() && ias.serial_number == *tbs.serial_number()
-                }
-                RecipientIdentifier::SubjectKeyIdentifier(ski) => cle_de(&cert).as_ref() == Some(ski),
-            };
-            if !pour_elle {
-                continue;
-            }
-            if let Some(k) = dechiffrer_cle(cle, &ktri.key_enc_alg, ktri.enc_key.as_bytes()) {
-                cle_contenu = Some(k);
-                break 'destinataires;
-            }
-        }
-    }
-    let Some(cle_contenu) = cle_contenu else {
-        return Err(if elliptique {
-            "chiffré pour une clé elliptique, pas encore prise en charge".into()
-        } else {
-            "aucun certificat de ce compte ne fait partie de ses destinataires".into()
-        });
-    };
+    let cle_contenu = cle_de_contenu(&ed.recip_infos, cles)?;
     let eci = &ed.encrypted_content;
     let chiffre = eci.encrypted_content.as_ref().ok_or("contenu chiffré absent")?.as_bytes();
     let iv = eci
@@ -907,6 +904,211 @@ fn dechiffrer(ci: &ContentInfo, cles: &[Cle]) -> Result<(Vec<u8>, bool), String>
         return Ok((clair, true));
     }
     Err(format!("algorithme de chiffrement non pris en charge ({})", eci.content_enc_alg.oid))
+}
+
+/// La clé de contenu, par la première clé du compte qui fait partie des
+/// destinataires : transport de clé (RSA) ou accord de clé (ECDH).
+fn cle_de_contenu(destinataires: &RecipientInfos, cles: &[Cle]) -> Result<Vec<u8>, String> {
+    let mut motif: Option<String> = None;
+    for ri in destinataires.0.iter() {
+        match ri {
+            RecipientInfo::Ktri(ktri) => {
+                for cle in cles {
+                    let pour_elle = match &ktri.rid {
+                        RecipientIdentifier::IssuerAndSerialNumber(ias) => designe(cle, Some(ias), None),
+                        RecipientIdentifier::SubjectKeyIdentifier(ski) => designe(cle, None, Some(ski)),
+                    };
+                    if pour_elle {
+                        if let Some(k) = dechiffrer_cle(cle, &ktri.key_enc_alg, ktri.enc_key.as_bytes()) {
+                            return Ok(k);
+                        }
+                    }
+                }
+            }
+            RecipientInfo::Kari(kari) => {
+                for rek in kari.recipient_enc_keys.iter() {
+                    for cle in cles {
+                        let pour_elle = match &rek.rid {
+                            KeyAgreeRecipientIdentifier::IssuerAndSerialNumber(ias) => designe(cle, Some(ias), None),
+                            KeyAgreeRecipientIdentifier::RKeyId(r) => designe(cle, None, Some(&r.subject_key_identifier)),
+                        };
+                        if !pour_elle {
+                            continue;
+                        }
+                        match accord_de_cle(kari, rek.enc_key.as_bytes(), cle) {
+                            Ok(k) => return Ok(k),
+                            Err(m) => motif = Some(m),
+                        }
+                    }
+                }
+            }
+            _ => continue,
+        }
+    }
+    Err(motif.unwrap_or_else(|| "aucun certificat de ce compte ne fait partie de ses destinataires".into()))
+}
+
+/// Vrai si le destinataire désigné — par émetteur et numéro de série, ou
+/// par identifiant de clé — est le certificat de `cle`.
+fn designe(cle: &Cle, ias: Option<&IssuerAndSerialNumber>, ski: Option<&SubjectKeyIdentifier>) -> bool {
+    let Ok(cert) = Certificate::from_der(&cle.certificat) else {
+        return false;
+    };
+    let tbs = cert.tbs_certificate();
+    match (ias, ski) {
+        (Some(ias), _) => ias.issuer == *tbs.issuer() && ias.serial_number == *tbs.serial_number(),
+        (None, Some(ski)) => cle_de(&cert).as_ref() == Some(ski),
+        (None, None) => false,
+    }
+}
+
+/// OID de la courbe de la clé publique d'un certificat elliptique ; `None`
+/// pour une autre clé.
+fn oid_courbe(certificat: &[u8]) -> Option<ObjectIdentifier> {
+    let cert = Certificate::from_der(certificat).ok()?;
+    let spki = cert.tbs_certificate().subject_public_key_info();
+    if spki.algorithm.oid != EC_PUBLIC_KEY {
+        return None;
+    }
+    spki.algorithm.parameters.as_ref()?.decode_as::<ObjectIdentifier>().ok()
+}
+
+/// Courbe de la clé publique d'un certificat elliptique, pour l'accord de
+/// clé ; `None` pour une autre clé.
+fn courbe_de(certificat: &[u8]) -> Option<&'static aws_lc_rs::agreement::Algorithm> {
+    match oid_courbe(certificat)? {
+        P256 => Some(&aws_lc_rs::agreement::ECDH_P256),
+        P384 => Some(&aws_lc_rs::agreement::ECDH_P384),
+        P521 => Some(&aws_lc_rs::agreement::ECDH_P521),
+        _ => None,
+    }
+}
+
+/// Accord de clé ECDH (RFC 5753) : le secret partagé entre la clé éphémère
+/// de l'expéditeur et la clé du compte, dérivé (X9.63) en clé d'emballage,
+/// qui ouvre la clé de contenu (emballage AES, RFC 3394).
+fn accord_de_cle(kari: &KeyAgreeRecipientInfo, emballee: &[u8], cle: &Cle) -> Result<Vec<u8>, String> {
+    use aws_lc_rs::agreement::{agree, PrivateKey, UnparsedPublicKey as ClePublique};
+    use aws_lc_rs::key_wrap::{AesKek, KeyWrap};
+    let OriginatorIdentifierOrKey::OriginatorKey(origine) = &kari.originator else {
+        return Err("accord de clé sans clé éphémère de l'expéditeur, pas pris en charge".into());
+    };
+    let courbe = courbe_de(&cle.certificat).ok_or("chiffré pour une clé elliptique, et ce certificat n'en est pas une")?;
+    let o = kari.key_enc_alg.oid;
+    let empreinte = if ECDH_SHA1.contains(&o) {
+        &digest::SHA1_FOR_LEGACY_USE_ONLY
+    } else if ECDH_SHA224.contains(&o) {
+        &digest::SHA224
+    } else if ECDH_SHA256.contains(&o) {
+        &digest::SHA256
+    } else if ECDH_SHA384.contains(&o) {
+        &digest::SHA384
+    } else if ECDH_SHA512.contains(&o) {
+        &digest::SHA512
+    } else {
+        return Err(format!("accord de clé non pris en charge ({o})"));
+    };
+    let emballage = kari
+        .key_enc_alg
+        .parameters
+        .as_ref()
+        .and_then(|p| p.decode_as::<spki::AlgorithmIdentifierOwned>().ok())
+        .ok_or("emballage de clé absent")?;
+    let (bloc, longueur) = match emballage.oid {
+        AES128_WRAP => (&aws_lc_rs::key_wrap::AES_128, 16usize),
+        AES256_WRAP => (&aws_lc_rs::key_wrap::AES_256, 32usize),
+        autre => return Err(format!("emballage de clé non pris en charge ({autre})")),
+    };
+    let privee = PrivateKey::from_private_key_der(courbe, &cle.privee).map_err(|_| "clé privée elliptique illisible".to_string())?;
+    let point = origine.public_key.as_bytes().ok_or("clé éphémère illisible")?;
+    let info = info_partagee(&emballage, kari.ukm.as_ref().map(|u| u.as_bytes()), (longueur * 8) as u32)?;
+    let kek = agree(&privee, ClePublique::new(courbe, point), "accord de clé impossible".to_string(), |z| {
+        Ok(derivation_x963(empreinte, z, &info, longueur))
+    })?;
+    let kek = AesKek::new(bloc, &kek).map_err(|_| "clé d'emballage invalide".to_string())?;
+    let mut sortie = vec![0u8; emballee.len()];
+    let contenu = kek.unwrap(emballee, &mut sortie).map_err(|_| "clé de contenu illisible : accord de clé incorrect".to_string())?;
+    Ok(contenu.to_vec())
+}
+
+/// `ECC-CMS-SharedInfo` (RFC 5753) : l'emballage tel que le message le
+/// nomme, l'aléa de l'expéditeur s'il en donne un, la longueur de la clé
+/// d'emballage en bits.
+fn info_partagee(emballage: &spki::AlgorithmIdentifierOwned, alea: Option<&[u8]>, bits: u32) -> Result<Vec<u8>, String> {
+    let illisible = |_| "accord de clé : paramètres illisibles".to_string();
+    let mut corps = emballage.to_der().map_err(illisible)?;
+    if let Some(a) = alea {
+        let octets = OctetString::new(a).and_then(|o| o.to_der()).map_err(illisible)?;
+        corps.extend(tlv(0xa0, &octets));
+    }
+    let longueur = OctetString::new(bits.to_be_bytes().to_vec()).and_then(|o| o.to_der()).map_err(illisible)?;
+    corps.extend(tlv(0xa2, &longueur));
+    Ok(tlv(0x30, &corps))
+}
+
+/// Un élément DER : étiquette, longueur, valeur.
+fn tlv(etiquette: u8, valeur: &[u8]) -> Vec<u8> {
+    let mut sortie = vec![etiquette];
+    let n = valeur.len();
+    if n < 0x80 {
+        sortie.push(n as u8);
+    } else {
+        let octets = (n as u32).to_be_bytes();
+        let zeros = octets.iter().take_while(|o| **o == 0).count();
+        sortie.push(0x80 | (octets.len() - zeros) as u8);
+        sortie.extend_from_slice(&octets[zeros..]);
+    }
+    sortie.extend_from_slice(valeur);
+    sortie
+}
+
+/// Dérivation de clé ANSI X9.63 : empreinte de `secret ‖ compteur ‖ info`,
+/// le compteur partant de 1, jusqu'à `longueur` octets.
+fn derivation_x963(empreinte: &'static digest::Algorithm, secret: &[u8], info: &[u8], longueur: usize) -> Vec<u8> {
+    let mut sortie = Vec::with_capacity(longueur + 64);
+    let mut compteur: u32 = 1;
+    while sortie.len() < longueur {
+        let mut c = digest::Context::new(empreinte);
+        c.update(secret);
+        c.update(&compteur.to_be_bytes());
+        c.update(info);
+        sortie.extend_from_slice(c.finish().as_ref());
+        compteur += 1;
+    }
+    sortie.truncate(longueur);
+    sortie
+}
+
+/// Contenu chiffré en AES-GCM (RFC 5084) : nonce et longueur de l'étiquette
+/// dans les paramètres ; l'étiquette est le `mac` de l'enveloppe.
+fn dechiffrer_gcm(eci: &EncryptedContentInfo, cle: &[u8], mac: &[u8], associee: &[u8]) -> Result<Vec<u8>, String> {
+    use aws_lc_rs::aead::{Aad, LessSafeKey, Nonce, UnboundKey, AES_128_GCM, AES_192_GCM, AES_256_GCM};
+    use der::{Reader, SliceReader};
+    let alg = match eci.content_enc_alg.oid {
+        AES128_GCM => &AES_128_GCM,
+        AES192_GCM => &AES_192_GCM,
+        AES256_GCM => &AES_256_GCM,
+        autre => return Err(format!("algorithme de chiffrement non pris en charge ({autre})")),
+    };
+    // GCMParameters ::= SEQUENCE { aes-nonce OCTET STRING,
+    //                              aes-ICVlen INTEGER DEFAULT 12 }
+    let parametres = eci.content_enc_alg.parameters.as_ref().ok_or("paramètres AES-GCM absents")?;
+    let illisibles = |_| "paramètres AES-GCM illisibles".to_string();
+    let mut lecteur = SliceReader::new(parametres.value()).map_err(illisibles)?;
+    let nonce = OctetString::decode(&mut lecteur).map_err(illisibles)?;
+    let etiquette = if lecteur.is_finished() { 12 } else { u8::decode(&mut lecteur).map_err(illisibles)? };
+    if etiquette != 16 || mac.len() != 16 {
+        return Err(format!("étiquette AES-GCM de {} octets, pas encore prise en charge", mac.len()));
+    }
+    let nonce: [u8; 12] =
+        nonce.as_bytes().try_into().map_err(|_| "nonce AES-GCM d'une longueur non prise en charge".to_string())?;
+    let chiffre = eci.encrypted_content.as_ref().ok_or("contenu chiffré absent")?.as_bytes();
+    let cle = LessSafeKey::new(UnboundKey::new(alg, cle).map_err(|_| "clé de contenu invalide".to_string())?);
+    let mut tampon = chiffre.to_vec();
+    let clair = cle
+        .open_in_place_separate_tag(Nonce::assume_unique_for_key(nonce), Aad::from(associee), mac, &mut tampon)
+        .map_err(|_| "message modifié depuis son chiffrement, ou clé incorrecte".to_string())?;
+    Ok(clair.to_vec())
 }
 
 /// Déchiffre la clé de contenu destinée à `cle` (RSA PKCS#1 v1.5 ou OAEP).

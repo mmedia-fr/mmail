@@ -44,11 +44,98 @@ Page {
     property bool fermerApresEnregistrement: false
     property bool afficherCopies: false
     // Barre du haut resserrée — téléphone, ou rédaction étroite : Envoyer,
-    // Joindre…, le menu « ⋮ » et Fermer. Enregistrer, Coller en pièce jointe
-    // et Cc / Cci passent dans le menu. Sept boutons sur une ligne de
+    // Joindre…, le menu « ⋮ » et Fermer, en icônes. Enregistrer, Coller en
+    // pièce jointe et Cc / Cci passent dans le menu. Sept boutons sur une ligne de
     // téléphone se chevauchaient : plus moyen d'envoyer ni de fermer (retour
     // de Manu du 03/11, sous Android).
     readonly property bool barreCompacte: fenetre.tactile || width < 680
+
+    // Bouton à icône de la barre resserrée (demande de Manu du 03/11 : des
+    // icônes plutôt que du texte sous Android) : le dessin seul ; le libellé
+    // reste pour l'info-bulle et la synthèse vocale.
+    component BoutonIcone: ToolButton {
+        id: bi
+        property var dessin: null
+        property real largeurDessin: 22
+        property real hauteurDessin: 22
+        display: AbstractButton.IconOnly
+        implicitWidth: 44
+        implicitHeight: 40
+        Accessible.name: bi.text
+        ToolTip.visible: bi.hovered
+        ToolTip.delay: 500
+        ToolTip.text: bi.text
+        // Au doigt, l'appui long montre le libellé, comme dans les barres
+        // d'Android ; un appui tenu ne déclenche pas le bouton.
+        onPressAndHold: ToolTip.show(bi.text, 1500)
+        contentItem: Item {
+            Canvas {
+                anchors.centerIn: parent
+                width: bi.largeurDessin
+                height: bi.hauteurDessin
+                opacity: bi.enabled ? 1 : 0.4
+                property color encre: bi.palette.buttonText
+                property var dessin: bi.dessin
+                onEncreChanged: requestPaint()
+                onDessinChanged: requestPaint()
+                onPaint: if (bi.dessin) bi.dessin(getContext("2d"), width, height, encre)
+            }
+        }
+    }
+
+    // Avion de papier : « Envoyer ».
+    function dessinerEnvoi(ctx, w, h, encre) {
+        ctx.reset()
+        ctx.strokeStyle = encre
+        ctx.lineWidth = Math.max(1.5, w * 0.09)
+        ctx.lineJoin = "round"
+        ctx.beginPath()
+        ctx.moveTo(w * 0.06, h * 0.44)
+        ctx.lineTo(w * 0.94, h * 0.08)
+        ctx.lineTo(w * 0.62, h * 0.92)
+        ctx.lineTo(w * 0.46, h * 0.56)
+        ctx.closePath()
+        ctx.moveTo(w * 0.46, h * 0.56)
+        ctx.lineTo(w * 0.94, h * 0.08)
+        ctx.stroke()
+    }
+    // Horloge : « Programmer » (envoi différé).
+    function dessinerHorloge(ctx, w, h, encre) {
+        ctx.reset()
+        ctx.strokeStyle = encre
+        ctx.lineWidth = Math.max(1.5, w * 0.09)
+        ctx.lineCap = "round"
+        ctx.beginPath()
+        ctx.arc(w / 2, h / 2, Math.min(w, h) * 0.42, 0, 2 * Math.PI, false)
+        ctx.moveTo(w / 2, h * 0.24)
+        ctx.lineTo(w / 2, h / 2)
+        ctx.lineTo(w * 0.7, h * 0.62)
+        ctx.stroke()
+    }
+    // Trois points l'un sous l'autre : le menu.
+    function dessinerMenu(ctx, w, h, encre) {
+        ctx.reset()
+        ctx.fillStyle = encre
+        var r = Math.max(1.5, w * 0.1)
+        for (var i = 0; i < 3; ++i) {
+            ctx.beginPath()
+            ctx.arc(w / 2, h * (0.18 + i * 0.32), r, 0, 2 * Math.PI, false)
+            ctx.fill()
+        }
+    }
+    // Croix : « Fermer ».
+    function dessinerFermer(ctx, w, h, encre) {
+        ctx.reset()
+        ctx.strokeStyle = encre
+        ctx.lineWidth = Math.max(1.5, w * 0.1)
+        ctx.lineCap = "round"
+        ctx.beginPath()
+        ctx.moveTo(w * 0.18, h * 0.18)
+        ctx.lineTo(w * 0.82, h * 0.82)
+        ctx.moveTo(w * 0.82, h * 0.18)
+        ctx.lineTo(w * 0.18, h * 0.82)
+        ctx.stroke()
+    }
     property bool miseEnForme: reglagesRedaction.miseEnForme
     // Lus par les scénarios d'essai (cf. Scenarios.qml, « majuscule »).
     readonly property alias corps: corpsRedaction
@@ -731,8 +818,18 @@ Page {
             // la note qui cède la place.
             ToolButton {
                 objectName: "boutonEnvoyer"
+                visible: !redac.barreCompacte
                 text: redac.envoiDiffere > 0 ? qsTr("Programmer") : qsTr("Envoyer")
                 font.bold: true
+                enabled: !redac.occupe
+                Layout.minimumWidth: implicitWidth
+                onClicked: redac.envoyer(false)
+            }
+            BoutonIcone {
+                objectName: "boutonEnvoyer"
+                visible: redac.barreCompacte
+                text: redac.envoiDiffere > 0 ? qsTr("Programmer") : qsTr("Envoyer")
+                dessin: redac.envoiDiffere > 0 ? redac.dessinerHorloge : redac.dessinerEnvoi
                 enabled: !redac.occupe
                 Layout.minimumWidth: implicitWidth
                 onClicked: redac.envoyer(false)
@@ -746,6 +843,17 @@ Page {
             }
             ToolButton {
                 text: qsTr("Joindre…")
+                visible: !redac.barreCompacte
+                enabled: !redac.occupe
+                Layout.minimumWidth: implicitWidth
+                onClicked: choixFichiers.open()
+            }
+            BoutonIcone {
+                visible: redac.barreCompacte
+                text: qsTr("Joindre…")
+                dessin: fenetre.dessinerTrombone
+                largeurDessin: 13
+                hauteurDessin: 21
                 enabled: !redac.occupe
                 Layout.minimumWidth: implicitWidth
                 onClicked: choixFichiers.open()
@@ -772,10 +880,19 @@ Page {
             ToolButton {
                 id: boutonOptions
                 objectName: "boutonOptions"
-                text: redac.barreCompacte ? "⋮" : qsTr("Options ▾")
-                Accessible.name: qsTr("Options")
+                visible: !redac.barreCompacte
+                text: qsTr("Options ▾")
                 Layout.minimumWidth: implicitWidth
                 onClicked: menuOptions.popup(boutonOptions, 0, boutonOptions.height)
+            }
+            BoutonIcone {
+                id: boutonOptionsIcone
+                objectName: "boutonOptions"
+                visible: redac.barreCompacte
+                text: qsTr("Options")
+                dessin: redac.dessinerMenu
+                Layout.minimumWidth: implicitWidth
+                onClicked: menuOptions.popup(boutonOptionsIcone, 0, boutonOptionsIcone.height)
             }
             Label {
                 text: redac.note
@@ -791,7 +908,18 @@ Page {
             }
             ToolButton {
                 objectName: "boutonFermer"
+                visible: !redac.barreCompacte
                 text: qsTr("Fermer")
+                Layout.minimumWidth: implicitWidth
+                onClicked: redac.demanderFermeture()
+            }
+            BoutonIcone {
+                objectName: "boutonFermer"
+                visible: redac.barreCompacte
+                text: qsTr("Fermer")
+                dessin: redac.dessinerFermer
+                largeurDessin: 18
+                hauteurDessin: 18
                 Layout.minimumWidth: implicitWidth
                 onClicked: redac.demanderFermeture()
             }

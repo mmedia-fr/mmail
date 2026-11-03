@@ -4075,7 +4075,7 @@ QtObject {
     /// boutons de la rédaction chevauchés, plus moyen d'envoyer ni de fermer) :
     /// les boutons visibles de la barre du haut ne se chevauchent pas, gardent
     /// leur largeur et restent dans la barre ; resserrée, elle montre Envoyer,
-    /// Joindre…, « ⋮ » et Fermer. Au banc : MMAIL_TACTILE=1, MMAIL_TAILLE=392x800
+    /// Joindre…, « ⋮ » et Fermer, en icônes. Au banc : MMAIL_TACTILE=1, MMAIL_TAILLE=392x800
     /// (un téléphone) ; sans eux, la barre complète. MMAIL_DOSSIER « garder » :
     /// MMail reste ouvert, pour une capture.
     function etapeScenarioBarreRedaction() {
@@ -4107,8 +4107,10 @@ QtObject {
             }
             var noms = boutons.map(function(b) { return b.objectName })
             bilan("Envoyer et Fermer visibles", noms.indexOf("boutonEnvoyer") >= 0 && noms.indexOf("boutonFermer") >= 0)
-            if (fenetre.tactile)
+            if (fenetre.tactile) {
                 bilan("resserrée sous le tactile, 4 boutons", r.barreCompacte && boutons.length === 4)
+                bilan("en icônes", boutons.every(function(b) { return !!b.dessin }))
+            }
             console.log("scenario: barre-redaction " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
             if (identifiantsEssai.dossier !== "garder")
                 Qt.quit()

@@ -379,22 +379,47 @@ fn grille(enfants: &[Noeud]) -> Option<String> {
     bordures.into_iter().next()
 }
 
-/// Couleur de la première bordure visible déclarée dans le style d'une cellule
-/// (`border`, `border-top`…), noir si elle n'en dit pas ; `None` sans bordure
-/// visible — `none`, `hidden`, épaisseur nulle.
+/// Styles de trait d'une bordure CSS qui dessinent quelque chose.
+const STYLES_DE_TRAIT: &[&str] = &["solid", "dotted", "dashed", "double", "groove", "ridge", "inset", "outset"];
+
+/// Couleur des bordures d'une cellule de grille : une cellule bordée à la fois
+/// d'un trait vertical et d'un trait horizontal, d'après les déclarations
+/// `border`, `border-top`… de son style, dans l'ordre (Excel écrit `border`
+/// puis `border-left:none` pour ne pas doubler le trait de sa voisine). Noir si
+/// le style ne dit pas de couleur. `None` sans bordure visible — sans style
+/// de trait nommé, ou d'épaisseur nulle — ou avec des filets d'un seul sens : les lignes
+/// d'une liste soulignées d'un `border-bottom` ne font pas une grille.
 fn bordure_de(attributs: &[(String, String)]) -> Option<String> {
     let style = attributs.iter().find(|(a, _)| a == "style").map(|(_, v)| v.as_str())?;
-    declarations(style)
-        .filter(|(propriete, _)| {
-            matches!(propriete.as_str(), "border" | "border-top" | "border-right" | "border-bottom" | "border-left")
-        })
-        .find(|(_, valeur)| {
-            let mots: Vec<String> = valeur.split_whitespace().map(str::to_ascii_lowercase).collect();
-            !mots.is_empty() && !mots.iter().any(|m| m == "none" || m == "hidden" || nul(m))
-        })
-        .map(|(_, valeur)| {
-            valeur.split_whitespace().find_map(crate::rendu::couleur).unwrap_or_else(|| "#000000".to_string())
-        })
+    // Un trait n'existe que si son style est nommé : sans lui, CSS le tient
+    // pour `none` (`border:revert` du bandeau « externe » d'Outlook n'en est
+    // pas un).
+    let visible = |valeur: &str| {
+        let mots: Vec<String> = valeur.split_whitespace().map(str::to_ascii_lowercase).collect();
+        mots.iter().any(|m| STYLES_DE_TRAIT.contains(&m.as_str())) && !mots.iter().any(|m| nul(m))
+    };
+    // Haut, droite, bas, gauche.
+    let mut cotes = [false; 4];
+    let mut couleur = None;
+    for (propriete, valeur) in declarations(style) {
+        let rangs: &[usize] = match propriete.as_str() {
+            "border" => &[0, 1, 2, 3],
+            "border-top" => &[0],
+            "border-right" => &[1],
+            "border-bottom" => &[2],
+            "border-left" => &[3],
+            _ => continue,
+        };
+        let vu = visible(valeur);
+        for &rang in rangs {
+            cotes[rang] = vu;
+        }
+        if vu {
+            couleur = valeur.split_whitespace().find_map(crate::rendu::couleur).or(couleur);
+        }
+    }
+    let [haut, droite, bas, gauche] = cotes;
+    ((haut || bas) && (gauche || droite)).then(|| couleur.unwrap_or_else(|| "#000000".to_string()))
 }
 
 /// Attributs d'un tableau de données (0.6.35) : une bordure d'un pixel de la
@@ -1114,7 +1139,18 @@ mod tests {
         let bleu = "<table><tbody><tr><td style=\"border:1px solid #4472C4\">a</td>\
                     <td style=\"border-top:1px solid #4472C4\">b</td></tr></tbody></table>";
         assert!(aplatir(bleu).contains("border=\"1\" cellspacing=\"0\" style=\"border-collapse:collapse;border-style:solid;border-color:#4472C4\""));
-        for sans in ["border:none", "border:0", "border:0px solid #000", "border-bottom:hidden"] {
+        // Une liste dont les lignes sont soulignées d'un filet (avis de
+        // Microsoft) non plus : il y faut des traits dans les deux sens.
+        for sans in [
+            "border:none",
+            "border:0",
+            "border:0px solid #000",
+            "border-bottom:hidden",
+            "border-bottom: solid 1px #dedede",
+            "border:solid 1px #000; border-left:none; border-right:none",
+            "border:revert!important",
+            "border:1px #000",
+        ] {
             let html = format!(
                 "<table><tbody><tr><td width=\"80\" style=\"{sans}\">a</td><td width=\"80\" style=\"{sans}\">b</td>\
                  </tr></tbody></table>"

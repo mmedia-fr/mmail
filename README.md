@@ -37,8 +37,9 @@ de projet interne.
   même quand on change « De » (0.6.24) ; le dossier Brouillons affiche entre
   crochets le nombre de ses éléments, comme Outlook ;
 - **correcteur d'orthographe** (0.6.36) : à la rédaction, les mots inconnus du
-  dictionnaire sont soulignés en rouge — pas celui qu'on est en train de
-  taper —, et le clic droit sur l'un d'eux propose ses corrections et « Ajouter
+  dictionnaire sont soulignés d'une vague rouge — pas celui qu'on est en train
+  de taper — (la vague ne s'affichait pas avant la 0.6.33 : Qt Quick ne trace
+  pas ce soulignement, MMail le dessine lui-même), et le clic droit sur l'un d'eux propose ses corrections et « Ajouter
   au dictionnaire » (les mots ajoutés suivent la sauvegarde de la
   configuration). Dictionnaire français de Grammalecte (version 7.7, licence
   MPL 2.0, celui de LibreOffice et de Firefox), embarqué dans MMail : rien à

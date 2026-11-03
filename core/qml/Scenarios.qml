@@ -3341,8 +3341,14 @@ QtObject {
     // message choisi, et le basculent.
     function lancerScenarioMarquerLu(essais) {
         var n = essais || 0
-        if (modeleMessages.count < 1 && n < 40) {
+        // Le compte connecté et sa boîte de réception rouverte : cette
+        // réouverture vide la liste, et la sélection avec elle.
+        if ((modeleMessages.count < 1 || boite.compteCourant <= 0) && n < 40) {
             plusTard(1000, function() { lancerScenarioMarquerLu(n + 1) })
+            return
+        }
+        if (n < 40 && essais !== -1) {
+            plusTard(6000, function() { lancerScenarioMarquerLu(-1) })
             return
         }
         var echecs = 0
@@ -3355,6 +3361,7 @@ QtObject {
         var barre = function() { return objetNomme(fenetre.menuBar, "boutonMarquerLuBarre") }
         choisir(0, 0)
         plusTard(2500, function() {
+            console.log("scenario: sélection", JSON.stringify(Object.keys(selection)), "| état", JSON.stringify(fenetre.etatChoix))
             var v = volet(), b = barre()
             bilan("message affiché, marqué lu : boutons « " + (v ? v.text : "?") + " » / « " + (b ? b.text : "?") + " »",
                   modeleMessages.get(0).lu === true && !!v && v.text === qsTr("Marquer comme non lu")

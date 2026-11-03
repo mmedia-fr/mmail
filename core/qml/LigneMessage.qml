@@ -16,6 +16,14 @@ import fr.mmedia.mmail.natif
 SwipeDelegate {
     id: ligne
     width: ListView.view.width
+    // Groupe de dates replié (cf. colonneListe.replis) : la ligne est la
+    // seule du groupe à rester dans la vue, sans hauteur, pour en porter
+    // l'intitulé.
+    readonly property bool dansGroupeReplie: colonneListe.groupeReplie(model.groupe)
+    height: dansGroupeReplie ? 0 : implicitHeight
+    visible: !dansGroupeReplie
+    // Rang de la ligne dans `modeleMessages`, et non dans la vue filtrée.
+    readonly property int rang: index
     readonly property bool choisi: fenetre.listeMulti
                                    ? fenetre.cleChoisie === fenetre.cleResultat(model.compte, model.chemin, model.uid)
                                    : fenetre.selection[model.uid] === true

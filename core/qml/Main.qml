@@ -111,6 +111,12 @@ ApplicationWindow {
     Pastille { id: pastille }
     // Notification du nouveau courrier (0.6.2 ; Windows et Linux) : un clic
     // ramène la fenêtre au premier plan, sur « Toutes les BàL ».
+    // Relève et notifications en arrière-plan sous Android (0.7.0) : la tâche
+    // du système est programmée à l'ouverture du profil.
+    Releve {
+        id: releve
+    }
+
     Notifieur {
         id: notifieur
         onActive: {
@@ -274,6 +280,10 @@ ApplicationWindow {
     ].concat(rechercheGlobale ? [{ cle: "dossier", libelle: qsTr("Dossier") }] : [])
     property string cleChoisie: ""
     property var dossierAvantRecherche: null
+    // Recherche en cours dans une seule boîte, tous ses dossiers (0.8.3) : son
+    // compte ; 0 pour toutes les boîtes. Non lus seulement (0.8.2).
+    property int rechercheCompte: 0
+    property bool rechercheNonLus: false
     // Boîte de réception unifiée (« toutes les BàL », demande de Manu du
     // 08/10) : les réceptions de tous les comptes en une liste, sur le même
     // modèle — chaque message avec son compte, le noyau sur le dossier du
@@ -1086,6 +1096,18 @@ ApplicationWindow {
             iconeSeule: fenetre.enteteSerree
             text: qsTr("Actualiser")
             onClicked: fenetre.module === "agenda" ? boite.synchroniserAgendas(true) : boite.actualiser()
+        }
+        // 0.8.1 : marquer la sélection lue (ou non lue, si tout y est lu), sans
+        // passer par le menu.
+        BoutonOutil {
+            objectName: "boutonMarquerLuBarre"
+            sombre: ae.sombre
+            visible: fenetre.module !== "agenda"
+            enabled: fenetre.etatChoix.nombre > 0
+            dessin: fenetre.dessinerLu
+            iconeSeule: fenetre.enteteSerree
+            text: fenetre.etatChoix.nonLu || fenetre.etatChoix.nombre === 0 ? qsTr("Marquer comme lu") : qsTr("Marquer comme non lu")
+            onClicked: fenetre.marquerSelection(fenetre.etatChoix.nonLu)
         }
         SeparateurEntete { sombre: ae.sombre }
         // Boîte de réception unifiée : les réceptions de tous les comptes,
@@ -2160,7 +2182,9 @@ ApplicationWindow {
             return
         }
         if (rechercheGlobale) {
-            infoDossier = qsTr("Toutes les boîtes") + "  —  " + (modeleMessages.count >= 500
+            var boiteCherchee = rechercheCompte > 0 ? compteParId(rechercheCompte) : null
+            infoDossier = (boiteCherchee ? qsTr("%1, tous dossiers").arg(boiteCherchee.adresse) : qsTr("Toutes les boîtes"))
+                    + (rechercheNonLus ? qsTr(", non lus") : "") + "  —  " + (modeleMessages.count >= 500
                     ? qsTr("recherche « %1 » : les 500 plus récents, précisez la recherche").arg(recherche)
                     : qsTr("recherche « %1 » : %2").arg(recherche)
                       .arg(accord(modeleMessages.count, qsTr("résultat"), qsTr("résultats"))))
@@ -2574,6 +2598,7 @@ ApplicationWindow {
     DialogueLogiciels { id: dlgLogiciels }
 
     DialogueExpediteursConfiance { id: dlgExpediteursConfiance }
+    DialogueMessagerie { id: dlgMessagerie }
 
     FileDialog {
         id: dlgEnregistrerPiece
@@ -2722,6 +2747,16 @@ ApplicationWindow {
         sequences: [StandardKey.Delete]
         enabled: fenetre.courrierActif && !fenetre.dialogueOuvert() && Object.keys(fenetre.selection).length > 0
         onActivated: fenetre.supprimerSelection()
+    }
+    // Ctrl+Z, comme dans Outlook : défait la dernière suppression ou le
+    // dernier déplacement (demande d'un utilisateur, 03/11/2026). Le champ de
+    // recherche garde le sien.
+    Shortcut {
+        id: raccourciAnnuler
+        sequences: [StandardKey.Undo]
+        enabled: fenetre.courrierActif && !fenetre.dialogueOuvert() && boite.annulation.length > 0
+                 && !colonneListe.champRecherche.activeFocus
+        onActivated: fenetre.annuler()
     }
     // Raccourcis d'Outlook : déplacer, marquer lu, marquer non lu.
     Shortcut {
@@ -3166,6 +3201,21 @@ ApplicationWindow {
     }
 
     /// Flèche en cercle du bouton « Actualiser », pointe en haut à gauche.
+    // Enveloppe cochée : « Marquer comme lu » (0.8.1).
+    function dessinerLu(ctx, w, h, encre) {
+        ctx.reset()
+        ctx.strokeStyle = encre
+        ctx.lineWidth = Math.max(1.5, w * 0.11)
+        ctx.lineJoin = "round"
+        var g = w * 0.12, d = w * 0.88, haut = h * 0.24, bas = h * 0.76
+        ctx.strokeRect(g, haut, d - g, bas - haut)
+        ctx.beginPath()
+        ctx.moveTo(g, haut)
+        ctx.lineTo(w / 2, h * 0.52)
+        ctx.lineTo(d, haut)
+        ctx.stroke()
+    }
+
     function dessinerActualiser(ctx, w, h, encre) {
         ctx.reset()
         ctx.strokeStyle = encre
@@ -4366,7 +4416,7 @@ ApplicationWindow {
         if (sortieGlobale || compte !== boite.compteCourant || chemin !== boite.dossierCourant) {
             recherche = ""
             uidsServeur = []
-            if (!colonneListe.porteeRecherche.partout)
+            if (!colonneListe.porteeRecherche.globale)
                 colonneListe.champRecherche.text = ""
             viderListe()
             if (boite.ouvrirDossier(compte, chemin)) {
@@ -4469,7 +4519,7 @@ ApplicationWindow {
         })
         var enHaut = listeEnHaut()
         var position = colonneListe.vueMessages.contentY
-        var rangHaut = Math.max(0, colonneListe.vueMessages.indexAt(1, position + 1))
+        var rangHaut = Math.max(0, colonneListe.rangModele(colonneListe.vueMessages.indexAt(1, position + 1)))
         modeleMessages.clear()
         modeleMessages.append(grouper(messages))
         var presents = {}
@@ -4598,10 +4648,18 @@ ApplicationWindow {
             cleChoisie = ""
             viderListe()
         }
-        if (colonneListe.porteeRecherche.partout) {
+        rechercheNonLus = colonneListe.nonLusRecherche.checked
+        if (colonneListe.porteeRecherche.globale) {
             if (!rechercheGlobale)
                 dossierAvantRecherche = boite.dossierCourant.length > 0
                         ? { compte: boite.compteCourant, chemin: boite.dossierCourant } : null
+            // « Cette boîte » : celle du dossier d'où l'on part.
+            rechercheCompte = colonneListe.porteeRecherche.boiteSeule
+                    ? (dossierAvantRecherche ? dossierAvantRecherche.compte : boite.compteCourant) : 0
+            if (colonneListe.porteeRecherche.boiteSeule && rechercheCompte <= 0) {
+                messageEtat.texte = qsTr("Ouvrez d'abord un dossier de la boîte où chercher.")
+                return
+            }
             rechercheGlobale = true
             recherche = texte
             uidsServeur = []
@@ -4612,7 +4670,8 @@ ApplicationWindow {
             // L'index répond tout de suite ; le serveur suit, dossier par
             // dossier, dans le texte des messages et jusque dans les dossiers
             // jamais ouverts sur ce poste.
-            dossiersPartout = boite.chercherPartoutSurLeServeur(texte)
+            dossiersPartout = rechercheCompte > 0 ? boite.chercherDansLeCompteSurLeServeur(texte, rechercheCompte)
+                                                  : boite.chercherPartoutSurLeServeur(texte)
             messageEtat.texte = (boite.rechercheApprochee() ? qsTr("Rien d'exact sur le poste : fautes de frappe tolérées. ") : "")
                     + etatRecherchePartout()
             return
@@ -4651,7 +4710,8 @@ ApplicationWindow {
     /// du plus récent au plus ancien.
     function poserResultats() {
         if (rechercheGlobale) {
-            var trouves = JSON.parse(boite.chercher(recherche, true))
+            var trouves = JSON.parse(boite.chercherSelon(recherche, rechercheCompte > 0 ? 1 : 2, rechercheCompte,
+                                                         rechercheNonLus))
             var connus = {}
             for (var j = 0; j < trouves.length; ++j)
                 connus[trouves[j].compte + "\n" + trouves[j].chemin + "\n" + trouves[j].uid] = true
@@ -4664,6 +4724,9 @@ ApplicationWindow {
                                                                          cle.slice(coupure + 1),
                                                                          absents.join(","))))
             }
+            // Trouvés par le serveur : non lus seulement, comme l'index.
+            if (rechercheNonLus)
+                trouves = trouves.filter(function(r) { return !r.lu })
             // Les plus récents d'abord pour la coupure, puis le tri choisi.
             trouves.sort(function(a, b) { return b.h - a.h || b.uid - a.uid })
             resultatsTronques = trouves.length > resultatsMax
@@ -4675,13 +4738,15 @@ ApplicationWindow {
             })))
             return
         }
-        var lignes = JSON.parse(boite.chercher(recherche, false))
+        var lignes = JSON.parse(boite.chercherSelon(recherche, 0, 0, rechercheNonLus))
         var vus = {}
         for (var i = 0; i < lignes.length; ++i)
             vus[lignes[i].uid] = true
         var manquants = uidsServeur.filter(function(u) { return !vus[u] })
         if (manquants.length > 0)
             lignes = lignes.concat(JSON.parse(boite.messagesParUid(manquants.join(","))))
+        if (rechercheNonLus)
+            lignes = lignes.filter(function(r) { return !r.lu })
         poserListe(trierResultats(lignes))
     }
 
@@ -4715,6 +4780,7 @@ ApplicationWindow {
     }
 
     function sortirRechercheGlobale() {
+        rechercheCompte = 0
         rechercheGlobale = false
         cleChoisie = ""
         dossierAvantRecherche = null
@@ -4982,8 +5048,10 @@ ApplicationWindow {
         var nouvelle = {}
         if (modificateurs & Qt.ShiftModifier && ancre >= 0) {
             var debut = Math.min(ancre, index), fin = Math.max(ancre, index)
+            // Sans les messages des groupes repliés, qui ne se voient pas.
             for (var i = debut; i <= fin; ++i)
-                nouvelle[modeleMessages.get(i).uid] = true
+                if (!colonneListe.ligneCachee(i))
+                    nouvelle[modeleMessages.get(i).uid] = true
         } else if (modificateurs & Qt.ControlModifier) {
             for (var u in selection)
                 nouvelle[u] = true
@@ -4997,7 +5065,7 @@ ApplicationWindow {
             ancre = index
         }
         selection = nouvelle
-        colonneListe.vueMessages.currentIndex = index
+        colonneListe.vueMessages.currentIndex = colonneListe.rangVue(index)
         colonneListe.vueMessages.forceActiveFocus()
         var nombre = Object.keys(nouvelle).length
         if (nombre === 1 && nouvelle[uid])
@@ -5015,17 +5083,25 @@ ApplicationWindow {
         s[r.uid] = true
         selection = s
         ancre = index
-        colonneListe.vueMessages.currentIndex = index
+        colonneListe.vueMessages.currentIndex = colonneListe.rangVue(index)
         colonneListe.vueMessages.forceActiveFocus()
         if (r.compte !== boite.compteCourant || r.chemin !== boite.dossierCourant)
             boite.ouvrirDossier(r.compte, r.chemin)
         afficherMessage(r.uid, index)
     }
 
+    // En rangs de la vue, d'un message montré au suivant : ceux d'un groupe
+    // replié sont sautés.
     function deplacerCurseur(pas, etendre) {
-        var index = Math.max(0, Math.min(modeleMessages.count - 1, colonneListe.vueMessages.currentIndex + pas))
-        choisir(index, etendre ? Qt.ShiftModifier : 0)
-        colonneListe.vueMessages.positionViewAtIndex(index, ListView.Contain)
+        var vue = colonneListe.vueMessages
+        var n = vue.count
+        var rang = Math.max(0, Math.min(n - 1, vue.currentIndex + pas))
+        while (rang >= 0 && rang < n && colonneListe.ligneCachee(colonneListe.rangModele(rang)))
+            rang += pas > 0 ? 1 : -1
+        if (rang < 0 || rang >= n)
+            return
+        choisir(colonneListe.rangModele(rang), etendre ? Qt.ShiftModifier : 0)
+        vue.positionViewAtIndex(rang, ListView.Contain)
     }
 
     function toutChoisir() {
@@ -5058,6 +5134,24 @@ ApplicationWindow {
 
     /// Ce que portent les messages choisis, pour le menu d'un message : au
     /// moins un non lu, au moins un sans drapeau.
+    // État de la sélection, tenu à jour pour les boutons « Marquer comme
+    // lu / non lu » (0.8.1) : un message non lu parmi les choisis. Liaison :
+    // elle se recalcule quand la sélection change, ou la liste (lu, non lu
+    // posés à l'affichage), que `versionListe` compte.
+    property int versionListe: 0
+    Connections {
+        target: modeleMessages
+        function onDataChanged() { fenetre.versionListe++ }
+        function onCountChanged() { fenetre.versionListe++ }
+    }
+    readonly property var etatChoix: {
+        // Dépendances de la liaison.
+        var dependances = [selection, cleChoisie, versionListe, listeMulti]
+        var e = etatSelection()
+        e.nombre = listeMulti ? (cleChoisie.length > 0 ? 1 : 0) : Object.keys(selection).length
+        return e
+    }
+
     function etatSelection() {
         var etat = { nonLu: false, sansDrapeau: false }
         for (var i = 0; i < modeleMessages.count; ++i) {
@@ -5602,6 +5696,7 @@ ApplicationWindow {
     /// Lien survolé, tel que la barre d'état le montre (0.6.32) : le numéro
     /// à appeler, l'adresse cherchée sur la carte, sinon le lien lui-même.
     function libelleLien(lien) {
+        lien = lienNettoye(lien)
         if (lien.toLowerCase().indexOf("tel:") === 0)
             return qsTr("Appeler le %1").arg(lien.substring(4))
         var carte = "https://www.openstreetmap.org/search?query="
@@ -5614,10 +5709,21 @@ ApplicationWindow {
         return lien
     }
 
+    /// Un lien tel qu'un navigateur le lit (0.6.33) : sans les tabulations ni
+    /// les sauts de ligne qu'il contient, sans les espaces et caractères de
+    /// contrôle qui l'entourent (norme URL du WHATWG, « remove all ASCII tab
+    /// or newline »). Des expéditeurs coupent leurs longs liens en plusieurs
+    /// lignes dans le HTML, jeton d'accès compris ; Qt garde ces sauts de
+    /// ligne, et le navigateur recevait « %0A » au milieu du jeton : page vide.
+    function lienNettoye(lien) {
+        return String(lien).replace(/[\t\n\r]/g, "").replace(/^[\u0000-\u0020]+|[\u0000-\u0020]+$/g, "")
+    }
+
     /// Un lien du message : une adresse de courriel ouvre une rédaction dans
     /// MMail, une adresse web part au navigateur, un numéro de téléphone au
     /// logiciel d'appel du poste (`tel:`), une adresse postale à la carte.
     function ouvrirLien(lien) {
+        lien = lienNettoye(lien)
         if (lien.toLowerCase().indexOf("mailto:") !== 0) {
             Qt.openUrlExternally(lien)
             return
@@ -5636,6 +5742,25 @@ ApplicationWindow {
         var compte = boite.compteCourant > 0 ? boite.compteCourant
                    : (comptesConnus.length > 0 ? comptesConnus[0].compte : 0)
         ouvrirRedaction(compte).remplir({ a: adresse, objet: objet, mode: "nouveau" })
+    }
+
+    /// Message préparé par un autre logiciel, qui a choisi MMail comme
+    /// messagerie (MAPI : « Envoyer vers › Destinataire », l'export d'un état
+    /// « par courriel »…), reçu en JSON (cf. mapi/mmail_mapi.c et
+    /// cpp/main.cpp) : une rédaction remplie, au premier plan, depuis le compte
+    /// ouvert. La personne la relit, complète le destinataire et envoie.
+    function redigerExterne(json) {
+        var m
+        try { m = JSON.parse(json) } catch (e) { return false }
+        var compte = boite.compteCourant > 0 ? boite.compteCourant
+                   : (comptesConnus.length > 0 ? comptesConnus[0].compte : 0)
+        var r = ouvrirRedaction(compte)
+        r.remplir({ mode: "nouveau", a: (m.a || []).join(", "), cc: (m.cc || []).join(", "),
+                    cci: (m.cci || []).join(", "), objet: m.objet || "", pieces: m.pieces || [] })
+        r.placerTexte(m.texte || "")
+        if (r.conteneur && r.conteneur.montrerRedaction)
+            r.conteneur.montrerRedaction()
+        return true
     }
 
     /// « Envoyer une suggestion… » (menu « ? ») : une rédaction depuis le
@@ -5741,6 +5866,21 @@ ApplicationWindow {
         }
         if (boite.supprimer(uids.join(",")))
             retirerDeLaListe(uids)
+    }
+
+    /// Ctrl+Z (ou le menu d'un message) : la dernière suppression ou le
+    /// dernier déplacement est défait, les messages reviennent dans leur
+    /// dossier ; un nouveau Ctrl+Z défait le précédent. Un effacement définitif
+    /// (corbeille, indésirables) ne se défait pas : il est confirmé avant.
+    function annuler() {
+        if (boite.annulation.length === 0)
+            return false
+        if (!boite.annuler()) {
+            messageEtat.texte = boite.erreur
+            return false
+        }
+        messageEtat.texte = qsTr("Annulation : les messages reviennent dans leur dossier…")
+        return true
     }
 
     /// Clé d'un message en cours de déplacement : un UID ne désigne un message
@@ -6098,6 +6238,8 @@ ApplicationWindow {
             if (l.groupe !== g)
                 modeleMessages.setProperty(i, "groupe", g)
         }
+        // Les groupes ont bougé : ceux qui sont repliés aussi.
+        colonneListe.appliquerReplis(0)
     }
 
     // « mer. 16/09/2026 14:54 », indépendamment de la langue du système.
@@ -6184,6 +6326,8 @@ ApplicationWindow {
             return
         rafraichirArborescence()
         Qt.callLater(proposerReprise)
+        if (releve.disponible && !(typeof identifiantsEssai !== "undefined" && identifiantsEssai && identifiantsEssai.hote))
+            releve.programmer(cheminProfil)
         // Session ouverte d'emblée quand l'environnement porte des identifiants
         // (cf. cpp/main.cpp) : sert aux captures et aux essais, jamais en usage
         // courant. Le coffre n'est alors pas touché.
@@ -6209,6 +6353,17 @@ ApplicationWindow {
             }
             if (essai.scenario === "reprise")
                 return
+            // Scénario « lien-saut » (0.6.33) : un lien coupé sur plusieurs
+            // lignes dans le HTML part au navigateur d'un seul tenant.
+            if (essai.scenario === "lien-saut") {
+                var coupe = "https://essai.test/suivi?type=a&jeton=abcdef\nghijkl\r\nmnop\n"
+                console.log("scenario: nettoyé |", lienNettoye(coupe), "| barre d'état |", libelleLien(coupe))
+                ouvrirLien(coupe)
+                var finLien = Qt.createQmlObject('import QtQuick; Timer { interval: 2000 }', fenetre)
+                finLien.triggered.connect(Qt.quit)
+                finLien.start()
+                return
+            }
             // Scénario « restauration » : un profil neuf, dont le compte
             // retrouve la sauvegarde du scénario « sauvegarde ».
             if (essai.scenario === "restauration")
@@ -6623,6 +6778,15 @@ ApplicationWindow {
             // de réception (banc DATES=1).
             if (essai.scenario === "groupes-dates")
                 scenarios.lancerScenarioGroupesDates()
+            // Scénarios « annuler » (Ctrl+Z), « molette » (banc NOMBRE=60) et
+            // « groupes-replier » (banc DATES=1 NOMBRE=40) : demandes d'un
+            // utilisateur du 03/11/2026.
+            if (essai.scenario === "annuler")
+                scenarios.lancerScenarioAnnuler()
+            if (essai.scenario === "molette")
+                scenarios.lancerScenarioMolette()
+            if (essai.scenario === "groupes-replier")
+                scenarios.lancerScenarioGroupesReplier()
             // Scénario « lu-differe » (0.6.9) : marquage « lu » après un délai,
             // ou jamais.
             if (essai.scenario === "lu-differe")
@@ -6676,10 +6840,16 @@ ApplicationWindow {
             // Scénario « desabonnement » (0.6.30, banc DESABO=1).
             if (essai.scenario === "desabonnement")
                 scenarios.lancerScenarioDesabonnement()
+            // Scénario « marquer-lu » (0.8.1).
+            if (essai.scenario === "marquer-lu")
+                scenarios.lancerScenarioMarquerLu()
             // Scénario « zoom-lecture » (0.6.29) : le zoom du volet de lecture
             // laisse les boutons à leur taille (banc PIECE=1).
             if (essai.scenario === "zoom-lecture")
                 scenarios.lancerScenarioZoomLecture()
+            // Scénario « recherche-portee » (0.8.2, 0.8.3 ; banc LOT1=1).
+            if (essai.scenario === "recherche-portee")
+                scenarios.lancerScenarioRecherchePortee()
             // « Affichage › Marges du message » (0.6.23).
             if (essai.scenario === "marges")
                 scenarios.lancerScenarioMarges()
@@ -6747,6 +6917,12 @@ ApplicationWindow {
                 var attenteImage = Qt.createQmlObject('import QtQuick; Timer { interval: 6000 }', fenetre)
                 attenteImage.triggered.connect(scenarios.etapeScenarioCollerImage)
                 attenteImage.start()
+            }
+            // Scénario « coller-piece » (0.8.4) : « Coller en pièce jointe ».
+            if (essai.scenario === "coller-piece") {
+                var attentePiece = Qt.createQmlObject('import QtQuick; Timer { interval: 6000 }', fenetre)
+                attentePiece.triggered.connect(scenarios.etapeScenarioCollerPiece)
+                attentePiece.start()
             }
             if (essai.scenario === "brouillon-compte") {
                 var attenteCompte = Qt.createQmlObject('import QtQuick; Timer { interval: 8000 }', fenetre)

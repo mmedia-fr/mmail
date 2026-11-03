@@ -51,6 +51,8 @@ QtObject {
         console.log("scenario: mot juste |", c.motA(texte.indexOf("Bonjour") + 2) === "",
                     "| élision |", c.motA(texte.indexOf("école") + 2) === "")
         console.log("scenario: suggestions |", JSON.stringify(suggestionsOrthographe("factrue")))
+        // Les vagues dessinées (0.6.33) : une zone, celle de « factrue ».
+        console.log("scenario: zones |", JSON.stringify(c.zones))
         if (fautif.length > 0) {
             var f = JSON.parse(fautif)
             c.remplacer(f.debut, f.fin, "facture")
@@ -436,6 +438,35 @@ QtObject {
         r.enregistrer(false)
     }
 
+    /// Scénario « coller-piece » (0.8.4), MMAIL_DOSSIER=<image PNG> : l'image
+    /// du presse-papier devient pièce jointe par « Coller en pièce jointe »,
+    /// sans entrer dans le corps ; rien à coller, le motif s'affiche.
+    function etapeScenarioCollerPiece() {
+        var echecs = 0
+        var bilan = function(texte, bon) {
+            if (!bon)
+                echecs += 1
+            console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
+        }
+        var r = ouvrirRedaction(comptesConnus[0].compte)
+        r.pret()
+        r.remplir({ a: "destinataire@exemple.fr", objet: "Essai pièce collée", texte: "Bonjour.", mode: "nouveau" })
+        bilan("presse-papier vide de fichiers virtuels hors Windows",
+              pressePapier.fichiersVirtuels(boite.dossierPiecesCollees()).length === 0)
+        bilan("image déposée dans le presse-papier", pressePapier.deposerImage(identifiantsEssai.dossier))
+        var bouton = objetNomme(r, "boutonCollerPiece")
+        bilan("bouton « Coller en pièce jointe » présent", !!bouton)
+        bouton.clicked()
+        bilan("image jointe : " + JSON.stringify(r.pieces.map(function(p) { return p.nom })),
+              r.pieces.length === 1 && /\.png$/.test(r.pieces[0].nom))
+        bilan("rien dans le corps", r.htmlActuel().indexOf("<img") < 0)
+        pressePapier.deposer("du texte seulement")
+        bouton.clicked()
+        bilan("rien à joindre : « " + r.note + " »", r.pieces.length === 1 && r.note.indexOf("Rien à joindre") === 0)
+        console.log("scenario: coller-piece " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
+        Qt.quit()
+    }
+
     /// Scénario « brouillon-auto » : un message neuf que l'on ne touche pas ne
     /// passe pas pour modifié ; modifié, il est enregistré sur le serveur sans
     /// rien demander 30 s plus tard, puis une minute après la frappe suivante,
@@ -545,7 +576,7 @@ QtObject {
             ouvrirDossier(compte, "INBOX")
         } else if (essai.etape === 2 && chemin === "INBOX") {
             essai.etape = 3
-            colonneListe.porteeRecherche.currentIndex = 1
+            colonneListe.porteeRecherche.currentIndex = 2
             colonneListe.champRecherche.text = identifiantsEssai.dossier
             lancerRecherche()
             var dossiers = {}
@@ -658,7 +689,7 @@ QtObject {
         t = Date.now()
         quitterRecherche()
         console.log("mesure: sortie de recherche,", modeleMessages.count, "messages,", Date.now() - t, "ms")
-        colonneListe.porteeRecherche.currentIndex = 1
+        colonneListe.porteeRecherche.currentIndex = 2
         colonneListe.champRecherche.text = "dossier 39"
         t = Date.now()
         lancerRecherche()
@@ -1782,7 +1813,7 @@ QtObject {
             } else if (suivi.n === 8) {
                 bilan("mot effacé : recherche finie, liste de départ",
                       recherche === "" && modeleMessages.count === suivi.total)
-                colonneListe.porteeRecherche.currentIndex = 1
+                colonneListe.porteeRecherche.currentIndex = 2
                 colonneListe.champRecherche.text = suivi.mot
                 lancerRecherche()
                 bilan("recherche « " + suivi.mot + " » dans toutes les boîtes", rechercheGlobale)
@@ -2873,6 +2904,371 @@ QtObject {
         })
     }
 
+    // --- Ctrl+Z, molette, groupes repliés (demandes d'un utilisateur, 03/11/2026)
+
+    function bilanEssai(suivi, texte, bon) {
+        if (!bon)
+            suivi.echecs += 1
+        console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
+    }
+    function sujetsDeLaListe() {
+        var s = []
+        for (var i = 0; i < modeleMessages.count; ++i)
+            s.push(modeleMessages.get(i).sujet)
+        return s.sort().join(" | ")
+    }
+
+    /// Scénario « annuler » (banc à deux comptes) : Ctrl+Z défait une
+    /// suppression, un déplacement de deux messages, deux gestes l'un après
+    /// l'autre, puis un déplacement vers l'autre boîte — où le même
+    /// Message-ID est déjà (graines du banc) : c'est le message déplacé qui
+    /// revient, pas l'autre.
+    property var suiviAnnuler: null
+    function lancerScenarioAnnuler() {
+        suiviAnnuler = { etape: 0, echecs: 0, avant: "", compte: 0, autre: 0 }
+        plusTard(8000, function() {
+            var comptes = listeComptes()
+            var un = comptes.filter(function(c) { return c.adresse === "un@essai.test" })[0]
+            var deux = comptes.filter(function(c) { return c.adresse === "deux@essai.test" })[0]
+            if (!un || !deux) {
+                console.log("scenario: ECHEC comptes " + JSON.stringify(comptes))
+                Qt.quit()
+                return
+            }
+            suiviAnnuler.compte = un.id
+            suiviAnnuler.autre = deux.id
+            ouvrirDossier(un.id, "INBOX")
+            plusTard(4000, function() { etapeScenarioAnnuler("depart") })
+        })
+    }
+    function etapeScenarioAnnuler(genre, nombre, erreurs, detail) {
+        var s = suiviAnnuler
+        if (!s)
+            return
+        var bilan = function(texte, bon) { bilanEssai(s, texte, bon) }
+        // Les messages revenus, la liste relue : comme au départ.
+        var apresRetour = function(texte, suite) {
+            plusTard(2500, function() {
+                var liste = sujetsDeLaListe()
+                bilan(texte + " : liste « " + liste + " », annulation suivante « " + boite.annulation + " »",
+                      liste === s.avant)
+                suite()
+            })
+        }
+        if (genre === "depart" && s.etape === 0) {
+            s.avant = sujetsDeLaListe()
+            bilan("départ : " + modeleMessages.count + " messages, rien à annuler (« " + boite.annulation + " »)",
+                  modeleMessages.count >= 3 && boite.annulation === "" && !raccourciAnnuler.enabled)
+            s.etape = 1
+            choisir(0, 0)
+            supprimerSelection()
+        } else if (genre === "deplacement" && s.etape === 1) {
+            bilan("suppression : " + nombre + " message, annulable " + detail + ", « " + boite.annulation
+                  + " », Ctrl+Z actif " + raccourciAnnuler.enabled + ", barre d'état « " + messageEtat.texte + " »",
+                  nombre === 1 && detail === true && boite.annulation === "Annuler la suppression"
+                  && raccourciAnnuler.enabled && messageEtat.texte.indexOf("Ctrl+Z") >= 0)
+            s.etape = 2
+            // Comme au clavier : ce que fait le raccourci.
+            raccourciAnnuler.activated()
+        } else if (genre === "annulation" && s.etape === 2) {
+            bilan("suppression annulée : " + nombre + " rétabli, " + detail + " introuvable « " + erreurs + " »",
+                  nombre === 1 && detail === 0 && erreurs === "")
+            s.etape = 3
+            apresRetour("après la suppression annulée", function() {
+                choisir(0, 0)
+                choisir(1, Qt.ControlModifier)
+                deplacerVers(s.compte, "Essais")
+            })
+        } else if (genre === "deplacement" && s.etape === 3) {
+            bilan("déplacement de " + nombre + " messages vers « Essais », « " + boite.annulation + " »",
+                  nombre === 2 && boite.annulation === "Annuler le déplacement")
+            s.etape = 4
+            fenetre.annuler()
+        } else if (genre === "annulation" && s.etape === 4) {
+            bilan("déplacement annulé : " + nombre + " rétablis", nombre === 2 && erreurs === "")
+            s.etape = 5
+            apresRetour("après le déplacement annulé", function() {
+                choisir(0, 0)
+                supprimerSelection()
+            })
+        } else if (genre === "deplacement" && s.etape === 5) {
+            s.etape = 6
+            choisir(0, 0)
+            deplacerVers(s.compte, "Archive")
+        } else if (genre === "deplacement" && s.etape === 6) {
+            bilan("deux gestes : le dernier, « " + boite.annulation + " »", boite.annulation === "Annuler le déplacement")
+            s.etape = 7
+            fenetre.annuler()
+        } else if (genre === "annulation" && s.etape === 7) {
+            bilan("premier Ctrl+Z : " + nombre + " rétabli, reste « " + boite.annulation + " »",
+                  nombre === 1 && boite.annulation === "Annuler la suppression")
+            s.etape = 8
+            fenetre.annuler()
+        } else if (genre === "annulation" && s.etape === 8) {
+            bilan("second Ctrl+Z : " + nombre + " rétabli", nombre === 1 && erreurs === "")
+            s.etape = 9
+            apresRetour("après les deux gestes annulés", function() {
+                bilan("plus rien à annuler : Ctrl+Z actif " + raccourciAnnuler.enabled + ", annuler() " + fenetre.annuler(),
+                      boite.annulation === "" && !raccourciAnnuler.enabled)
+                choisir(0, 0)
+                s.sujet = modeleMessages.get(0).sujet
+                deplacerVers(s.autre, "INBOX")
+            })
+        } else if (genre === "deplacement" && s.etape === 9) {
+            bilan("vers l'autre boîte : " + nombre + " message, « " + boite.annulation + " »",
+                  nombre === 1 && boite.annulation === "Annuler le déplacement")
+            s.etape = 10
+            fenetre.annuler()
+        } else if (genre === "annulation" && s.etape === 10) {
+            bilan("retour de l'autre boîte : " + nombre + " rétabli, " + detail + " introuvable « " + erreurs + " »",
+                  nombre === 1 && detail === 0 && erreurs === "")
+            s.etape = 11
+            apresRetour("après le retour de l'autre boîte", function() {
+                // Dans l'autre boîte, la graine au même Message-ID est restée.
+                ouvrirDossier(s.autre, "INBOX")
+                plusTard(3000, function() {
+                    var meme = 0
+                    for (var i = 0; i < modeleMessages.count; ++i)
+                        if (modeleMessages.get(i).sujet === s.sujet)
+                            meme += 1
+                    bilan("l'autre boîte garde sa graine « " + s.sujet + " » : " + meme, meme === 1)
+                    console.log("scenario: annuler " + (s.echecs === 0 ? "OK" : "ECHEC (" + s.echecs + ")"))
+                    Qt.quit()
+                })
+            })
+        }
+    }
+
+    /// Scénario « molette » (banc NOMBRE=60) : de vrais crans de molette sur
+    /// la liste (gestesEssai) — d'abord sans la molette de MMail, pour
+    /// mesurer le défilement propre de Qt, puis avec.
+    function lancerScenarioMolette() {
+        var s = { echecs: 0 }
+        var bilan = function(texte, bon) { bilanEssai(s, texte, bon) }
+        var v = colonneListe.vueMessages
+        var cran = function(angle, pixels) {
+            return gestesEssai.molette(v, v.width / 2, v.height / 2, angle, pixels)
+        }
+        plusTard(8000, function() {
+            ouvrirDossier(comptesConnus[0].compte, "INBOX")
+            plusTard(5000, function() {
+                fenetre.completerListe()
+                v.positionViewAtBeginning()
+                var hauteur = colonneListe.hauteurLigne()
+                var lignes = Qt.styleHints.wheelScrollLines
+                console.log("scenario: " + modeleMessages.count + " messages, ligne de " + Math.round(hauteur)
+                            + " px, vue de " + Math.round(v.height) + " px, réglage du poste : " + lignes + " lignes par cran")
+                // Sans la molette de MMail : Flickable seul.
+                colonneListe.molette.enabled = false
+                var y0 = v.contentY
+                cran(-120, 0)
+                plusTard(1500, function() {
+                    var natif = v.contentY - y0
+                    console.log("scenario: avant (Qt seul) : un cran = " + Math.round(natif) + " px, "
+                                + (natif / hauteur).toFixed(2) + " ligne(s)")
+                    colonneListe.molette.enabled = true
+                    v.positionViewAtBeginning()
+                    plusTard(500, function() {
+                        var attendu = Math.min(lignes * hauteur, Math.max(hauteur, v.height - hauteur))
+                        y0 = v.contentY
+                        cran(-120, 0)
+                        var un = v.contentY - y0
+                        bilan("un cran = " + Math.round(un) + " px (" + (un / hauteur).toFixed(2) + " lignes, attendu "
+                              + Math.round(attendu) + ")", Math.abs(un - attendu) < 1)
+                        var apresUn = v.contentY
+                        // Une seconde plus tard, rien n'a bougé : pas d'élan de
+                        // Flickable par-dessus.
+                        plusTard(1000, function() {
+                            bilan("sans élan : " + Math.round(v.contentY) + " une seconde après, " + Math.round(apresUn)
+                                  + " au cran", Math.abs(v.contentY - apresUn) < 1)
+                            y0 = v.contentY
+                            cran(-120, 0); cran(-120, 0); cran(-120, 0)
+                            var trois = v.contentY - y0
+                            bilan("trois crans = " + Math.round(trois) + " px", Math.abs(trois - 3 * attendu) < 1)
+                            y0 = v.contentY
+                            cran(120, 0)
+                            bilan("un cran vers le haut = " + Math.round(v.contentY - y0) + " px",
+                                  Math.abs(v.contentY - y0 + attendu) < 1)
+                            y0 = v.contentY
+                            cran(-120, -40)
+                            bilan("pavé tactile, 40 px : " + Math.round(v.contentY - y0) + " px", Math.abs(v.contentY - y0 - 40) < 1)
+                            for (var k = 0; k < 80; ++k)
+                                cran(-120, 0)
+                            var bas = v.originY + v.contentHeight - v.height
+                            bilan("tout en bas : contentY " + Math.round(v.contentY) + ", bas " + Math.round(bas),
+                                  Math.abs(v.contentY - bas) < 1)
+                            for (var j = 0; j < 80; ++j)
+                                cran(120, 0)
+                            bilan("tout en haut : contentY " + Math.round(v.contentY) + ", haut " + Math.round(v.originY),
+                                  Math.abs(v.contentY - v.originY) < 1)
+                            console.log("scenario: molette " + (s.echecs === 0 ? "OK" : "ECHEC (" + s.echecs + ")"))
+                            Qt.quit()
+                        })
+                    })
+                })
+            })
+        })
+    }
+
+    /// Scénario « groupes-replier » (banc DATES=1 NOMBRE=40) : un groupe se
+    /// replie d'un clic sur son intitulé et se déplie ; le clavier et Maj+clic
+    /// sautent ses messages ; un message qui arrive dans un groupe replié y
+    /// reste caché ; tout replier, tout déplier ; l'état suit le dossier ; sans
+    /// les groupes, tout se voit.
+    function lancerScenarioGroupesReplier() {
+        var s = { echecs: 0 }
+        var bilan = function(texte, bon) { bilanEssai(s, texte, bon) }
+        var v = colonneListe.vueMessages
+        // Groupes de la liste, dans l'ordre : { nom, debut, taille }.
+        var groupes = function() {
+            var g = []
+            for (var i = 0; i < modeleMessages.count; ++i) {
+                var nom = modeleMessages.get(i).groupe
+                if (g.length === 0 || g[g.length - 1].nom !== nom)
+                    g.push({ nom: nom, debut: i, taille: 0 })
+                g[g.length - 1].taille += 1
+            }
+            return g
+        }
+        var enTete = function(nom) {
+            var enfants = v.contentItem.children
+            for (var k = 0; k < enfants.length; ++k)
+                if (enfants[k].section === nom && enfants[k].visible)
+                    return enfants[k]
+            return null
+        }
+        var visibles = function() { return v.count }
+        plusTard(8000, function() {
+            var compte = comptesConnus[0].compte
+            ouvrirDossier(compte, "INBOX")
+            plusTard(5000, function() {
+                fenetre.completerListe()
+                var n = modeleMessages.count
+                var g = groupes()
+                console.log("scenario: " + n + " messages, groupes " + g.map(function(x) { return x.nom + " (" + x.taille + ")" }).join(" | "))
+                // Un groupe du milieu d'au moins deux messages, puis le suivant.
+                var k = -1
+                for (var i = 1; i < g.length - 1 && k < 0; ++i)
+                    if (g[i].taille >= 2)
+                        k = i
+                if (k < 0) {
+                    console.log("scenario: ECHEC pas de groupe du milieu à replier")
+                    Qt.quit()
+                    return
+                }
+                var cible = g[k]
+                v.positionViewAtIndex(cible.debut, ListView.Beginning)
+                plusTard(500, function() {
+                    var tete = enTete(cible.nom)
+                    bilan("intitulé « " + cible.nom + " » à l'écran, déplié", tete !== null && !tete.replie)
+                    if (tete)
+                        gestesEssai.clic(tete, 30, tete.height / 2, Qt.LeftButton)
+                    plusTard(500, function() {
+                        tete = enTete(cible.nom)
+                        var representant = v.itemAtIndex(colonneListe.rangVue(cible.debut))
+                        bilan("clic : « " + cible.nom + " » replié, " + visibles() + " lignes dans la vue sur " + n
+                              + ", intitulé " + (tete ? (tete.replie ? "replié" : "déplié") : "absent")
+                              + ", sa première ligne haute de " + (representant ? representant.height : "?") + " px",
+                              visibles() === n - cible.taille + 1 && tete !== null && tete.replie
+                              && representant !== null && representant.height === 0)
+                        // Rangs : la ligne qui suit le groupe replié.
+                        var apres = cible.debut + cible.taille
+                        var rangApres = colonneListe.rangVue(apres)
+                        var ligneApres = v.itemAtIndex(rangApres)
+                        bilan("rangs : modèle " + apres + " = vue " + rangApres + ", retour " + colonneListe.rangModele(rangApres)
+                              + ", la ligne dit " + (ligneApres ? ligneApres.rang : "?"),
+                              rangApres === apres - cible.taille + 1 && colonneListe.rangModele(rangApres) === apres
+                              && ligneApres !== null && ligneApres.rang === apres
+                              && colonneListe.rangVue(cible.debut + 1) === -1)
+                        // Clavier : de la dernière ligne d'avant à la première d'après.
+                        var avant = cible.debut - 1
+                        choisir(avant, 0)
+                        deplacerCurseur(1, false)
+                        var choisis = uidsChoisis()
+                        bilan("flèche bas : du rang " + avant + " au message " + (choisis.length === 1 ? indexDe(choisis[0]) : "?")
+                              + " (attendu " + apres + ")", choisis.length === 1 && indexDe(choisis[0]) === apres)
+                        deplacerCurseur(-1, false)
+                        choisis = uidsChoisis()
+                        bilan("flèche haut : retour au rang " + (choisis.length === 1 ? indexDe(choisis[0]) : "?"),
+                              choisis.length === 1 && indexDe(choisis[0]) === avant)
+                        choisir(apres, Qt.ShiftModifier)
+                        bilan("Maj+clic par-dessus le groupe : " + uidsChoisis().length + " messages choisis",
+                              uidsChoisis().length === 2)
+                        // Un message qui arrive dans le groupe replié, en tête
+                        // puis en fin de groupe : il reste caché, l'intitulé reste.
+                        var modele = modeleMessages.get(cible.debut)
+                        var neuf = {}
+                        var roles = ["uid", "h", "expediteur", "adresse", "destinataires", "sujet", "date", "taille", "lu",
+                                     "repondu", "reponduTous", "transfere", "pieces", "suivi", "importance", "motsCles",
+                                     "compte", "chemin", "dossier", "role", "cheminAffiche", "groupe"]
+                        for (var r = 0; r < roles.length; ++r)
+                            neuf[roles[r]] = modele[roles[r]]
+                        neuf.uid = 999001
+                        neuf.h = modele.h + 1
+                        neuf.sujet = "Arrivé dans un groupe replié"
+                        modeleMessages.insert(cible.debut, neuf)
+                        plusTard(200, function() {
+                            var premier = v.itemAtIndex(colonneListe.rangVue(cible.debut))
+                            bilan("arrivée en tête du groupe replié : " + visibles() + " lignes (attendu " + (n - cible.taille + 1)
+                                  + "), l'ancienne tête cachée " + (colonneListe.rangVue(cible.debut + 1) === -1),
+                                  visibles() === n - cible.taille + 1 && colonneListe.rangVue(cible.debut + 1) === -1
+                                  && premier !== null && premier.height === 0 && enTete(cible.nom) !== null)
+                            // Puis elle repart : l'ancienne tête reprend l'intitulé.
+                            modeleMessages.remove(cible.debut)
+                            plusTard(200, function() {
+                                bilan("retrait de la tête : " + visibles() + " lignes, intitulé " + (enTete(cible.nom) !== null),
+                                      visibles() === n - cible.taille + 1 && colonneListe.rangVue(cible.debut) >= 0
+                                      && enTete(cible.nom) !== null)
+                                var tete2 = enTete(cible.nom)
+                                if (tete2)
+                                    gestesEssai.clic(tete2, 30, tete2.height / 2, Qt.RightButton)
+                                plusTard(500, function() {
+                                    bilan("clic droit : menu des groupes ouvert", colonneListe.menuGroupes.opened)
+                                    colonneListe.menuGroupes.close()
+                                    colonneListe.replierTout(true)
+                                    plusTard(500, function() {
+                                        bilan("tout replié : " + visibles() + " lignes pour " + g.length + " groupes",
+                                              visibles() === g.length)
+                                        colonneListe.replierTout(false)
+                                        plusTard(300, function() {
+                                            bilan("tout déplié : " + visibles() + " lignes sur " + n, visibles() === n)
+                                            colonneListe.basculerGroupe(cible.nom)
+                                            ouvrirDossier(compte, "Essais")
+                                            plusTard(3000, function() {
+                                                bilan("autre dossier : " + visibles() + " lignes sur " + modeleMessages.count,
+                                                      visibles() === modeleMessages.count)
+                                                ouvrirDossier(compte, "INBOX")
+                                                plusTard(4000, function() {
+                                                    fenetre.completerListe()
+                                                    plusTard(500, function() {
+                                                        bilan("retour au dossier : « " + cible.nom + " » toujours replié, "
+                                                              + visibles() + " lignes", visibles() === n - cible.taille + 1)
+                                                        reglages.groupesDates = false
+                                                        plusTard(500, function() {
+                                                            bilan("sans les groupes : " + visibles() + " lignes sur " + n, visibles() === n)
+                                                            reglages.groupesDates = true
+                                                            plusTard(500, function() {
+                                                                bilan("groupes rendus : " + visibles() + " lignes",
+                                                                      visibles() === n - cible.taille + 1)
+                                                                colonneListe.basculerGroupe(cible.nom)
+                                                                console.log("scenario: groupes-replier " + (s.echecs === 0 ? "OK" : "ECHEC (" + s.echecs + ")"))
+                                                                Qt.quit()
+                                                            })
+                                                        })
+                                                    })
+                                                })
+                                            })
+                                        })
+                                    })
+                                })
+                            })
+                        })
+                    })
+                })
+            })
+        })
+    }
+
     /// Scénario « marges » (0.6.23) : « Affichage › Marges du message », ses
     /// trois choix l'un après l'autre, dans le volet de lecture et dans la
     /// fenêtre du message. Le texte doit se décaler de la marge choisie, vers
@@ -3336,6 +3732,52 @@ QtObject {
     /// préparée vers l'adresse de la liste ; « Lettre lien du corps » : lien
     /// repéré dans le corps ; « TR : Lettre transférée » et « Essai 1 » : pas
     /// de bandeau.
+    // Scénario « marquer-lu » (0.8.1) : les boutons « Marquer comme lu / non
+    // lu » du volet de lecture et de la barre du haut suivent l'état du
+    // message choisi, et le basculent.
+    function lancerScenarioMarquerLu(essais) {
+        var n = essais || 0
+        // Le compte connecté et sa boîte de réception rouverte : cette
+        // réouverture vide la liste, et la sélection avec elle.
+        if ((modeleMessages.count < 1 || boite.compteCourant <= 0) && n < 40) {
+            plusTard(1000, function() { lancerScenarioMarquerLu(n + 1) })
+            return
+        }
+        if (n < 40 && essais !== -1) {
+            plusTard(6000, function() { lancerScenarioMarquerLu(-1) })
+            return
+        }
+        var echecs = 0
+        var bilan = function(texte, bon) {
+            if (!bon)
+                echecs += 1
+            console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
+        }
+        var volet = function() { return objetNomme(colonneLecture, "boutonMarquerLu") }
+        var barre = function() { return objetNomme(fenetre.menuBar, "boutonMarquerLuBarre") }
+        choisir(0, 0)
+        plusTard(2500, function() {
+            console.log("scenario: sélection", JSON.stringify(Object.keys(selection)), "| état", JSON.stringify(fenetre.etatChoix))
+            var v = volet(), b = barre()
+            bilan("message affiché, marqué lu : boutons « " + (v ? v.text : "?") + " » / « " + (b ? b.text : "?") + " »",
+                  modeleMessages.get(0).lu === true && !!v && v.text === qsTr("Marquer comme non lu")
+                  && !!b && b.text === qsTr("Marquer comme non lu") && b.enabled)
+            v.clicked()
+            plusTard(2000, function() {
+                bilan("« Marquer comme non lu » : ligne non lue, bouton « " + volet().text + " »",
+                      modeleMessages.get(0).lu === false && volet().text === qsTr("Marquer comme lu")
+                      && barre().text === qsTr("Marquer comme lu"))
+                barre().clicked()
+                plusTard(2000, function() {
+                    bilan("« Marquer comme lu » de la barre : ligne lue, bouton « " + volet().text + " »",
+                          modeleMessages.get(0).lu === true && volet().text === qsTr("Marquer comme non lu"))
+                    console.log("scenario: marquer-lu " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
+                    Qt.quit()
+                })
+            })
+        })
+    }
+
     function lancerScenarioDesabonnement() {
         var suivi = { echecs: 0 }
         var bilan = function(texte, bon) {
@@ -3428,6 +3870,74 @@ QtObject {
     /// le message, pas les boutons. « Devis joint » (banc PIECE=1) affiché, le
     /// zoom passe à 1,5 : le corps et l'objet grossissent d'autant ; le bouton
     /// « Répondre » et le bandeau des pièces jointes gardent leur taille.
+    // Scénario « recherche-portee » (0.8.2, 0.8.3), banc LOT1=1 : la portée
+    // « Cette boîte (tous dossiers) » ne rend que les messages du compte, de
+    // plusieurs dossiers ; « Toutes les boîtes » ajoute ceux de l'autre
+    // compte ; « Non lus » écarte le message lu.
+    function lancerScenarioRecherchePortee(essais) {
+        var n = essais || 0
+        var trouve = false
+        for (var j = 0; j < modeleMessages.count; ++j)
+            if (modeleMessages.get(j).sujet === "Essai 1")
+                trouve = true
+        if ((!trouve || comptesConnus.length < 2) && n < 40) {
+            plusTard(1000, function() { lancerScenarioRecherchePortee(n + 1) })
+            return
+        }
+        var echecs = 0
+        var bilan = function(texte, bon) {
+            if (!bon)
+                echecs += 1
+            console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
+        }
+        var un = boite.compteCourant
+        var lignes = function() {
+            var l = []
+            for (var k = 0; k < modeleMessages.count; ++k)
+                l.push(modeleMessages.get(k))
+            return l
+        }
+        var resume = function(l) {
+            return l.map(function(r) { return r.sujet + "@" + (r.compte || un) + ":" + (r.chemin || boite.dossierCourant) + (r.lu ? "(lu)" : "") }).join(" | ")
+        }
+        // « Essai 1 » affiché : il est lu.
+        for (var i = 0; i < modeleMessages.count; ++i)
+            if (modeleMessages.get(i).sujet === "Essai 1")
+                choisir(i, 0)
+        plusTard(2500, function() {
+            colonneListe.porteeRecherche.currentIndex = 1
+            colonneListe.nonLusRecherche.checked = false
+            fenetre.lancerRecherche("essai")
+            plusTard(5000, function() {
+                var l = lignes()
+                var chemins = {}
+                l.forEach(function(r) { chemins[r.chemin] = true })
+                bilan("cette boîte : " + resume(l),
+                      l.length > 0 && l.every(function(r) { return r.compte === un }) && Object.keys(chemins).length >= 3)
+                colonneListe.porteeRecherche.currentIndex = 2
+                fenetre.lancerRecherche("essai")
+                plusTard(5000, function() {
+                    var l2 = lignes()
+                    bilan("toutes les boîtes : " + resume(l2), l2.some(function(r) { return r.compte !== un }))
+                    colonneListe.porteeRecherche.currentIndex = 1
+                    colonneListe.nonLusRecherche.checked = true
+                    fenetre.lancerRecherche("essai")
+                    plusTard(5000, function() {
+                        var l3 = lignes()
+                        bilan("cette boîte, non lus : " + resume(l3),
+                              l3.length > 0 && l3.every(function(r) { return !r.lu && r.compte === un })
+                              && !l3.some(function(r) { return r.sujet === "Essai 1" })
+                              && l3.some(function(r) { return r.sujet === "Essai 2" }))
+                        bilan("bandeau : " + fenetre.infoDossier, fenetre.infoDossier.indexOf("tous dossiers") >= 0
+                              && fenetre.infoDossier.indexOf("non lus") >= 0)
+                        console.log("scenario: recherche-portee " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
+                        Qt.quit()
+                    })
+                })
+            })
+        })
+    }
+
     function lancerScenarioZoomLecture() {
         var suivi = { echecs: 0 }
         var bilan = function(texte, bon) {

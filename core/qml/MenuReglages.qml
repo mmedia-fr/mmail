@@ -34,12 +34,30 @@ Menu {
         text: qsTr("Expéditeurs de confiance…")
         onTriggered: dlgExpediteursConfiance.open()
     }
+    // Messagerie que Windows sert aux autres logiciels (MAPI) : MMail,
+    // Outlook… Windows seulement.
+    MenuItem {
+        text: qsTr("Messagerie par défaut…")
+        visible: Qt.platform.os === "windows"
+        height: visible ? implicitHeight : 0
+        onTriggered: dlgMessagerie.open()
+    }
     // Correcteur d'orthographe de la rédaction (0.6.36).
     MenuItem {
         text: qsTr("Vérifier l'orthographe en tapant")
         checkable: true
         checked: reglagesRedaction.orthographe
         onTriggered: reglagesRedaction.orthographe = checked
+    }
+    // Android (0.7.0) : MMail fermé, une tâche du système relève la boîte de
+    // réception et notifie les messages arrivés (cf. cpp/releve.h).
+    MenuItem {
+        text: qsTr("Notifier les nouveaux messages, MMail fermé")
+        visible: releve.disponible
+        height: visible ? implicitHeight : 0
+        checkable: true
+        checked: releve.actif
+        onTriggered: releve.actif = checked
     }
     MenuSeparator {}
     MenuItem {

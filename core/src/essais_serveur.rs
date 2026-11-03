@@ -502,6 +502,11 @@ fn deplacement_dans_la_boite_et_retour() {
     assert!(compter(&mut a, "INBOX", &message_id).is_empty());
     let la = compter(&mut a, "Essais/Clients", &message_id);
     assert_eq!(la.len(), 1);
+    // Le serveur dit où il l'a mis (COPYUID) : de quoi l'y retrouver sans
+    // chercher, pour Ctrl+Z.
+    let (_, paires) = rapport.correspondances.clone().expect("COPYUID au déplacement");
+    assert_eq!(paires, vec![(uid, la[0])]);
+    assert_eq!(a.presents(&[la[0], la[0] + 1000]).unwrap(), vec![la[0]]);
 
     // Retour, depuis le dossier cible synchronisé.
     synchro::synchroniser(&mut a, &magasin, compte, "Essais/Clients").unwrap();

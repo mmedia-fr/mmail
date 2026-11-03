@@ -9608,6 +9608,8 @@ mod tests {
             menage: None,
             dernier: None,
             differes_reserves: HashMap::new(),
+            graph: None,
+            dossiers_graph: HashMap::new(),
         };
         (travail, etabli, issues)
     }

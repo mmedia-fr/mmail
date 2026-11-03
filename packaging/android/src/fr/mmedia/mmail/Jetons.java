@@ -109,6 +109,7 @@ public class Jetons {
      * l'issue revient par termine.
      */
     public static void connecter(Context c, String service, String indice) {
+        Log.i(JOURNAL, "connexion : " + service);
         preparer(c);
         if (!(c instanceof Activity)) {
             remettre(erreur(service, "pas d'activité pour la connexion", "android"));
@@ -184,8 +185,12 @@ public class Jetons {
         return compte.getUsername();
     }
 
-    /** Issue d'une connexion, vers l'interface. */
+    /** Issue d'une connexion, vers l'interface. Au journal : son genre, jamais le jeton. */
     static void remettre(JSONObject issue) {
+        Log.i(JOURNAL, "connexion : issue " + issue.optString("service") + " "
+                + (issue.optBoolean("annule") ? "abandonnée"
+                   : issue.has("erreur") ? "refusée (" + issue.optString("code") + ") : " + issue.optString("erreur")
+                   : "aboutie"));
         try {
             termine(issue.toString().getBytes(StandardCharsets.UTF_8));
         } catch (Throwable e) {
@@ -296,6 +301,10 @@ public class Jetons {
 
     private static synchronized IMultipleAccountPublicClientApplication msal() throws Exception {
         if (msal == null) {
+            // Journal de MSAL : avertissements et erreurs, sans données personnelles.
+            com.microsoft.identity.client.Logger.getInstance().setEnableLogcatLog(true);
+            com.microsoft.identity.client.Logger.getInstance().setLogLevel(com.microsoft.identity.client.Logger.LogLevel.WARNING);
+            com.microsoft.identity.client.Logger.getInstance().setEnablePII(false);
             int config = contexte.getResources().getIdentifier("msal_config", "raw", contexte.getPackageName());
             msal = PublicClientApplication.createMultipleAccountPublicClientApplication(contexte, config);
         }

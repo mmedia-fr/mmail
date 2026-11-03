@@ -122,7 +122,10 @@ ApplicationWindow {
     ConnexionAndroid {
         id: connexionAndroid
         onTermine: function(issue) {
-            if (!boite.terminerAndroid(issue))
+            var lue = boite.terminerAndroid(issue)
+            // Au journal d'Android (essai de la CI) : le genre de l'issue, pas son contenu.
+            console.info("connexion Android : issue " + (lue ? "lue par le noyau" : "illisible"))
+            if (!lue)
                 messageEtat.texte = qsTr("Retour de connexion illisible : recommencez l'ajout du compte.")
         }
     }

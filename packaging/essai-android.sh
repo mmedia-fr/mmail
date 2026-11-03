@@ -280,9 +280,18 @@ else
   adb shell input text "essai.mmail@outlook.com"
   sleep 1
   adb shell input keyevent KEYCODE_ENTER
-  sleep 15
+  # L'issue s'inscrit au journal (Jetons.java, puis Main.qml) ; le message de
+  # la barre d'état, lui, ne reste que quelques secondes.
+  focus=""
+  for i in $(seq 1 15); do
+    sleep 2
+    adb logcat -d > logcat-connexion.txt 2>/dev/null || true
+    grep -q "connexion Android : issue" logcat-connexion.txt && break
+    focus=$(adb shell dumpsys window | grep -m 1 'mCurrentFocus' | tr -d '\r' || true)
+    echo "$focus" | grep -q "$PAQUET/org.qtproject" || break
+  done
   adb exec-out screencap -p > connexion-1-msal.png
-  adb logcat -d > logcat-connexion.txt 2>/dev/null || true
+  grep -E "MMail *: connexion|connexion Android|MSAL|Msal" logcat-connexion.txt | cut -c1-300 || true
   if grep -E "UnsatisfiedLinkError|NoClassDefFoundError" logcat-connexion.txt \
      || grep -A2 "FATAL EXCEPTION" logcat-connexion.txt | grep -q "$PAQUET"; then
     echo "Connexion Microsoft : erreur Java au lancement de MSAL" >&2
@@ -293,9 +302,8 @@ else
     exit 1
   fi
   focus=$(adb shell dumpsys window | grep -m 1 'mCurrentFocus' | tr -d '\r' || true)
-  refus=$(trouver "Connexion à Microsoft : ")
-  if [ -n "$refus" ]; then
-    echo "Connexion Microsoft : refus de MSAL revenu à l'interface (APK d'essai, signature attendue absente)"
+  if grep -q "connexion Android : issue lue par le noyau" logcat-connexion.txt; then
+    echo "Connexion Microsoft : issue de MSAL revenue jusqu'au noyau ($(grep -m 1 -o 'connexion : issue.*' logcat-connexion.txt | cut -c1-160))"
   elif echo "$focus" | grep -qiE 'chrome|browser|customtab|AuthorizationActivity|BrowserTabActivity|identity'; then
     echo "Connexion Microsoft : page de Microsoft ouverte par MSAL ($focus)"
     adb shell input keyevent KEYCODE_BACK

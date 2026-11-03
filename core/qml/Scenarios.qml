@@ -3415,6 +3415,92 @@ QtObject {
         })
     }
 
+    // Scénario « smime-envoi » (0.8.0) : banc SMTP=1, EML=<smime>/signe-par-deux.eml,
+    // MMAIL_DOSSIER=<smime> (banc/smime-banc.sh : autorité, un.p12, deux.p12,
+    // mot de passe « essai »). un@ recueille le certificat de deux@ sur son
+    // message signé ; un envoi chiffré à une adresse sans certificat est
+    // refusé, avant tout départ ; puis un message signé et chiffré part à deux@
+    // avec un@ en Cci — deux messages au serveur d'envoi, contrôlés par le
+    // banc —, et sa copie, dans « Sent », se relit ouverte.
+    function lancerScenarioSmimeEnvoi(essais) {
+        var n = essais || 0
+        var rangDe = function(sujet) {
+            for (var k = 0; k < modeleMessages.count; ++k)
+                if (modeleMessages.get(k).sujet === sujet)
+                    return k
+            return -1
+        }
+        if ((comptesConnus.length < 2 || rangDe("Signé par deux") < 0) && n < 40) {
+            plusTard(1000, function() { lancerScenarioSmimeEnvoi(n + 1) })
+            return
+        }
+        var echecs = 0
+        var bilan = function(texte, bon) {
+            if (!bon)
+                echecs += 1
+            console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
+        }
+        var finir = function() {
+            console.log("scenario: smime-envoi " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
+            Qt.quit()
+        }
+        var compteDe = function(adresse) {
+            for (var k = 0; k < comptesConnus.length; ++k)
+                if (comptesConnus[k].adresse === adresse)
+                    return comptesConnus[k].compte
+            return 0
+        }
+        var un = compteDe("un@essai.test")
+        var deux = compteDe("deux@essai.test")
+        var dossier = identifiantsEssai.dossier
+        var a = JSON.parse(boite.ajouterAutorite(lecteurEssai.base64(dossier + "/racine.pem")))
+        bilan("autorité du banc ajoutée", a.ok === true)
+        var k1 = JSON.parse(boite.importerCertificat(un, lecteurEssai.base64(dossier + "/un.p12"), "essai"))
+        var k2 = JSON.parse(boite.importerCertificat(deux, lecteurEssai.base64(dossier + "/deux.p12"), "essai"))
+        bilan("certificats de un@ et deux@ importés, sans avertissement : " + JSON.stringify([k1.erreur, k1.avertissement, k2.erreur, k2.avertissement]),
+              k1.ok === true && k2.ok === true && k1.avertissement === "" && k2.avertissement === "")
+        choisir(rangDe("Signé par deux"), 0)
+        plusTard(3000, function() {
+            var s = fenetre.securite
+            bilan("message signé de deux@ vérifié, son certificat recueilli : " + JSON.stringify(s),
+                  !!s.signature && s.signature.etat === "verifiee")
+            var r = ouvrirRedaction(un)
+            r.pret()
+            r.remplir({ a: "inconnu@essai.test", objet: "Refus", mode: "nouveau", texte: "Pas de certificat.",
+                        signer: true, chiffrer: true })
+            r.envoyer(false)
+            plusTard(4000, function() {
+                bilan("chiffré sans certificat du destinataire : refusé, motif « " + r.note + " »",
+                      r.note.indexOf("inconnu@essai.test") >= 0)
+                r.remplir({ a: "deux@essai.test", cci: "un@essai.test", objet: "Secret", mode: "nouveau",
+                            texte: "Message secret pour deux.", signer: true, chiffrer: true })
+                r.envoyer(false)
+                console.log("scenario: envoi signé et chiffré lancé")
+                plusTard(8000, function() {
+                    bilan("rédaction refermée après l'envoi (note « " + r.note + " »)", !r.visible || r.note.indexOf("Envoi") === 0)
+                    fenetre.ouvrirDossier(un, "Sent")
+                    plusTard(4000, function() {
+                        var i = rangDe("Secret")
+                        bilan("copie dans « Sent »", i >= 0)
+                        if (i < 0) {
+                            finir()
+                            return
+                        }
+                        choisir(i, 0)
+                        plusTard(3000, function() {
+                            var s2 = fenetre.securite
+                            bilan("copie envoyée ouverte : " + JSON.stringify(s2),
+                                  s2.chiffre === true && (s2.illisible || "") === "" && !!s2.signature
+                                  && s2.signature.etat === "verifiee")
+                            bilan("corps de la copie déchiffré", colonneLecture.vueCorps.text.indexOf("Message secret") >= 0)
+                            finir()
+                        })
+                    })
+                })
+            })
+        })
+    }
+
     function lancerScenarioDesabonnement() {
         var suivi = { echecs: 0 }
         var bilan = function(texte, bon) {

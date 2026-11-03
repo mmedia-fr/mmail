@@ -7221,11 +7221,19 @@ impl Travail {
                 manquants.join(", ")
             ));
         }
+        // Chaque certificat une fois : l'expéditeur peut être aussi
+        // destinataire.
+        let unique = |mut v: Vec<Vec<u8>>| {
+            v.sort();
+            v.dedup();
+            v
+        };
         pour.push(cle.certificat.clone());
+        let pour = unique(pour);
         let (envoi, copie) = crate::smime::proteger_avec_copie(&f.envoi, &f.copie, signe_par, &pour, heure)?;
         let mut separes = Vec::new();
         for (adresse, c) in pour_caches {
-            let pour_lui = [c.unwrap_or_default(), cle.certificat.clone()];
+            let pour_lui = unique(vec![c.unwrap_or_default(), cle.certificat.clone()]);
             separes.push((adresse, crate::smime::proteger(&f.envoi, signe_par, &pour_lui, heure)?));
         }
         let destinataires = if separes.is_empty() {

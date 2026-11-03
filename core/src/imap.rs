@@ -478,10 +478,11 @@ impl Client {
         Ok(())
     }
 
-    /// Supprime un dossier : sert aux épreuves contre un vrai serveur, qui
-    /// retirent ce qu'elles ont créé.
-    #[cfg(test)]
+    /// Supprime un dossier du serveur, avec ses messages : « Effacer
+    /// définitivement le dossier » dans la corbeille (0.8.5), et les épreuves
+    /// contre un vrai serveur, qui retirent ce qu'elles ont créé.
     pub fn supprimer_dossier(&mut self, chemin: &str) -> Resultat<()> {
+        self.selection = None;
         let _ = self.commande(&format!("UNSUBSCRIBE {}", citer(chemin)));
         self.commande(&format!("DELETE {}", citer(chemin))).map(|_| ())
     }

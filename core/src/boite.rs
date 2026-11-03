@@ -279,6 +279,15 @@ pub mod qobject {
         #[cxx_name = "chercher"]
         fn chercher(&self, texte: &QString, partout: bool) -> QString;
 
+        /// Comme `chercher`, dans une portée (0.8.3) : 0 le dossier ouvert,
+        /// 1 tous les dossiers du compte `compte`, 2 tous les
+        /// comptes ; les non-lus seulement si `non_lus` (0.8.2). Les portées 1
+        /// et 2 rendent des lignes à compte, chemin et dossier, comme
+        /// `chercher(texte, true)`.
+        #[qinvokable]
+        #[cxx_name = "chercherSelon"]
+        fn chercher_selon(&self, texte: &QString, portee: i32, compte: i32, non_lus: bool) -> QString;
+
         /// Cherche aussi dans le texte entier des messages du dossier ouvert,
         /// sur le serveur, par une connexion à part (0.6.16). Issue :
         /// `resultatsServeur`, précédé de `rechercheInachevee` si le serveur
@@ -296,6 +305,12 @@ pub mod qobject {
         #[qinvokable]
         #[cxx_name = "chercherPartoutSurLeServeur"]
         fn chercher_partout_sur_le_serveur(self: Pin<&mut Boite>, texte: &QString) -> i32;
+
+        /// Comme `chercherPartoutSurLeServeur`, dans les seuls dossiers d'un
+        /// compte (0.8.3, « cette boîte, tous dossiers »).
+        #[qinvokable]
+        #[cxx_name = "chercherDansLeCompteSurLeServeur"]
+        fn chercher_dans_le_compte_sur_le_serveur(self: Pin<&mut Boite>, texte: &QString, compte: i32) -> i32;
 
         /// Lignes d'un dossier quelconque pour des UID (« 3,5,7 »), comme
         /// `chercher(texte, true)` : compte, chemin et dossier compris.
@@ -3174,6 +3189,33 @@ impl qobject::Boite {
         QString::from(&json_messages(&messages))
     }
 
+    pub fn chercher_selon(&self, texte: &QString, portee: i32, compte: i32, non_lus: bool) -> QString {
+        let Some(magasin) = self.magasin.as_ref() else {
+            return QString::from("[]");
+        };
+        let (texte, categories) = criteres_recherche(magasin, &texte.to_string());
+        self.recherche_approchee.store(false, Ordering::SeqCst);
+        let courant = self.courant.as_ref().map(|(_, _, id)| *id);
+        let filtre = match (portee, courant) {
+            (0, Some(id)) => crate::magasin::Filtre { dossier: Some(id), non_lus, ..Default::default() },
+            (1, _) if compte > 0 => crate::magasin::Filtre { compte: Some(compte as i64), non_lus, ..Default::default() },
+            (2, _) => crate::magasin::Filtre { non_lus, ..Default::default() },
+            _ => return QString::from("[]"),
+        };
+        let (trouves, approchee) =
+            magasin.chercher_tolerant_selon(&filtre, &texte, &categories, RECHERCHE_MAX).unwrap_or_default();
+        self.recherche_approchee.store(approchee, Ordering::SeqCst);
+        if portee == 0 {
+            let messages: Vec<MessageLocal> = trouves.into_iter().map(|t| t.message).collect();
+            return QString::from(&json_messages(&messages));
+        }
+        QString::from(&json_trouves(&trouves, &partagees_par_compte(magasin)))
+    }
+
+    pub fn chercher_dans_le_compte_sur_le_serveur(self: Pin<&mut Self>, texte: &QString, compte: i32) -> i32 {
+        self.chercher_dans_les_comptes(texte, Some(compte as i64))
+    }
+
     pub fn chercher_sur_le_serveur(mut self: Pin<&mut Self>, texte: &QString) -> bool {
         // Une nouvelle recherche remplace la précédente, partout comprise.
         let numero = self.recherche.fetch_add(1, Ordering::SeqCst) + 1;
@@ -3187,14 +3229,20 @@ impl qobject::Boite {
         self.as_mut().lancer_recherche(compte, texte, vec![chemin], false, numero)
     }
 
-    pub fn chercher_partout_sur_le_serveur(mut self: Pin<&mut Self>, texte: &QString) -> i32 {
+    pub fn chercher_partout_sur_le_serveur(self: Pin<&mut Self>, texte: &QString) -> i32 {
+        self.chercher_dans_les_comptes(texte, None)
+    }
+
+    /// Recherche sur le serveur dans tous les dossiers d'un compte, ou de
+    /// tous les comptes connectés (`seul` absent).
+    fn chercher_dans_les_comptes(mut self: Pin<&mut Self>, texte: &QString, seul: Option<i64>) -> i32 {
         // Nouvelle recherche ou arrêt : les fils de la précédente s'arrêtent.
         let numero = self.recherche.fetch_add(1, Ordering::SeqCst) + 1;
         let texte = texte.to_string().trim().to_string();
         if texte.is_empty() {
             return 0;
         }
-        let mut comptes: Vec<i64> = self.sessions.keys().copied().collect();
+        let mut comptes: Vec<i64> = self.sessions.keys().copied().filter(|c| seul.is_none_or(|s| s == *c)).collect();
         comptes.sort_unstable();
         let mut total = 0;
         for compte in comptes {

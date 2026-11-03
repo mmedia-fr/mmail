@@ -547,7 +547,7 @@ QtObject {
             ouvrirDossier(compte, "INBOX")
         } else if (essai.etape === 2 && chemin === "INBOX") {
             essai.etape = 3
-            colonneListe.porteeRecherche.currentIndex = 1
+            colonneListe.porteeRecherche.currentIndex = 2
             colonneListe.champRecherche.text = identifiantsEssai.dossier
             lancerRecherche()
             var dossiers = {}
@@ -660,7 +660,7 @@ QtObject {
         t = Date.now()
         quitterRecherche()
         console.log("mesure: sortie de recherche,", modeleMessages.count, "messages,", Date.now() - t, "ms")
-        colonneListe.porteeRecherche.currentIndex = 1
+        colonneListe.porteeRecherche.currentIndex = 2
         colonneListe.champRecherche.text = "dossier 39"
         t = Date.now()
         lancerRecherche()
@@ -1784,7 +1784,7 @@ QtObject {
             } else if (suivi.n === 8) {
                 bilan("mot effacé : recherche finie, liste de départ",
                       recherche === "" && modeleMessages.count === suivi.total)
-                colonneListe.porteeRecherche.currentIndex = 1
+                colonneListe.porteeRecherche.currentIndex = 2
                 colonneListe.champRecherche.text = suivi.mot
                 lancerRecherche()
                 bilan("recherche « " + suivi.mot + " » dans toutes les boîtes", rechercheGlobale)
@@ -3795,6 +3795,74 @@ QtObject {
     /// le message, pas les boutons. « Devis joint » (banc PIECE=1) affiché, le
     /// zoom passe à 1,5 : le corps et l'objet grossissent d'autant ; le bouton
     /// « Répondre » et le bandeau des pièces jointes gardent leur taille.
+    // Scénario « recherche-portee » (0.8.2, 0.8.3), banc LOT1=1 : la portée
+    // « Cette boîte (tous dossiers) » ne rend que les messages du compte, de
+    // plusieurs dossiers ; « Toutes les boîtes » ajoute ceux de l'autre
+    // compte ; « Non lus » écarte le message lu.
+    function lancerScenarioRecherchePortee(essais) {
+        var n = essais || 0
+        var trouve = false
+        for (var j = 0; j < modeleMessages.count; ++j)
+            if (modeleMessages.get(j).sujet === "Essai 1")
+                trouve = true
+        if ((!trouve || comptesConnus.length < 2) && n < 40) {
+            plusTard(1000, function() { lancerScenarioRecherchePortee(n + 1) })
+            return
+        }
+        var echecs = 0
+        var bilan = function(texte, bon) {
+            if (!bon)
+                echecs += 1
+            console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
+        }
+        var un = boite.compteCourant
+        var lignes = function() {
+            var l = []
+            for (var k = 0; k < modeleMessages.count; ++k)
+                l.push(modeleMessages.get(k))
+            return l
+        }
+        var resume = function(l) {
+            return l.map(function(r) { return r.sujet + "@" + (r.compte || un) + ":" + (r.chemin || boite.dossierCourant) + (r.lu ? "(lu)" : "") }).join(" | ")
+        }
+        // « Essai 1 » affiché : il est lu.
+        for (var i = 0; i < modeleMessages.count; ++i)
+            if (modeleMessages.get(i).sujet === "Essai 1")
+                choisir(i, 0)
+        plusTard(2500, function() {
+            colonneListe.porteeRecherche.currentIndex = 1
+            colonneListe.nonLusRecherche.checked = false
+            fenetre.lancerRecherche("essai")
+            plusTard(5000, function() {
+                var l = lignes()
+                var chemins = {}
+                l.forEach(function(r) { chemins[r.chemin] = true })
+                bilan("cette boîte : " + resume(l),
+                      l.length > 0 && l.every(function(r) { return r.compte === un }) && Object.keys(chemins).length >= 3)
+                colonneListe.porteeRecherche.currentIndex = 2
+                fenetre.lancerRecherche("essai")
+                plusTard(5000, function() {
+                    var l2 = lignes()
+                    bilan("toutes les boîtes : " + resume(l2), l2.some(function(r) { return r.compte !== un }))
+                    colonneListe.porteeRecherche.currentIndex = 1
+                    colonneListe.nonLusRecherche.checked = true
+                    fenetre.lancerRecherche("essai")
+                    plusTard(5000, function() {
+                        var l3 = lignes()
+                        bilan("cette boîte, non lus : " + resume(l3),
+                              l3.length > 0 && l3.every(function(r) { return !r.lu && r.compte === un })
+                              && !l3.some(function(r) { return r.sujet === "Essai 1" })
+                              && l3.some(function(r) { return r.sujet === "Essai 2" }))
+                        bilan("bandeau : " + fenetre.infoDossier, fenetre.infoDossier.indexOf("tous dossiers") >= 0
+                              && fenetre.infoDossier.indexOf("non lus") >= 0)
+                        console.log("scenario: recherche-portee " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
+                        Qt.quit()
+                    })
+                })
+            })
+        })
+    }
+
     function lancerScenarioZoomLecture() {
         var suivi = { echecs: 0 }
         var bilan = function(texte, bon) {

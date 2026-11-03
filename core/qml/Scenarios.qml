@@ -3336,6 +3336,74 @@ QtObject {
     /// préparée vers l'adresse de la liste ; « Lettre lien du corps » : lien
     /// repéré dans le corps ; « TR : Lettre transférée » et « Essai 1 » : pas
     /// de bandeau.
+    // Scénario « smime » (0.8.0) : banc EML=<essais>/signe-chiffre.eml et
+    // MMAIL_DOSSIER=<essais> (core/src/smime/essais). Le message, chiffré pour
+    // Bob et signé par Alice, est illisible sans certificat ; l'autorité
+    // d'essai ajoutée et le .p12 de Bob importé, il s'affiche ouvert, signature
+    // vérifiée, sa pièce jointe comprise.
+    property LecteurFichier lecteurEssai: LecteurFichier {}
+    function lancerScenarioSmime() {
+        var echecs = 0
+        var bilan = function(texte, bon) {
+            if (!bon)
+                echecs += 1
+            console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
+        }
+        var dossier = identifiantsEssai.dossier
+        var compte = comptesConnus[0].compte
+        var rang = -1
+        for (var k = 0; k < modeleMessages.count; ++k)
+            if (modeleMessages.get(k).sujet === "Devis")
+                rang = k
+        if (rang < 0) {
+            console.log("scenario: smime ECHEC (message « Devis » absent : banc EML=…/signe-chiffre.eml ?)")
+            Qt.quit()
+            return
+        }
+        var autorite = JSON.parse(boite.ajouterAutorite(lecteurEssai.base64(dossier + "/racine.pem")))
+        bilan("autorité d'essai ajoutée : " + JSON.stringify(autorite), autorite.ok === true)
+        choisir(rang, 0)
+        plusTard(3000, function() {
+            var s = fenetre.securite
+            bilan("sans certificat : " + JSON.stringify(s),
+                  s.chiffre === true && (s.illisible || "").indexOf("aucun certificat") >= 0)
+            var cle = JSON.parse(boite.importerCertificat(compte, lecteurEssai.base64(dossier + "/bob.p12"), "essai-bob"))
+            bilan("certificat de Bob importé (adresse autre que le compte, avertie) : " + JSON.stringify(cle),
+                  cle.ok === true && cle.avertissement.length > 0)
+            var liste = JSON.parse(boite.clesSmime())
+            bilan("clés du profil : " + JSON.stringify(liste),
+                  liste.length === 1 && liste[0].compte === compte && liste[0].deverrouillee === true)
+            // La clé ouverte relit le message affiché.
+            fenetre.clesSmimeChangees()
+            plusTard(3000, function() {
+                var s2 = fenetre.securite
+                var b = objetNomme(colonneLecture, "bandeauSecurite")
+                bilan("message ouvert : " + JSON.stringify(s2),
+                      s2.chiffre === true && (s2.illisible || "") === "" && !!s2.signature && s2.signature.etat === "verifiee")
+                bilan("bandeau visible", !!b && b.visible)
+                bilan("corps déchiffré", colonneLecture.vueCorps.text.indexOf("Bonjour Bob") >= 0)
+                bilan("pièce jointe du contenu chiffré : " + JSON.stringify(fenetre.pieces),
+                      fenetre.pieces.length === 1 && fenetre.pieces[0].nom === "devis.txt")
+                var finir = function() {
+                    console.log("scenario: smime " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
+                    Qt.quit()
+                }
+                if (!identifiantsEssai.sortie) {
+                    finir()
+                    return
+                }
+                b.details = true
+                plusTard(800, function() {
+                    var chemin = lanceur.chemin(identifiantsEssai.sortie + "/smime.png")
+                    fenetre.contentItem.grabToImage(function(r) {
+                        r.saveToFile(chemin)
+                        finir()
+                    })
+                })
+            })
+        })
+    }
+
     function lancerScenarioDesabonnement() {
         var suivi = { echecs: 0 }
         var bilan = function(texte, bon) {

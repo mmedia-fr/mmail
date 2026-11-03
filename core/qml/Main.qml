@@ -6691,6 +6691,9 @@ ApplicationWindow {
             // Scénario « desabonnement » (0.6.30, banc DESABO=1).
             if (essai.scenario === "desabonnement")
                 scenarios.lancerScenarioDesabonnement()
+            // Scénario « smime » (0.8.0) : message signé et chiffré.
+            if (essai.scenario === "smime")
+                scenarios.lancerScenarioSmime()
             // Scénario « zoom-lecture » (0.6.29) : le zoom du volet de lecture
             // laisse les boutons à leur taille (banc PIECE=1).
             if (essai.scenario === "zoom-lecture")

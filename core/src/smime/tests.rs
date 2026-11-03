@@ -208,3 +208,22 @@ fn intermediaires_hors_du_message() {
     assert_eq!(Autorites::de(&[der(RACINE)]).nombre(), 1);
     assert_eq!(Autorites::de(&[der(RACINE), der(INTERMEDIAIRE)]).nombre(), 2);
 }
+
+#[test]
+fn recueil_du_signataire_et_de_ses_intermediaires() {
+    let profil = std::env::temp_dir().join(format!("mmail-smime-recueil-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&profil);
+    let p = profil.to_string_lossy().into_owned();
+    let o = ouvrir_essai("signe-detache.eml", &[], MAINTENANT);
+    let s = o.securite.signature.as_ref().unwrap();
+    assert!(recueillir(&p, s));
+    // Déjà là : rien de nouveau.
+    assert!(!recueillir(&p, s));
+    assert_eq!(certificats_de(&p, "alice@exemple.fr").len(), 1);
+    assert_eq!(intermediaires_recueillis(&p), vec![der(INTERMEDIAIRE)]);
+    // Une signature dont l'autorité est inconnue ne se recueille pas.
+    let o = ouvrir_essai("signe-inconnu.eml", &[], MAINTENANT);
+    assert!(!recueillir(&p, o.securite.signature.as_ref().unwrap()));
+    assert!(certificats_de(&p, "inconnu@exemple.fr").is_empty());
+    let _ = std::fs::remove_dir_all(&profil);
+}

@@ -262,11 +262,15 @@ pub struct Signature {
     /// Le certificat du signataire, à recueillir si la signature est bonne.
     #[serde(skip)]
     pub certificat: Vec<u8>,
+    /// Les autres certificats du message (intermédiaires), recueillis avec
+    /// lui : sans eux, sa chaîne ne remonte pas jusqu'à l'autorité.
+    #[serde(skip)]
+    pub intermediaires: Vec<Vec<u8>>,
 }
 
 impl Signature {
     fn defaut(etat: &str, texte: String) -> Signature {
-        Signature { etat: etat.into(), texte, titulaire: None, signe_le: 0, certificat: Vec::new() }
+        Signature { etat: etat.into(), texte, titulaire: None, signe_le: 0, certificat: Vec::new(), intermediaires: Vec::new() }
     }
 
     /// Bonne au point d'en recueillir le certificat, pour chiffrer vers son
@@ -581,6 +585,7 @@ fn verifier(
         titulaire: qui.clone(),
         signe_le: 0,
         certificat: cert_der.clone(),
+        intermediaires: certificats.iter().map(|(d, _)| d.clone()).filter(|d| d != cert_der).collect(),
     };
     let nom = qui
         .as_ref()
@@ -1075,7 +1080,26 @@ pub fn recueillir(profil: &str, signature: &Signature) -> bool {
             nouveau = true;
         }
     }
+    let dossier = std::path::Path::new(profil).join("smime").join("intermediaires");
+    for i in &signature.intermediaires {
+        let chemin = dossier.join(format!("{}.cer", empreinte(i)));
+        if !chemin.exists() && Certificate::from_der(i).is_ok() && std::fs::create_dir_all(&dossier).is_ok() {
+            let _ = ecrire_entier(&chemin, i);
+        }
+    }
     nouveau
+}
+
+/// Les certificats intermédiaires recueillis sur les messages signés.
+pub fn intermediaires_recueillis(profil: &str) -> Vec<Vec<u8>> {
+    let Ok(fichiers) = std::fs::read_dir(std::path::Path::new(profil).join("smime").join("intermediaires")) else {
+        return Vec::new();
+    };
+    fichiers
+        .flatten()
+        .filter(|f| f.file_name().to_string_lossy().ends_with(".cer"))
+        .filter_map(|f| std::fs::read(f.path()).ok())
+        .collect()
 }
 
 /// Les certificats recueillis pour une adresse.

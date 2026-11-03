@@ -110,6 +110,13 @@ const PORTEE_AUTORISATION: &str = "offline_access openid email \
      https://graph.microsoft.com/Mail.ReadWrite";
 const PORTEE_CODE: &str = "offline_access openid email https://outlook.office.com/IMAP.AccessAsUser.All";
 
+/// Réglages de la boîte (0.9.0) : la liste des catégories d'Outlook, avec
+/// leurs couleurs (`masterCategories`). Demandé à part, quand on reprend ces
+/// couleurs : la connexion d'un compte n'en dépend pas, et un refus n'éteint
+/// que cette fonction.
+pub const PORTEE_REGLAGES: &str = "offline_access https://graph.microsoft.com/MailboxSettings.Read";
+const PORTEE_AUTORISATION_REGLAGES: &str = "offline_access openid https://graph.microsoft.com/MailboxSettings.Read";
+
 /// Identifiant de l'application « MMail » dans l'annuaire Entra où elle est
 /// inscrite (éditeur `mmedia.fr`). Public par nature : application sans
 /// secret, que toute page de connexion affiche. Depuis la 0.6.19, celle du
@@ -199,13 +206,24 @@ pub fn url_consentement(client: &str) -> String {
 /// Adresse de la page de connexion de Microsoft. `indice` : l'adresse du
 /// compte quand on le reconnecte, pour ne pas la redemander.
 pub fn url_autorisation(client: &str, redirection: &str, defi: &str, etat: &str, indice: &str) -> String {
+    url_autorisation_de(client, redirection, defi, etat, indice, PORTEE_AUTORISATION, "&prompt=select_account")
+}
+
+/// Page de Microsoft qui demande l'autorisation de lire les réglages de la
+/// boîte d'un compte déjà connecté (`PORTEE_REGLAGES`) : sans choix du
+/// compte, désigné par `adresse`.
+pub fn url_autorisation_reglages(client: &str, redirection: &str, defi: &str, etat: &str, adresse: &str) -> String {
+    url_autorisation_de(client, redirection, defi, etat, adresse, PORTEE_AUTORISATION_REGLAGES, "")
+}
+
+fn url_autorisation_de(client: &str, redirection: &str, defi: &str, etat: &str, indice: &str, portee: &str, invite: &str) -> String {
     let mut url = format!(
         "{}/authorize?client_id={}&response_type=code&redirect_uri={}&response_mode=query\
-         &scope={}&state={}&code_challenge={}&code_challenge_method=S256&prompt=select_account",
+         &scope={}&state={}&code_challenge={}&code_challenge_method=S256{invite}",
         autorite(indice),
         encoder(client),
         encoder(redirection),
-        encoder(PORTEE_AUTORISATION),
+        encoder(portee),
         encoder(etat),
         encoder(defi),
     );
@@ -218,13 +236,30 @@ pub fn url_autorisation(client: &str, redirection: &str, defi: &str, etat: &str,
 /// Échange le code reçu par l'écoute locale contre les premiers jetons.
 /// `adresse` : celle de la connexion, pour le même point d'entrée.
 pub fn echanger_code(client: &str, code: &str, verificateur: &str, redirection: &str, adresse: &str) -> Result<ReponseJeton, ErreurOAuth> {
+    echanger_code_pour(client, code, verificateur, redirection, adresse, PORTEE_CODE)
+}
+
+/// Comme `echanger_code`, pour le jeton de lecture des réglages
+/// (`PORTEE_REGLAGES`), après l'autorisation demandée à part.
+pub fn echanger_code_reglages(client: &str, code: &str, verificateur: &str, redirection: &str, adresse: &str) -> Result<ReponseJeton, ErreurOAuth> {
+    echanger_code_pour(client, code, verificateur, redirection, adresse, PORTEE_REGLAGES)
+}
+
+fn echanger_code_pour(
+    client: &str,
+    code: &str,
+    verificateur: &str,
+    redirection: &str,
+    adresse: &str,
+    portee: &str,
+) -> Result<ReponseJeton, ErreurOAuth> {
     crate::oauth::demander_jeton(&format!("{}/token", autorite(adresse)), &format!(
         "client_id={}&grant_type=authorization_code&code={}&redirect_uri={}&code_verifier={}&scope={}",
         encoder(client),
         encoder(code),
         encoder(redirection),
         encoder(verificateur),
-        encoder(PORTEE_CODE),
+        encoder(portee),
     ))
 }
 
@@ -784,6 +819,64 @@ fn renommer_categorie_par(t: &mut Transport, jeton: &str, ancien: &str, nouveau:
         changes += 1;
     }
     Ok(changes)
+}
+
+/// Couleur d'une catégorie d'Outlook (`preset0` à `preset24`, Graph
+/// `categoryColor`) : les teintes nommées par Microsoft — rouge, orange,
+/// marron… puis leurs versions foncées —, rendues par les couleurs de la
+/// palette Fluent qui les portent. `none` et l'inconnu : rien, la catégorie
+/// garde sa couleur.
+pub fn couleur_outlook(preset: &str) -> Option<&'static str> {
+    const COULEURS: [&str; 25] = [
+        "#E81123", // rouge
+        "#F7630C", // orange
+        "#8E562E", // marron
+        "#FFB900", // jaune
+        "#13A10E", // vert
+        "#00B7C3", // sarcelle
+        "#7E8C3D", // olive
+        "#0078D4", // bleu
+        "#8764B8", // violet
+        "#C30052", // canneberge
+        "#69797E", // acier
+        "#4A5459", // acier foncé
+        "#A0A0A0", // gris
+        "#6E6E6E", // gris foncé
+        "#1F1F1F", // noir
+        "#A4262C", // rouge foncé
+        "#CA5010", // orange foncé
+        "#603D30", // marron foncé
+        "#C19C00", // jaune foncé
+        "#107C10", // vert foncé
+        "#038387", // sarcelle foncée
+        "#5C6B2E", // olive foncé
+        "#004E8C", // bleu foncé
+        "#5C2E91", // violet foncé
+        "#77004D", // canneberge foncée
+    ];
+    let n: usize = preset.strip_prefix("preset")?.parse().ok()?;
+    COULEURS.get(n).copied()
+}
+
+/// Les catégories de la liste d'Outlook (`masterCategories`) et leur couleur,
+/// pour celles qui en ont une : `(nom, #RRGGBB)`. Demande `PORTEE_REGLAGES`.
+pub fn couleurs_categories(jeton: &str) -> Result<Vec<(String, String)>, ErreurOAuth> {
+    couleurs_categories_par(&mut |d: &Demande| http::envoyer(d), jeton)
+}
+
+fn couleurs_categories_par(t: &mut Transport, jeton: &str) -> Result<Vec<(String, String)>, ErreurOAuth> {
+    let liste = reponse_json(&appeler(t, jeton, "GET", &format!("{GRAPH}/outlook/masterCategories"), "", b"", REPONSE_MAX)?)?;
+    Ok(liste
+        .get("value")
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|c| {
+            let nom = c.get("displayName").and_then(|v| v.as_str())?.trim();
+            let couleur = couleur_outlook(c.get("color").and_then(|v| v.as_str())?)?;
+            (!nom.is_empty()).then(|| (nom.to_string(), couleur.to_string()))
+        })
+        .collect())
 }
 
 /// Le message, avec un en-tête `Bcc` pour les destinataires de l'enveloppe
@@ -1375,5 +1468,38 @@ mod tests {
         assert_eq!(corps(2), serde_json::json!({"categories": ["Commande", "Urgent"]}));
         // Déjà porteur du nouveau nom : il n'apparaît qu'une fois.
         assert_eq!(corps(3), serde_json::json!({"categories": ["Commande"]}));
+    }
+
+    #[test]
+    fn couleurs_de_la_liste_d_outlook() {
+        assert_eq!(couleur_outlook("preset0"), Some("#E81123"));
+        assert_eq!(couleur_outlook("preset24"), Some("#77004D"));
+        assert_eq!(couleur_outlook("preset25"), None);
+        assert_eq!(couleur_outlook("none"), None);
+        let mut journal = Vec::new();
+        let reponses = [(
+            "GET",
+            "https://graph.microsoft.com/v1.0/me/outlook/masterCategories",
+            200,
+            r#"{"value":[{"id":"1","displayName":"Devis","color":"preset7"},{"id":"2","displayName":"Sans couleur","color":"none"},
+                        {"id":"3","displayName":"  ","color":"preset1"}]}"#,
+        )];
+        let couleurs = couleurs_categories_par(&mut graph_categories(&mut journal, &reponses), "J").unwrap();
+        assert_eq!(couleurs, vec![("Devis".to_string(), "#0078D4".to_string())]);
+        // Refus faute d'autorisation : l'erreur de Graph remonte.
+        let reponses = [("GET", "https://graph.microsoft.com/v1.0/me/outlook/masterCategories", 403,
+                         r#"{"error":{"code":"ErrorAccessDenied","message":"Access is denied."}}"#)];
+        assert!(couleurs_categories_par(&mut graph_categories(&mut journal, &reponses), "J").is_err());
+    }
+
+    #[test]
+    fn autorisation_des_reglages_sans_choix_du_compte() {
+        let url = url_autorisation_reglages("C", "http://localhost:1", "D", "E", "a@exemple.fr");
+        assert!(url.contains(&format!("scope={}", encoder(PORTEE_AUTORISATION_REGLAGES))), "{url}");
+        assert!(url.contains("login_hint=a%40exemple.fr"), "{url}");
+        assert!(!url.contains("prompt="), "{url}");
+        // La connexion d'un compte, elle, ne change pas.
+        let url = url_autorisation("C", "http://localhost:1", "D", "E", "");
+        assert!(url.contains("&prompt=select_account") && url.contains(&encoder(PORTEE_AUTORISATION)), "{url}");
     }
 }

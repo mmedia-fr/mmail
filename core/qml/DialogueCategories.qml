@@ -43,6 +43,19 @@ Dialog {
         }
     }
 
+    // Couleurs d'Outlook (Microsoft 365, 0.9.0) : l'autorisation de lire les
+    // réglages de la boîte se donne dans le navigateur ; la suite revient par
+    // `couleursOutlook` (ReactionsNoyau.qml).
+    function reprendreCouleurs() {
+        var url = boite.autoriserCouleursOutlook(compte)
+        if (url.length === 0) {
+            messageEtat.texte = qsTr("Couleurs d'Outlook : %1").arg(boite.erreur)
+            return
+        }
+        Qt.openUrlExternally(url)
+        messageEtat.texte = qsTr("Autorisation dans votre navigateur : MMail attend son retour…")
+    }
+
     function retirer(c) {
         if (aRetirer !== c.motCle) {
             aRetirer = c.motCle
@@ -83,11 +96,31 @@ Dialog {
             Layout.fillWidth: true
             wrapMode: Text.Wrap
             opacity: 0.85
-            text: dlgCategories.etat.serveur
+            text: dlgCategories.etat.microsoft === true
+                  ? qsTr("Compte Microsoft 365 : la liste des catégories reste sur ce poste. Celles posées sur les messages sont dans Outlook, et s'y voient.")
+                  : dlgCategories.etat.serveur
                   ? (dlgCategories.etat.boite === "INBOX"
                      ? qsTr("Catégories de cette boîte, gardées sur le serveur : tous les postes où elle est ouverte dans MMail les voient.")
                      : qsTr("Catégories de la boîte partagée, gardées sur le serveur : tous ceux qui l'ouvrent dans MMail voient les mêmes."))
                   : qsTr("Ce serveur ne garde pas la liste des catégories : elle reste sur ce poste. Les catégories posées sur les messages, elles, sont sur le serveur.")
+        }
+        RowLayout {
+            Layout.fillWidth: true
+            visible: dlgCategories.etat.microsoft === true && Qt.platform.os !== "android"
+            spacing: 8
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                opacity: 0.85
+                text: qsTr("Les couleurs viennent d'Outlook une fois MMail autorisé à lire les réglages de la boîte.")
+            }
+            Button {
+                text: qsTr("Couleurs d'Outlook…")
+                onClicked: dlgCategories.reprendreCouleurs()
+                ToolTip.visible: hovered
+                ToolTip.delay: 500
+                ToolTip.text: qsTr("Microsoft vous demandera, dans votre navigateur, d'autoriser MMail à lire les réglages de votre boîte, dont la liste des catégories d'Outlook. Sans cette autorisation, les catégories venues d'Outlook restent grises.")
+            }
         }
         ListView {
             id: vueCategories

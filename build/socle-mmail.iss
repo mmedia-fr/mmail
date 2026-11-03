@@ -54,6 +54,13 @@ PrivilegesRequiredOverridesAllowed=commandline dialog
 ArchitecturesInstallIn64BitMode=x64compatible
 ArchitecturesAllowed=x64compatible
 DisableProgramGroupPage=yes
+; En silence, Inno Setup ferme d'office les applications qui tiennent un
+; fichier à remplacer (gestionnaire de redémarrage). Le fournisseur MAPI est
+; chargé par l'Explorateur ou le logiciel qui a créé un courriel : les fermer
+; en pleine journée n'est pas admissible. Les DLL sont donc hors du filtre ;
+; celle de MAPI, en service, est écartée sous un autre nom (cf.
+; EcarterFournisseurMapi), et MMail.exe, lui, reste surveillé.
+CloseApplicationsFilter=*.exe,*.chm
 ShowLanguageDialog=no
 
 [Languages]

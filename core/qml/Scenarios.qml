@@ -425,10 +425,11 @@ QtObject {
         }
     }
 
-    // Scénario « supprimer-dossier » (0.8.5), banc LOT1=1 (« Essais » et
-    // « Essais/Clients ») : le dossier va dans la corbeille avec son
-    // sous-dossier, Ctrl+Z l'en sort, puis, supprimé de nouveau, il s'efface
-    // de la corbeille pour de bon.
+    // Scénario « supprimer-dossier » (0.8.5) : « Archive/Projets » et
+    // « Archive/Projets/2025 », créés ici — les dossiers du banc (« Essais »)
+    // sont recréés d'office par Dovecot (auto = subscribe). Le dossier va
+    // dans la corbeille avec son sous-dossier, Ctrl+Z l'en sort, puis, supprimé
+    // de nouveau, il s'efface de la corbeille pour de bon.
     function lancerScenarioSupprimerDossier(essais) {
         var n = essais || 0
         var chemins = function() {
@@ -440,10 +441,6 @@ QtObject {
             }
             return l
         }
-        if ((boite.compteCourant <= 0 || chemins().indexOf("Essais/Clients") < 0) && n < 40) {
-            plusTard(1000, function() { lancerScenarioSupprimerDossier(n + 1) })
-            return
-        }
         var echecs = 0
         var bilan = function(texte, bon) {
             if (!bon)
@@ -454,31 +451,54 @@ QtObject {
             console.log("scenario: supprimer-dossier " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
             Qt.quit()
         }
+        if ((boite.compteCourant <= 0 || chemins().indexOf("Archive") < 0) && n < 40) {
+            plusTard(1000, function() { lancerScenarioSupprimerDossier(n + 1) })
+            return
+        }
         var compte = boite.compteCourant
+        if (chemins().indexOf("Archive/Projets/2025") < 0) {
+            if (n < 100) {
+                if (chemins().indexOf("Archive/Projets") < 0)
+                    boite.creerSousDossier(compte, "Archive", "Projets")
+                else
+                    boite.creerSousDossier(compte, "Archive/Projets", "2025")
+                plusTard(3000, function() { lancerScenarioSupprimerDossier(100) })
+                return
+            }
+            if (n === 100) {
+                boite.creerSousDossier(compte, "Archive/Projets", "2025")
+                plusTard(3000, function() { lancerScenarioSupprimerDossier(101) })
+                return
+            }
+            bilan("dossiers d'essai créés : " + chemins().join(", "), false)
+            finir()
+            return
+        }
         bilan("système protégé : « " + boite.supprimerDossier(compte, "INBOX") + " »",
               boite.supprimerDossier(compte, "INBOX").length > 0)
-        bilan("pas dans la corbeille au départ", !boite.dansLaCorbeille(compte, "Essais"))
-        var motif = boite.supprimerDossier(compte, "Essais")
+        bilan("pas dans la corbeille au départ", !boite.dansLaCorbeille(compte, "Archive/Projets"))
+        var motif = boite.supprimerDossier(compte, "Archive/Projets")
         bilan("suppression lancée (« " + motif + " »)", motif === "")
         plusTard(4000, function() {
             var l = chemins()
             bilan("dans la corbeille avec son sous-dossier : " + l.join(", "),
-                  l.indexOf("Essais") < 0 && l.indexOf("Trash/Essais") >= 0 && l.indexOf("Trash/Essais/Clients") >= 0)
+                  l.indexOf("Archive/Projets") < 0 && l.indexOf("Trash/Projets") >= 0 && l.indexOf("Trash/Projets/2025") >= 0)
             bilan("Ctrl+Z proposé : « " + boite.annulation + " »", boite.annulation === qsTr("Annuler la suppression du dossier"))
-            bilan("dans la corbeille désormais", boite.dansLaCorbeille(compte, "Trash/Essais"))
+            bilan("dans la corbeille désormais", boite.dansLaCorbeille(compte, "Trash/Projets"))
             fenetre.annuler()
             plusTard(4000, function() {
                 var l2 = chemins()
                 bilan("Ctrl+Z : remis à sa place : " + l2.join(", "),
-                      l2.indexOf("Essais") >= 0 && l2.indexOf("Essais/Clients") >= 0 && l2.indexOf("Trash/Essais") < 0)
-                boite.supprimerDossier(compte, "Essais")
+                      l2.indexOf("Archive/Projets") >= 0 && l2.indexOf("Archive/Projets/2025") >= 0 && l2.indexOf("Trash/Projets") < 0)
+                bilan("plus rien à annuler", boite.annulation === "")
+                boite.supprimerDossier(compte, "Archive/Projets")
                 plusTard(4000, function() {
-                    var m = boite.effacerDossier(compte, "Trash/Essais")
+                    var m = boite.effacerDossier(compte, "Trash/Projets")
                     bilan("effacement définitif lancé (« " + m + " »)", m === "")
                     plusTard(4000, function() {
                         var l3 = chemins()
                         bilan("effacé de la corbeille : " + l3.join(", "),
-                              l3.indexOf("Trash/Essais") < 0 && l3.indexOf("Trash/Essais/Clients") < 0 && l3.indexOf("Essais") < 0)
+                              l3.indexOf("Trash/Projets") < 0 && l3.indexOf("Trash/Projets/2025") < 0 && l3.indexOf("Archive/Projets") < 0)
                         finir()
                     })
                 })

@@ -6918,7 +6918,7 @@ ApplicationWindow {
                 attenteNotif.triggered.connect(scenarios.lancerScenarioNotification)
                 attenteNotif.start()
             }
-            // Scénario « supprimer-dossier » (0.8.5 ; banc LOT1=1).
+            // Scénario « supprimer-dossier » (0.8.5).
             if (essai.scenario === "supprimer-dossier")
                 scenarios.lancerScenarioSupprimerDossier()
             if (essai.scenario === "coller-image") {

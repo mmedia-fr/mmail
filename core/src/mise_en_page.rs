@@ -43,6 +43,18 @@
 //! d'un tableau un tableau à colonnes. L'astuce `dir="rtl"` des colonnes
 //! inversées sur téléphone est retirée : Qt la portait sur le texte.
 //!
+//! Un tableau de données collé d'Excel ou de Word (0.6.35) porte une bordure
+//! sur chaque cellule, en style (`border:solid windowtext 1.0pt`), avec une
+//! largeur fixe en pixels et `nowrap`. Qt Quick ne dessine pas la bordure
+//! d'une cellule, seulement celle du tableau, qu'il répète autour de chaque
+//! cellule ; et il ne tient pas `nowrap` : une colonne de 80 pixels, composée
+//! pour une police étroite que le poste n'a pas, coupait les mots en deux
+//! (« Transporte » puis « ur »). Un tel tableau — la moitié de ses cellules au
+//! moins bordées — reçoit donc une bordure de tableau d'un pixel, de la
+//! couleur de celles des cellules, et perd sa largeur ; ses cellules perdent
+//! leurs bordures, leurs largeurs et `nowrap`. Qt règle alors les colonnes sur
+//! leur texte, et ne coupe plus un mot tant que la place suffit.
+//!
 //! Le HTML traité est celui qui sort d'`ammonia` : bien formé, chaque élément
 //! non vide fermé, attributs entre guillemets, aucun « < » ni « > » dans un
 //! attribut. Faute de pouvoir le relire, il est rendu tel quel.
@@ -258,7 +270,11 @@ fn transformer(noeud: Noeud, fond: Option<&str>) -> Vec<Noeud> {
     if nom == "table"
         && lignes(&enfants).iter().any(|ligne| cellules(ligne).into_iter().filter(|c| !expansion(c)).count() > 1)
     {
-        let mut attributs = pleine_largeur(attributs);
+        let couleur_grille = grille(&enfants);
+        let mut attributs = match couleur_grille.as_deref() {
+            Some(couleur) => en_grille(attributs, couleur),
+            None => pleine_largeur(attributs),
+        };
         if colonnes_inversees(&attributs, &enfants) {
             attributs = sans_direction(attributs);
         }
@@ -270,11 +286,12 @@ fn transformer(noeud: Noeud, fond: Option<&str>) -> Vec<Noeud> {
         // Sur le blanc de la page, la place que Qt laisse de part et d'autre ne
         // se voit pas, et des colonnes de données, ramenées à leurs parts, y
         // passaient à la ligne : seul un tableau sous un fond est réparti.
-        let a_repartir = fond.is_some() && toute_la_largeur(&attributs);
+        let a_repartir = fond.is_some() && toute_la_largeur(&attributs) && couleur_grille.is_none();
         let enfants = enfants
             .into_iter()
             .flat_map(garder)
             .map(|enfant| if a_repartir { repartir(enfant) } else { enfant })
+            .map(|enfant| if couleur_grille.is_some() { cellules_de_grille(enfant) } else { enfant })
             .collect();
         return vec![Noeud::Element { nom, attributs, enfants }];
     }
@@ -341,6 +358,116 @@ fn largeur_fixe(attributs: &[(String, String)]) -> Option<u32> {
         Some((_, v)) => pixels(v),
         None => valeur("width").and_then(pixels),
     }
+}
+
+/// Couleur des bordures d'un tableau de données (0.6.35) : celle que portent,
+/// en style, la moitié de ses cellules au moins — noir pour la couleur système
+/// `windowtext` d'Excel, ou faute de couleur dite. `None` pour un tableau dont
+/// les cellules ne sont pas bordées : une lettre d'information, une signature.
+fn grille(enfants: &[Noeud]) -> Option<String> {
+    let cellules: Vec<&Noeud> = lignes(enfants).into_iter().flat_map(cellules).collect();
+    let bordures: Vec<String> = cellules
+        .iter()
+        .filter_map(|cellule| match cellule {
+            Noeud::Element { attributs, .. } => bordure_de(attributs),
+            Noeud::Texte(_) => None,
+        })
+        .collect();
+    if cellules.len() < 2 || bordures.len() * 2 < cellules.len() {
+        return None;
+    }
+    bordures.into_iter().next()
+}
+
+/// Couleur de la première bordure visible déclarée dans le style d'une cellule
+/// (`border`, `border-top`…), noir si elle n'en dit pas ; `None` sans bordure
+/// visible — `none`, `hidden`, épaisseur nulle.
+fn bordure_de(attributs: &[(String, String)]) -> Option<String> {
+    let style = attributs.iter().find(|(a, _)| a == "style").map(|(_, v)| v.as_str())?;
+    declarations(style)
+        .filter(|(propriete, _)| {
+            matches!(propriete.as_str(), "border" | "border-top" | "border-right" | "border-bottom" | "border-left")
+        })
+        .find(|(_, valeur)| {
+            let mots: Vec<String> = valeur.split_whitespace().map(str::to_ascii_lowercase).collect();
+            !mots.is_empty() && !mots.iter().any(|m| m == "none" || m == "hidden" || nul(m))
+        })
+        .map(|(_, valeur)| {
+            valeur.split_whitespace().find_map(crate::rendu::couleur).unwrap_or_else(|| "#000000".to_string())
+        })
+}
+
+/// Attributs d'un tableau de données (0.6.35) : une bordure d'un pixel de la
+/// couleur de ses cellules, que le moteur de Qt trace autour du tableau et de
+/// chaque cellule ; ni largeur, ni espacement entre cellules, ni bordure de
+/// style, qui feraient double emploi.
+fn en_grille(attributs: Vec<(String, String)>, couleur: &str) -> Vec<(String, String)> {
+    let mut style = String::new();
+    let mut gardes: Vec<(String, String)> = Vec::new();
+    for (attribut, valeur) in attributs {
+        match attribut.as_str() {
+            "width" | "border" | "cellspacing" | "bordercolor" => {}
+            "style" => {
+                style = sans_bordures(&sans_proprietes(
+                    &valeur,
+                    &["width", "min-width", "max-width", "border-spacing", "border-collapse"],
+                ))
+            }
+            _ => gardes.push((attribut, valeur)),
+        }
+    }
+    ajouter(&mut style, &format!("border-collapse:collapse;border-style:solid;border-color:{couleur}"));
+    gardes.push(("border".to_string(), "1".to_string()));
+    gardes.push(("cellspacing".to_string(), "0".to_string()));
+    gardes.push(("style".to_string(), style));
+    gardes
+}
+
+/// Ce que deviennent les lignes et les cellules d'un tableau de données
+/// (0.6.35) : les cellules perdent leurs bordures de style, que la bordure du
+/// tableau remplace, leurs largeurs et `nowrap`, pour que Qt règle chaque
+/// colonne sur son texte.
+fn cellules_de_grille(noeud: Noeud) -> Noeud {
+    let Noeud::Element { nom, attributs, enfants } = noeud else {
+        return noeud;
+    };
+    match nom.as_str() {
+        "tbody" | "thead" | "tfoot" | "tr" => {
+            Noeud::Element { nom, attributs, enfants: enfants.into_iter().map(cellules_de_grille).collect() }
+        }
+        "td" | "th" => {
+            let attributs = sans_largeur(attributs)
+                .into_iter()
+                .filter(|(attribut, _)| attribut != "nowrap")
+                .filter_map(|(attribut, valeur)| {
+                    if attribut != "style" {
+                        return Some((attribut, valeur));
+                    }
+                    let style = sans_bordures(&sans_proprietes(&valeur, &["white-space"]));
+                    (!style.is_empty()).then_some((attribut, style))
+                })
+                .collect();
+            Noeud::Element { nom, attributs, enfants }
+        }
+        _ => Noeud::Element { nom, attributs, enfants },
+    }
+}
+
+/// Un style sans ses bordures : `border`, `border-…` (sauf `border-collapse`)
+/// et les `mso-border-…` de Word.
+fn sans_bordures(style: &str) -> String {
+    style
+        .split(';')
+        .filter(|declaration| {
+            let propriete = declaration.split(':').next().unwrap_or("").trim().to_ascii_lowercase();
+            !declaration.trim().is_empty()
+                && propriete != "border"
+                && (!propriete.starts_with("border-") || propriete == "border-collapse")
+                && !propriete.starts_with("mso-border")
+        })
+        .map(str::trim)
+        .collect::<Vec<_>>()
+        .join(";")
 }
 
 /// Ce que devient une ligne d'un tableau gardé à pleine largeur dont toutes les
@@ -945,6 +1072,59 @@ mod tests {
         assert_eq!(aplatir(propre), propre);
         let page = "<table><tbody><tr><td>a</td><td>b</td></tr></tbody></table>";
         assert_eq!(aplatir(page), page);
+    }
+
+    /// Tableau de données collé d'Excel (0.6.35) : bordure de tableau à la
+    /// couleur de celles des cellules ; cellules sans bordures, largeurs ni
+    /// `nowrap` ; tableau sans largeur.
+    #[test]
+    fn tableau_de_donnees_a_bordures() {
+        let cellule = |texte: &str, gauche: bool| {
+            format!(
+                "<td width=\"80\" nowrap=\"\" valign=\"bottom\" style=\"width:60.0pt; border:solid windowtext 1.0pt; {}\
+                 padding:0cm 3.5pt 0cm 3.5pt; height:15.0pt\"><p class=\"MsoNormal\"><b>{texte}</b></p></td>",
+                if gauche { "" } else { "border-left:none; " }
+            )
+        };
+        let html = format!(
+            "<table class=\"MsoNormalTable\" border=\"0\" cellspacing=\"0\" cellpadding=\"0\" width=\"1188\" \
+             style=\"width:891.0pt; border-collapse:collapse\"><tbody><tr>{}{}</tr><tr>{}{}</tr></tbody></table>",
+            cellule("Transporteur", true),
+            cellule("Date de ramasse", false),
+            cellule("TRANSPORTS", true),
+            cellule("04.11", false)
+        );
+        let sortie = aplatir(&html);
+        assert!(
+            sortie.starts_with(
+                "<table class=\"MsoNormalTable\" cellpadding=\"0\" border=\"1\" cellspacing=\"0\" \
+                 style=\"border-collapse:collapse;border-style:solid;border-color:#000000\"><tbody><tr>\
+                 <td valign=\"bottom\" style=\"padding:0cm 3.5pt 0cm 3.5pt;height:15.0pt\">\
+                 <p class=\"MsoNormal\"><b>Transporteur</b></p></td>"
+            ),
+            "{sortie}"
+        );
+        for absent in ["width", "nowrap", "windowtext", "border-left", "1.0pt"] {
+            assert!(!sortie.contains(absent), "{absent} : {sortie}");
+        }
+        assert_eq!(sortie.matches("<td valign=\"bottom\" style=\"padding:0cm 3.5pt 0cm 3.5pt;height:15.0pt\">").count(), 4);
+
+        // Une couleur dite est reprise ; une bordure nulle ou absente ne fait
+        // pas une grille.
+        let bleu = "<table><tbody><tr><td style=\"border:1px solid #4472C4\">a</td>\
+                    <td style=\"border-top:1px solid #4472C4\">b</td></tr></tbody></table>";
+        assert!(aplatir(bleu).contains("border=\"1\" cellspacing=\"0\" style=\"border-collapse:collapse;border-style:solid;border-color:#4472C4\""));
+        for sans in ["border:none", "border:0", "border:0px solid #000", "border-bottom:hidden"] {
+            let html = format!(
+                "<table><tbody><tr><td width=\"80\" style=\"{sans}\">a</td><td width=\"80\" style=\"{sans}\">b</td>\
+                 </tr></tbody></table>"
+            );
+            assert_eq!(aplatir(&html), html, "{sans}");
+        }
+        // Une cellule bordée sur quatre : la bordure d'un bouton, pas une grille.
+        let bouton = "<table><tbody><tr><td width=\"200\">texte</td><td width=\"120\" style=\"border:1px solid #000\">\
+                      bouton</td></tr><tr><td>a</td><td>b</td></tr></tbody></table>";
+        assert_eq!(aplatir(bouton), bouton);
     }
 
     #[test]

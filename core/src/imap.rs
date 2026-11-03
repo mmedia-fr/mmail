@@ -768,6 +768,14 @@ impl Client {
         Ok(protocole::analyser_search(&texte))
     }
 
+    /// UID des messages non lus du dossier sélectionné, d'UID `depuis` et
+    /// au-delà. « n:* » rend aussi le dernier message quand son UID est
+    /// inférieur à n : à écarter par l'appelant.
+    pub fn chercher_non_lus(&mut self, depuis: u32) -> Resultat<Vec<u32>> {
+        let (texte, _) = self.commande(&format!("UID SEARCH UNSEEN UID {depuis}:*"))?;
+        Ok(protocole::analyser_search(&texte))
+    }
+
     /// Entre en `IDLE` (RFC 2177) sur le dossier sélectionné : le serveur
     /// signale alors de lui-même messages arrivés, retirés et drapeaux changés.
     pub fn idle_commencer(&mut self) -> Resultat<()> {

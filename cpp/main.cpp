@@ -54,6 +54,7 @@ extern const std::size_t nombreTraductionsQt;
 #include "notifieur.h"
 #include "presse_papier.h"
 #include "correcteur.h"
+#include "releve.h"
 #include "mise_en_forme.h"
 #include "rendu_complet.h"
 
@@ -416,6 +417,8 @@ int main(int argc, char* argv[])
   qmlRegisterType<MiseEnForme>("fr.mmedia.mmail.natif", 1, 0, "MiseEnForme");
   // Correcteur d'orthographe de la rédaction (0.6.36).
   qmlRegisterType<Correcteur>("fr.mmedia.mmail.natif", 1, 0, "Correcteur");
+  // Relève en arrière-plan sous Android (0.7.0, cf. releve.h).
+  qmlRegisterType<Releve>("fr.mmedia.mmail.natif", 1, 0, "Releve");
   // Long texte riche dessiné en entier (cf. cpp/rendu_complet.h).
   qmlRegisterType<RenduComplet>("fr.mmedia.mmail.natif", 1, 0, "RenduComplet");
 

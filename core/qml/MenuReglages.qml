@@ -41,6 +41,16 @@ Menu {
         checked: reglagesRedaction.orthographe
         onTriggered: reglagesRedaction.orthographe = checked
     }
+    // Android (0.7.0) : MMail fermé, une tâche du système relève la boîte de
+    // réception et notifie les messages arrivés (cf. cpp/releve.h).
+    MenuItem {
+        text: qsTr("Notifier les nouveaux messages, MMail fermé")
+        visible: releve.disponible
+        height: visible ? implicitHeight : 0
+        checkable: true
+        checked: releve.actif
+        onTriggered: releve.actif = checked
+    }
     MenuSeparator {}
     MenuItem {
         text: qsTr("Carnet d'adresses…")

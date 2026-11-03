@@ -291,7 +291,24 @@ pub struct Ouvert {
 /// Vrai si le message est signé ou chiffré en S/MIME (lecture des seuls
 /// en-têtes de premier niveau).
 pub fn est_smime(brut: &[u8]) -> bool {
-    !matches!(forme(brut), Forme::Autre)
+    // Les seuls en-têtes : appelé pour chaque message affiché, il ne relit
+    // pas le corps d'un message ordinaire.
+    let Some(m) = MessageParser::default().parse_headers(brut) else {
+        return false;
+    };
+    let Some(ct) = m.root_part().content_type() else {
+        return false;
+    };
+    let type_ = ct.ctype().to_ascii_lowercase();
+    let sous = ct.subtype().unwrap_or("").to_ascii_lowercase();
+    match (type_.as_str(), sous.as_str()) {
+        ("multipart", "signed") => ct.attribute("protocol").unwrap_or("").to_ascii_lowercase().ends_with("pkcs7-signature"),
+        ("application", "pkcs7-mime" | "x-pkcs7-mime") => true,
+        ("application", "octet-stream") => {
+            m.root_part().attachment_name().map(|n| n.to_ascii_lowercase().ends_with(".p7m")).unwrap_or(false)
+        }
+        _ => false,
+    }
 }
 
 /// Ouvre un message signé ou chiffré ; `None` s'il n'est ni l'un ni l'autre.
@@ -1487,7 +1504,12 @@ pub fn ouvrir_pour(profil: &str, compte: i64, brut: &[u8]) -> Option<Ouvert> {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
-    ouvrir(brut, &cles(compte), &autorites(profil), maintenant)
+    // Un message malformé ne doit pas faire tomber MMail : une panique
+    // d'analyse laisse le message tel quel.
+    let (cles, autorites) = (cles(compte), autorites(profil));
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ouvrir(brut, &cles, &autorites, maintenant)))
+        .ok()
+        .flatten()
 }
 
 /// Le message à lire : ouvert s'il est signé ou chiffré, tel quel sinon

@@ -3405,11 +3405,14 @@ QtObject {
                 }
                 b.details = true
                 plusTard(800, function() {
+                    // Capture de l'élément racine, comme les autres scénarios ;
+                    // la fin n'attend pas son rappel.
+                    var racine = fenetre.contentItem
+                    while (racine.parent)
+                        racine = racine.parent
                     var chemin = lanceur.chemin(identifiantsEssai.sortie + "/smime.png")
-                    fenetre.contentItem.grabToImage(function(r) {
-                        r.saveToFile(chemin)
-                        finir()
-                    })
+                    racine.grabToImage(function(r) { r.saveToFile(chemin) })
+                    plusTard(1500, finir)
                 })
             })
         })

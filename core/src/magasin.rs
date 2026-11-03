@@ -1348,9 +1348,9 @@ impl Magasin {
     /// Range les messages d'un dossier. Un message déjà connu ne voit changer
     /// que ses drapeaux.
     pub fn poser_messages(&self, dossier: i64, messages: &[MessageLocal]) -> Resultat<()> {
-        // Serveur qui ne garde pas les mots-clés (Microsoft 365) : ceux de
-        // l'index — les catégories lues dans Graph (0.9.0) — restent.
-        let garder = self.sans_mots_cles(dossier)? as i32;
+        // Microsoft 365 : ceux de l'index — les catégories lues dans Graph
+        // (0.9.0) — restent.
+        let garder = self.categories_par_graph(dossier)? as i32;
         for lot in messages.chunks(LOT_ECRITURE) {
             let transaction = self.base.unchecked_transaction()?;
             {
@@ -1431,9 +1431,9 @@ impl Magasin {
     /// ligne inchangée n'est pas réécrite (ni sa version, ni le disque).
     pub fn poser_drapeaux(&self, dossier: i64, drapeaux: &[(u32, Vec<String>)]) -> Resultat<usize> {
         let mut changes = 0;
-        // Cf. `poser_messages` : les mots-clés de l'index restent quand le
-        // serveur n'en garde pas.
-        let garder = self.sans_mots_cles(dossier)?;
+        // Cf. `poser_messages` : sur Microsoft 365, les mots-clés de l'index
+        // restent.
+        let garder = self.categories_par_graph(dossier)?;
         for lot in drapeaux.chunks(LOT_ECRITURE) {
             let transaction = self.base.unchecked_transaction()?;
             {
@@ -1609,14 +1609,21 @@ impl Magasin {
         let transaction = self.base.unchecked_transaction()?;
         let mut change = false;
         {
-            let mut lire =
-                transaction.prepare_cached("SELECT uid, mots_cles FROM messages WHERE folder_id = ?1 AND message_id = ?2")?;
+            // Le dossier lu une fois : aucun index ne porte sur `message_id`,
+            // et le premier passage en apporte des milliers.
+            let mut par_id: std::collections::HashMap<String, Vec<(u32, String)>> = std::collections::HashMap::new();
+            {
+                let mut lire = transaction
+                    .prepare_cached("SELECT uid, message_id, mots_cles FROM messages WHERE folder_id = ?1 AND message_id <> ''")?;
+                let lignes = lire.query_map(params![dossier], |l| Ok((l.get::<_, u32>(0)?, l.get::<_, String>(1)?, l.get::<_, String>(2)?)))?;
+                for ligne in lignes {
+                    let (uid, message_id, mots) = ligne?;
+                    par_id.entry(message_id).or_default().push((uid, mots));
+                }
+            }
             let mut ecrire = transaction.prepare_cached("UPDATE messages SET mots_cles = ?3 WHERE folder_id = ?1 AND uid = ?2")?;
             for (message_id, mots) in trouvees {
-                let lignes: Vec<(u32, String)> = lire
-                    .query_map(params![dossier, message_id], |l| Ok((l.get(0)?, l.get(1)?)))?
-                    .collect::<Result<_, _>>()?;
-                for (uid, actuels) in lignes {
+                for (uid, actuels) in par_id.get(message_id).cloned().unwrap_or_default() {
                     let mut liste: Vec<String> = crate::categories::decouper(&actuels)
                         .into_iter()
                         .filter(|m| !categories.iter().any(|c| c.eq_ignore_ascii_case(m)))
@@ -1632,6 +1639,27 @@ impl Magasin {
         }
         transaction.commit()?;
         Ok(change)
+    }
+
+    /// Vrai si les catégories de ce dossier viennent de Graph (0.9.0) : un
+    /// compte Microsoft 365, dont le serveur IMAP ne garde pas les mots-clés.
+    /// Leur absence dans les drapeaux du serveur ne dit alors rien : l'index
+    /// les garde. Pas pour un autre serveur sans mots-clés — un dossier
+    /// partagé en lecture seule sur Dovecot, notamment, dont les mots-clés
+    /// posés par d'autres doivent continuer de suivre le serveur.
+    pub fn categories_par_graph(&self, dossier: i64) -> Resultat<bool> {
+        if !self.sans_mots_cles(dossier)? {
+            return Ok(false);
+        }
+        let auth: Option<String> = self
+            .base
+            .query_row(
+                "SELECT a.auth FROM folders f JOIN accounts a ON a.id = f.account_id WHERE f.id = ?1",
+                params![dossier],
+                |l| l.get(0),
+            )
+            .optional()?;
+        Ok(auth.and_then(|a| crate::oauth::Fournisseur::de_auth(&a)) == Some(crate::oauth::Fournisseur::Microsoft))
     }
 
     /// Vrai si le serveur refuse les catégories dans ce dossier (cf.
@@ -3351,9 +3379,16 @@ mod tests {
         assert!(!m.sans_mots_cles(id).unwrap());
         m.poser_etat(id, &EtatDossier { uid_validity: 1, sans_mots_cles: true, ..Default::default() }).unwrap();
         assert!(m.sans_mots_cles(id).unwrap());
-        // Dans un tel dossier, les drapeaux du serveur ne retirent pas les
-        // catégories de l'index (lues dans Graph, 0.9.0).
+        // Un tel dossier ailleurs que sur Microsoft 365 (un partage en
+        // lecture seule sur Dovecot) : l'index suit toujours le serveur.
         m.poser_messages(id, &[MessageLocal { uid: 7, mots_cles: "devis".into(), ..Default::default() }]).unwrap();
+        assert!(!m.categories_par_graph(id).unwrap());
+        m.poser_drapeaux(id, &[(7, vec!["\\Seen".into()])]).unwrap();
+        assert_eq!(m.message(id, 7).unwrap().unwrap().mots_cles, "");
+        // Microsoft 365 : les drapeaux du serveur ne retirent pas les
+        // catégories de l'index (lues dans Graph, 0.9.0).
+        assert!(m.poser_auth("a@b.fr", AUTH_MICROSOFT).unwrap());
+        assert!(m.categories_par_graph(id).unwrap());
         m.marquer_categorie(id, &[7], "devis", true).unwrap();
         m.poser_drapeaux(id, &[(7, vec!["\\Seen".into()])]).unwrap();
         assert_eq!(m.message(id, 7).unwrap().unwrap().mots_cles, "devis");

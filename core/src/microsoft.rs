@@ -581,8 +581,13 @@ fn dossier_graph_par(t: &mut Transport, jeton: &str, chemin: &str, separateur: &
     };
     let mut parent: Option<String> = None;
     for (i, nom) in segments.iter().enumerate() {
+        // La boîte de réception par son nom connu, mais sous son vrai
+        // identifiant : c'est lui que les messages portent dans
+        // `parentFolderId`, auquel `poser_categorie` les compare.
         if i == 0 && nom.eq_ignore_ascii_case("INBOX") {
-            parent = Some("inbox".into());
+            let dossier = reponse_json(&appeler(t, jeton, "GET", &format!("{GRAPH}/mailFolders/inbox?$select=id"), "", b"", REPONSE_MAX)?)?;
+            let id = dossier.get("id").and_then(|v| v.as_str()).filter(|v| !v.is_empty());
+            parent = Some(id.ok_or_else(|| ErreurOAuth::refus("DossierInconnu", "boîte de réception sans identifiant dans Graph"))?.to_string());
             continue;
         }
         let url = match &parent {
@@ -1259,11 +1264,13 @@ mod tests {
              r#"{"value":[{"id":"I","displayName":"Boîte de réception"},{"id":"P1","displayName":"Projets"}]}"#),
             ("GET", "https://graph.microsoft.com/v1.0/me/mailFolders/P1/childFolders", 200,
              r#"{"value":[{"id":"C1","displayName":"Clients été"}]}"#),
-            ("GET", "https://graph.microsoft.com/v1.0/me/mailFolders/inbox/childFolders", 200,
+            ("GET", "https://graph.microsoft.com/v1.0/me/mailFolders/inbox?", 200, r#"{"id":"I"}"#),
+            ("GET", "https://graph.microsoft.com/v1.0/me/mailFolders/I/childFolders", 200,
              r#"{"value":[{"id":"S1","displayName":"Suivi"}]}"#),
         ];
         let mut t = graph_categories(&mut journal, &reponses);
-        assert_eq!(dossier_graph_par(&mut t, "J", "INBOX", "/").unwrap(), "inbox");
+        // Le vrai identifiant, celui des `parentFolderId` des messages.
+        assert_eq!(dossier_graph_par(&mut t, "J", "INBOX", "/").unwrap(), "I");
         // Le nom IMAP est en UTF-7 modifié : « Clients été ».
         assert_eq!(dossier_graph_par(&mut t, "J", "Projets/Clients &AOk-t&AOk-", "/").unwrap(), "C1");
         assert_eq!(dossier_graph_par(&mut t, "J", "INBOX/Suivi", "/").unwrap(), "S1");

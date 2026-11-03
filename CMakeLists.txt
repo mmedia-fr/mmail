@@ -146,6 +146,9 @@ if(WIN32)
   configure_file(build/mmail.rc.in ${CMAKE_CURRENT_BINARY_DIR}/mmail.rc @ONLY)
   list(APPEND MMAIL_SOURCES ${CMAKE_CURRENT_BINARY_DIR}/mmail.rc)
 endif()
+# Messagerie par défaut du poste, servie aux autres logiciels par MAPI (cf.
+# cpp/messagerie.h ; sans effet hors de Windows).
+list(APPEND MMAIL_SOURCES cpp/messagerie.h)
 
 # Traductions françaises de Qt lui-même — boutons standard des dialogues
 # (« OK », « Annuler », « Fermer »…), boîtes de fichiers —, embarquées dans

@@ -9,8 +9,14 @@
 ;
 ; L'AppId est propre à MMail — distinct de celui de MMdedit, dont ce script est
 ; issu : installer l'un ne remplace jamais l'autre. Aucune association de
-; fichiers : un client de messagerie n'ouvre pas de documents, et le lien
-; « mailto: » attendra la rédaction.
+; fichiers : un client de messagerie n'ouvre pas de documents.
+;
+; Messagerie de Windows (section [Registry]) : MMail se déclare gestionnaire
+; possible des liens « mailto: » (Applications par défaut de Windows) et, pour
+; la machine seulement, messagerie MAPI — ce que les autres logiciels
+; appellent pour créer un courriel (« Envoyer vers › Destinataire »…, cf.
+; mapi/mmail_mapi.c). Le choix reste à la personne : Réglages › Messagerie par
+; défaut (cf. cpp/messagerie.h) ou les réglages de Windows.
 
 #ifndef AppVersion
   #define AppVersion "0.1.1"
@@ -48,6 +54,13 @@ PrivilegesRequiredOverridesAllowed=commandline dialog
 ArchitecturesInstallIn64BitMode=x64compatible
 ArchitecturesAllowed=x64compatible
 DisableProgramGroupPage=yes
+; En silence, Inno Setup ferme d'office les applications qui tiennent un
+; fichier à remplacer (gestionnaire de redémarrage). Le fournisseur MAPI est
+; chargé par l'Explorateur ou le logiciel qui a créé un courriel : les fermer
+; en pleine journée n'est pas admissible. Les DLL sont donc hors du filtre ;
+; celle de MAPI, en service, est écartée sous un autre nom (cf.
+; EcarterFournisseurMapi), et MMail.exe, lui, reste surveillé.
+CloseApplicationsFilter=*.exe,*.chm
 ShowLanguageDialog=no
 
 [Languages]
@@ -62,6 +75,17 @@ Name: "desktopicon"; Description: "Créer un raccourci sur le &Bureau"; \
 Source: "..\dist\MMail\*"; DestDir: "{app}"; \
     Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\README.md";      DestDir: "{app}"; Flags: ignoreversion isreadme
+; Fournisseur MAPI pour la machine (cf. mapi/mmail_mapi.c) : la clé
+; Clients\Mail est commune aux processus 32 et 64 bits, DLLPath désigne donc
+; System32, et Windows sert aux processus 32 bits la copie de SysWOW64, du
+; même nom. Installation pour tous les utilisateurs seulement : une
+; installation par utilisateur ne peut pas écrire dans ces dossiers.
+Source: "..\dist\MMail\MMailMAPI64.dll"; DestDir: "{sys}"; DestName: "MMailMAPI.dll"; \
+    Flags: ignoreversion uninsrestartdelete; Check: IsAdminInstallMode; \
+    BeforeInstall: EcarterFournisseurMapi
+Source: "..\dist\MMail\MMailMAPI32.dll"; DestDir: "{syswow64}"; DestName: "MMailMAPI.dll"; \
+    Flags: ignoreversion uninsrestartdelete; Check: IsAdminInstallMode; \
+    BeforeInstall: EcarterFournisseurMapi
 Source: "..\LICENSE";        DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
@@ -75,8 +99,45 @@ Filename: "{app}\{#AppExe}"; Description: "Lancer {#AppName}"; \
 ; relancé sous le compte de la personne, même si l'installation a été élevée.
 Filename: "{app}\{#AppExe}"; Flags: nowait runasoriginaluser; Check: RelancerDemande
 
+[Registry]
+; Liens « mailto: » : MMail proposé dans les Applications par défaut de
+; Windows (pour la session ou la machine, selon l'installation). Windows
+; réserve le choix à la personne ; « --mailto » ouvre une rédaction (cf.
+; cpp/main.cpp). Les capacités ne vont pas sous Clients\Mail\MMail : par
+; utilisateur, une clé de ce nom sans DLL pourrait masquer celle de la machine.
+Root: HKA; Subkey: "Software\Classes\MMail.mailto"; ValueType: string; ValueName: ""; \
+    ValueData: "Adresse de courriel (MMail)"; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\MMail.mailto"; ValueType: string; ValueName: "URL Protocol"; ValueData: ""
+Root: HKA; Subkey: "Software\Classes\MMail.mailto\DefaultIcon"; ValueType: string; ValueName: ""; \
+    ValueData: "{app}\{#AppExe},0"
+Root: HKA; Subkey: "Software\Classes\MMail.mailto\shell\open\command"; ValueType: string; ValueName: ""; \
+    ValueData: """{app}\{#AppExe}"" --mailto ""%1"""
+Root: HKA; Subkey: "Software\M-Media\Integration"; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\M-Media\Integration\Capabilities"; ValueType: string; ValueName: "ApplicationName"; \
+    ValueData: "MMail"
+Root: HKA; Subkey: "Software\M-Media\Integration\Capabilities"; ValueType: string; ValueName: "ApplicationDescription"; \
+    ValueData: "Messagerie MMail"
+Root: HKA; Subkey: "Software\M-Media\Integration\Capabilities"; ValueType: string; ValueName: "ApplicationIcon"; \
+    ValueData: "{app}\{#AppExe},0"
+Root: HKA; Subkey: "Software\M-Media\Integration\Capabilities\URLAssociations"; ValueType: string; \
+    ValueName: "mailto"; ValueData: "MMail.mailto"
+Root: HKA; Subkey: "Software\RegisteredApplications"; ValueType: string; ValueName: "MMail"; \
+    ValueData: "Software\M-Media\Integration\Capabilities"; Flags: uninsdeletevalue
+; Messagerie MAPI de la machine : MMail figure parmi les messageries que l'on
+; peut choisir par défaut, sans le devenir d'office.
+Root: HKLM; Subkey: "SOFTWARE\Clients\Mail\MMail"; ValueType: string; ValueName: ""; ValueData: "MMail"; \
+    Flags: uninsdeletekey; Check: IsAdminInstallMode
+Root: HKLM; Subkey: "SOFTWARE\Clients\Mail\MMail"; ValueType: string; ValueName: "DLLPath"; \
+    ValueData: "{sys}\MMailMAPI.dll"; Check: IsAdminInstallMode
+Root: HKLM; Subkey: "SOFTWARE\Clients\Mail\MMail\DefaultIcon"; ValueType: string; ValueName: ""; \
+    ValueData: "{app}\{#AppExe},0"; Check: IsAdminInstallMode
+Root: HKLM; Subkey: "SOFTWARE\Clients\Mail\MMail\shell\open\command"; ValueType: string; ValueName: ""; \
+    ValueData: """{app}\{#AppExe}"""; Check: IsAdminInstallMode
+
 [UninstallDelete]
 Type: dirifempty; Name: "{app}"
+Type: files; Name: "{sys}\MMailMAPI.dll.ancien*"
+Type: files; Name: "{syswow64}\MMailMAPI.dll.ancien*"
 
 [Code]
 // Mise à jour assistée (cf. cpp/installeur.h) : MMail lance cet installeur en
@@ -122,4 +183,54 @@ end;
 function RelancerDemande(): Boolean;
 begin
   Result := ExpandConstant('{param:RELANCER|0}') = '1';
+end;
+
+// Fournisseur MAPI chargé dans un processus — l'Explorateur, après un
+// « Envoyer vers › Destinataire » : Windows refuse de l'écraser, mais permet
+// de le renommer. Il est écarté sous un autre nom, que l'installation
+// suivante (ou la désinstallation) efface ; jamais de redémarrage demandé.
+procedure EcarterFournisseurMapi();
+var
+  Chemin, Ancien: String;
+  I: Integer;
+  Redirection: Boolean;
+begin
+  Redirection := EnableFsRedirection(False);
+  try
+    Chemin := ExpandConstant(CurrentFileName);
+    for I := 1 to 20 do
+    begin
+      Ancien := Chemin + '.ancien' + IntToStr(I);
+      if FileExists(Ancien) then
+        DeleteFile(Ancien);
+    end;
+    if FileExists(Chemin) and DeleteFile(Chemin) then
+      Log('Fournisseur MAPI remplacé : ' + Chemin)
+    else if FileExists(Chemin) then
+      for I := 1 to 20 do
+      begin
+        Ancien := Chemin + '.ancien' + IntToStr(I);
+        if not FileExists(Ancien) then
+        begin
+          if RenameFile(Chemin, Ancien) then
+            Log('Fournisseur MAPI en service écarté : ' + Ancien)
+          else
+            Log('Fournisseur MAPI en service, impossible à écarter : ' + Chemin);
+          Break;
+        end;
+      end;
+  finally
+    EnableFsRedirection(Redirection);
+  end;
+end;
+
+// Désinstallation : si MMail était la messagerie choisie pour cette session,
+// le choix revient à celui de la machine plutôt que de désigner un absent.
+procedure CurUninstallStepChanged(Etape: TUninstallStep);
+var
+  Choix: String;
+begin
+  if Etape = usPostUninstall then
+    if RegQueryStringValue(HKCU, 'Software\Clients\Mail', '', Choix) and (CompareText(Choix, 'MMail') = 0) then
+      RegDeleteValue(HKCU, 'Software\Clients\Mail', '');
 end;

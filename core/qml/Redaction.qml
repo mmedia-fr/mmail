@@ -269,6 +269,18 @@ Page {
         }
     }
 
+    /// Texte d'un message préparé par un autre logiciel (cf.
+    /// Main.redigerExterne) : en tête du corps, au-dessus de la signature que
+    /// `remplir` vient de poser.
+    function placerTexte(texte) {
+        if (!texte || texte.length === 0)
+            return
+        chargement = true
+        mef.inserer(0, texte.replace(/\r\n/g, "\n"))
+        chargement = false
+        modifie = false
+    }
+
     function contenu() {
         var c = compteChoisi()
         return {

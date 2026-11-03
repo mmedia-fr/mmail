@@ -436,6 +436,35 @@ QtObject {
         r.enregistrer(false)
     }
 
+    /// Scénario « coller-piece » (0.8.4), MMAIL_DOSSIER=<image PNG> : l'image
+    /// du presse-papier devient pièce jointe par « Coller en pièce jointe »,
+    /// sans entrer dans le corps ; rien à coller, le motif s'affiche.
+    function etapeScenarioCollerPiece() {
+        var echecs = 0
+        var bilan = function(texte, bon) {
+            if (!bon)
+                echecs += 1
+            console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
+        }
+        var r = ouvrirRedaction(comptesConnus[0].compte)
+        r.pret()
+        r.remplir({ a: "destinataire@exemple.fr", objet: "Essai pièce collée", texte: "Bonjour.", mode: "nouveau" })
+        bilan("presse-papier vide de fichiers virtuels hors Windows",
+              pressePapier.fichiersVirtuels(boite.dossierPiecesCollees()).length === 0)
+        bilan("image déposée dans le presse-papier", pressePapier.deposerImage(identifiantsEssai.dossier))
+        var bouton = objetNomme(r, "boutonCollerPiece")
+        bilan("bouton « Coller en pièce jointe » présent", !!bouton)
+        bouton.clicked()
+        bilan("image jointe : " + JSON.stringify(r.pieces.map(function(p) { return p.nom })),
+              r.pieces.length === 1 && /\.png$/.test(r.pieces[0].nom))
+        bilan("rien dans le corps", r.htmlActuel().indexOf("<img") < 0)
+        pressePapier.deposer("du texte seulement")
+        bouton.clicked()
+        bilan("rien à joindre : « " + r.note + " »", r.pieces.length === 1 && r.note.indexOf("Rien à joindre") === 0)
+        console.log("scenario: coller-piece " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
+        Qt.quit()
+    }
+
     /// Scénario « brouillon-auto » : un message neuf que l'on ne touche pas ne
     /// passe pas pour modifié ; modifié, il est enregistré sur le serveur sans
     /// rien demander 30 s plus tard, puis une minute après la frappe suivante,

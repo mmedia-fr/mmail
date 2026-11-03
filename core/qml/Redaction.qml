@@ -317,11 +317,16 @@ Page {
     /// Ctrl+V : une image seule du presse-papier (capture d'écran) ou des
     /// images copiées dans l'explorateur entrent dans le corps ; d'autres
     /// fichiers copiés sont joints. Rien de tel : le collage ordinaire.
+    /// Fichiers sans chemin (0.8.4) : ceux que le bureau à distance apporte du
+    /// poste local dans une session RDS, ou qu'un autre logiciel copie, sont
+    /// d'abord écrits sur le disque, puis traités de même.
     function collerImage() {
         var url = pressePapier.enregistrerImage(boite.dossierImagesCollees())
         if (url.length > 0)
             return insererImages([url])
         var fichiers = pressePapier.fichiers()
+        if (fichiers.length === 0)
+            fichiers = pressePapier.fichiersVirtuels(boite.dossierPiecesCollees())
         if (fichiers.length === 0)
             return false
         var images = [], autres = []
@@ -335,6 +340,23 @@ Page {
         insererImages(images)
         if (autres.length > 0)
             ajouterFichiers(autres)
+        return true
+    }
+
+    /// « Coller en pièce jointe » (0.8.4) : tout ce que le presse-papier porte
+    /// de fichiers, ou son image seule, est joint — rien n'entre dans le corps.
+    function collerPieces() {
+        var fichiers = pressePapier.fichiers()
+        if (fichiers.length === 0)
+            fichiers = pressePapier.fichiersVirtuels(boite.dossierPiecesCollees())
+        if (fichiers.length === 0) {
+            var image = pressePapier.enregistrerImage(boite.dossierPiecesCollees())
+            if (image.length > 0)
+                fichiers = [image]
+        }
+        if (fichiers.length === 0)
+            return false
+        ajouterFichiers(fichiers)
         return true
     }
 
@@ -696,6 +718,15 @@ Page {
                 text: qsTr("Joindre…")
                 enabled: !redac.occupe
                 onClicked: choixFichiers.open()
+            }
+            // 0.8.4 : ce qui est copié — fichiers de l'explorateur, du poste
+            // local par le bureau à distance, image — devient pièce jointe,
+            // sans l'enregistrer d'abord.
+            ToolButton {
+                objectName: "boutonCollerPiece"
+                text: qsTr("Coller en pièce jointe")
+                enabled: !redac.occupe
+                onClicked: if (!redac.collerPieces()) redac.signaler(qsTr("Rien à joindre dans le presse-papier : copiez d'abord un fichier."), true)
             }
             ToolButton {
                 text: qsTr("Cc / Cci")

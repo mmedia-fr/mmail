@@ -56,6 +56,10 @@ pub struct Redaction {
     pub confirmation_lecture: bool,
     /// Heure d'envoi voulue, en secondes Unix (0 : tout de suite).
     pub envoi_differe: i64,
+    /// S/MIME (0.8.0) : signer, chiffrer (pour les destinataires et
+    /// l'expéditeur).
+    pub signer: bool,
+    pub chiffrer: bool,
     /// Message auquel on répond ou que l'on transfère : il reçoit `\Answered`
     /// ou `$Forwarded` une fois l'envoi fait.
     pub origine_chemin: String,
@@ -87,6 +91,9 @@ pub struct Fabrique {
     pub copie: Vec<u8>,
     pub destinataires: Vec<String>,
     pub message_id: String,
+    /// Messages qui partent à part, chacun à un seul destinataire : les Cci
+    /// d'un message chiffré, que l'enveloppe des autres ne doit pas nommer.
+    pub separes: Vec<(String, Vec<u8>)>,
 }
 
 /// Découpe une liste d'adresses saisie à la main : séparateurs `,` ou `;`,
@@ -296,6 +303,7 @@ pub fn fabriquer_avec_images(
         copie: construire(true)?,
         destinataires,
         message_id,
+        separes: Vec::new(),
     })
 }
 
@@ -364,6 +372,9 @@ pub const ENTETE_ACCUSE: &str = "X-MMail-Accuse-Remise";
 /// Poste qui a programmé un envoi différé (`boite::poste_differe`) : sur un
 /// serveur sans CONDSTORE, lui seul l'envoie à l'heure dite.
 pub const ENTETE_POSTE: &str = "X-MMail-Poste-Differe";
+/// Signature et chiffrement demandés (S/MIME, 0.8.0) : « signer »,
+/// « chiffrer », ou les deux ; repris avec le brouillon.
+pub const ENTETE_SMIME: &str = "X-MMail-Smime";
 
 /// Ce que le noyau rend à la fenêtre de rédaction pour la pré-remplir.
 #[derive(Debug, Default, Clone, Serialize, PartialEq)]
@@ -402,6 +413,10 @@ pub struct Preparation {
     pub accuse_remise: bool,
     pub confirmation_lecture: bool,
     pub envoi_differe: i64,
+    /// S/MIME (0.8.0) : repris d'un brouillon ; chiffrer, aussi pour
+    /// répondre à un message chiffré.
+    pub signer: bool,
+    pub chiffrer: bool,
 }
 
 /// Préfixe « RE : » ou « TR : », sauf si l'objet le porte déjà, sous l'une de
@@ -497,6 +512,10 @@ pub fn preparer(brut: &[u8], mode: &str, propres: &[String]) -> Preparation {
         p.importance = crate::index::importance(&m);
         p.confirmation_lecture = m.header_raw("Disposition-Notification-To").is_some();
         p.accuse_remise = m.header_raw(ENTETE_ACCUSE).is_some();
+        if let Some(v) = m.header_raw(ENTETE_SMIME) {
+            p.signer = v.contains("signer");
+            p.chiffrer = v.contains("chiffrer");
+        }
         p.envoi_differe = echeance(brut).unwrap_or(0);
         return p;
     }
@@ -742,7 +761,7 @@ pub fn preparer_envoi_differe(brut: &[u8], maintenant: i64) -> Result<EnvoiDiffe
     }
     let accuse = m.header_raw(ENTETE_ACCUSE).is_some();
     let date = format!("Date: {}", Date::new(maintenant).to_rfc822());
-    let propres = [ENTETE_DIFFERE, ENTETE_ACCUSE, ENTETE_POSTE, "Date"];
+    let propres = [ENTETE_DIFFERE, ENTETE_ACCUSE, ENTETE_POSTE, ENTETE_SMIME, "Date"];
     Ok(EnvoiDiffere {
         de,
         destinataires,

@@ -269,6 +269,14 @@ fn envoyer_par(t: &mut Transport, jeton: &str, octets: &[u8], destinataires: &[S
         let r = appeler(t, jeton, "POST", &format!("{GRAPH}/sendMail"), "text/plain", corps.as_bytes(), REPONSE_MAX)?;
         return succes(&r);
     }
+    // Signé ou chiffré (S/MIME) : le passage par un brouillon complété pièce
+    // par pièce récrirait le message, et casserait sa signature.
+    if crate::smime::est_smime(&message) {
+        return Err(ErreurOAuth::refus(
+            "TailleSmime",
+            "message signé ou chiffré trop lourd pour Microsoft 365 (environ 3 Mo au plus) : allégez ses pièces jointes",
+        ));
+    }
     let (reduit, pieces) = alleger(&message)?;
     let corps = crate::smtp::base64(&reduit);
     let r = appeler(t, jeton, "POST", &format!("{GRAPH}/messages"), "text/plain", corps.as_bytes(), BROUILLON_MAX)?;

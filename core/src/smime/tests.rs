@@ -227,3 +227,112 @@ fn recueil_du_signataire_et_de_ses_intermediaires() {
     assert!(certificats_de(&p, "inconnu@exemple.fr").is_empty());
     let _ = std::fs::remove_dir_all(&profil);
 }
+
+// ------------------------------------------------------------------ envoi
+
+/// Un message tel que le fabrique la rédaction, avec une pièce jointe.
+fn message_essai() -> Vec<u8> {
+    let r = crate::redaction::Redaction {
+        de: "alice@exemple.fr".into(),
+        nom: "Alice Essai".into(),
+        a: "bob@exemple.fr".into(),
+        objet: "Devis".into(),
+        texte: "Bonjour Bob, voici le devis signé.".into(),
+        ..Default::default()
+    };
+    let pj = [crate::redaction::Fichier { nom: "devis.txt".into(), contenu: b"Total : 1 234,56 euros\r\n".to_vec() }];
+    crate::redaction::fabriquer(&r, MAINTENANT, &pj).unwrap().envoi
+}
+
+#[test]
+fn signe_par_mmail_verifie_par_mmail() {
+    let m = proteger(&message_essai(), Some(&alice()), &[], MAINTENANT).unwrap();
+    let texte = String::from_utf8_lossy(&m);
+    assert!(texte.contains("multipart/signed"), "{texte}");
+    let o = ouvrir(&m, &[], &autorites(), MAINTENANT).unwrap();
+    assert_eq!(etat(&o), "verifiee", "{:?}", o.securite);
+    assert!(!o.securite.chiffre);
+    contenu_lisible(&o);
+}
+
+#[test]
+fn signe_et_chiffre_par_mmail() {
+    let pour = vec![der(BOB_PEM), alice().certificat.clone()];
+    let m = proteger(&message_essai(), Some(&alice()), &pour, MAINTENANT).unwrap();
+    let texte = String::from_utf8_lossy(&m);
+    // L'objet et les adresses restent en clair ; le corps, non.
+    assert!(texte.contains("Subject: Devis"), "{texte}");
+    assert!(!texte.contains("Bonjour Bob") && !texte.contains("devis.txt"), "{texte}");
+    for cle in [bob(), alice()] {
+        let o = ouvrir(&m, &[cle], &autorites(), MAINTENANT).unwrap();
+        assert!(o.securite.chiffre && o.securite.illisible.is_empty(), "{:?}", o.securite);
+        assert_eq!(etat(&o), "verifiee", "{:?}", o.securite);
+        contenu_lisible(&o);
+    }
+    let o = ouvrir(&m, &[], &autorites(), MAINTENANT).unwrap();
+    assert!(!o.securite.illisible.is_empty());
+}
+
+#[test]
+fn chiffrement_refuse_sans_destinataire_ni_cle_elliptique() {
+    assert!(chiffrer(b"Content-Type: text/plain\r\n\r\nx", &[]).is_err());
+    let carole = der(include_bytes!("essais/carole.pem"));
+    let e = chiffrer(b"Content-Type: text/plain\r\n\r\nx", &[carole]).unwrap_err();
+    assert!(e.contains("elliptique"), "{e}");
+}
+
+#[test]
+fn certificat_du_correspondant_choisi_parmi_les_recueillis() {
+    let profil = std::env::temp_dir().join(format!("mmail-smime-choix-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&profil);
+    let p = profil.to_string_lossy().into_owned();
+    assert!(certificat_pour(&p, "alice@exemple.fr", &autorites(), MAINTENANT).is_none());
+    let o = ouvrir_essai("signe-detache.eml", &[], MAINTENANT);
+    recueillir(&p, o.securite.signature.as_ref().unwrap());
+    let c = certificat_pour(&p, "Alice@Exemple.fr", &autorites(), MAINTENANT).unwrap();
+    assert_eq!(titulaire(&c).unwrap().nom, "Alice Essai");
+    // Expiré : plus personne à qui chiffrer.
+    assert!(certificat_pour(&p, "alice@exemple.fr", &autorites(), PLUS_TARD).is_none());
+    // Autorité retirée : refusé.
+    assert!(certificat_pour(&p, "alice@exemple.fr", &Autorites::de(&[]), MAINTENANT).is_none());
+    let _ = std::fs::remove_dir_all(&profil);
+}
+
+/// OpenSSL, la référence du CMS, vérifie et déchiffre ce que MMail produit.
+/// Absent du poste, l'essai se passe ; absent de la CI, il échoue.
+#[test]
+fn openssl_lit_ce_que_mmail_signe_et_chiffre() {
+    use std::process::Command;
+    if Command::new("openssl").arg("version").output().is_err() {
+        assert!(std::env::var_os("CI").is_none(), "openssl absent de la CI");
+        return;
+    }
+    let d = std::env::temp_dir().join(format!("mmail-smime-openssl-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(&d).unwrap();
+    let ecrire = |nom: &str, octets: &[u8]| std::fs::write(d.join(nom), octets).unwrap();
+    ecrire("racine.pem", RACINE);
+    ecrire("bob.pem", BOB_PEM);
+    ecrire("bob.p12", BOB_P12);
+    ecrire("signe.eml", &proteger(&message_essai(), Some(&alice()), &[], MAINTENANT).unwrap());
+    ecrire(
+        "chiffre.eml",
+        &proteger(&message_essai(), Some(&alice()), &[der(BOB_PEM), alice().certificat.clone()], MAINTENANT).unwrap(),
+    );
+    let openssl = |args: &[&str]| {
+        let s = Command::new("openssl").args(args).current_dir(&d).output().unwrap();
+        assert!(s.status.success(), "openssl {args:?} : {}", String::from_utf8_lossy(&s.stderr));
+    };
+    openssl(&["pkcs12", "-in", "bob.p12", "-passin", "pass:essai-bob", "-nodes", "-nocerts", "-out", "bob.key"]);
+    // L'heure de contrôle est celle de la signature : les certificats d'essai
+    // sont valides à cette date.
+    let quand = MAINTENANT.to_string();
+    openssl(&["cms", "-verify", "-in", "signe.eml", "-CAfile", "racine.pem", "-attime", &quand, "-out", "verifie.mime"]);
+    openssl(&["cms", "-decrypt", "-in", "chiffre.eml", "-recip", "bob.pem", "-inkey", "bob.key", "-out", "dechiffre.mime"]);
+    openssl(&["cms", "-verify", "-in", "dechiffre.mime", "-CAfile", "racine.pem", "-attime", &quand, "-out", "interieur.mime"]);
+    for f in ["verifie.mime", "interieur.mime"] {
+        let contenu = String::from_utf8_lossy(&std::fs::read(d.join(f)).unwrap()).into_owned();
+        assert!(contenu.contains("devis.txt"), "{f} : {contenu}");
+    }
+    let _ = std::fs::remove_dir_all(&d);
+}

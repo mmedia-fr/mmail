@@ -7084,15 +7084,21 @@ impl Travail {
 
     fn preparer(&self, e: &mut Etabli, chemin: &str, uid: u32, mode: &str, autres: &[String]) -> Result<Preparation, String> {
         // Signé ou chiffré (S/MIME) : la réponse et le transfert reprennent le
-        // contenu ouvert.
-        let octets = message_entier(e, &self.profil, self.compte, chemin, uid)
-            .map(|o| crate::smime::lisible(&self.profil, self.compte, o))
+        // contenu ouvert ; à un message chiffré, la réponse part chiffrée.
+        let brut = message_entier(e, &self.profil, self.compte, chemin, uid)
             .map_err(|x| format!("lecture du message : {x}"))?;
+        let ouvert = crate::smime::ouvrir_pour(&self.profil, self.compte, &brut);
+        let etait_chiffre = ouvert.as_ref().is_some_and(|o| o.securite.chiffre);
+        let octets = ouvert.map(|o| o.message).unwrap_or(brut);
         // L'adresse du compte, puis ses autres adresses d'envoi.
         let mut propres: Vec<String> =
             e.magasin.compte_par_id(self.compte).ok().flatten().map(|c| vec![c.adresse]).unwrap_or_default();
         propres.extend(autres.iter().map(|a| a.trim().to_string()).filter(|a| !a.is_empty()));
         let mut p = redaction::preparer(&octets, mode, &propres);
+        if etait_chiffre && mode != "brouillon" {
+            p.chiffrer = true;
+            p.signer = true;
+        }
         if mode == "brouillon" {
             p.brouillon_uid = uid;
             p.brouillon_chemin = chemin.to_string();
@@ -7149,11 +7155,90 @@ impl Travail {
         Ok(p)
     }
 
-    /// Range un message dans « Envoi différé », daté de son heure d'envoi.
-    fn programmer(&self, e: &mut Etabli, r: &Redaction) -> Result<(), String> {
+    /// Fabrique le message d'une rédaction ; signé et chiffré si elle le
+    /// demande (S/MIME, 0.8.0) :
+    /// - chiffré pour chaque destinataire et pour l'expéditeur, dont la copie
+    ///   reste lisible ; sans certificat valide pour l'un d'eux, rien ne part ;
+    /// - un message à part pour chaque destinataire en Cci, que l'enveloppe
+    ///   des autres ne doit pas nommer ;
+    /// - brouillon : chiffré pour l'expéditeur seul, signé seulement à
+    ///   l'envoi.
+    fn fabriquer(&self, r: &Redaction, quand: i64, usage: Usage) -> Result<redaction::Fabrique, String> {
         let fichiers = lire_fichiers(&r.pieces)?;
         let (r_images, images) = self.avec_images(r);
-        let f = redaction::fabriquer_avec_images(&r_images, r.envoi_differe, &fichiers, &images)?;
+        let f = redaction::fabriquer_avec_images(&r_images, quand, &fichiers, &images)?;
+        if !r.signer && !r.chiffrer {
+            return Ok(f);
+        }
+        let heure = maintenant();
+        let cle = crate::smime::cle_active(self.compte, heure).ok_or(
+            "aucun certificat S/MIME ouvert pour ce compte : importez-le par « Certificats S/MIME… », dans le menu du compte",
+        )?;
+        let marque = format!(
+            "{}: {}\r\n",
+            redaction::ENTETE_SMIME,
+            [r.signer.then_some("signer"), r.chiffrer.then_some("chiffrer")].into_iter().flatten().collect::<Vec<_>>().join(" ")
+        );
+        let marquer = |copie: Vec<u8>| [marque.as_bytes(), &copie[..]].concat();
+        if usage == Usage::Brouillon {
+            let copie = if r.chiffrer {
+                crate::smime::proteger(&f.copie, None, std::slice::from_ref(&cle.certificat), heure)?
+            } else {
+                f.copie
+            };
+            return Ok(redaction::Fabrique { copie: marquer(copie), ..f });
+        }
+        let liste = |v: &str| redaction::adresses(v).map(|l| l.into_iter().map(|(_, a)| a).collect::<Vec<_>>()).unwrap_or_default();
+        let principaux: Vec<String> = liste(&r.a).into_iter().chain(liste(&r.cc)).collect();
+        let caches: Vec<String> =
+            liste(&r.cci).into_iter().filter(|c| !principaux.iter().any(|p| p.eq_ignore_ascii_case(c))).collect();
+        let signe_par = r.signer.then_some(&cle);
+        if !r.chiffrer {
+            let (envoi, copie) = crate::smime::proteger_avec_copie(&f.envoi, &f.copie, signe_par, &[], heure)?;
+            return Ok(redaction::Fabrique { envoi, copie: marquer(copie), ..f });
+        }
+        if usage == Usage::Differe && !caches.is_empty() {
+            return Err("un message chiffré avec des destinataires en Cci ne peut pas encore être différé : envoyez-le tout de suite, ou sans Cci".into());
+        }
+        let autorites = crate::smime::autorites(&self.profil);
+        let compte_adresse = cle.titulaire().map(|t| t.adresses).unwrap_or_default();
+        let mut manquants = Vec::new();
+        let mut certificat = |adresse: &str| -> Option<Vec<u8>> {
+            if compte_adresse.iter().any(|a| a.eq_ignore_ascii_case(adresse)) {
+                return Some(cle.certificat.clone());
+            }
+            let c = crate::smime::certificat_pour(&self.profil, adresse, &autorites, heure);
+            if c.is_none() && !manquants.iter().any(|m: &String| m.eq_ignore_ascii_case(adresse)) {
+                manquants.push(adresse.to_string());
+            }
+            c
+        };
+        let mut pour: Vec<Vec<u8>> = principaux.iter().filter_map(|a| certificat(a.as_str())).collect();
+        let pour_caches: Vec<(String, Option<Vec<u8>>)> = caches.iter().map(|a| (a.clone(), certificat(a.as_str()))).collect();
+        if !manquants.is_empty() {
+            return Err(format!(
+                "pas de certificat valide pour {} : un message signé de leur part suffit à le recueillir ; sinon, décochez « Chiffrer »",
+                manquants.join(", ")
+            ));
+        }
+        pour.push(cle.certificat.clone());
+        let (envoi, copie) = crate::smime::proteger_avec_copie(&f.envoi, &f.copie, signe_par, &pour, heure)?;
+        let mut separes = Vec::new();
+        for (adresse, c) in pour_caches {
+            let pour_lui = [c.unwrap_or_default(), cle.certificat.clone()];
+            separes.push((adresse, crate::smime::proteger(&f.envoi, signe_par, &pour_lui, heure)?));
+        }
+        let destinataires = if separes.is_empty() {
+            f.destinataires
+        } else {
+            f.destinataires.into_iter().filter(|d| !separes.iter().any(|(s, _)| s.eq_ignore_ascii_case(d))).collect()
+        };
+        Ok(redaction::Fabrique { envoi, copie: marquer(copie), destinataires, message_id: f.message_id, separes })
+    }
+
+    /// Range un message dans « Envoi différé », daté de son heure d'envoi.
+    fn programmer(&self, e: &mut Etabli, r: &Redaction) -> Result<(), String> {
+        let f = self.fabriquer(r, r.envoi_differe, Usage::Differe)?;
         if f.destinataires.is_empty() {
             return Err("aucun destinataire".into());
         }
@@ -7178,10 +7263,7 @@ impl Travail {
     /// fil du compte.
     fn lancer_envoi(&self, r: Redaction, id: Identifiants) -> Option<Issue> {
         let jeton = r.jeton.clone();
-        let fabrique = lire_fichiers(&r.pieces).and_then(|fichiers| {
-            let (r_images, images) = self.avec_images(&r);
-            redaction::fabriquer_avec_images(&r_images, maintenant(), &fichiers, &images)
-        });
+        let fabrique = self.fabriquer(&r, maintenant(), Usage::Envoi);
         let f = match fabrique {
             Ok(f) if f.destinataires.is_empty() => return Some(Issue::EchecRedaction { jeton, message: "aucun destinataire".into() }),
             Ok(f) => f,
@@ -7195,7 +7277,23 @@ impl Travail {
             .as_ref()
             .is_some_and(|j| crate::oauth::fournisseur(j) != crate::oauth::Fournisseur::Google);
         let lance = thread::Builder::new().name("mmail-smtp".into()).spawn(move || {
-            let echec = remettre_message(&id, &r.de, &f.destinataires, &f.envoi, r.accuse_remise).err();
+            let mut echec = remettre_message(&id, &r.de, &f.destinataires, &f.envoi, r.accuse_remise).err();
+            // Les Cci d'un message chiffré, chacun le sien (S/MIME, 0.8.0) ;
+            // le message principal est parti : un échec ici le dit.
+            let mut manques = Vec::new();
+            if echec.is_none() {
+                for (dest, octets) in &f.separes {
+                    if let Err(x) = remettre_message(&id, &r.de, std::slice::from_ref(dest), octets, r.accuse_remise) {
+                        manques.push(format!("{dest} : {x}"));
+                    }
+                }
+            }
+            if !manques.is_empty() {
+                echec = Some(Erreur::Refuse(format!(
+                    "message parti, sauf pour ces destinataires en Cci : {} — le renvoyer en entier ferait un double",
+                    manques.join(" ; ")
+                )));
+            }
             // Coupure du réseau avant le texte du message (0.6.34) : il n'est
             // pas parti, il repartira seul.
             let hors_connexion =
@@ -7257,9 +7355,7 @@ impl Travail {
     }
 
     fn enregistrer_brouillon(&self, e: &mut Etabli, r: &Redaction) -> Result<(u32, String), String> {
-        let fichiers = lire_fichiers(&r.pieces)?;
-        let (r_images, images) = self.avec_images(r);
-        let f = redaction::fabriquer_avec_images(&r_images, maintenant(), &fichiers, &images)?;
+        let f = self.fabriquer(r, maintenant(), Usage::Brouillon)?;
         let brouillons =
             self.dossier_de_role(e, "Drafts").ok_or("ce compte n'a pas de dossier des brouillons")?;
         let uid = e
@@ -7278,6 +7374,15 @@ impl Travail {
 /// (0, rédaction d'avant la 0.6.24) : celui de l'envoi, comme avant.
 fn brouillon_du_compte(r: &Redaction, compte: i64) -> bool {
     r.brouillon_uid != 0 && (r.brouillon_compte == 0 || r.brouillon_compte == compte)
+}
+
+/// Ce pour quoi un message est fabriqué : il n'est pas protégé de même
+/// (S/MIME, cf. `fabriquer`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Usage {
+    Envoi,
+    Differe,
+    Brouillon,
 }
 
 /// Lit les fichiers à joindre. Un fichier disparu entre-temps arrête tout : un

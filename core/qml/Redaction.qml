@@ -67,6 +67,10 @@ Page {
     property bool accuseRemise: false
     property bool confirmationLecture: false
     property real envoiDiffere: 0
+    // S/MIME (0.8.0) : signer, chiffrer (pour chaque destinataire et pour
+    // soi). Proposés quand le compte a un certificat ouvert.
+    property bool signer: false
+    property bool chiffrer: false
     readonly property string resumeOptions: {
         var t = []
         if (importance > 0) t.push(qsTr("Importance haute"))
@@ -74,6 +78,8 @@ Page {
         if (accuseRemise) t.push(qsTr("Accusé de réception"))
         if (confirmationLecture) t.push(qsTr("Confirmation de lecture"))
         if (envoiDiffere > 0) t.push(qsTr("Envoi %1").arg(fenetre.heureEnvoi(envoiDiffere)))
+        if (signer) t.push(qsTr("Signé"))
+        if (chiffrer) t.push(qsTr("Chiffré"))
         return t.join("  ·  ")
     }
     property string note: ""
@@ -243,6 +249,8 @@ Page {
         accuseRemise = p.accuseRemise === true
         confirmationLecture = p.confirmationLecture === true
         envoiDiffere = p.envoiDiffere || 0
+        signer = p.signer === true
+        chiffrer = p.chiffrer === true
         origineChemin = p.origineChemin || ""
         origineUid = p.origineUid || 0
         origineMode = p.origineMode || ""
@@ -280,7 +288,8 @@ Page {
             brouillonChemin: brouillonChemin, brouillonCompte: brouillonCompte,
             origineChemin: origineChemin, origineUid: origineUid, origineMode: origineMode,
             importance: importance, accuseRemise: accuseRemise,
-            confirmationLecture: confirmationLecture, envoiDiffere: Math.round(envoiDiffere)
+            confirmationLecture: confirmationLecture, envoiDiffere: Math.round(envoiDiffere),
+            signer: signer, chiffrer: chiffrer
         }
     }
 
@@ -1144,6 +1153,23 @@ Page {
             checkable: true
             checked: redac.confirmationLecture
             onTriggered: { redac.confirmationLecture = checked; redac.modifie = true }
+        }
+        MenuSeparator {}
+        // S/MIME (0.8.0) : il faut un certificat, importé par « Certificats
+        // S/MIME… » au menu du compte. Le chiffrement exige celui de chaque
+        // destinataire, recueilli sur un message signé de sa part ; l'objet et
+        // les adresses restent en clair.
+        MenuItem {
+            text: qsTr("Signer le message")
+            checkable: true
+            checked: redac.signer
+            onTriggered: { redac.signer = checked; redac.modifie = true }
+        }
+        MenuItem {
+            text: qsTr("Chiffrer le message (l'objet reste visible)")
+            checkable: true
+            checked: redac.chiffrer
+            onTriggered: { redac.chiffrer = checked; redac.modifie = true }
         }
         MenuSeparator {}
         MenuItem {

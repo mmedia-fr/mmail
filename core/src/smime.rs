@@ -923,6 +923,309 @@ fn dechiffrer_cle(cle: &Cle, algorithme: &spki::AlgorithmIdentifierOwned, chiffr
     None
 }
 
+// ------------------------------------------------------------------ envoi
+
+const ID_DATA: ObjectIdentifier = oid("1.2.840.113549.1.7.1");
+const ATTR_CONTENT_TYPE: ObjectIdentifier = oid("1.2.840.113549.1.9.3");
+const ATTR_SMIME_CAPABILITIES: ObjectIdentifier = oid("1.2.840.113549.1.9.15");
+
+/// Une valeur ASN.1 quelconque, sous sa forme `Any`.
+fn any<T: Encode>(valeur: &T) -> Result<der::Any, String> {
+    let octets = valeur.to_der().map_err(|e| format!("encodage : {e}"))?;
+    der::Any::from_der(&octets).map_err(|e| format!("encodage : {e}"))
+}
+
+fn attribut(o: ObjectIdentifier, valeur: der::Any) -> Result<x509_cert::attr::Attribute, String> {
+    let values = der::asn1::SetOfVec::try_from(vec![valeur]).map_err(|e| format!("encodage : {e}"))?;
+    Ok(x509_cert::attr::Attribute { oid: o, values })
+}
+
+/// Émetteur et numéro de série d'un certificat : ce qui le désigne dans une
+/// signature ou une enveloppe.
+fn designation(c: &Certificate) -> cms::cert::IssuerAndSerialNumber {
+    cms::cert::IssuerAndSerialNumber {
+        issuer: c.tbs_certificate().issuer().clone(),
+        serial_number: c.tbs_certificate().serial_number().clone(),
+    }
+}
+
+/// Base64 en lignes de 76 caractères (MIME).
+fn base64_mime(octets: &[u8]) -> String {
+    let texte = crate::smtp::base64(octets);
+    let mut sortie = String::with_capacity(texte.len() + texte.len() / 38 + 2);
+    for (i, c) in texte.chars().enumerate() {
+        if i > 0 && i % 76 == 0 {
+            sortie.push_str("\r\n");
+        }
+        sortie.push(c);
+    }
+    sortie.push_str("\r\n");
+    sortie
+}
+
+fn aleatoire(n: usize) -> Result<Vec<u8>, String> {
+    let mut octets = vec![0u8; n];
+    aws_lc_rs::rand::fill(&mut octets).map_err(|_| "aléa indisponible".to_string())?;
+    Ok(octets)
+}
+
+/// Signe une entité MIME (en-têtes `Content-*` et corps, fins de ligne CRLF) :
+/// rend l'entité `multipart/signed` qui la porte, signature détachée en
+/// SHA-256 avec les intermédiaires du `.p12`, lisible sans S/MIME.
+pub fn signer(entite: &[u8], cle: &Cle, maintenant: i64) -> Result<Vec<u8>, String> {
+    use aws_lc_rs::signature::{RsaKeyPair, RSA_PKCS1_SHA256};
+    use cms::signed_data::{EncapsulatedContentInfo, SignerInfo, SignerInfos};
+    let cert = Certificate::from_der(&cle.certificat).map_err(|_| "certificat de la clé illisible".to_string())?;
+    let paire = RsaKeyPair::from_pkcs8(&cle.privee).map_err(|_| "clé de signature non prise en charge (RSA seulement)".to_string())?;
+    let empreinte = digest::digest(&digest::SHA256, entite);
+    let heure = x509_cert::time::Time::try_from(std::time::UNIX_EPOCH + Duration::from_secs(maintenant.max(0) as u64))
+        .map_err(|e| format!("heure de signature : {e}"))?;
+    let capacites = vec![
+        spki::AlgorithmIdentifierOwned { oid: AES256_CBC, parameters: None },
+        spki::AlgorithmIdentifierOwned { oid: AES128_CBC, parameters: None },
+    ];
+    let attributs = der::asn1::SetOfVec::try_from(vec![
+        attribut(ATTR_CONTENT_TYPE, any(&ID_DATA)?)?,
+        attribut(ATTR_SIGNING_TIME, any(&heure)?)?,
+        attribut(ATTR_MESSAGE_DIGEST, any(&OctetString::new(empreinte.as_ref()).map_err(|e| e.to_string())?)?)?,
+        attribut(ATTR_SMIME_CAPABILITIES, any(&capacites)?)?,
+    ])
+    .map_err(|e| format!("encodage : {e}"))?;
+    // Ce qui est signé : les attributs, sous leur forme DER d'ensemble (SET).
+    let a_signer = attributs.to_der().map_err(|e| format!("encodage : {e}"))?;
+    let mut signature = vec![0u8; paire.public_modulus_len()];
+    paire
+        .sign(&RSA_PKCS1_SHA256, &aws_lc_rs::rand::SystemRandom::new(), &a_signer, &mut signature)
+        .map_err(|_| "signature impossible".to_string())?;
+    let nul = any(&der::asn1::Null)?;
+    let signataire = SignerInfo {
+        version: cms::content_info::CmsVersion::V1,
+        sid: SignerIdentifier::IssuerAndSerialNumber(designation(&cert)),
+        digest_alg: spki::AlgorithmIdentifierOwned { oid: SHA256, parameters: None },
+        signed_attrs: Some(attributs),
+        signature_algorithm: spki::AlgorithmIdentifierOwned { oid: RSA, parameters: Some(nul) },
+        signature: OctetString::new(signature).map_err(|e| e.to_string())?,
+        unsigned_attrs: None,
+    };
+    let mut certificats = vec![CertificateChoices::Certificate(cert.clone())];
+    for i in &cle.intermediaires {
+        if let Ok(c) = Certificate::from_der(i) {
+            certificats.push(CertificateChoices::Certificate(c));
+        }
+    }
+    let sd = SignedData {
+        version: cms::content_info::CmsVersion::V1,
+        digest_algorithms: der::asn1::SetOfVec::try_from(vec![spki::AlgorithmIdentifierOwned {
+            oid: SHA256,
+            parameters: None,
+        }])
+        .map_err(|e| e.to_string())?,
+        encap_content_info: EncapsulatedContentInfo { econtent_type: ID_DATA, econtent: None },
+        certificates: Some(cms::signed_data::CertificateSet(
+            der::asn1::SetOfVec::try_from(certificats).map_err(|e| e.to_string())?,
+        )),
+        crls: None,
+        signer_infos: SignerInfos(der::asn1::SetOfVec::try_from(vec![signataire]).map_err(|e| e.to_string())?),
+    };
+    let ci = ContentInfo { content_type: ID_SIGNED_DATA, content: any(&sd)? };
+    let der = ci.to_der().map_err(|e| format!("encodage : {e}"))?;
+    let frontiere = format!(
+        "----MMAIL-SIGNE-{}",
+        aleatoire(12)?.iter().map(|o| format!("{o:02X}")).collect::<String>()
+    );
+    let mut sortie = Vec::with_capacity(entite.len() + der.len() * 2 + 512);
+    sortie.extend_from_slice(
+        format!(
+            "Content-Type: multipart/signed; protocol=\"application/pkcs7-signature\"; micalg=sha-256;\r\n boundary=\"{frontiere}\"\r\n\r\nThis is an S/MIME signed message\r\n\r\n--{frontiere}\r\n"
+        )
+        .as_bytes(),
+    );
+    sortie.extend_from_slice(entite);
+    sortie.extend_from_slice(
+        format!(
+            "\r\n--{frontiere}\r\nContent-Type: application/pkcs7-signature; name=\"smime.p7s\"\r\nContent-Transfer-Encoding: base64\r\nContent-Disposition: attachment; filename=\"smime.p7s\"\r\n\r\n{}\r\n--{frontiere}--\r\n",
+            base64_mime(&der)
+        )
+        .as_bytes(),
+    );
+    Ok(sortie)
+}
+
+/// Chiffre une entité MIME pour des certificats (RSA) : AES-256-CBC, clé de
+/// contenu en RSA PKCS#1 v1.5 — le défaut d'Outlook —, destinataires
+/// désignés par émetteur et numéro de série.
+pub fn chiffrer(entite: &[u8], certificats: &[Vec<u8>]) -> Result<Vec<u8>, String> {
+    use aws_lc_rs::cipher::PaddedBlockEncryptingKey;
+    use aws_lc_rs::rsa::{Pkcs1PublicEncryptingKey, PublicEncryptingKey};
+    use cms::enveloped_data::{EncryptedContentInfo, KeyTransRecipientInfo, RecipientInfos};
+    if certificats.is_empty() {
+        return Err("aucun destinataire à qui chiffrer".into());
+    }
+    let cle_contenu = aleatoire(32)?;
+    let mut destinataires = Vec::new();
+    for der_cert in certificats {
+        let c = Certificate::from_der(der_cert).map_err(|_| "certificat de destinataire illisible".to_string())?;
+        let spki = c.tbs_certificate().subject_public_key_info();
+        let nom = titulaire(der_cert).map(|t| t.adresses.join(", ")).unwrap_or_default();
+        if spki.algorithm.oid != RSA {
+            return Err(format!("le certificat de {nom} a une clé elliptique : chiffrement pas encore pris en charge"));
+        }
+        let publique = PublicEncryptingKey::from_der(&spki.to_der().map_err(|e| e.to_string())?)
+            .map_err(|_| format!("clé publique de {nom} illisible"))?;
+        let k = Pkcs1PublicEncryptingKey::new(publique).map_err(|_| format!("clé publique de {nom} refusée"))?;
+        let mut chiffree = vec![0u8; k.ciphertext_size()];
+        let chiffree = k.encrypt(&cle_contenu, &mut chiffree).map_err(|_| format!("chiffrement pour {nom} impossible"))?;
+        destinataires.push(RecipientInfo::Ktri(KeyTransRecipientInfo {
+            version: cms::content_info::CmsVersion::V0,
+            rid: RecipientIdentifier::IssuerAndSerialNumber(designation(&c)),
+            key_enc_alg: spki::AlgorithmIdentifierOwned { oid: RSA, parameters: Some(any(&der::asn1::Null)?) },
+            enc_key: OctetString::new(chiffree.to_vec()).map_err(|e| e.to_string())?,
+        }));
+    }
+    let cle = UnboundCipherKey::new(&AES_256, &cle_contenu).map_err(|_| "clé de contenu refusée".to_string())?;
+    let cle = PaddedBlockEncryptingKey::cbc_pkcs7(cle).map_err(|_| "clé de contenu refusée".to_string())?;
+    let mut donnees = entite.to_vec();
+    let contexte = cle.encrypt(&mut donnees).map_err(|_| "chiffrement impossible".to_string())?;
+    let iv: &[u8] = (&contexte).try_into().map_err(|_| "vecteur d'initialisation absent".to_string())?;
+    let ed = EnvelopedData {
+        version: cms::content_info::CmsVersion::V0,
+        originator_info: None,
+        recip_infos: RecipientInfos(der::asn1::SetOfVec::try_from(destinataires).map_err(|e| e.to_string())?),
+        encrypted_content: EncryptedContentInfo {
+            content_type: ID_DATA,
+            content_enc_alg: spki::AlgorithmIdentifierOwned {
+                oid: AES256_CBC,
+                parameters: Some(any(&OctetString::new(iv.to_vec()).map_err(|e| e.to_string())?)?),
+            },
+            encrypted_content: Some(OctetString::new(donnees).map_err(|e| e.to_string())?),
+        },
+        unprotected_attrs: None,
+    };
+    let ci = ContentInfo { content_type: ID_ENVELOPED_DATA, content: any(&ed)? };
+    let der = ci.to_der().map_err(|e| format!("encodage : {e}"))?;
+    let mut sortie = Vec::with_capacity(der.len() * 2 + 256);
+    sortie.extend_from_slice(
+        b"Content-Type: application/pkcs7-mime; smime-type=enveloped-data; name=\"smime.p7m\"\r\nContent-Transfer-Encoding: base64\r\nContent-Disposition: attachment; filename=\"smime.p7m\"\r\n\r\n",
+    );
+    sortie.extend_from_slice(base64_mime(&der).as_bytes());
+    Ok(sortie)
+}
+
+/// Les en-têtes `Content-*` d'un bloc d'en-têtes (lignes de suite comprises),
+/// suivis de la ligne vide et du corps : l'entité du message.
+fn entite_de(message: &[u8]) -> Vec<u8> {
+    let fin = fin_entetes(message).unwrap_or(message.len());
+    let texte = String::from_utf8_lossy(&message[..fin]);
+    let mut entite = Vec::with_capacity(message.len());
+    let mut garder = false;
+    for ligne in texte.split_inclusive('\n') {
+        if ligne.trim_end_matches(['\r', '\n']).is_empty() {
+            break;
+        }
+        if !ligne.starts_with([' ', '\t']) {
+            let nom = ligne.split(':').next().unwrap_or("").trim().to_ascii_lowercase();
+            garder = nom.starts_with("content-");
+        }
+        if garder {
+            entite.extend_from_slice(ligne.trim_end_matches(['\r', '\n']).as_bytes());
+            entite.extend_from_slice(b"\r\n");
+        }
+    }
+    entite.extend_from_slice(b"\r\n");
+    entite.extend_from_slice(&message[fin..]);
+    entite
+}
+
+/// Protège un message fabriqué : signé par `cle` s'il y en a une, puis chiffré
+/// pour `pour` s'il n'est pas vide. Les en-têtes extérieurs (expéditeur,
+/// destinataires, objet) restent en clair : S/MIME ne les cache pas.
+pub fn proteger(message: &[u8], cle: Option<&Cle>, pour: &[Vec<u8>], maintenant: i64) -> Result<Vec<u8>, String> {
+    let fin = fin_entetes(message).unwrap_or(message.len());
+    let mut entite = entite_de(message);
+    if let Some(cle) = cle {
+        entite = signer(&entite, cle, maintenant)?;
+    }
+    if !pour.is_empty() {
+        entite = chiffrer(&entite, pour)?;
+    }
+    Ok(recomposer(&message[..fin], &entite))
+}
+
+/// Comme `proteger`, pour le message qui part et sa copie (Cci, en-têtes
+/// propres à MMail) : la même entité protégée, sous leurs en-têtes
+/// extérieurs respectifs.
+pub fn proteger_avec_copie(
+    envoi: &[u8],
+    copie: &[u8],
+    cle: Option<&Cle>,
+    pour: &[Vec<u8>],
+    maintenant: i64,
+) -> Result<(Vec<u8>, Vec<u8>), String> {
+    let mut entite = entite_de(envoi);
+    if let Some(cle) = cle {
+        entite = signer(&entite, cle, maintenant)?;
+    }
+    if !pour.is_empty() {
+        entite = chiffrer(&entite, pour)?;
+    }
+    let tete = |m: &[u8]| m[..fin_entetes(m).unwrap_or(m.len())].to_vec();
+    Ok((recomposer(&tete(envoi), &entite), recomposer(&tete(copie), &entite)))
+}
+
+/// La clé qui signe et reçoit pour un compte : la plus récente des clés
+/// ouvertes valides à cette heure.
+pub fn cle_active(compte: i64, maintenant: i64) -> Option<Cle> {
+    cles(compte)
+        .into_iter()
+        .filter_map(|k| k.titulaire().map(|t| (t, k)))
+        .filter(|(t, _)| t.debut <= maintenant && maintenant <= t.fin)
+        .max_by_key(|(t, _)| t.debut)
+        .map(|(_, k)| k)
+}
+
+/// Le certificat à qui chiffrer pour `adresse` : le plus récent des
+/// certificats recueillis qui soit à cette adresse, valide maintenant, à clé
+/// RSA, et garanti par une autorité de confiance.
+pub fn certificat_pour(profil: &str, adresse: &str, autorites: &Autorites, maintenant: i64) -> Option<Vec<u8>> {
+    let adresse = adresse.trim().to_ascii_lowercase();
+    let recueillis = intermediaires_recueillis(profil);
+    let intermediaires: Vec<CertificateDer<'_>> = recueillis.iter().map(|d| CertificateDer::from(d.as_slice())).collect();
+    let mut candidats: Vec<(i64, Vec<u8>)> = Vec::new();
+    for c in certificats_de(profil, &adresse) {
+        let Some(t) = titulaire(&c) else {
+            continue;
+        };
+        if !t.adresses.iter().any(|a| a == &adresse) || t.debut > maintenant || maintenant > t.fin {
+            continue;
+        }
+        let Ok(cert) = Certificate::from_der(&c) else {
+            continue;
+        };
+        if cert.tbs_certificate().subject_public_key_info().algorithm.oid != RSA {
+            continue;
+        }
+        let fin = CertificateDer::from(c.as_slice());
+        let valide = webpki::EndEntityCert::try_from(&fin)
+            .and_then(|ee| {
+                ee.verify_for_usage(
+                    ALGORITHMES,
+                    &autorites.ancres,
+                    &intermediaires,
+                    UnixTime::since_unix_epoch(Duration::from_secs(maintenant.max(0) as u64)),
+                    webpki::KeyUsage::required_if_present(EKU_COURRIER),
+                    None,
+                    None,
+                )
+                .map(|_| ())
+            })
+            .is_ok();
+        if valide {
+            candidats.push((t.debut, c));
+        }
+    }
+    candidats.into_iter().max_by_key(|(d, _)| *d).map(|(_, c)| c)
+}
+
 // ---------------------------------------------------------------- profil
 
 /// Rangement dans le profil : `smime/cles/<adresse>/<empreinte>.p12`, chaque

@@ -15,7 +15,12 @@
 //! connaît (ce que MMail a déjà montré), ou le dernier signalé s'il est plus
 //! grand. Sans l'un ni l'autre (compte jamais relevé, `UIDVALIDITY` changé),
 //! la relève pose le seuil sans rien signaler : pas de notification pour tout
-//! un historique. Seuls les messages non lus sont signalés. Limite : un
+//! un historique. Seuls les messages non lus sont signalés.
+//!
+//! La notification d'un compte reprend tous les messages non lus arrivés
+//! depuis ce que MMail a montré, et pas seulement ceux de la dernière
+//! relève ; elle n'est reposée (et ne sonne) que si quelque chose est arrivé
+//! depuis la précédente. Limite : un
 //! message que MMail range lui-même dans l'index après qu'on l'a quitté (une
 //! synchronisation encore en cours, celle d'un compte qu'on vient d'ajouter)
 //! passe pour déjà montré, et n'est pas signalé.
@@ -174,7 +179,10 @@ pub fn seuil(uidvalidity: u32, reception: Option<(u32, u32)>, repere: Option<Rep
 }
 
 /// Relève la boîte de réception d'une session ouverte : nombre de messages
-/// arrivés non lus, les `PLAFOND` plus récents, et le repère suivant.
+/// non lus arrivés depuis ce que MMail a montré, les `PLAFOND` plus récents,
+/// et le repère suivant. Nombre nul quand rien n'est arrivé depuis la relève
+/// précédente (ou seulement des messages déjà lus ailleurs) : la
+/// notification en place reste telle quelle.
 fn relever_boite(client: &mut Client, reception: Option<(u32, u32)>, repere: Option<Repere>) -> Result<(usize, Vec<Nouveau>, Repere), Erreur> {
     let etat = client.examiner("INBOX")?;
     let haut = etat.uid_next.saturating_sub(1);
@@ -187,25 +195,31 @@ fn relever_boite(client: &mut Client, reception: Option<(u32, u32)>, repere: Opt
     if etat.messages == 0 || (etat.uid_next != 0 && haut <= seuil) {
         return Ok((0, Vec::new(), neuf));
     }
-    // « n:* » rend au moins le dernier message, même d'UID inférieur à n.
-    let mut arrives: Vec<_> = client
-        .entetes(&format!("{}:*", seuil.saturating_add(1)))?
+    // Depuis ce que MMail a montré (l'index), ou à défaut le dernier signalé.
+    let montre = reception.filter(|&(v, uid)| v == etat.uid_validity && uid > 0).map(|(_, uid)| uid);
+    let depuis = montre.unwrap_or(seuil).min(seuil);
+    let mut non_lus: Vec<u32> = client
+        .chercher_non_lus(depuis.saturating_add(1))?
         .into_iter()
-        .filter(|e| e.uid > seuil)
+        .filter(|&uid| uid > depuis)
         .collect();
-    neuf.uid = arrives.iter().map(|e| e.uid).max().unwrap_or(seuil).max(seuil);
-    arrives.retain(|e| !e.lu());
-    arrives.sort_by(|a, b| b.uid.cmp(&a.uid));
-    let nombre = arrives.len();
-    let messages = arrives
+    neuf.uid = if etat.uid_next != 0 { haut.max(seuil) } else { non_lus.iter().copied().fold(seuil, u32::max) };
+    if !non_lus.iter().any(|&uid| uid > seuil) {
+        return Ok((0, Vec::new(), neuf));
+    }
+    non_lus.sort_unstable_by(|a, b| b.cmp(a));
+    let detail: Vec<String> = non_lus.iter().take(PLAFOND).map(u32::to_string).collect();
+    let mut entetes = client.entetes(&detail.join(","))?;
+    entetes.retain(|e| non_lus.contains(&e.uid));
+    entetes.sort_by(|a, b| b.uid.cmp(&a.uid));
+    let messages = entetes
         .iter()
-        .take(PLAFOND)
         .map(|e| {
             let ligne = crate::index::ligne_index(e);
             Nouveau { uid: e.uid, de: ligne.expediteur, objet: ligne.sujet }
         })
         .collect();
-    Ok((nombre, messages, neuf))
+    Ok((non_lus.len(), messages, neuf))
 }
 
 /// Interface C de la tâche Android (cf. `cpp/releve_android.cpp`, qui en fait
@@ -325,18 +339,60 @@ mod tests {
 
     #[test]
     fn arrives_non_lus_signales() {
-        let (mut client, _) = session(
+        let (mut client, journal) = session(
             "IMAP4rev1",
             vec![
                 echange("EXAMINE \"INBOX\"", "* 2 EXISTS\r\n* OK [UIDVALIDITY 7] x\r\n* OK [UIDNEXT 44] x\r\n", "OK fait"),
-                echange("UID FETCH 42:*", &[fetch(1, 42, "", "Jean Dupont <jean@exemple.fr>", "Devis"), fetch(2, 43, "\\Seen", "Marie <marie@exemple.fr>", "Lu ailleurs")].concat(), "OK fait"),
+                // 43 est lu (sur un autre appareil) : le serveur ne rend que 42.
+                echange("UID SEARCH UNSEEN UID 42:*", "* SEARCH 42\r\n", "OK fait"),
+                echange("UID FETCH 42 ", &fetch(1, 42, "", "Jean Dupont <jean@exemple.fr>", "Devis"), "OK fait"),
             ],
         );
         let (nombre, messages, neuf) = relever_boite(&mut client, Some((7, 41)), None).unwrap();
-        // 43 est lu (sur un autre appareil) : seul 42 est signalé.
         assert_eq!(nombre, 1);
         assert_eq!(messages, vec![Nouveau { uid: 42, de: "Jean Dupont".into(), objet: "Devis".into() }]);
-        // Le repère passe au plus grand UID vu, lu ou non.
+        // Le repère passe au dernier message de la boîte, lu ou non.
         assert_eq!(neuf, Repere { uidvalidity: 7, uid: 43 });
+        assert_eq!(journal.lock().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn notification_cumulee_depuis_ce_que_mmail_a_montre() {
+        // MMail a montré jusqu'à 40 ; 41 a déjà été signalé, 42 lu ailleurs,
+        // 43 et 44 arrivent : la notification reprend 44, 43 et 41.
+        let (mut client, journal) = session(
+            "IMAP4rev1",
+            vec![
+                echange("EXAMINE \"INBOX\"", "* 4 EXISTS\r\n* OK [UIDVALIDITY 7] x\r\n* OK [UIDNEXT 45] x\r\n", "OK fait"),
+                echange("UID SEARCH UNSEEN UID 41:*", "* SEARCH 41 43 44\r\n", "OK fait"),
+                echange(
+                    "UID FETCH 44,43,41 ",
+                    &[fetch(1, 41, "", "Anne <anne@exemple.fr>", "Premier"), fetch(3, 43, "", "Paul <paul@exemple.fr>", "Deuxième"), fetch(4, 44, "", "Marie <marie@exemple.fr>", "Troisième")].concat(),
+                    "OK fait",
+                ),
+            ],
+        );
+        let (nombre, messages, neuf) = relever_boite(&mut client, Some((7, 40)), Some(Repere { uidvalidity: 7, uid: 42 })).unwrap();
+        assert_eq!(nombre, 3);
+        assert_eq!(messages.iter().map(|m| m.uid).collect::<Vec<_>>(), vec![44, 43, 41]);
+        assert_eq!(neuf, Repere { uidvalidity: 7, uid: 44 });
+        assert_eq!(journal.lock().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn arrives_deja_lus_rien_a_reposer() {
+        // 43 est arrivé, mais déjà lu ailleurs ; 41, non lu, a déjà été
+        // signalé : la notification en place reste, le repère avance.
+        let (mut client, journal) = session(
+            "IMAP4rev1",
+            vec![
+                echange("EXAMINE \"INBOX\"", "* 3 EXISTS\r\n* OK [UIDVALIDITY 7] x\r\n* OK [UIDNEXT 44] x\r\n", "OK fait"),
+                echange("UID SEARCH UNSEEN UID 41:*", "* SEARCH 41\r\n", "OK fait"),
+            ],
+        );
+        let (nombre, messages, neuf) = relever_boite(&mut client, Some((7, 40)), Some(Repere { uidvalidity: 7, uid: 42 })).unwrap();
+        assert_eq!((nombre, messages.len()), (0, 0));
+        assert_eq!(neuf, Repere { uidvalidity: 7, uid: 43 });
+        assert_eq!(journal.lock().unwrap().len(), 2, "aucun en-tête demandé");
     }
 }

@@ -836,6 +836,13 @@ pub mod qobject {
         #[cxx_name = "dossierImagesCollees"]
         fn dossier_images_collees(&self) -> QString;
 
+        /// Dossier où écrire les fichiers collés dans une rédaction sans
+        /// chemin sur le disque (0.8.4 : bureau à distance, pièce jointe
+        /// d'un autre logiciel) : créé au besoin.
+        #[qinvokable]
+        #[cxx_name = "dossierPiecesCollees"]
+        fn dossier_pieces_collees(&self) -> QString;
+
         /// Copie une image du poste, glissée ou collée dans le corps d'un
         /// message, parmi les images collées ; rend son adresse `file:`, vide
         /// si ce n'est pas une image de 10 Mo au plus.
@@ -5021,6 +5028,12 @@ impl qobject::Boite {
 
     pub fn dossier_images_collees(&self) -> QString {
         let dossier = dossier_images_collees(&self.profil);
+        let _ = std::fs::create_dir_all(&dossier);
+        QString::from(&dossier.to_string_lossy().into_owned())
+    }
+
+    pub fn dossier_pieces_collees(&self) -> QString {
+        let dossier = dossier_pieces(&self.profil).join("collees");
         let _ = std::fs::create_dir_all(&dossier);
         QString::from(&dossier.to_string_lossy().into_owned())
     }

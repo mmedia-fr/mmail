@@ -6870,6 +6870,12 @@ ApplicationWindow {
                 attenteImage.triggered.connect(scenarios.etapeScenarioCollerImage)
                 attenteImage.start()
             }
+            // Scénario « coller-piece » (0.8.4) : « Coller en pièce jointe ».
+            if (essai.scenario === "coller-piece") {
+                var attentePiece = Qt.createQmlObject('import QtQuick; Timer { interval: 6000 }', fenetre)
+                attentePiece.triggered.connect(scenarios.etapeScenarioCollerPiece)
+                attentePiece.start()
+            }
             if (essai.scenario === "brouillon-compte") {
                 var attenteCompte = Qt.createQmlObject('import QtQuick; Timer { interval: 8000 }', fenetre)
                 attenteCompte.triggered.connect(function() { scenarios.etapeScenarioBrouillonCompte(null, 0, 0, "") })

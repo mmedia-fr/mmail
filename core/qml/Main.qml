@@ -111,6 +111,12 @@ ApplicationWindow {
     Pastille { id: pastille }
     // Notification du nouveau courrier (0.6.2 ; Windows et Linux) : un clic
     // ramène la fenêtre au premier plan, sur « Toutes les BàL ».
+    // Relève et notifications en arrière-plan sous Android (0.7.0) : la tâche
+    // du système est programmée à l'ouverture du profil.
+    Releve {
+        id: releve
+    }
+
     Notifieur {
         id: notifieur
         onActive: {
@@ -6221,6 +6227,8 @@ ApplicationWindow {
             return
         rafraichirArborescence()
         Qt.callLater(proposerReprise)
+        if (releve.disponible && !(typeof identifiantsEssai !== "undefined" && identifiantsEssai && identifiantsEssai.hote))
+            releve.programmer(cheminProfil)
         // Session ouverte d'emblée quand l'environnement porte des identifiants
         // (cf. cpp/main.cpp) : sert aux captures et aux essais, jamais en usage
         // courant. Le coffre n'est alors pas touché.

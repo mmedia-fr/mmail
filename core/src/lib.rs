@@ -32,6 +32,7 @@ pub mod poste;
 pub mod presse_papier;
 pub mod purge;
 pub mod redaction;
+pub mod releve;
 pub mod rendu;
 pub mod saisie;
 pub mod sauvegarde;

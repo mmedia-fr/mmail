@@ -1272,7 +1272,7 @@ checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
 
 [[package]]
 name = "mmail_core"
-version = "0.6.34"
+version = "0.6.35"
 dependencies = [
  "ammonia",
  "aws-lc-rs",

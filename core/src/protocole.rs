@@ -319,8 +319,10 @@ pub fn boite_partagee(chemin: &str, separateur: &str, partagees: &[String]) -> O
 
 /// Rôle d'un dossier de premier niveau d'une boîte partagée, lu à son nom
 /// (0.6.25) : l'espace partagé de Mailcow n'annonce pas SPECIAL-USE, et ses
-/// « INBOX », « Sent », « Trash »… restaient en anglais. Sert à l'affichage
-/// seulement : rien n'est rangé ni purgé d'après lui.
+/// « INBOX », « Sent », « Trash »… restaient en anglais. Sert à l'affichage,
+/// et depuis la 0.6.35 à trouver la corbeille d'une boîte partagée, où
+/// « Supprimer » met ses messages (`boite::corbeille_partagee`) ; rien n'est
+/// purgé d'après lui.
 pub fn role_partage(nom: &str) -> &'static str {
     match nom.to_lowercase().as_str() {
         "inbox" => "Inbox",

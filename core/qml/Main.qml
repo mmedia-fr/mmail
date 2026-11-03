@@ -274,6 +274,10 @@ ApplicationWindow {
     ].concat(rechercheGlobale ? [{ cle: "dossier", libelle: qsTr("Dossier") }] : [])
     property string cleChoisie: ""
     property var dossierAvantRecherche: null
+    // Recherche en cours dans une seule boîte, tous ses dossiers (0.8.3) : son
+    // compte ; 0 pour toutes les boîtes. Non lus seulement (0.8.2).
+    property int rechercheCompte: 0
+    property bool rechercheNonLus: false
     // Boîte de réception unifiée (« toutes les BàL », demande de Manu du
     // 08/10) : les réceptions de tous les comptes en une liste, sur le même
     // modèle — chaque message avec son compte, le noyau sur le dossier du
@@ -2160,7 +2164,9 @@ ApplicationWindow {
             return
         }
         if (rechercheGlobale) {
-            infoDossier = qsTr("Toutes les boîtes") + "  —  " + (modeleMessages.count >= 500
+            var boiteCherchee = rechercheCompte > 0 ? compteParId(rechercheCompte) : null
+            infoDossier = (boiteCherchee ? qsTr("%1, tous dossiers").arg(boiteCherchee.adresse) : qsTr("Toutes les boîtes"))
+                    + (rechercheNonLus ? qsTr(", non lus") : "") + "  —  " + (modeleMessages.count >= 500
                     ? qsTr("recherche « %1 » : les 500 plus récents, précisez la recherche").arg(recherche)
                     : qsTr("recherche « %1 » : %2").arg(recherche)
                       .arg(accord(modeleMessages.count, qsTr("résultat"), qsTr("résultats"))))
@@ -4366,7 +4372,7 @@ ApplicationWindow {
         if (sortieGlobale || compte !== boite.compteCourant || chemin !== boite.dossierCourant) {
             recherche = ""
             uidsServeur = []
-            if (!colonneListe.porteeRecherche.partout)
+            if (!colonneListe.porteeRecherche.globale)
                 colonneListe.champRecherche.text = ""
             viderListe()
             if (boite.ouvrirDossier(compte, chemin)) {
@@ -4598,10 +4604,18 @@ ApplicationWindow {
             cleChoisie = ""
             viderListe()
         }
-        if (colonneListe.porteeRecherche.partout) {
+        rechercheNonLus = colonneListe.nonLusRecherche.checked
+        if (colonneListe.porteeRecherche.globale) {
             if (!rechercheGlobale)
                 dossierAvantRecherche = boite.dossierCourant.length > 0
                         ? { compte: boite.compteCourant, chemin: boite.dossierCourant } : null
+            // « Cette boîte » : celle du dossier d'où l'on part.
+            rechercheCompte = colonneListe.porteeRecherche.boiteSeule
+                    ? (dossierAvantRecherche ? dossierAvantRecherche.compte : boite.compteCourant) : 0
+            if (colonneListe.porteeRecherche.boiteSeule && rechercheCompte <= 0) {
+                messageEtat.texte = qsTr("Ouvrez d'abord un dossier de la boîte où chercher.")
+                return
+            }
             rechercheGlobale = true
             recherche = texte
             uidsServeur = []
@@ -4612,7 +4626,8 @@ ApplicationWindow {
             // L'index répond tout de suite ; le serveur suit, dossier par
             // dossier, dans le texte des messages et jusque dans les dossiers
             // jamais ouverts sur ce poste.
-            dossiersPartout = boite.chercherPartoutSurLeServeur(texte)
+            dossiersPartout = rechercheCompte > 0 ? boite.chercherDansLeCompteSurLeServeur(texte, rechercheCompte)
+                                                  : boite.chercherPartoutSurLeServeur(texte)
             messageEtat.texte = (boite.rechercheApprochee() ? qsTr("Rien d'exact sur le poste : fautes de frappe tolérées. ") : "")
                     + etatRecherchePartout()
             return
@@ -4651,7 +4666,8 @@ ApplicationWindow {
     /// du plus récent au plus ancien.
     function poserResultats() {
         if (rechercheGlobale) {
-            var trouves = JSON.parse(boite.chercher(recherche, true))
+            var trouves = JSON.parse(boite.chercherSelon(recherche, rechercheCompte > 0 ? 1 : 2, rechercheCompte,
+                                                         rechercheNonLus))
             var connus = {}
             for (var j = 0; j < trouves.length; ++j)
                 connus[trouves[j].compte + "\n" + trouves[j].chemin + "\n" + trouves[j].uid] = true
@@ -4664,6 +4680,9 @@ ApplicationWindow {
                                                                          cle.slice(coupure + 1),
                                                                          absents.join(","))))
             }
+            // Trouvés par le serveur : non lus seulement, comme l'index.
+            if (rechercheNonLus)
+                trouves = trouves.filter(function(r) { return !r.lu })
             // Les plus récents d'abord pour la coupure, puis le tri choisi.
             trouves.sort(function(a, b) { return b.h - a.h || b.uid - a.uid })
             resultatsTronques = trouves.length > resultatsMax
@@ -4675,13 +4694,15 @@ ApplicationWindow {
             })))
             return
         }
-        var lignes = JSON.parse(boite.chercher(recherche, false))
+        var lignes = JSON.parse(boite.chercherSelon(recherche, 0, 0, rechercheNonLus))
         var vus = {}
         for (var i = 0; i < lignes.length; ++i)
             vus[lignes[i].uid] = true
         var manquants = uidsServeur.filter(function(u) { return !vus[u] })
         if (manquants.length > 0)
             lignes = lignes.concat(JSON.parse(boite.messagesParUid(manquants.join(","))))
+        if (rechercheNonLus)
+            lignes = lignes.filter(function(r) { return !r.lu })
         poserListe(trierResultats(lignes))
     }
 
@@ -4715,6 +4736,7 @@ ApplicationWindow {
     }
 
     function sortirRechercheGlobale() {
+        rechercheCompte = 0
         rechercheGlobale = false
         cleChoisie = ""
         dossierAvantRecherche = null
@@ -6680,6 +6702,9 @@ ApplicationWindow {
             // laisse les boutons à leur taille (banc PIECE=1).
             if (essai.scenario === "zoom-lecture")
                 scenarios.lancerScenarioZoomLecture()
+            // Scénario « recherche-portee » (0.8.2, 0.8.3 ; banc LOT1=1).
+            if (essai.scenario === "recherche-portee")
+                scenarios.lancerScenarioRecherchePortee()
             // « Affichage › Marges du message » (0.6.23).
             if (essai.scenario === "marges")
                 scenarios.lancerScenarioMarges()

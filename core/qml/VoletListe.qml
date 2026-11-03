@@ -20,6 +20,7 @@ ColumnLayout {
     property alias champRecherche: champRecherche
     property alias panneauHistorique: panneauHistorique
     property alias porteeRecherche: porteeRecherche
+    property alias nonLusRecherche: nonLusRecherche
     property alias vueMessages: vueMessages
     visible: !fenetre.compact || fenetre.vue === 1
     SplitView.preferredWidth: fenetre.compact ? fenetre.width : reglages.largeurListe
@@ -139,10 +140,24 @@ ColumnLayout {
                 }
             }
         }
+        // Non lus seulement (0.8.2), dans la portée choisie.
+        CheckBox {
+            id: nonLusRecherche
+            objectName: "nonLusRecherche"
+            text: qsTr("Non lus")
+            onToggled: if (champRecherche.text.trim().length > 0) fenetre.lancerRecherche()
+            ToolTip.visible: hovered
+            ToolTip.delay: 600
+            ToolTip.text: qsTr("Ne garder que les messages non lus")
+        }
         ComboBox {
             id: porteeRecherche
-            readonly property bool partout: currentIndex === 1
-            model: [qsTr("Dossier actif"), qsTr("Toutes les boîtes")]
+            // « Cette boîte » (0.8.3) : tous les dossiers et sous-dossiers du
+            // compte du dossier ouvert.
+            readonly property bool partout: currentIndex === 2
+            readonly property bool boiteSeule: currentIndex === 1
+            readonly property bool globale: currentIndex >= 1
+            model: [qsTr("Dossier actif"), qsTr("Cette boîte (tous dossiers)"), qsTr("Toutes les boîtes")]
             implicitContentWidthPolicy: ComboBox.WidestText
             // Le champ s'étire, la portée garde sa largeur : « Toutes les
             // boîtes » était tronqué.

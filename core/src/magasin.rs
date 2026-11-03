@@ -1640,7 +1640,7 @@ impl Magasin {
         categories: &[Vec<String>],
         limite: usize,
     ) -> Resultat<Vec<Trouve>> {
-        self.chercher_selon(dossier, texte, categories, limite, false)
+        self.chercher_selon(&Filtre { dossier, ..Default::default() }, texte, categories, limite, false)
     }
 
     /// Comme `chercher_avec` ; s'il ne trouve rien, cherche à nouveau en
@@ -1654,19 +1654,32 @@ impl Magasin {
         categories: &[Vec<String>],
         limite: usize,
     ) -> Resultat<(Vec<Trouve>, bool)> {
-        let exacts = self.chercher_selon(dossier, texte, categories, limite, false)?;
+        self.chercher_tolerant_selon(&Filtre { dossier, ..Default::default() }, texte, categories, limite)
+    }
+
+    /// Comme `chercher_tolerant`, dans la portée de `filtre` (0.8.2, 0.8.3) :
+    /// un dossier, tous les dossiers d'un compte, ou tous les comptes ; les
+    /// non-lus seulement s'il le dit.
+    pub fn chercher_tolerant_selon(
+        &self,
+        filtre: &Filtre,
+        texte: &str,
+        categories: &[Vec<String>],
+        limite: usize,
+    ) -> Resultat<(Vec<Trouve>, bool)> {
+        let exacts = self.chercher_selon(filtre, texte, categories, limite, false)?;
         let tolerable = texte.split_whitespace().any(|m| tolerance(replie(m).chars().count()) > 0);
         if !exacts.is_empty() || !tolerable {
             return Ok((exacts, false));
         }
-        let approches = self.chercher_selon(dossier, texte, categories, limite, true)?;
+        let approches = self.chercher_selon(filtre, texte, categories, limite, true)?;
         let approchee = !approches.is_empty();
         Ok((approches, approchee))
     }
 
     fn chercher_selon(
         &self,
-        dossier: Option<i64>,
+        filtre: &Filtre,
         texte: &str,
         categories: &[Vec<String>],
         limite: usize,
@@ -1676,6 +1689,7 @@ impl Magasin {
         if replies.is_empty() && categories.is_empty() {
             return Ok(Vec::new());
         }
+        let dossier = filtre.dossier;
         let mut valeurs: Vec<rusqlite::types::Value> = vec![dossier.unwrap_or(0).into()];
         let mut conditions: Vec<String> = Vec::new();
         for mot in &replies {
@@ -1706,6 +1720,13 @@ impl Magasin {
         }
         if dossier.is_some() {
             conditions.push("m.folder_id = ?1".into());
+        }
+        if let Some(compte) = filtre.compte {
+            valeurs.push(compte.into());
+            conditions.push(format!("f.account_id = ?{}", valeurs.len()));
+        }
+        if filtre.non_lus {
+            conditions.push("m.lu = 0".into());
         }
         let sql = format!(
             "{SELECT_TROUVE} WHERE {} ORDER BY m.horodatage DESC, m.uid DESC LIMIT {limite}",
@@ -2540,6 +2561,16 @@ pub(crate) fn replie(texte: &str) -> String {
         }
     }
     sortie
+}
+
+/// Portée d'une recherche dans l'index : un dossier, ou tous les dossiers
+/// d'un compte (0.8.3), ou tous les comptes (aucun des deux) ; les non-lus
+/// seulement (0.8.2).
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+pub struct Filtre {
+    pub dossier: Option<i64>,
+    pub compte: Option<i64>,
+    pub non_lus: bool,
 }
 
 const SELECT_TROUVE: &str = "SELECT m.uid, m.message_id, m.expediteur, m.adresse, m.sujet, m.date, m.horodatage,
@@ -3546,6 +3577,39 @@ mod tests {
         let ailleurs = m.trouves_par_uid(archives, &[1, 9]).unwrap();
         assert_eq!(sujets(&ailleurs), vec!["Facture de février"]);
         assert_eq!((ailleurs[0].compte, ailleurs[0].chemin.as_str()), (compte, "Archives"));
+    }
+
+    /// Portée « cette boîte, tous dossiers » (0.8.3) et non-lus seulement
+    /// (0.8.2).
+    #[test]
+    fn recherche_dans_une_boite_et_non_lus() {
+        let m = Magasin::en_memoire().unwrap();
+        let a = m.compte("a@exemple.fr", "h", 993, "a@exemple.fr").unwrap();
+        let b = m.compte("b@exemple.fr", "h", 993, "b@exemple.fr").unwrap();
+        m.poser_dossiers(a, &[dossier("INBOX", &[]), dossier("Archives", &[]), dossier("Archives/2025", &[])]).unwrap();
+        m.poser_dossiers(b, &[dossier("INBOX", &[])]).unwrap();
+        let recu = |uid, h, sujet: &str, lu: bool| MessageLocal {
+            uid,
+            horodatage: h,
+            expediteur: "Martin".into(),
+            adresse: "martin@exemple.fr".into(),
+            sujet: sujet.into(),
+            lu,
+            ..Default::default()
+        };
+        m.poser_messages(m.dossier_id(a, "INBOX").unwrap(), &[recu(1, 40, "Devis A", false)]).unwrap();
+        m.poser_messages(m.dossier_id(a, "Archives").unwrap(), &[recu(1, 30, "Devis archivé", true)]).unwrap();
+        m.poser_messages(m.dossier_id(a, "Archives/2025").unwrap(), &[recu(1, 20, "Devis 2025", false)]).unwrap();
+        m.poser_messages(m.dossier_id(b, "INBOX").unwrap(), &[recu(1, 50, "Devis B", false)]).unwrap();
+        let sujets = |f: Filtre| {
+            m.chercher_tolerant_selon(&f, "devis", &[], 50).unwrap().0.iter().map(|t| t.message.sujet.clone()).collect::<Vec<_>>()
+        };
+        assert_eq!(sujets(Filtre::default()), vec!["Devis B", "Devis A", "Devis archivé", "Devis 2025"]);
+        assert_eq!(sujets(Filtre { compte: Some(a), ..Default::default() }), vec!["Devis A", "Devis archivé", "Devis 2025"]);
+        assert_eq!(sujets(Filtre { compte: Some(a), non_lus: true, ..Default::default() }), vec!["Devis A", "Devis 2025"]);
+        assert_eq!(sujets(Filtre { non_lus: true, ..Default::default() }), vec!["Devis B", "Devis A", "Devis 2025"]);
+        let archives = m.dossier_id(a, "Archives").unwrap();
+        assert!(sujets(Filtre { dossier: Some(archives), non_lus: true, ..Default::default() }).is_empty());
     }
 
     /// Recherche tolérante aux fautes de frappe (0.6.22) : seulement quand la

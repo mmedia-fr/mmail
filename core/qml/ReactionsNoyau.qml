@@ -203,7 +203,7 @@ Connections {
         // dossiers jamais ouverts (suite dans onResultatsPartout).
         if (fenetre.essai && fenetre.essai.scenario === "recherche-serveur" && !fenetre.essai.cherche) {
             fenetre.essai.cherche = true
-            colonneListe.porteeRecherche.currentIndex = 1
+            colonneListe.porteeRecherche.currentIndex = 2
             colonneListe.champRecherche.text = identifiantsEssai.dossier
             fenetre.lancerRecherche()
             console.log("scenario: l'index trouve", modeleMessages.count, "message(s) | dossiers à interroger",
@@ -676,7 +676,7 @@ Connections {
                 // toutes les boîtes.
                 scenarios.plusTard(8000, function() {
                     fenetre.essai.depart = Date.now()
-                    colonneListe.porteeRecherche.currentIndex = 1
+                    colonneListe.porteeRecherche.currentIndex = 2
                     fenetre.lancerRecherche()
                     console.log("scenario: toutes les boîtes, dossiers à interroger", fenetre.dossiersPartout,
                                 "|", messageEtat.texte)

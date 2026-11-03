@@ -2730,6 +2730,16 @@ ApplicationWindow {
         enabled: fenetre.courrierActif && !fenetre.dialogueOuvert() && Object.keys(fenetre.selection).length > 0
         onActivated: fenetre.supprimerSelection()
     }
+    // Ctrl+Z, comme dans Outlook : défait la dernière suppression ou le
+    // dernier déplacement (demande d'un utilisateur, 03/11/2026). Le champ de
+    // recherche garde le sien.
+    Shortcut {
+        id: raccourciAnnuler
+        sequences: [StandardKey.Undo]
+        enabled: fenetre.courrierActif && !fenetre.dialogueOuvert() && boite.annulation.length > 0
+                 && !colonneListe.champRecherche.activeFocus
+        onActivated: fenetre.annuler()
+    }
     // Raccourcis d'Outlook : déplacer, marquer lu, marquer non lu.
     Shortcut {
         sequence: "Ctrl+Shift+V"
@@ -4476,7 +4486,7 @@ ApplicationWindow {
         })
         var enHaut = listeEnHaut()
         var position = colonneListe.vueMessages.contentY
-        var rangHaut = Math.max(0, colonneListe.vueMessages.indexAt(1, position + 1))
+        var rangHaut = Math.max(0, colonneListe.rangModele(colonneListe.vueMessages.indexAt(1, position + 1)))
         modeleMessages.clear()
         modeleMessages.append(grouper(messages))
         var presents = {}
@@ -4989,8 +4999,10 @@ ApplicationWindow {
         var nouvelle = {}
         if (modificateurs & Qt.ShiftModifier && ancre >= 0) {
             var debut = Math.min(ancre, index), fin = Math.max(ancre, index)
+            // Sans les messages des groupes repliés, qui ne se voient pas.
             for (var i = debut; i <= fin; ++i)
-                nouvelle[modeleMessages.get(i).uid] = true
+                if (!colonneListe.ligneCachee(i))
+                    nouvelle[modeleMessages.get(i).uid] = true
         } else if (modificateurs & Qt.ControlModifier) {
             for (var u in selection)
                 nouvelle[u] = true
@@ -5004,7 +5016,7 @@ ApplicationWindow {
             ancre = index
         }
         selection = nouvelle
-        colonneListe.vueMessages.currentIndex = index
+        colonneListe.vueMessages.currentIndex = colonneListe.rangVue(index)
         colonneListe.vueMessages.forceActiveFocus()
         var nombre = Object.keys(nouvelle).length
         if (nombre === 1 && nouvelle[uid])
@@ -5022,17 +5034,25 @@ ApplicationWindow {
         s[r.uid] = true
         selection = s
         ancre = index
-        colonneListe.vueMessages.currentIndex = index
+        colonneListe.vueMessages.currentIndex = colonneListe.rangVue(index)
         colonneListe.vueMessages.forceActiveFocus()
         if (r.compte !== boite.compteCourant || r.chemin !== boite.dossierCourant)
             boite.ouvrirDossier(r.compte, r.chemin)
         afficherMessage(r.uid, index)
     }
 
+    // En rangs de la vue, d'un message montré au suivant : ceux d'un groupe
+    // replié sont sautés.
     function deplacerCurseur(pas, etendre) {
-        var index = Math.max(0, Math.min(modeleMessages.count - 1, colonneListe.vueMessages.currentIndex + pas))
-        choisir(index, etendre ? Qt.ShiftModifier : 0)
-        colonneListe.vueMessages.positionViewAtIndex(index, ListView.Contain)
+        var vue = colonneListe.vueMessages
+        var n = vue.count
+        var rang = Math.max(0, Math.min(n - 1, vue.currentIndex + pas))
+        while (rang >= 0 && rang < n && colonneListe.ligneCachee(colonneListe.rangModele(rang)))
+            rang += pas > 0 ? 1 : -1
+        if (rang < 0 || rang >= n)
+            return
+        choisir(colonneListe.rangModele(rang), etendre ? Qt.ShiftModifier : 0)
+        vue.positionViewAtIndex(rang, ListView.Contain)
     }
 
     function toutChoisir() {
@@ -5781,6 +5801,21 @@ ApplicationWindow {
             retirerDeLaListe(uids)
     }
 
+    /// Ctrl+Z (ou le menu d'un message) : la dernière suppression ou le
+    /// dernier déplacement est défait, les messages reviennent dans leur
+    /// dossier ; un nouveau Ctrl+Z défait le précédent. Un effacement définitif
+    /// (corbeille, indésirables) ne se défait pas : il est confirmé avant.
+    function annuler() {
+        if (boite.annulation.length === 0)
+            return false
+        if (!boite.annuler()) {
+            messageEtat.texte = boite.erreur
+            return false
+        }
+        messageEtat.texte = qsTr("Annulation : les messages reviennent dans leur dossier…")
+        return true
+    }
+
     /// Clé d'un message en cours de déplacement : un UID ne désigne un message
     /// que dans son dossier, et le même numéro existe ailleurs.
     function cleDeplacement(uid) {
@@ -6136,6 +6171,8 @@ ApplicationWindow {
             if (l.groupe !== g)
                 modeleMessages.setProperty(i, "groupe", g)
         }
+        // Les groupes ont bougé : ceux qui sont repliés aussi.
+        colonneListe.appliquerReplis(0)
     }
 
     // « mer. 16/09/2026 14:54 », indépendamment de la langue du système.
@@ -6674,6 +6711,15 @@ ApplicationWindow {
             // de réception (banc DATES=1).
             if (essai.scenario === "groupes-dates")
                 scenarios.lancerScenarioGroupesDates()
+            // Scénarios « annuler » (Ctrl+Z), « molette » (banc NOMBRE=60) et
+            // « groupes-replier » (banc DATES=1 NOMBRE=40) : demandes d'un
+            // utilisateur du 03/11/2026.
+            if (essai.scenario === "annuler")
+                scenarios.lancerScenarioAnnuler()
+            if (essai.scenario === "molette")
+                scenarios.lancerScenarioMolette()
+            if (essai.scenario === "groupes-replier")
+                scenarios.lancerScenarioGroupesReplier()
             // Scénario « lu-differe » (0.6.9) : marquage « lu » après un délai,
             // ou jamais.
             if (essai.scenario === "lu-differe")

@@ -726,7 +726,7 @@ Connections {
             console.log("scenario: filtres appliqués", compte, touches, deplacements)
     }
 
-    function onDeplacementTermine(nombre, erreurs) {
+    function onDeplacementTermine(nombre, erreurs, annulable) {
         fenetre.deplacementsEnVol = Math.max(0, fenetre.deplacementsEnVol - 1)
         if (fenetre.deplacementsEnVol === 0)
             fenetre.enDeplacement = ({})
@@ -735,6 +735,9 @@ Connections {
         fenetre.rafraichirListe(erreurs.length > 0)
         if (erreurs.length === 0)
             messageEtat.texte = fenetre.accord(nombre, qsTr("message déplacé."), qsTr("messages déplacés."))
+                    + (annulable && !fenetre.tactile ? " " + qsTr("Ctrl+Z pour annuler.") : "")
+        if (fenetre.essai && fenetre.essai.scenario === "annuler")
+            scenarios.etapeScenarioAnnuler("deplacement", nombre, erreurs, annulable)
         if (fenetre.essai && fenetre.essai.scenario) {
             console.log("scenario: deplacement termine", nombre, erreurs)
             scenarios.etapeScenario()
@@ -751,6 +754,22 @@ Connections {
             if (fenetre.essai.scenario === "filtres")
                 scenarios.etapeScenarioFiltres()
         }
+    }
+
+    // Ctrl+Z fait : les messages sont revenus dans leur dossier — dont la
+    // liste est relue s'il est ouvert —, sinon pourquoi.
+    function onAnnulationTerminee(nombre, absents, erreurs) {
+        fenetre.rafraichirListe()
+        if (erreurs.length > 0)
+            messageEtat.texte = erreurs
+        else if (nombre === 0)
+            messageEtat.texte = qsTr("Rien n'est rétabli : les messages ne sont plus là où ils avaient été mis.")
+        else
+            messageEtat.texte = fenetre.accord(nombre, qsTr("message rétabli."), qsTr("messages rétablis."))
+                    + (absents > 0 ? " " + fenetre.accord(absents, qsTr("introuvable, déplacé ou effacé depuis."),
+                                                          qsTr("introuvables, déplacés ou effacés depuis.")) : "")
+        if (fenetre.essai && fenetre.essai.scenario === "annuler")
+            scenarios.etapeScenarioAnnuler("annulation", nombre, erreurs, absents)
     }
 
     function onDossierCree(compte, chemin, nom) {

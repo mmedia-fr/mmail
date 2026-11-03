@@ -2875,6 +2875,371 @@ QtObject {
         })
     }
 
+    // --- Ctrl+Z, molette, groupes repliés (demandes d'un utilisateur, 03/11/2026)
+
+    function bilanEssai(suivi, texte, bon) {
+        if (!bon)
+            suivi.echecs += 1
+        console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
+    }
+    function sujetsDeLaListe() {
+        var s = []
+        for (var i = 0; i < modeleMessages.count; ++i)
+            s.push(modeleMessages.get(i).sujet)
+        return s.sort().join(" | ")
+    }
+
+    /// Scénario « annuler » (banc à deux comptes) : Ctrl+Z défait une
+    /// suppression, un déplacement de deux messages, deux gestes l'un après
+    /// l'autre, puis un déplacement vers l'autre boîte — où le même
+    /// Message-ID est déjà (graines du banc) : c'est le message déplacé qui
+    /// revient, pas l'autre.
+    property var suiviAnnuler: null
+    function lancerScenarioAnnuler() {
+        suiviAnnuler = { etape: 0, echecs: 0, avant: "", compte: 0, autre: 0 }
+        plusTard(8000, function() {
+            var comptes = listeComptes()
+            var un = comptes.filter(function(c) { return c.adresse === "un@essai.test" })[0]
+            var deux = comptes.filter(function(c) { return c.adresse === "deux@essai.test" })[0]
+            if (!un || !deux) {
+                console.log("scenario: ECHEC comptes " + JSON.stringify(comptes))
+                Qt.quit()
+                return
+            }
+            suiviAnnuler.compte = un.id
+            suiviAnnuler.autre = deux.id
+            ouvrirDossier(un.id, "INBOX")
+            plusTard(4000, function() { etapeScenarioAnnuler("depart") })
+        })
+    }
+    function etapeScenarioAnnuler(genre, nombre, erreurs, detail) {
+        var s = suiviAnnuler
+        if (!s)
+            return
+        var bilan = function(texte, bon) { bilanEssai(s, texte, bon) }
+        // Les messages revenus, la liste relue : comme au départ.
+        var apresRetour = function(texte, suite) {
+            plusTard(2500, function() {
+                var liste = sujetsDeLaListe()
+                bilan(texte + " : liste « " + liste + " », annulation suivante « " + boite.annulation + " »",
+                      liste === s.avant)
+                suite()
+            })
+        }
+        if (genre === "depart" && s.etape === 0) {
+            s.avant = sujetsDeLaListe()
+            bilan("départ : " + modeleMessages.count + " messages, rien à annuler (« " + boite.annulation + " »)",
+                  modeleMessages.count >= 3 && boite.annulation === "" && !raccourciAnnuler.enabled)
+            s.etape = 1
+            choisir(0, 0)
+            supprimerSelection()
+        } else if (genre === "deplacement" && s.etape === 1) {
+            bilan("suppression : " + nombre + " message, annulable " + detail + ", « " + boite.annulation
+                  + " », Ctrl+Z actif " + raccourciAnnuler.enabled + ", barre d'état « " + messageEtat.texte + " »",
+                  nombre === 1 && detail === true && boite.annulation === "Annuler la suppression"
+                  && raccourciAnnuler.enabled && messageEtat.texte.indexOf("Ctrl+Z") >= 0)
+            s.etape = 2
+            // Comme au clavier : ce que fait le raccourci.
+            raccourciAnnuler.activated()
+        } else if (genre === "annulation" && s.etape === 2) {
+            bilan("suppression annulée : " + nombre + " rétabli, " + detail + " introuvable « " + erreurs + " »",
+                  nombre === 1 && detail === 0 && erreurs === "")
+            s.etape = 3
+            apresRetour("après la suppression annulée", function() {
+                choisir(0, 0)
+                choisir(1, Qt.ControlModifier)
+                deplacerVers(s.compte, "Essais")
+            })
+        } else if (genre === "deplacement" && s.etape === 3) {
+            bilan("déplacement de " + nombre + " messages vers « Essais », « " + boite.annulation + " »",
+                  nombre === 2 && boite.annulation === "Annuler le déplacement")
+            s.etape = 4
+            fenetre.annuler()
+        } else if (genre === "annulation" && s.etape === 4) {
+            bilan("déplacement annulé : " + nombre + " rétablis", nombre === 2 && erreurs === "")
+            s.etape = 5
+            apresRetour("après le déplacement annulé", function() {
+                choisir(0, 0)
+                supprimerSelection()
+            })
+        } else if (genre === "deplacement" && s.etape === 5) {
+            s.etape = 6
+            choisir(0, 0)
+            deplacerVers(s.compte, "Archive")
+        } else if (genre === "deplacement" && s.etape === 6) {
+            bilan("deux gestes : le dernier, « " + boite.annulation + " »", boite.annulation === "Annuler le déplacement")
+            s.etape = 7
+            fenetre.annuler()
+        } else if (genre === "annulation" && s.etape === 7) {
+            bilan("premier Ctrl+Z : " + nombre + " rétabli, reste « " + boite.annulation + " »",
+                  nombre === 1 && boite.annulation === "Annuler la suppression")
+            s.etape = 8
+            fenetre.annuler()
+        } else if (genre === "annulation" && s.etape === 8) {
+            bilan("second Ctrl+Z : " + nombre + " rétabli", nombre === 1 && erreurs === "")
+            s.etape = 9
+            apresRetour("après les deux gestes annulés", function() {
+                bilan("plus rien à annuler : Ctrl+Z actif " + raccourciAnnuler.enabled + ", annuler() " + fenetre.annuler(),
+                      boite.annulation === "" && !raccourciAnnuler.enabled)
+                choisir(0, 0)
+                s.sujet = modeleMessages.get(0).sujet
+                deplacerVers(s.autre, "INBOX")
+            })
+        } else if (genre === "deplacement" && s.etape === 9) {
+            bilan("vers l'autre boîte : " + nombre + " message, « " + boite.annulation + " »",
+                  nombre === 1 && boite.annulation === "Annuler le déplacement")
+            s.etape = 10
+            fenetre.annuler()
+        } else if (genre === "annulation" && s.etape === 10) {
+            bilan("retour de l'autre boîte : " + nombre + " rétabli, " + detail + " introuvable « " + erreurs + " »",
+                  nombre === 1 && detail === 0 && erreurs === "")
+            s.etape = 11
+            apresRetour("après le retour de l'autre boîte", function() {
+                // Dans l'autre boîte, la graine au même Message-ID est restée.
+                ouvrirDossier(s.autre, "INBOX")
+                plusTard(3000, function() {
+                    var meme = 0
+                    for (var i = 0; i < modeleMessages.count; ++i)
+                        if (modeleMessages.get(i).sujet === s.sujet)
+                            meme += 1
+                    bilan("l'autre boîte garde sa graine « " + s.sujet + " » : " + meme, meme === 1)
+                    console.log("scenario: annuler " + (s.echecs === 0 ? "OK" : "ECHEC (" + s.echecs + ")"))
+                    Qt.quit()
+                })
+            })
+        }
+    }
+
+    /// Scénario « molette » (banc NOMBRE=60) : de vrais crans de molette sur
+    /// la liste (gestesEssai) — d'abord sans la molette de MMail, pour
+    /// mesurer le défilement propre de Qt, puis avec.
+    function lancerScenarioMolette() {
+        var s = { echecs: 0 }
+        var bilan = function(texte, bon) { bilanEssai(s, texte, bon) }
+        var v = colonneListe.vueMessages
+        var cran = function(angle, pixels) {
+            return gestesEssai.molette(v, v.width / 2, v.height / 2, angle, pixels)
+        }
+        plusTard(8000, function() {
+            ouvrirDossier(comptesConnus[0].compte, "INBOX")
+            plusTard(5000, function() {
+                fenetre.completerListe()
+                v.positionViewAtBeginning()
+                var hauteur = colonneListe.hauteurLigne()
+                var lignes = Qt.styleHints.wheelScrollLines
+                console.log("scenario: " + modeleMessages.count + " messages, ligne de " + Math.round(hauteur)
+                            + " px, vue de " + Math.round(v.height) + " px, réglage du poste : " + lignes + " lignes par cran")
+                // Sans la molette de MMail : Flickable seul.
+                colonneListe.molette.enabled = false
+                var y0 = v.contentY
+                cran(-120, 0)
+                plusTard(1500, function() {
+                    var natif = v.contentY - y0
+                    console.log("scenario: avant (Qt seul) : un cran = " + Math.round(natif) + " px, "
+                                + (natif / hauteur).toFixed(2) + " ligne(s)")
+                    colonneListe.molette.enabled = true
+                    v.positionViewAtBeginning()
+                    plusTard(500, function() {
+                        var attendu = Math.min(lignes * hauteur, Math.max(hauteur, v.height - hauteur))
+                        y0 = v.contentY
+                        cran(-120, 0)
+                        var un = v.contentY - y0
+                        bilan("un cran = " + Math.round(un) + " px (" + (un / hauteur).toFixed(2) + " lignes, attendu "
+                              + Math.round(attendu) + ")", Math.abs(un - attendu) < 1)
+                        var apresUn = v.contentY
+                        // Une seconde plus tard, rien n'a bougé : pas d'élan de
+                        // Flickable par-dessus.
+                        plusTard(1000, function() {
+                            bilan("sans élan : " + Math.round(v.contentY) + " une seconde après, " + Math.round(apresUn)
+                                  + " au cran", Math.abs(v.contentY - apresUn) < 1)
+                            y0 = v.contentY
+                            cran(-120, 0); cran(-120, 0); cran(-120, 0)
+                            var trois = v.contentY - y0
+                            bilan("trois crans = " + Math.round(trois) + " px", Math.abs(trois - 3 * attendu) < 1)
+                            y0 = v.contentY
+                            cran(120, 0)
+                            bilan("un cran vers le haut = " + Math.round(v.contentY - y0) + " px",
+                                  Math.abs(v.contentY - y0 + attendu) < 1)
+                            y0 = v.contentY
+                            cran(-120, -40)
+                            bilan("pavé tactile, 40 px : " + Math.round(v.contentY - y0) + " px", Math.abs(v.contentY - y0 - 40) < 1)
+                            for (var k = 0; k < 80; ++k)
+                                cran(-120, 0)
+                            var bas = v.originY + v.contentHeight - v.height
+                            bilan("tout en bas : contentY " + Math.round(v.contentY) + ", bas " + Math.round(bas),
+                                  Math.abs(v.contentY - bas) < 1)
+                            for (var j = 0; j < 80; ++j)
+                                cran(120, 0)
+                            bilan("tout en haut : contentY " + Math.round(v.contentY) + ", haut " + Math.round(v.originY),
+                                  Math.abs(v.contentY - v.originY) < 1)
+                            console.log("scenario: molette " + (s.echecs === 0 ? "OK" : "ECHEC (" + s.echecs + ")"))
+                            Qt.quit()
+                        })
+                    })
+                })
+            })
+        })
+    }
+
+    /// Scénario « groupes-replier » (banc DATES=1 NOMBRE=40) : un groupe se
+    /// replie d'un clic sur son intitulé et se déplie ; le clavier et Maj+clic
+    /// sautent ses messages ; un message qui arrive dans un groupe replié y
+    /// reste caché ; tout replier, tout déplier ; l'état suit le dossier ; sans
+    /// les groupes, tout se voit.
+    function lancerScenarioGroupesReplier() {
+        var s = { echecs: 0 }
+        var bilan = function(texte, bon) { bilanEssai(s, texte, bon) }
+        var v = colonneListe.vueMessages
+        // Groupes de la liste, dans l'ordre : { nom, debut, taille }.
+        var groupes = function() {
+            var g = []
+            for (var i = 0; i < modeleMessages.count; ++i) {
+                var nom = modeleMessages.get(i).groupe
+                if (g.length === 0 || g[g.length - 1].nom !== nom)
+                    g.push({ nom: nom, debut: i, taille: 0 })
+                g[g.length - 1].taille += 1
+            }
+            return g
+        }
+        var enTete = function(nom) {
+            var enfants = v.contentItem.children
+            for (var k = 0; k < enfants.length; ++k)
+                if (enfants[k].section === nom && enfants[k].visible)
+                    return enfants[k]
+            return null
+        }
+        var visibles = function() { return v.count }
+        plusTard(8000, function() {
+            var compte = comptesConnus[0].compte
+            ouvrirDossier(compte, "INBOX")
+            plusTard(5000, function() {
+                fenetre.completerListe()
+                var n = modeleMessages.count
+                var g = groupes()
+                console.log("scenario: " + n + " messages, groupes " + g.map(function(x) { return x.nom + " (" + x.taille + ")" }).join(" | "))
+                // Un groupe du milieu d'au moins deux messages, puis le suivant.
+                var k = -1
+                for (var i = 1; i < g.length - 1 && k < 0; ++i)
+                    if (g[i].taille >= 2)
+                        k = i
+                if (k < 0) {
+                    console.log("scenario: ECHEC pas de groupe du milieu à replier")
+                    Qt.quit()
+                    return
+                }
+                var cible = g[k]
+                v.positionViewAtIndex(cible.debut, ListView.Beginning)
+                plusTard(500, function() {
+                    var tete = enTete(cible.nom)
+                    bilan("intitulé « " + cible.nom + " » à l'écran, déplié", tete !== null && !tete.replie)
+                    if (tete)
+                        gestesEssai.clic(tete, 30, tete.height / 2, Qt.LeftButton)
+                    plusTard(500, function() {
+                        tete = enTete(cible.nom)
+                        var representant = v.itemAtIndex(colonneListe.rangVue(cible.debut))
+                        bilan("clic : « " + cible.nom + " » replié, " + visibles() + " lignes dans la vue sur " + n
+                              + ", intitulé " + (tete ? (tete.replie ? "replié" : "déplié") : "absent")
+                              + ", sa première ligne haute de " + (representant ? representant.height : "?") + " px",
+                              visibles() === n - cible.taille + 1 && tete !== null && tete.replie
+                              && representant !== null && representant.height === 0)
+                        // Rangs : la ligne qui suit le groupe replié.
+                        var apres = cible.debut + cible.taille
+                        var rangApres = colonneListe.rangVue(apres)
+                        var ligneApres = v.itemAtIndex(rangApres)
+                        bilan("rangs : modèle " + apres + " = vue " + rangApres + ", retour " + colonneListe.rangModele(rangApres)
+                              + ", la ligne dit " + (ligneApres ? ligneApres.rang : "?"),
+                              rangApres === apres - cible.taille + 1 && colonneListe.rangModele(rangApres) === apres
+                              && ligneApres !== null && ligneApres.rang === apres
+                              && colonneListe.rangVue(cible.debut + 1) === -1)
+                        // Clavier : de la dernière ligne d'avant à la première d'après.
+                        var avant = cible.debut - 1
+                        choisir(avant, 0)
+                        deplacerCurseur(1, false)
+                        var choisis = uidsChoisis()
+                        bilan("flèche bas : du rang " + avant + " au message " + (choisis.length === 1 ? indexDe(choisis[0]) : "?")
+                              + " (attendu " + apres + ")", choisis.length === 1 && indexDe(choisis[0]) === apres)
+                        deplacerCurseur(-1, false)
+                        choisis = uidsChoisis()
+                        bilan("flèche haut : retour au rang " + (choisis.length === 1 ? indexDe(choisis[0]) : "?"),
+                              choisis.length === 1 && indexDe(choisis[0]) === avant)
+                        choisir(apres, Qt.ShiftModifier)
+                        bilan("Maj+clic par-dessus le groupe : " + uidsChoisis().length + " messages choisis",
+                              uidsChoisis().length === 2)
+                        // Un message qui arrive dans le groupe replié, en tête
+                        // puis en fin de groupe : il reste caché, l'intitulé reste.
+                        var modele = modeleMessages.get(cible.debut)
+                        var neuf = {}
+                        var roles = ["uid", "h", "expediteur", "adresse", "destinataires", "sujet", "date", "taille", "lu",
+                                     "repondu", "reponduTous", "transfere", "pieces", "suivi", "importance", "motsCles",
+                                     "compte", "chemin", "dossier", "role", "cheminAffiche", "groupe"]
+                        for (var r = 0; r < roles.length; ++r)
+                            neuf[roles[r]] = modele[roles[r]]
+                        neuf.uid = 999001
+                        neuf.h = modele.h + 1
+                        neuf.sujet = "Arrivé dans un groupe replié"
+                        modeleMessages.insert(cible.debut, neuf)
+                        plusTard(200, function() {
+                            var premier = v.itemAtIndex(colonneListe.rangVue(cible.debut))
+                            bilan("arrivée en tête du groupe replié : " + visibles() + " lignes (attendu " + (n - cible.taille + 1)
+                                  + "), l'ancienne tête cachée " + (colonneListe.rangVue(cible.debut + 1) === -1),
+                                  visibles() === n - cible.taille + 1 && colonneListe.rangVue(cible.debut + 1) === -1
+                                  && premier !== null && premier.height === 0 && enTete(cible.nom) !== null)
+                            // Puis elle repart : l'ancienne tête reprend l'intitulé.
+                            modeleMessages.remove(cible.debut)
+                            plusTard(200, function() {
+                                bilan("retrait de la tête : " + visibles() + " lignes, intitulé " + (enTete(cible.nom) !== null),
+                                      visibles() === n - cible.taille + 1 && colonneListe.rangVue(cible.debut) >= 0
+                                      && enTete(cible.nom) !== null)
+                                var tete2 = enTete(cible.nom)
+                                if (tete2)
+                                    gestesEssai.clic(tete2, 30, tete2.height / 2, Qt.RightButton)
+                                plusTard(500, function() {
+                                    bilan("clic droit : menu des groupes ouvert", colonneListe.menuGroupes.opened)
+                                    colonneListe.menuGroupes.close()
+                                    colonneListe.replierTout(true)
+                                    plusTard(500, function() {
+                                        bilan("tout replié : " + visibles() + " lignes pour " + g.length + " groupes",
+                                              visibles() === g.length)
+                                        colonneListe.replierTout(false)
+                                        plusTard(300, function() {
+                                            bilan("tout déplié : " + visibles() + " lignes sur " + n, visibles() === n)
+                                            colonneListe.basculerGroupe(cible.nom)
+                                            ouvrirDossier(compte, "Essais")
+                                            plusTard(3000, function() {
+                                                bilan("autre dossier : " + visibles() + " lignes sur " + modeleMessages.count,
+                                                      visibles() === modeleMessages.count)
+                                                ouvrirDossier(compte, "INBOX")
+                                                plusTard(4000, function() {
+                                                    fenetre.completerListe()
+                                                    plusTard(500, function() {
+                                                        bilan("retour au dossier : « " + cible.nom + " » toujours replié, "
+                                                              + visibles() + " lignes", visibles() === n - cible.taille + 1)
+                                                        reglages.groupesDates = false
+                                                        plusTard(500, function() {
+                                                            bilan("sans les groupes : " + visibles() + " lignes sur " + n, visibles() === n)
+                                                            reglages.groupesDates = true
+                                                            plusTard(500, function() {
+                                                                bilan("groupes rendus : " + visibles() + " lignes",
+                                                                      visibles() === n - cible.taille + 1)
+                                                                colonneListe.basculerGroupe(cible.nom)
+                                                                console.log("scenario: groupes-replier " + (s.echecs === 0 ? "OK" : "ECHEC (" + s.echecs + ")"))
+                                                                Qt.quit()
+                                                            })
+                                                        })
+                                                    })
+                                                })
+                                            })
+                                        })
+                                    })
+                                })
+                            })
+                        })
+                    })
+                })
+            })
+        })
+    }
+
     /// Scénario « marges » (0.6.23) : « Affichage › Marges du message », ses
     /// trois choix l'un après l'autre, dans le volet de lecture et dans la
     /// fenêtre du message. Le texte doit se décaler de la marge choisie, vers

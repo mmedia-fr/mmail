@@ -4061,6 +4061,12 @@ ApplicationWindow {
         reglagesSauvegarde.aChercher = false
         var presents = JSON.parse(boite.comptes())
         var connectes = 0
+        // Clés S/MIME restaurées : leur mot de passe au coffre, puis elles
+        // s'ouvrent (cf. `deverrouillerClesSmime`).
+        for (var k = 0; k < (r.comptes || []).length; ++k)
+            for (var m = 0; m < (r.comptes[k].smime || []).length; ++m)
+                coffre.ecrire("smime:" + r.comptes[k].smime[m].empreinte, r.comptes[k].smime[m].motDePasse)
+        Qt.callLater(deverrouillerClesSmime)
         for (var i = 0; i < (r.comptes || []).length; ++i) {
             var c = r.comptes[i]
             var p = presents.filter(function(x) { return x.adresse === c.adresse })[0]
@@ -4085,6 +4091,7 @@ ApplicationWindow {
         }
         rafraichirArborescence()
         messageEtat.texte = qsTr("Configuration du %1 restaurée.").arg(dateLongue(s.date * 1000))
+                + (r.clesAReimporter > 0 ? " " + qsTr("%n certificat(s) S/MIME sans mot de passe sauvegardé : à réimporter.", "", r.clesAReimporter) : "")
         if (fenetre.essai && fenetre.essai.scenario === "restauration") {
             console.log("scenario: restaurée,", (r.comptes || []).length, "compte(s),", r.images, "image(s),", connectes, "connexion(s)")
             var bilan = Qt.createQmlObject('import QtQuick; Timer { interval: 3000 }', fenetre)

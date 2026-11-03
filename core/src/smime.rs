@@ -1456,6 +1456,20 @@ static TROUSSEAU: std::sync::Mutex<Vec<(i64, Cle)>> = std::sync::Mutex::new(Vec:
 /// long à lire), et rechargées après un ajout.
 static AUTORITES: std::sync::RwLock<Option<std::sync::Arc<Autorites>>> = std::sync::RwLock::new(None);
 
+/// Mots de passe des `.p12` ouverts pendant la session, par empreinte : la
+/// sauvegarde de la configuration les emporte, comme ceux des comptes.
+static MOTS_DE_PASSE: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new(Vec::new());
+
+pub fn retenir_mot_de_passe(empreinte: &str, mot_de_passe: &str) {
+    let mut m = MOTS_DE_PASSE.lock().unwrap_or_else(|e| e.into_inner());
+    m.retain(|(e, _)| e != empreinte);
+    m.push((empreinte.to_string(), mot_de_passe.to_string()));
+}
+
+pub fn mot_de_passe(empreinte: &str) -> Option<String> {
+    MOTS_DE_PASSE.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|(e, _)| e == empreinte).map(|(_, m)| m.clone())
+}
+
 pub fn deposer(compte: i64, cle: Cle) {
     let mut t = TROUSSEAU.lock().unwrap_or_else(|e| e.into_inner());
     let empreinte = cle.empreinte();
@@ -1465,6 +1479,7 @@ pub fn deposer(compte: i64, cle: Cle) {
 
 pub fn oublier(empreinte: &str) {
     TROUSSEAU.lock().unwrap_or_else(|e| e.into_inner()).retain(|(_, k)| k.empreinte() != empreinte);
+    MOTS_DE_PASSE.lock().unwrap_or_else(|e| e.into_inner()).retain(|(e, _)| e != empreinte);
 }
 
 /// Les clés d'un compte, la plus récente en dernier.

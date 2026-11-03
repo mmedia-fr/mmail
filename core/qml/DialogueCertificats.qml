@@ -74,7 +74,7 @@ Dialog {
         motDePasse.text = ""
         fichierChoisi = ""
         message = (r.avertissement.length > 0 ? r.avertissement + "\n" : "")
-                + qsTr("Certificat importé. Gardez le fichier .p12 et son mot de passe en lieu sûr : la sauvegarde de MMail ne les couvre pas encore.")
+                + qsTr("Certificat importé. La sauvegarde de la configuration l'emporte avec son mot de passe pour un compte à mot de passe ; pour un compte Microsoft ou Google, qu'elle ne chiffre pas, gardez le fichier .p12 et son mot de passe en lieu sûr.")
         fenetre.clesSmimeChangees()
         actualiser()
     }

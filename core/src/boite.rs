@@ -1984,13 +1984,27 @@ impl qobject::Boite {
             env!("CARGO_PKG_VERSION"),
             maintenant(),
         );
-        let document = match document {
+        let mut document = match document {
             Ok(d) => d,
             Err(e) => {
                 self.as_mut().sauvegarde_echouee(&QString::from(&e.to_string()));
                 return false;
             }
         };
+        // Clés S/MIME (0.8.0) : chaque .p12 avec son compte ; son mot de passe
+        // seulement si l'utilisateur garde les siens, et dans la copie de son
+        // compte seulement (`pour_compte`).
+        for r in crate::smime::cles_rangees(&self.profil) {
+            let Some(c) = document.comptes.iter_mut().find(|c| c.adresse.eq_ignore_ascii_case(&r.adresse)) else {
+                continue;
+            };
+            if let Ok(p12) = std::fs::read(&r.chemin) {
+                c.smime.push(crate::sauvegarde::CleSauvee {
+                    p12: crate::smtp::base64(&p12),
+                    mot_de_passe: if mots_de_passe { crate::smime::mot_de_passe(&r.empreinte) } else { None },
+                });
+            }
+        }
         let neuve = crate::sauvegarde::empreinte(&document);
         if neuve == empreinte.to_string() {
             return false;
@@ -2109,13 +2123,42 @@ impl qobject::Boite {
         };
         let reglages: serde_json::Value =
             serde_json::from_str(&crate::sauvegarde::reglages_pour(&document, &signatures)).unwrap_or_default();
+        // Clés S/MIME : rangées dans le profil si leur mot de passe est là ;
+        // l'interface le confie au coffre. Sans lui, elles sont à réimporter.
+        let mut cles_rendues: HashMap<String, Vec<serde_json::Value>> = HashMap::new();
+        let mut a_reimporter = 0;
+        for c in &document.comptes {
+            for k in &c.smime {
+                let ouverte = k.mot_de_passe.as_deref().and_then(|m| {
+                    let p12 = crate::rendu::base64(&k.p12)?;
+                    let cle = crate::smime::Cle::depuis_p12(&p12, m).ok()?;
+                    let r = crate::smime::ranger_cle(&self.profil, &c.adresse, &p12, &cle).ok()?;
+                    Some(serde_json::json!({ "empreinte": r.empreinte, "motDePasse": m }))
+                });
+                match ouverte {
+                    Some(v) => cles_rendues.entry(c.adresse.clone()).or_default().push(v),
+                    None => a_reimporter += 1,
+                }
+            }
+        }
         let comptes: Vec<serde_json::Value> = document
             .comptes
             .iter()
-            .map(|c| serde_json::json!({ "adresse": c.adresse, "hote": c.hote, "motDePasse": c.mot_de_passe, "auth": c.auth }))
+            .map(|c| {
+                serde_json::json!({
+                    "adresse": c.adresse,
+                    "hote": c.hote,
+                    "motDePasse": c.mot_de_passe,
+                    "auth": c.auth,
+                    "smime": cles_rendues.get(&c.adresse).cloned().unwrap_or_default(),
+                })
+            })
             .collect();
         self.as_mut().reviser();
-        QString::from(&serde_json::json!({ "reglages": reglages, "comptes": comptes, "images": images }).to_string())
+        QString::from(
+            &serde_json::json!({ "reglages": reglages, "comptes": comptes, "images": images, "clesAReimporter": a_reimporter })
+                .to_string(),
+        )
     }
 
     pub fn nouveau_poste(&self) -> QString {
@@ -4660,6 +4703,7 @@ impl qobject::Boite {
             };
             let rangee = crate::smime::ranger_cle(&self.profil, &adresse, &octets, &cle)
                 .map_err(|e| format!("rangement dans le profil : {e}"))?;
+            crate::smime::retenir_mot_de_passe(&rangee.empreinte, &mot_de_passe.to_string());
             crate::smime::deposer(compte, cle);
             Ok(serde_json::json!({
                 "ok": true,
@@ -4705,6 +4749,7 @@ impl qobject::Boite {
         };
         match crate::smime::Cle::depuis_p12(&octets, &mot_de_passe.to_string()) {
             Ok(cle) => {
+                crate::smime::retenir_mot_de_passe(&empreinte, &mot_de_passe.to_string());
                 crate::smime::deposer(compte, cle);
                 true
             }

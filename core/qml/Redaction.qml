@@ -304,6 +304,18 @@ Page {
         }
     }
 
+    /// Texte d'un message préparé par un autre logiciel (cf.
+    /// Main.redigerExterne) : en tête du corps, au-dessus de la signature que
+    /// `remplir` vient de poser.
+    function placerTexte(texte) {
+        if (!texte || texte.length === 0)
+            return
+        chargement = true
+        mef.inserer(0, texte.replace(/\r\n/g, "\n"))
+        chargement = false
+        modifie = false
+    }
+
     function contenu() {
         var c = compteChoisi()
         return {
@@ -353,11 +365,16 @@ Page {
     /// Ctrl+V : une image seule du presse-papier (capture d'écran) ou des
     /// images copiées dans l'explorateur entrent dans le corps ; d'autres
     /// fichiers copiés sont joints. Rien de tel : le collage ordinaire.
+    /// Fichiers sans chemin (0.8.4) : ceux que le bureau à distance apporte du
+    /// poste local dans une session RDS, ou qu'un autre logiciel copie, sont
+    /// d'abord écrits sur le disque, puis traités de même.
     function collerImage() {
         var url = pressePapier.enregistrerImage(boite.dossierImagesCollees())
         if (url.length > 0)
             return insererImages([url])
         var fichiers = pressePapier.fichiers()
+        if (fichiers.length === 0)
+            fichiers = pressePapier.fichiersVirtuels(boite.dossierPiecesCollees())
         if (fichiers.length === 0)
             return false
         var images = [], autres = []
@@ -371,6 +388,23 @@ Page {
         insererImages(images)
         if (autres.length > 0)
             ajouterFichiers(autres)
+        return true
+    }
+
+    /// « Coller en pièce jointe » (0.8.4) : tout ce que le presse-papier porte
+    /// de fichiers, ou son image seule, est joint — rien n'entre dans le corps.
+    function collerPieces() {
+        var fichiers = pressePapier.fichiers()
+        if (fichiers.length === 0)
+            fichiers = pressePapier.fichiersVirtuels(boite.dossierPiecesCollees())
+        if (fichiers.length === 0) {
+            var image = pressePapier.enregistrerImage(boite.dossierPiecesCollees())
+            if (image.length > 0)
+                fichiers = [image]
+        }
+        if (fichiers.length === 0)
+            return false
+        ajouterFichiers(fichiers)
         return true
     }
 
@@ -733,6 +767,15 @@ Page {
                 enabled: !redac.occupe
                 onClicked: choixFichiers.open()
             }
+            // 0.8.4 : ce qui est copié — fichiers de l'explorateur, du poste
+            // local par le bureau à distance, image — devient pièce jointe,
+            // sans l'enregistrer d'abord.
+            ToolButton {
+                objectName: "boutonCollerPiece"
+                text: qsTr("Coller en pièce jointe")
+                enabled: !redac.occupe
+                onClicked: if (!redac.collerPieces()) redac.signaler(qsTr("Rien à joindre dans le presse-papier : copiez d'abord un fichier."), true)
+            }
             ToolButton {
                 text: qsTr("Cc / Cci")
                 checkable: true
@@ -1032,6 +1075,42 @@ Page {
                     orthographe: dictionnaire
                     actif: reglagesRedaction.orthographe && !redac.chargement
                     curseur: corpsRedaction.cursorPosition
+                }
+                // Les vagues rouges sous les mots inconnus (0.6.33) : Qt Quick
+                // ne dessine pas le soulignement ondulé d'un format, on le
+                // trace ici, sous chaque zone du correcteur. Canvas : rendu
+                // aussi par le moteur logiciel (serveur RDS sans GPU).
+                Repeater {
+                    model: correcteurCorps.zones
+                    delegate: Canvas {
+                        // Relu quand le texte se remet en page (largeur, zoom).
+                        readonly property rect debut: {
+                            corpsRedaction.width; corpsRedaction.contentHeight; corpsRedaction.font.pointSize
+                            return corpsRedaction.positionToRectangle(modelData.debut)
+                        }
+                        readonly property rect fin: {
+                            corpsRedaction.width; corpsRedaction.contentHeight; corpsRedaction.font.pointSize
+                            return corpsRedaction.positionToRectangle(modelData.fin)
+                        }
+                        // Un mot coupé en fin de ligne n'a pas de vague.
+                        visible: fin.y === debut.y && fin.x > debut.x
+                        x: Math.round(debut.x)
+                        y: Math.round(debut.y + debut.height) - 3
+                        width: Math.max(1, Math.round(fin.x - debut.x))
+                        height: 4
+                        onWidthChanged: requestPaint()
+                        onPaint: {
+                            var ctx = getContext("2d")
+                            ctx.reset()
+                            ctx.strokeStyle = "#d02020"
+                            ctx.lineWidth = 1
+                            ctx.beginPath()
+                            ctx.moveTo(0, 3)
+                            for (var px = 2; px <= width + 2; px += 2)
+                                ctx.lineTo(px, (px / 2) % 2 === 0 ? 3 : 1)
+                            ctx.stroke()
+                        }
+                    }
                 }
                 textFormat: TextEdit.RichText
                 wrapMode: TextEdit.Wrap

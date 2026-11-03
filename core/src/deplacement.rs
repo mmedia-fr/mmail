@@ -37,6 +37,10 @@ pub struct Rapport {
     /// Messages disparus de la source avant d'avoir été lus : rien à faire.
     pub absents: usize,
     pub erreurs: Vec<String>,
+    /// UID donnés dans la cible, quand le serveur les dit (`COPYUID`) : la
+    /// validité de la cible et, par message, (UID source, UID cible). De quoi
+    /// annuler le déplacement (Ctrl+Z) sans chercher les messages.
+    pub correspondances: Option<(u32, Vec<(u32, u32)>)>,
 }
 
 /// Déplace des messages d'un dossier vers un autre de la même boîte.
@@ -52,11 +56,11 @@ pub fn dans_la_boite(
         return Ok(Rapport::default());
     }
     assurer_selection(client, source)?;
-    client.deplacer(uids, cible)?;
+    let correspondances = client.deplacer(uids, cible)?;
     let id = magasin.dossier_id(compte, source)?;
     magasin.retirer(id, uids)?;
     magasin.recompter(id)?;
-    Ok(Rapport { deplaces: uids.len(), ..Default::default() })
+    Ok(Rapport { deplaces: uids.len(), correspondances, ..Default::default() })
 }
 
 /// Déplace des messages vers un dossier d'une autre boîte.

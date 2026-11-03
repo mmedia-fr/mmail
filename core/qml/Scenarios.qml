@@ -3342,7 +3342,18 @@ QtObject {
     // d'essai ajoutée et le .p12 de Bob importé, il s'affiche ouvert, signature
     // vérifiée, sa pièce jointe comprise.
     property LecteurFichier lecteurEssai: LecteurFichier {}
-    function lancerScenarioSmime() {
+    function lancerScenarioSmime(essais) {
+        // Le compte connecté et le message arrivé dans la liste d'abord.
+        var n = essais || 0
+        var pret = boite.compteCourant > 0 || (comptesConnus.length > 0 && comptesConnus[0].compte > 0)
+        var trouve = false
+        for (var j = 0; j < modeleMessages.count; ++j)
+            if (modeleMessages.get(j).sujet === "Devis")
+                trouve = true
+        if ((!pret || !trouve) && n < 40) {
+            plusTard(1000, function() { lancerScenarioSmime(n + 1) })
+            return
+        }
         var echecs = 0
         var bilan = function(texte, bon) {
             if (!bon)
@@ -3350,7 +3361,7 @@ QtObject {
             console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
         }
         var dossier = identifiantsEssai.dossier
-        var compte = comptesConnus[0].compte
+        var compte = boite.compteCourant > 0 ? boite.compteCourant : (comptesConnus.length > 0 ? comptesConnus[0].compte : 0)
         var rang = -1
         for (var k = 0; k < modeleMessages.count; ++k)
             if (modeleMessages.get(k).sujet === "Devis")

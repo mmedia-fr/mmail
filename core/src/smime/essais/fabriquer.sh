@@ -122,6 +122,19 @@ openssl cms -encrypt -in contenu.mime -binary -aes256 -recip bob.pem -stream -cr
   -out chiffre-ber.eml
 openssl cms -encrypt -in contenu.mime -binary -aes256 -recip alice.pem -crlfeol "${entetes[@]}" \
   -out chiffre-pour-alice.eml
+# S/MIME 4.0 : AES-256-GCM, enveloppe authentifiée (ajouté le 03/11/2026).
+openssl cms -encrypt -in contenu.mime -binary -aes-256-gcm -recip bob.pem -crlfeol "${entetes[@]}" \
+  -out chiffre-gcm.eml
+# Clé elliptique P-256 (ECDH), autosignée : le déchiffrement ne regarde pas
+# la chaîne. Dérivation SHA-1 (défaut d'OpenSSL), puis SHA-512.
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -keyout dan.key -out dan.pem -days $jours \
+  -subj "/O=MMail essais/CN=Dan Essai" -addext "subjectAltName=email:dan@exemple.fr" \
+  -addext "keyUsage=critical,digitalSignature,keyAgreement" -addext "extendedKeyUsage=emailProtection" 2>/dev/null
+openssl pkcs12 -export -inkey dan.key -in dan.pem -name dan -passout pass:essai-dan -out dan.p12
+openssl cms -encrypt -in contenu.mime -binary -aes256 -recip dan.pem -crlfeol \
+  -from alice@exemple.fr -to dan@exemple.fr -subject "Devis" -out chiffre-ecdh.eml
+openssl cms -encrypt -in contenu.mime -binary -aes128 -recip dan.pem -keyopt ecdh_kdf_md:sha512 -crlfeol \
+  -from alice@exemple.fr -to dan@exemple.fr -subject "Devis" -out chiffre-ecdh-sha512.eml
 
 # Signé puis chiffré, comme Outlook : la signature détachée devient le contenu
 # chiffré.

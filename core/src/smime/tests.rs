@@ -10,6 +10,7 @@ const ALICE_P12: &[u8] = include_bytes!("essais/alice.p12");
 const BOB_P12: &[u8] = include_bytes!("essais/bob.p12");
 const BOB_ANCIEN_P12: &[u8] = include_bytes!("essais/bob-ancien.p12");
 const BOB_PEM: &[u8] = include_bytes!("essais/bob.pem");
+const DAN_P12: &[u8] = include_bytes!("essais/dan.p12");
 
 /// Le 01/01/2027 : les certificats d'essai, faits le 03/11/2026 pour vingt
 /// ans, sont valides.
@@ -191,6 +192,45 @@ fn chiffre_illisible_sans_la_bonne_cle() {
     // L'ancienne clé d'Alice parmi d'autres suffit.
     let o = ouvrir_essai("chiffre-pour-alice.eml", &[bob(), alice()], MAINTENANT);
     assert!(o.securite.illisible.is_empty(), "{:?}", o.securite);
+}
+
+fn dan() -> Cle {
+    Cle::depuis_p12(DAN_P12, "essai-dan").unwrap()
+}
+
+/// S/MIME 4.0 : AES-256-GCM dans une enveloppe authentifiée. Une étiquette
+/// altérée rend le message illisible, sans rien en montrer.
+#[test]
+fn chiffre_aes_gcm() {
+    let o = ouvrir_essai("chiffre-gcm.eml", &[bob()], MAINTENANT);
+    assert!(o.securite.chiffre && o.securite.illisible.is_empty(), "{:?}", o.securite);
+    assert!(!o.securite.ancien);
+    contenu_lisible(&o);
+    let brut = std::fs::read(format!("{}/src/smime/essais/chiffre-gcm.eml", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    let fin = fin_entetes(&brut).unwrap();
+    let corps: String = String::from_utf8_lossy(&brut[fin..]).split_whitespace().collect();
+    let mut cms = crate::rendu::base64(&corps).unwrap();
+    // L'étiquette (le `mac`) clôt la structure.
+    *cms.last_mut().unwrap() ^= 1;
+    let mut altere = brut[..fin].to_vec();
+    altere.extend_from_slice(crate::smtp::base64(&cms).as_bytes());
+    let o = ouvrir(&altere, &[bob()], &autorites(), MAINTENANT).unwrap();
+    assert!(o.securite.illisible.contains("modifié"), "{:?}", o.securite);
+    assert!(!crate::index::corps_affichable(&o.message).contains("Bonjour Bob"));
+}
+
+/// Chiffré pour une clé elliptique P-256 (ECDH), dérivation SHA-1 (celle
+/// d'OpenSSL par défaut) ou SHA-512, emballage AES-256 ou AES-128.
+#[test]
+fn chiffre_pour_une_cle_elliptique() {
+    assert!(dan().titulaire().is_some());
+    for nom in ["chiffre-ecdh.eml", "chiffre-ecdh-sha512.eml"] {
+        let o = ouvrir_essai(nom, &[bob(), dan()], MAINTENANT);
+        assert!(o.securite.chiffre && o.securite.illisible.is_empty(), "{nom} : {:?}", o.securite);
+        contenu_lisible(&o);
+        let o = ouvrir_essai(nom, &[bob()], MAINTENANT);
+        assert!(o.securite.illisible.contains("destinataires"), "{nom} : {}", o.securite.illisible);
+    }
 }
 
 #[test]

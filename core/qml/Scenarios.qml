@@ -4114,6 +4114,9 @@ QtObject {
             console.log("scenario: barre-redaction " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
             if (identifiantsEssai.dossier !== "garder")
                 Qt.quit()
+        })
+    }
+
     /// Scénario « recherche-etroite » : dans la colonne de la liste, le champ
     /// de recherche, ✕, « Non lus » et la portée ne se chevauchent pas — sur
     /// deux lignes dans une colonne étroite (0.8.2 et 0.8.3 les mettaient sur

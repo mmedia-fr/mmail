@@ -6362,6 +6362,8 @@ ApplicationWindow {
                 var attente = Qt.createQmlObject('import QtQuick; Timer { interval: 1500 }', fenetre)
                 attente.triggered.connect(scenarios.etapeScenarioBarreRedaction)
                 attente.start()
+                return
+            }
             // Scénario « recherche-etroite » : la ligne de recherche d'une
             // colonne étroite, puis large.
             if (essai.scenario === "recherche-etroite") {

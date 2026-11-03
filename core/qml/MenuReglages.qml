@@ -34,6 +34,14 @@ Menu {
         text: qsTr("Expéditeurs de confiance…")
         onTriggered: dlgExpediteursConfiance.open()
     }
+    // Messagerie que Windows sert aux autres logiciels (MAPI) : MMail,
+    // Outlook… Windows seulement.
+    MenuItem {
+        text: qsTr("Messagerie par défaut…")
+        visible: Qt.platform.os === "windows"
+        height: visible ? implicitHeight : 0
+        onTriggered: dlgMessagerie.open()
+    }
     // Correcteur d'orthographe de la rédaction (0.6.36).
     MenuItem {
         text: qsTr("Vérifier l'orthographe en tapant")

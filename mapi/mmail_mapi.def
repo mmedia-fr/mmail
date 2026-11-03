@@ -1,0 +1,18 @@
+; Exportations du fournisseur MAPI simple de MMail (cf. mmail_mapi.c).
+; Les noms sans décoration : en 32 bits, l'éditeur de liens de MSVC rattache
+; chaque nom à la fonction __stdcall décorée (_MAPISendMail@20…), et le stub de
+; Windows les cherche par ces noms.
+EXPORTS
+  MAPILogon
+  MAPILogoff
+  MAPISendMail
+  MAPISendMailW
+  MAPISendDocuments
+  MAPIFindNext
+  MAPIReadMail
+  MAPISaveMail
+  MAPIDeleteMail
+  MAPIFreeBuffer
+  MAPIAddress
+  MAPIDetails
+  MAPIResolveName

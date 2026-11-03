@@ -44,6 +44,7 @@
 #include "fenetre.h"
 #include "installeur.h"
 #include "lanceur.h"
+#include "messagerie.h"
 #include "pastille.h"
 
 // Traductions françaises de Qt, embarquées (cf. CMakeLists.txt).
@@ -86,6 +87,51 @@ static QStringList argumentsUnicode()
 #else
   return QCoreApplication::arguments();
 #endif
+}
+
+/// Fichier d'un message préparé par un autre logiciel : seulement celui que la
+/// DLL MAPI écrit dans son dossier de travail
+/// (…\MMail\mapi\envoi-…\message.json, cf. mapi/mmail_mapi.c). MMail l'efface
+/// une fois lu — c'est le signe qu'attend la DLL — et ne doit pas pouvoir
+/// effacer autre chose sur la foi d'un argument.
+static bool fichierDeRedaction(const QString& chemin)
+{
+  const QFileInfo info(QFileInfo(chemin).canonicalFilePath());
+  if (!info.isFile() || info.fileName() != QStringLiteral("message.json"))
+    return false;
+  QDir envoi = info.dir();
+  if (!envoi.dirName().startsWith(QStringLiteral("envoi-")) || !envoi.cdUp()
+      || envoi.dirName().compare(QStringLiteral("mapi"), Qt::CaseInsensitive) != 0 || !envoi.cdUp())
+    return false;
+  return envoi.dirName().compare(QStringLiteral("MMail"), Qt::CaseInsensitive) == 0;
+}
+
+/// Rédaction demandée de l'extérieur — `rediger` : message préparé par un
+/// autre logiciel (MAPI, « Envoyer vers › Destinataire ») ; `mailto` : lien
+/// « mailto: » dont MMail est le gestionnaire. Une rédaction remplie s'ouvre,
+/// que la personne relit et envoie : rien ne part sans elle.
+static void redigerDemande(QQmlApplicationEngine& engine, const QString& genre, const QString& valeur)
+{
+  if (engine.rootObjects().isEmpty())
+    return;
+  QObject* racine = engine.rootObjects().first();
+  if (genre == QStringLiteral("mailto")) {
+    if (valeur.startsWith(QStringLiteral("mailto:"), Qt::CaseInsensitive))
+      QMetaObject::invokeMethod(racine, "ouvrirLien", Q_ARG(QVariant, valeur));
+    return;
+  }
+  if (genre != QStringLiteral("rediger") || !fichierDeRedaction(valeur)) {
+    std::fprintf(stderr, "MMail : message préparé ignoré (%s)\n", valeur.toLocal8Bit().constData());
+    return;
+  }
+  QFile fichier(valeur);
+  if (!fichier.open(QIODevice::ReadOnly))
+    return;
+  const QString json = QString::fromUtf8(fichier.readAll());
+  fichier.close();
+  QVariant ouverte;
+  QMetaObject::invokeMethod(racine, "redigerExterne", Q_RETURN_ARG(QVariant, ouverte), Q_ARG(QVariant, json));
+  QFile::remove(valeur);
 }
 
 /// Réglage de la machine, pour un serveur partagé (RDS) : la variable
@@ -382,10 +428,22 @@ int main(int argc, char* argv[])
   QString capture;
   int delaiCapture = 600;
   bool ramener = false;
+  // Rédaction demandée par un autre logiciel (cf. redigerDemande).
+  QString redigerFichier;
+  QString mailto;
   const QStringList arguments = argumentsUnicode();
   for (int i = 1; i < arguments.size(); ++i) {
     const QString argument = arguments.at(i);
-    if (argument == QStringLiteral("--smoke"))
+    // « --mailto <adresse> » (gestionnaire des liens, cf. build/socle-mmail.iss)
+    // ou l'adresse seule : la suite de la ligne n'est pas lue, une adresse ne
+    // doit pas pouvoir y glisser une option.
+    if (argument == QStringLiteral("--mailto") || argument.startsWith(QStringLiteral("mailto:"), Qt::CaseInsensitive)) {
+      mailto = argument.startsWith(QStringLiteral("--")) ? arguments.value(i + 1) : argument;
+      break;
+    }
+    if (argument == QStringLiteral("--rediger") && i + 1 < arguments.size())
+      redigerFichier = arguments.at(++i);
+    else if (argument == QStringLiteral("--smoke"))
       smoke = true;
     // Clic droit sur la barre des tâches, « Ramener la fenêtre » (cf. fenetre.h).
     else if (argument == QStringLiteral("--ramener"))
@@ -406,6 +464,8 @@ int main(int argc, char* argv[])
   qmlRegisterType<PressePapier>("fr.mmedia.mmail.natif", 1, 0, "PressePapier");
   // Lancement d'un logiciel choisi sur une pièce jointe (décision 9).
   qmlRegisterType<Lanceur>("fr.mmedia.mmail.natif", 1, 0, "Lanceur");
+  // Messagerie par défaut du poste, servie aux autres logiciels par MAPI.
+  qmlRegisterType<Messagerie>("fr.mmedia.mmail.natif", 1, 0, "Messagerie");
   // Nombre de non-lus des boîtes de réception sur l'icône de la barre des tâches.
   qmlRegisterType<Pastille>("fr.mmedia.mmail.natif", 1, 0, "Pastille");
   qmlRegisterType<Notifieur>("fr.mmedia.mmail.natif", 1, 0, "Notifieur");
@@ -515,20 +575,29 @@ int main(int argc, char* argv[])
     // le cède à l'instance déjà ouverte.
     AllowSetForegroundWindow(ASFW_ANY);
 #endif
+    QByteArray demande = ramener ? "ramener\n" : "montrer\n";
+    if (!redigerFichier.isEmpty())
+      demande = "rediger " + QFileInfo(redigerFichier).absoluteFilePath().toUtf8() + "\n";
+    else if (!mailto.isEmpty())
+      demande = "mailto " + mailto.toUtf8() + "\n";
     QLocalSocket appel;
     appel.connectToServer(canal);
+    bool remise = false;
     if (appel.waitForConnected(1000)) {
-      appel.write(ramener ? "ramener\n" : "montrer\n");
+      remise = appel.write(demande) == demande.size();
       appel.waitForBytesWritten(1000);
     }
     std::fprintf(stderr, "MMail est déjà ouvert sur ce profil.\n");
-    return 0;
+    // Une rédaction demandée qui n'a pas pu être remise : l'appelant (la DLL
+    // MAPI) le saura par le code de sortie.
+    return remise || (redigerFichier.isEmpty() && mailto.isEmpty()) ? 0 : 3;
   }
   QLocalServer reveil;
   QLocalServer::removeServer(canal);
   reveil.listen(canal);
-  // Le second lancement dit ce qu'il veut : « montrer » la fenêtre, ou la
-  // « ramener » au centre de l'écran principal.
+  // Le second lancement dit ce qu'il veut : « montrer » la fenêtre, la
+  // « ramener » au centre de l'écran principal, ou ouvrir une rédaction
+  // (« rediger <fichier> », « mailto <adresse> », cf. redigerDemande).
   QObject::connect(&reveil, &QLocalServer::newConnection, &app, [&reveil, &engine] {
     while (QLocalSocket* appel = reveil.nextPendingConnection()) {
       QObject::connect(appel, &QLocalSocket::disconnected, appel, &QObject::deleteLater);
@@ -539,6 +608,11 @@ int main(int argc, char* argv[])
         auto* principale = qobject_cast<QQuickWindow*>(engine.rootObjects().first());
         if (!principale)
           return;
+        if (demande.startsWith("rediger ") || demande.startsWith("mailto ")) {
+          const qsizetype espace = demande.indexOf(' ');
+          redigerDemande(engine, QString::fromUtf8(demande.left(espace)), QString::fromUtf8(demande.mid(espace + 1)));
+          return;
+        }
         if (demande == "ramener") {
           fenetre::ramener(principale);
           return;
@@ -593,6 +667,14 @@ int main(int argc, char* argv[])
 #ifdef Q_OS_WIN
   fenetre::poserListeRaccourcis();
 #endif
+
+  // MMail lancé pour une rédaction (DLL MAPI, lien « mailto: ») : elle s'ouvre
+  // une fois la fenêtre chargée — les comptes sont lus à ce moment-là.
+  if (!smoke && (!redigerFichier.isEmpty() || !mailto.isEmpty())) {
+    const QString genre = redigerFichier.isEmpty() ? QStringLiteral("mailto") : QStringLiteral("rediger");
+    const QString valeur = redigerFichier.isEmpty() ? mailto : QFileInfo(redigerFichier).absoluteFilePath();
+    QTimer::singleShot(0, &app, [&engine, genre, valeur] { redigerDemande(engine, genre, valeur); });
+  }
 
   if (smoke) {
     // Contrôle de fabrication : la fenêtre existe, le noyau Rust répond, et

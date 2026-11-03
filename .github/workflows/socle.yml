@@ -188,6 +188,40 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
 
+      # ---- Windows : fournisseur MAPI (cf. mapi/mmail_mapi.c) ----------------
+      # Deux compilations du même source : Windows charge la DLL dans le
+      # processus du logiciel qui envoie, de son architecture — 64 bits pour
+      # l'Explorateur, 32 bits pour bien des logiciels de gestion. Bibliothèque
+      # C liée en statique (/MT) : rien à supposer du processus hôte.
+      - name: Fournisseur MAPI
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * `
+            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          $vcvars = Join-Path $vs 'VC\Auxiliary\Build\vcvarsall.bat'
+          if (-not (Test-Path $vcvars)) { throw "vcvarsall.bat introuvable" }
+          New-Item -ItemType Directory -Force dist\MMail | Out-Null
+          foreach ($a in @(@{ arch = 'x86'; nom = 'MMailMAPI32.dll'; machine = 'x86' },
+                           @{ arch = 'x64'; nom = 'MMailMAPI64.dll'; machine = 'x64' })) {
+            $o = "_build\mapi\$($a.arch)"
+            New-Item -ItemType Directory -Force $o | Out-Null
+            cmd /c "`"$vcvars`" $($a.arch) >nul && rc /nologo /c65001 /fo $o\mmail_mapi.res mapi\mmail_mapi.rc && cl /nologo /O2 /W4 /MT /utf-8 /LD mapi\mmail_mapi.c $o\mmail_mapi.res /Fo$o\ /Fe$o\$($a.nom) /link /DEF:mapi\mmail_mapi.def advapi32.lib user32.lib"
+            if ($LASTEXITCODE -ne 0) { throw "compilation du fournisseur MAPI $($a.arch) en échec" }
+            # Exportations sans décoration (le stub les cherche par leur nom),
+            # architecture attendue, et aucune DLL d'exécution partagée.
+            $exports = cmd /c "`"$vcvars`" $($a.arch) >nul && dumpbin /nologo /exports $o\$($a.nom)"
+            $entetes = cmd /c "`"$vcvars`" $($a.arch) >nul && dumpbin /nologo /headers /dependents $o\$($a.nom)"
+            foreach ($f in 'MAPISendMail', 'MAPISendMailW', 'MAPISendDocuments', 'MAPILogon', 'MAPILogoff', 'MAPIFreeBuffer', 'MAPIResolveName') {
+              if (-not ($exports | Select-String -Pattern "\s$f$" -Quiet)) { throw "$($a.nom) : $f non exportée" }
+            }
+            if ($exports | Select-String -Pattern '@\d+$' -Quiet) { throw "$($a.nom) : exportations décorées" }
+            if (-not ($entetes | Select-String -Pattern "machine \($($a.machine)\)" -Quiet)) { throw "$($a.nom) : architecture inattendue" }
+            if ($entetes | Select-String -Pattern 'vcruntime|msvcp|api-ms-win-crt|ucrtbase' -Quiet) { throw "$($a.nom) : dépend d'une bibliothèque d'exécution partagée" }
+            Copy-Item "$o\$($a.nom)" dist\MMail\
+            Write-Host "$($a.nom) : $((Get-Item dist\MMail\$($a.nom)).Length) octets"
+          }
+
       # ---- Windows : l'installeur que reçoivent les postes -----------------
       - name: Paquet Windows
         if: runner.os == 'Windows'
@@ -384,6 +418,95 @@ jobs:
           $rouvert | Stop-Process -Force -ErrorAction SilentlyContinue
           if ($version -ne $attendue) { throw "version installée : $version, attendue : $attendue" }
           if (-not $rouvert) { throw "MMail n'a pas été rouvert après l'installation" }
+      - name: Contrôle Windows — fournisseur MAPI, 32 et 64 bits
+        if: runner.os == 'Windows'
+        shell: pwsh
+        timeout-minutes: 10
+        run: |
+          # Le chemin d'un logiciel qui crée un courriel par MAPI, dans les deux
+          # architectures : mapi32.dll de Windows (le stub) → MMailMAPI.dll de
+          # System32 (64 bits) ou de SysWOW64 (32 bits), sous un seul DLLPath
+          # (cf. build/socle-mmail.iss) → message préparé → MMail, installé pour
+          # l'utilisateur à l'étape précédente, qui ouvre la rédaction et efface
+          # le fichier. La machine désigne une messagerie absente : c'est le
+          # choix de la session (cf. cpp/messagerie.h) qui doit l'emporter.
+          $ErrorActionPreference = 'Stop'
+          # Installation pour la machine : c'est elle qui dépose les deux DLL et
+          # déclare MMail parmi les messageries.
+          $setup = Get-ChildItem dist\MMail-*-setup.exe | Select-Object -First 1
+          function InstallerMachine($journal) {
+            $p = Start-Process -FilePath $setup.FullName -Wait -PassThru -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", `
+              "/NORESTART", "/SP-", "/ALLUSERS", "/DIR=`"$env:RUNNER_TEMP\MMailMachine`"", "/LOG=`"$journal`""
+            if ($p.ExitCode -ne 0) { Get-Content $journal -Tail 30; throw "installation pour la machine en échec : code $($p.ExitCode)" }
+          }
+          function Machine($chemin) {
+            $o = [IO.File]::ReadAllBytes($chemin)
+            $pe = [BitConverter]::ToInt32($o, 0x3C)
+            '{0:X}' -f [BitConverter]::ToUInt16($o, $pe + 4)
+          }
+          InstallerMachine "$env:RUNNER_TEMP\installation-machine.log"
+          $dll64 = "$env:SystemRoot\System32\MMailMAPI.dll"
+          $dll32 = "$env:SystemRoot\SysWOW64\MMailMAPI.dll"
+          if ((Machine $dll64) -ne '8664') { throw "System32 : la DLL n'est pas en 64 bits" }
+          if ((Machine $dll32) -ne '14C') { throw "SysWOW64 : la DLL n'est pas en 32 bits" }
+          $cle = 'HKLM:\SOFTWARE\Clients\Mail\MMail'
+          if ((Get-ItemProperty $cle).DLLPath -ne $dll64) { throw "DLLPath : $((Get-ItemProperty $cle).DLLPath)" }
+          if (-not (Get-ItemProperty 'HKLM:\SOFTWARE\RegisteredApplications').MMail) { throw "MMail absent des applications déclarées" }
+          # Mise à jour pendant qu'un processus tient la DLL chargée (l'Explorateur
+          # après un « Envoyer vers ») : elle doit passer, sans redémarrage.
+          $tenue = Start-Process pwsh -PassThru -WindowStyle Hidden -ArgumentList '-NoProfile', '-Command', `
+            "[Runtime.InteropServices.NativeLibrary]::Load('$dll64') | Out-Null; Start-Sleep 120"
+          Start-Sleep 5
+          InstallerMachine "$env:RUNNER_TEMP\installation-machine-2.log"
+          Stop-Process $tenue -Force
+          Get-ChildItem "$env:SystemRoot\System32\MMailMAPI.dll*" | ForEach-Object { Write-Host "$($_.Name) $($_.Length)" }
+          if (-not (Select-String -Path "$env:RUNNER_TEMP\installation-machine-2.log" -Pattern 'Fournisseur MAPI en service \S+cart\S* :' -Quiet)) {
+            throw "la DLL chargée n'a pas été écartée à la mise à jour"
+          }
+          Set-ItemProperty 'HKLM:\SOFTWARE\Clients\Mail' -Name '(default)' -Value 'Messagerie absente'
+          New-Item 'HKCU:\Software\Clients\Mail' -Force | Out-Null
+          Set-ItemProperty 'HKCU:\Software\Clients\Mail' -Name '(default)' -Value 'MMail'
+          $mapi = "$env:LOCALAPPDATA\MMail\mapi"
+          $piece = "$env:RUNNER_TEMP\Relevé d'essai.pdf"
+          Set-Content -Path $piece -Value 'contenu' -Encoding utf8
+          $ps32 = "$env:SystemRoot\SysWOW64\WindowsPowerShell\v1.0\powershell.exe"
+          $cas = @(@{ exe = 'pwsh'; jeu = 'W'; bits = 'x64' }, @{ exe = $ps32; jeu = 'A'; bits = 'x86' },
+                   @{ exe = $ps32; jeu = 'W'; bits = 'x86' })
+          function Appeler($c) {
+            & $c.exe -NoProfile -ExecutionPolicy Bypass -File build\essai-mapi.ps1 -Jeu $c.jeu -Objet 'Relevé n° 12' `
+              -A 'jean@exemple.test' -Nom 'Dupont, Jean' -Piece $piece
+            if ($LASTEXITCODE -ne 0) { throw "$($c.bits) MAPISendMail$($c.jeu) : code $LASTEXITCODE" }
+          }
+          # 1. Message préparé sans lancer MMail (MMAIL_MAPI_ESSAI) : son contenu.
+          $env:MMAIL_MAPI_ESSAI = '1'
+          foreach ($c in $cas) {
+            $avant = Get-Date
+            Appeler $c
+            $json = Get-ChildItem $mapi -Recurse -Filter message.json | Where-Object { $_.LastWriteTime -ge $avant.AddSeconds(-1) } |
+              Sort-Object LastWriteTime | Select-Object -Last 1
+            if (-not $json) { throw "$($c.bits) : aucun message préparé" }
+            $m = Get-Content $json.FullName -Raw -Encoding utf8 | ConvertFrom-Json
+            Write-Host "$($c.bits) $($c.jeu) : objet « $($m.objet) » | à $($m.a -join ' ; ') | pièces $($m.pieces -join ' ; ')"
+            if ($m.objet -ne 'Relevé n° 12') { throw "objet altéré : $($m.objet)" }
+            if (@($m.a).Count -ne 1 -or $m.a[0] -ne '"Dupont, Jean" <jean@exemple.test>') { throw "destinataire altéré : $($m.a)" }
+            if (@($m.pieces).Count -ne 1 -or -not (Test-Path -LiteralPath $m.pieces[0]) -or
+                (Split-Path $m.pieces[0] -Leaf) -ne "Relevé d'essai.pdf") { throw "pièce jointe absente ou renommée" }
+            Remove-Item -LiteralPath $json.FullName
+          }
+          # 2. De bout en bout : MMail lancé par la DLL (64 bits), puis la même
+          # demande en 32 bits remise à ce MMail par son canal d'instance unique.
+          Remove-Item Env:\MMAIL_MAPI_ESSAI
+          $env:QT_QPA_PLATFORM = 'offscreen'
+          foreach ($c in $cas[0], $cas[2]) {
+            Appeler $c
+            $restants = @(Get-ChildItem $mapi -Recurse -Filter message.json)
+            if ($restants.Count -gt 0) { throw "$($c.bits) : message non pris par MMail" }
+          }
+          $journal = Get-Content "$mapi\journal.txt"
+          $journal
+          Get-Process MMail -ErrorAction SilentlyContinue | Stop-Process -Force
+          if (-not ($journal | Select-String 'x64 pwsh.exe MAPISendMailW : .*transmis à MMail' -Quiet)) { throw "64 bits : rien transmis à MMail" }
+          if (-not ($journal | Select-String 'x86 powershell.exe MAPISendMailW : .*transmis à MMail' -Quiet)) { throw "32 bits : rien transmis à MMail" }
       - name: Dépôt de l'installeur Windows
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

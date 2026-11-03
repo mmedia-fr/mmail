@@ -2574,6 +2574,7 @@ ApplicationWindow {
     DialogueLogiciels { id: dlgLogiciels }
 
     DialogueExpediteursConfiance { id: dlgExpediteursConfiance }
+    DialogueMessagerie { id: dlgMessagerie }
 
     FileDialog {
         id: dlgEnregistrerPiece
@@ -5636,6 +5637,25 @@ ApplicationWindow {
         var compte = boite.compteCourant > 0 ? boite.compteCourant
                    : (comptesConnus.length > 0 ? comptesConnus[0].compte : 0)
         ouvrirRedaction(compte).remplir({ a: adresse, objet: objet, mode: "nouveau" })
+    }
+
+    /// Message préparé par un autre logiciel, qui a choisi MMail comme
+    /// messagerie (MAPI : « Envoyer vers › Destinataire », l'export d'un état
+    /// « par courriel »…), reçu en JSON (cf. mapi/mmail_mapi.c et
+    /// cpp/main.cpp) : une rédaction remplie, au premier plan, depuis le compte
+    /// ouvert. La personne la relit, complète le destinataire et envoie.
+    function redigerExterne(json) {
+        var m
+        try { m = JSON.parse(json) } catch (e) { return false }
+        var compte = boite.compteCourant > 0 ? boite.compteCourant
+                   : (comptesConnus.length > 0 ? comptesConnus[0].compte : 0)
+        var r = ouvrirRedaction(compte)
+        r.remplir({ mode: "nouveau", a: (m.a || []).join(", "), cc: (m.cc || []).join(", "),
+                    cci: (m.cci || []).join(", "), objet: m.objet || "", pieces: m.pieces || [] })
+        r.placerTexte(m.texte || "")
+        if (r.conteneur && r.conteneur.montrerRedaction)
+            r.conteneur.montrerRedaction()
+        return true
     }
 
     /// « Envoyer une suggestion… » (menu « ? ») : une rédaction depuis le

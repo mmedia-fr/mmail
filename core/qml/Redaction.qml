@@ -43,6 +43,12 @@ Page {
     property bool enAttente: false
     property bool fermerApresEnregistrement: false
     property bool afficherCopies: false
+    // Barre du haut resserrée — téléphone, ou rédaction étroite : Envoyer,
+    // Joindre…, le menu « ⋮ » et Fermer. Enregistrer, Coller en pièce jointe
+    // et Cc / Cci passent dans le menu. Sept boutons sur une ligne de
+    // téléphone se chevauchaient : plus moyen d'envoyer ni de fermer (retour
+    // de Manu du 03/11, sous Android).
+    readonly property bool barreCompacte: fenetre.tactile || width < 680
     property bool miseEnForme: reglagesRedaction.miseEnForme
     // Lus par les scénarios d'essai (cf. Scenarios.qml, « majuscule »).
     readonly property alias corps: corpsRedaction
@@ -702,6 +708,11 @@ Page {
         ev.accepted = true
     }
 
+    function collerEnPiece() {
+        if (!collerPieces())
+            signaler(qsTr("Rien à joindre dans le presse-papier : copiez d'abord un fichier."), true)
+    }
+
     function demanderFermeture() {
         if (!modifie || fermetureConfirmee) {
             conteneur.fermerRedaction()
@@ -712,23 +723,31 @@ Page {
 
     header: ToolBar {
         RowLayout {
+            objectName: "barreRedaction"
             anchors.fill: parent
             anchors.leftMargin: 6
             anchors.rightMargin: 6
+            // Un bouton ne se comprime pas sous sa largeur : c'est le texte de
+            // la note qui cède la place.
             ToolButton {
+                objectName: "boutonEnvoyer"
                 text: redac.envoiDiffere > 0 ? qsTr("Programmer") : qsTr("Envoyer")
                 font.bold: true
                 enabled: !redac.occupe
+                Layout.minimumWidth: implicitWidth
                 onClicked: redac.envoyer(false)
             }
             ToolButton {
                 text: qsTr("Enregistrer")
+                visible: !redac.barreCompacte
                 enabled: !redac.occupe
+                Layout.minimumWidth: implicitWidth
                 onClicked: redac.enregistrer()
             }
             ToolButton {
                 text: qsTr("Joindre…")
                 enabled: !redac.occupe
+                Layout.minimumWidth: implicitWidth
                 onClicked: choixFichiers.open()
             }
             // 0.8.4 : ce qui est copié — fichiers de l'explorateur, du poste
@@ -737,18 +756,25 @@ Page {
             ToolButton {
                 objectName: "boutonCollerPiece"
                 text: qsTr("Coller en pièce jointe")
+                visible: !redac.barreCompacte
                 enabled: !redac.occupe
-                onClicked: if (!redac.collerPieces()) redac.signaler(qsTr("Rien à joindre dans le presse-papier : copiez d'abord un fichier."), true)
+                Layout.minimumWidth: implicitWidth
+                onClicked: redac.collerEnPiece()
             }
             ToolButton {
                 text: qsTr("Cc / Cci")
+                visible: !redac.barreCompacte
                 checkable: true
                 checked: redac.afficherCopies
+                Layout.minimumWidth: implicitWidth
                 onToggled: redac.afficherCopies = checked
             }
             ToolButton {
                 id: boutonOptions
-                text: qsTr("Options ▾")
+                objectName: "boutonOptions"
+                text: redac.barreCompacte ? "⋮" : qsTr("Options ▾")
+                Accessible.name: qsTr("Options")
+                Layout.minimumWidth: implicitWidth
                 onClicked: menuOptions.popup(boutonOptions, 0, boutonOptions.height)
             }
             Label {
@@ -757,10 +783,16 @@ Page {
                 opacity: redac.noteErreur ? 1 : 0.75
                 elide: Text.ElideRight
                 Layout.fillWidth: true
+                // Sa largeur est ce qui reste : un message long ne pousse pas
+                // les boutons.
+                Layout.preferredWidth: 0
+                Layout.minimumWidth: 0
                 horizontalAlignment: Text.AlignRight
             }
             ToolButton {
+                objectName: "boutonFermer"
                 text: qsTr("Fermer")
+                Layout.minimumWidth: implicitWidth
                 onClicked: redac.demanderFermeture()
             }
         }
@@ -1199,6 +1231,33 @@ Page {
     Menu {
         id: menuOptions
         onAboutToShow: width = fenetre.largeurMenu(menuOptions)
+        // Barre resserrée : ce qui n'y tient plus.
+        MenuItem {
+            visible: redac.barreCompacte
+            height: visible ? implicitHeight : 0
+            text: qsTr("Enregistrer")
+            enabled: !redac.occupe
+            onTriggered: redac.enregistrer()
+        }
+        MenuItem {
+            visible: redac.barreCompacte
+            height: visible ? implicitHeight : 0
+            text: qsTr("Coller en pièce jointe")
+            enabled: !redac.occupe
+            onTriggered: redac.collerEnPiece()
+        }
+        MenuItem {
+            visible: redac.barreCompacte
+            height: visible ? implicitHeight : 0
+            text: qsTr("Cc / Cci")
+            checkable: true
+            checked: redac.afficherCopies
+            onTriggered: redac.afficherCopies = checked
+        }
+        MenuSeparator {
+            visible: redac.barreCompacte
+            height: visible ? implicitHeight : 0
+        }
         MenuItem {
             text: qsTr("Importance haute")
             checkable: true

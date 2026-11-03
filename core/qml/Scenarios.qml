@@ -4071,6 +4071,50 @@ QtObject {
         })
     }
 
+    /// Scénario « barre-redaction » (retour de Manu du 03/11 sous Android :
+    /// boutons de la rédaction chevauchés, plus moyen d'envoyer ni de fermer) :
+    /// les boutons visibles de la barre du haut ne se chevauchent pas, gardent
+    /// leur largeur et restent dans la barre ; resserrée, elle montre Envoyer,
+    /// Joindre…, « ⋮ » et Fermer. Au banc : MMAIL_TACTILE=1, MMAIL_TAILLE=392x800
+    /// (un téléphone) ; sans eux, la barre complète. MMAIL_DOSSIER « garder » :
+    /// MMail reste ouvert, pour une capture.
+    function etapeScenarioBarreRedaction() {
+        var r = ouvrirRedaction(comptesConnus.length > 0 ? comptesConnus[0].compte : 0)
+        plusTard(1500, function() {
+            var echecs = 0
+            var bilan = function(texte, bon) {
+                if (!bon)
+                    ++echecs
+                console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
+            }
+            var barre = objetNomme(r, "barreRedaction")
+            bilan("barre trouvée, largeur " + (barre ? Math.round(barre.width) : 0), !!barre)
+            var boutons = []
+            for (var i = 0; barre && i < barre.children.length; ++i) {
+                var b = barre.children[i]
+                if (b.visible && typeof b.clicked === "function")
+                    boutons.push(b)
+            }
+            boutons.sort(function(a, b) { return a.x - b.x })
+            console.log("scenario: tactile", fenetre.tactile, "| resserrée", r.barreCompacte, "| boutons",
+                        boutons.map(function(b) { return b.text + " (" + Math.round(b.x) + "+" + Math.round(b.width) + ")" }).join(", "))
+            for (var j = 0; j < boutons.length; ++j) {
+                var c = boutons[j]
+                bilan("« " + c.text + " » à sa largeur", c.width >= c.implicitWidth - 0.5)
+                bilan("« " + c.text + " » dans la barre", c.x >= -0.5 && c.x + c.width <= barre.width + 0.5)
+                if (j > 0)
+                    bilan("« " + c.text + " » après « " + boutons[j - 1].text + " »", c.x >= boutons[j - 1].x + boutons[j - 1].width - 0.5)
+            }
+            var noms = boutons.map(function(b) { return b.objectName })
+            bilan("Envoyer et Fermer visibles", noms.indexOf("boutonEnvoyer") >= 0 && noms.indexOf("boutonFermer") >= 0)
+            if (fenetre.tactile)
+                bilan("resserrée sous le tactile, 4 boutons", r.barreCompacte && boutons.length === 4)
+            console.log("scenario: barre-redaction " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
+            if (identifiantsEssai.dossier !== "garder")
+                Qt.quit()
+        })
+    }
+
     /// Premier objet nommé `nom` sous `racine` (objectName), ou null.
     function objetNomme(racine, nom) {
         if (!racine)

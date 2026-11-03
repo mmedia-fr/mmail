@@ -7,16 +7,15 @@
 // présent, et montre les messages arrivés en notification (core/src/releve.rs).
 //
 // Ici, ce que l'interface en tient : programmer la tâche (au lancement, et
-// quand la personne change le réglage), demander la permission de notifier
-// (Android 13 et au-delà), et dire à la tâche quand MMail est au premier plan
-// — elle ne fait alors rien, MMail relevant lui-même, et ses notifications
-// s'effacent. Ailleurs qu'Android, rien.
+// quand la personne change le réglage) et demander la permission de notifier
+// (Android 13 et au-delà). MMail au premier plan, la tâche ne fait rien et ses
+// notifications s'effacent : Releve.java le voit lui-même. Ailleurs
+// qu'Android, rien.
 #pragma once
 
 #include <QtCore/QObject>
 #include <QtCore/QSettings>
 #include <QtCore/QString>
-#include <QtGui/QGuiApplication>
 
 #ifdef Q_OS_ANDROID
 #include <QtCore/QJniObject>
@@ -33,15 +32,7 @@ class Releve : public QObject
   Q_PROPERTY(bool actif READ actif WRITE poserActif NOTIFY actifChange)
 
 public:
-  explicit Releve(QObject* parent = nullptr) : QObject(parent)
-  {
-#ifdef Q_OS_ANDROID
-    connect(qGuiApp, &QGuiApplication::applicationStateChanged, this, [](Qt::ApplicationState etat) {
-      premierPlan(etat == Qt::ApplicationActive);
-    });
-    premierPlan(QGuiApplication::applicationState() == Qt::ApplicationActive);
-#endif
-  }
+  explicit Releve(QObject* parent = nullptr) : QObject(parent) {}
 
   bool disponible() const
   {
@@ -87,16 +78,5 @@ signals:
   void actifChange();
 
 private:
-#ifdef Q_OS_ANDROID
-  static void premierPlan(bool oui)
-  {
-    const QJniObject contexte = QNativeInterface::QAndroidApplication::context();
-    if (!contexte.isValid())
-      return;
-    QJniObject::callStaticMethod<void>("fr/mmedia/mmail/Releve", "premierPlan",
-                                       "(Landroid/content/Context;Z)V", contexte.object(), jboolean(oui));
-  }
-#endif
-
   QString m_index;
 };

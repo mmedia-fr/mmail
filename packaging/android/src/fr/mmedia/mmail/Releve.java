@@ -17,13 +17,14 @@
 // activité. D'où aussi des fichiers, relus à chaque passage, plutôt que des
 // préférences, qu'un processus garde en mémoire.
 //
-// MMail au premier plan, la tâche ne fait rien : MMail relève lui-même, et ses
-// notifications s'effacent (premierPlan, appelé par cpp/releve.h).
+// MMail au premier plan, la tâche ne fait rien : MMail relève lui-même. Ses
+// notifications s'effacent à chaque reprise de son activité (suivre).
 package fr.mmedia.mmail;
 
 import android.Manifest;
 import android.app.Activity;
 import android.app.ActivityManager;
+import android.app.Application;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
@@ -38,6 +39,7 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.os.Build;
+import android.os.Bundle;
 import android.util.Log;
 
 import org.json.JSONArray;
@@ -60,6 +62,7 @@ public class Releve extends JobService {
     private static final int LIGNES = 5;
 
     private static boolean chargee;
+    private static boolean suivi;
 
     private static native byte[] comptes(byte[] index);
     private static native byte[] relever(byte[] index, byte[] secrets, byte[] etat);
@@ -86,6 +89,7 @@ public class Releve extends JobService {
             effacer(contexte);
             return;
         }
+        suivre(contexte);
         if (ordonnanceur.getPendingJob(TACHE) != null)
             return;
         JobInfo tache = new JobInfo.Builder(TACHE, new ComponentName(contexte, Releve.class))
@@ -116,10 +120,28 @@ public class Releve extends JobService {
         ((Activity) contexte).requestPermissions(new String[] {Manifest.permission.POST_NOTIFICATIONS}, TACHE);
     }
 
-    /** MMail au premier plan (ou non) ; au premier plan, ses notifications s'effacent. */
-    public static void premierPlan(Context contexte, boolean oui) {
-        if (oui)
-            effacer(contexte);
+    /**
+     * MMail au premier plan, ses notifications s'effacent : tout de suite, puis
+     * à chaque reprise de son activité. Le cycle de vie d'Android, et non
+     * l'état de l'application Qt : MMail rouvert depuis le lanceur après un
+     * passage en arrière-plan, l'effacement qui en dépendait ne se faisait
+     * pas (constaté sur l'émulateur, 03/11/2026).
+     */
+    private static synchronized void suivre(Context contexte) {
+        effacer(contexte);
+        if (suivi || !(contexte.getApplicationContext() instanceof Application))
+            return;
+        suivi = true;
+        ((Application) contexte.getApplicationContext()).registerActivityLifecycleCallbacks(
+                new Application.ActivityLifecycleCallbacks() {
+                    @Override public void onActivityResumed(Activity activite) { effacer(activite); }
+                    @Override public void onActivityCreated(Activity activite, Bundle etat) {}
+                    @Override public void onActivityStarted(Activity activite) {}
+                    @Override public void onActivityPaused(Activity activite) {}
+                    @Override public void onActivityStopped(Activity activite) {}
+                    @Override public void onActivitySaveInstanceState(Activity activite, Bundle etat) {}
+                    @Override public void onActivityDestroyed(Activity activite) {}
+                });
     }
 
     /** Le processus de l'application est-il au premier plan ? Vu d'ici, un autre processus. */

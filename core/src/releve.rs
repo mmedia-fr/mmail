@@ -15,7 +15,10 @@
 //! connaît (ce que MMail a déjà montré), ou le dernier signalé s'il est plus
 //! grand. Sans l'un ni l'autre (compte jamais relevé, `UIDVALIDITY` changé),
 //! la relève pose le seuil sans rien signaler : pas de notification pour tout
-//! un historique. Seuls les messages non lus sont signalés.
+//! un historique. Seuls les messages non lus sont signalés. Limite : un
+//! message que MMail range lui-même dans l'index après qu'on l'a quitté (une
+//! synchronisation encore en cours, celle d'un compte qu'on vient d'ajouter)
+//! passe pour déjà montré, et n'est pas signalé.
 //!
 //! Les filtres ne passent pas ici : un message qu'un filtre rangera à la
 //! prochaine ouverture de MMail est signalé quand même.

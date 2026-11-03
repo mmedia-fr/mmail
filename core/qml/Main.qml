@@ -6381,6 +6381,14 @@ ApplicationWindow {
                 pause.start()
                 return
             }
+            // Scénario « barre-redaction » (retour de Manu du 03/11 sous
+            // Android) : au banc, MMAIL_TACTILE=1 et MMAIL_TAILLE=392x800.
+            if (essai.scenario === "barre-redaction") {
+                var attente = Qt.createQmlObject('import QtQuick; Timer { interval: 1500 }', fenetre)
+                attente.triggered.connect(scenarios.etapeScenarioBarreRedaction)
+                attente.start()
+                return
+            }
             if (essai.scenario === "reprise")
                 return
             // Scénario « lien-saut » (0.6.33) : un lien coupé sur plusieurs

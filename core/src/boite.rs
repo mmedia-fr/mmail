@@ -142,6 +142,15 @@ pub mod qobject {
         #[cxx_name = "terminerMicrosoft"]
         fn terminer_microsoft(self: Pin<&mut Boite>, url: &QString) -> bool;
 
+        /// Sous Android (0.7.0) : l'issue d'une connexion Microsoft ou Google
+        /// menée par le système (MSAL, services Google), en JSON
+        /// (`crate::android::lire_connexion`). Rend faux si elle est
+        /// illisible. Issue : `microsoftConnecte` ou `microsoftRefuse`,
+        /// `googleConnecte` ou `googleRefuse`.
+        #[qinvokable]
+        #[cxx_name = "terminerAndroid"]
+        fn terminer_android(self: Pin<&mut Boite>, issue: &QString) -> bool;
+
         /// Vrai si MMail a un client Google : sans lui, pas de compte Google.
         #[qinvokable]
         #[cxx_name = "googleDisponible"]
@@ -2546,6 +2555,30 @@ impl qobject::Boite {
         lance.is_ok()
     }
 
+    pub fn terminer_android(mut self: Pin<&mut Self>, issue: &QString) -> bool {
+        use crate::oauth::Fournisseur;
+        let Some((service, issue)) = crate::android::lire_connexion(&issue.to_string()) else {
+            return false;
+        };
+        // Le compte garde, à la place du jeton de rafraîchissement que le
+        // système ne rend pas, le repère qui lui fera demander ses jetons.
+        let issue = issue.map(|c| ConnexionOAuth {
+            adresse: c.adresse,
+            client: match service {
+                Fournisseur::Microsoft => crate::microsoft::identifiant_client(),
+                Fournisseur::Google => String::new(),
+            },
+            rafraichissement: crate::android::repere(&c.compte),
+            acces: c.acces,
+            duree: c.duree,
+        });
+        match service {
+            Fournisseur::Microsoft => self.as_mut().accueillir_microsoft(issue),
+            Fournisseur::Google => self.as_mut().accueillir_google(issue),
+        }
+        true
+    }
+
     /// Issue de la connexion Microsoft, sur le fil Qt : le compte est
     /// enregistré — ou converti, s'il existait avec un mot de passe — puis
     /// connecté.
@@ -2759,7 +2792,8 @@ impl qobject::Boite {
             .and_then(|i| i.oauth.clone())
             .filter(|p| crate::oauth::fournisseur(p) == crate::oauth::Fournisseur::Google)
             .map(|p| crate::oauth::verrouiller(&p).rafraichissement.clone())
-            .filter(|j| !j.is_empty());
+            // Connecté par Android : Google garde le jeton, pas MMail.
+            .filter(|j| !j.is_empty() && !j.starts_with(crate::android::DELEGUE));
         if let Some(jeton) = a_revoquer {
             let _ = thread::Builder::new().name("mmail-revocation".into()).spawn(move || {
                 if let Err(e) = crate::google::revoquer(&jeton) {

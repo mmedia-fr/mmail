@@ -140,7 +140,8 @@ endif()
 # Le .h figure dans les sources pour qu'AUTOMOC le traite : sans cela, la classe
 # QObject qu'il declare n'a pas de metaobjet et l'edition de liens echoue.
 set(MMAIL_SOURCES cpp/main.cpp cpp/coffre.h cpp/fenetre.h cpp/installeur.h cpp/lanceur.h cpp/pastille.h cpp/notifieur.h cpp/impression.h cpp/presse_papier.h
-                  cpp/mise_en_forme.h cpp/rendu_complet.h cpp/correcteur.h cpp/releve.h)
+                  cpp/mise_en_forme.h cpp/rendu_complet.h cpp/correcteur.h cpp/releve.h
+                  cpp/connexion_android.h)
 if(WIN32)
   # Icône et informations de version de l'exécutable (cf. build/mmail.rc.in).
   configure_file(build/mmail.rc.in ${CMAKE_CURRENT_BINARY_DIR}/mmail.rc @ONLY)
@@ -257,6 +258,9 @@ if(ANDROID)
   # par Java : rien ne les référence dans le programme, et l'éditeur de liens
   # ne garderait pas l'interface C du noyau qu'elles appellent sans elles.
   target_sources(mmail PRIVATE cpp/releve_android.cpp)
+  # Jetons des comptes Microsoft et Google connectés par Android (0.7.0) :
+  # pont entre le noyau (core/src/android.rs) et Jetons.java.
+  target_sources(mmail PRIVATE cpp/jetons_android.cpp)
 endif()
 
 if(NOT ANDROID)

@@ -72,15 +72,16 @@ pub fn secret_client() -> String {
 
 /// Vrai si MMail a un client Google : sans lui, pas de compte Google.
 pub fn disponible() -> bool {
-    !identifiant_client().is_empty() && !secret_client().is_empty()
+    // Sous Android, la connexion passe par les services Google (0.7.0,
+    // `crate::android`) : ni identifiant ni secret dans MMail.
+    cfg!(target_os = "android") || (!identifiant_client().is_empty() && !secret_client().is_empty())
 }
 
 /// L'application Google de MMail est-elle publiée ? Passée en production le
 /// 19/10/2026 : tout compte Gmail peut s'y connecter, avec l'avertissement
-/// « application non vérifiée » tant que Google ne l'a pas vérifiée. L'ajout
-/// est donc ouvert, sur le bureau seulement : la connexion par le navigateur
-/// et l'écoute locale n'ont pas été éprouvées sous Android.
-const APPLICATION_PUBLIEE: bool = cfg!(not(target_os = "android"));
+/// « application non vérifiée » tant que Google ne l'a pas vérifiée. Sous
+/// Android, la connexion passe par les services Google (0.7.0).
+const APPLICATION_PUBLIEE: bool = true;
 
 /// Vrai si l'ajout d'un compte Google s'affiche : application publiée, ou
 /// `MMAIL_GOOGLE_ESSAI` posée (utilisateurs de test).

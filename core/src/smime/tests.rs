@@ -11,6 +11,7 @@ const BOB_P12: &[u8] = include_bytes!("essais/bob.p12");
 const BOB_ANCIEN_P12: &[u8] = include_bytes!("essais/bob-ancien.p12");
 const BOB_PEM: &[u8] = include_bytes!("essais/bob.pem");
 const DAN_P12: &[u8] = include_bytes!("essais/dan.p12");
+const DAN_PEM: &[u8] = include_bytes!("essais/dan.pem");
 
 /// Le 01/01/2027 : les certificats d'essai, faits le 03/11/2026 pour vingt
 /// ans, sont valides.
@@ -319,8 +320,12 @@ fn messages_malformes_sans_panique() {
 
 /// Un message tel que le fabrique la rédaction, avec une pièce jointe.
 fn message_essai() -> Vec<u8> {
+    message_essai_de("alice@exemple.fr")
+}
+
+fn message_essai_de(de: &str) -> Vec<u8> {
     let r = crate::redaction::Redaction {
-        de: "alice@exemple.fr".into(),
+        de: de.into(),
         nom: "Alice Essai".into(),
         a: "bob@exemple.fr".into(),
         objet: "Devis".into(),
@@ -361,11 +366,32 @@ fn signe_et_chiffre_par_mmail() {
 }
 
 #[test]
-fn chiffrement_refuse_sans_destinataire_ni_cle_elliptique() {
+fn chiffrement_refuse_sans_destinataire() {
     assert!(chiffrer(b"Content-Type: text/plain\r\n\r\nx", &[]).is_err());
+    // Une clé elliptique (P-256) n'est plus refusée.
     let carole = der(include_bytes!("essais/carole.pem"));
-    let e = chiffrer(b"Content-Type: text/plain\r\n\r\nx", &[carole]).unwrap_err();
-    assert!(e.contains("elliptique"), "{e}");
+    assert!(chiffrer(b"Content-Type: text/plain\r\n\r\nx", &[carole]).is_ok());
+}
+
+/// Clé elliptique (P-256) : signature ECDSA, et chiffrement par accord de clé
+/// pour elle, à côté d'un destinataire RSA dans le même message.
+#[test]
+fn signe_et_chiffre_avec_une_cle_elliptique() {
+    let dan_seul = Autorites::de(&[der(DAN_PEM)]);
+    let m = proteger(&message_essai_de("dan@exemple.fr"), Some(&dan()), &[], MAINTENANT).unwrap();
+    assert!(String::from_utf8_lossy(&m).contains("micalg=sha-256"));
+    let o = ouvrir(&m, &[], &dan_seul, MAINTENANT).unwrap();
+    assert_eq!(etat(&o), "verifiee", "{:?}", o.securite);
+    let pour = vec![dan().certificat.clone(), der(BOB_PEM)];
+    let m = proteger(&message_essai_de("dan@exemple.fr"), Some(&dan()), &pour, MAINTENANT).unwrap();
+    for cle in [dan(), bob()] {
+        let o = ouvrir(&m, &[cle], &dan_seul, MAINTENANT).unwrap();
+        assert!(o.securite.chiffre && o.securite.illisible.is_empty(), "{:?}", o.securite);
+        assert_eq!(etat(&o), "verifiee", "{:?}", o.securite);
+        contenu_lisible(&o);
+    }
+    let o = ouvrir(&m, &[alice()], &dan_seul, MAINTENANT).unwrap();
+    assert!(o.securite.illisible.contains("destinataires"), "{}", o.securite.illisible);
 }
 
 #[test]
@@ -401,6 +427,12 @@ fn openssl_lit_ce_que_mmail_signe_et_chiffre() {
     ecrire("racine.pem", RACINE);
     ecrire("bob.pem", BOB_PEM);
     ecrire("bob.p12", BOB_P12);
+    ecrire("dan.pem", DAN_PEM);
+    ecrire("dan.p12", DAN_P12);
+    ecrire(
+        "dan.eml",
+        &proteger(&message_essai_de("dan@exemple.fr"), Some(&dan()), &[dan().certificat.clone()], MAINTENANT).unwrap(),
+    );
     ecrire("signe.eml", &proteger(&message_essai(), Some(&alice()), &[], MAINTENANT).unwrap());
     ecrire(
         "chiffre.eml",
@@ -411,13 +443,18 @@ fn openssl_lit_ce_que_mmail_signe_et_chiffre() {
         assert!(s.status.success(), "openssl {args:?} : {}", String::from_utf8_lossy(&s.stderr));
     };
     openssl(&["pkcs12", "-in", "bob.p12", "-passin", "pass:essai-bob", "-nodes", "-nocerts", "-out", "bob.key"]);
+    openssl(&["pkcs12", "-in", "dan.p12", "-passin", "pass:essai-dan", "-nodes", "-nocerts", "-out", "dan.key"]);
     // L'heure de contrôle est celle de la signature : les certificats d'essai
     // sont valides à cette date.
     let quand = MAINTENANT.to_string();
     openssl(&["cms", "-verify", "-in", "signe.eml", "-CAfile", "racine.pem", "-attime", &quand, "-out", "verifie.mime"]);
     openssl(&["cms", "-decrypt", "-in", "chiffre.eml", "-recip", "bob.pem", "-inkey", "bob.key", "-out", "dechiffre.mime"]);
     openssl(&["cms", "-verify", "-in", "dechiffre.mime", "-CAfile", "racine.pem", "-attime", &quand, "-out", "interieur.mime"]);
-    for f in ["verifie.mime", "interieur.mime"] {
+    // Clé elliptique : accord de clé ECDH, puis signature ECDSA (la chaîne,
+    // un certificat autosigné, n'est pas ce qu'on éprouve ici).
+    openssl(&["cms", "-decrypt", "-in", "dan.eml", "-recip", "dan.pem", "-inkey", "dan.key", "-out", "dan-dechiffre.mime"]);
+    openssl(&["cms", "-verify", "-noverify", "-in", "dan-dechiffre.mime", "-out", "dan-interieur.mime"]);
+    for f in ["verifie.mime", "interieur.mime", "dan-interieur.mime"] {
         let contenu = String::from_utf8_lossy(&std::fs::read(d.join(f)).unwrap()).into_owned();
         assert!(contenu.contains("devis.txt"), "{f} : {contenu}");
     }

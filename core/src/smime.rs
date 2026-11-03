@@ -1195,11 +1195,20 @@ fn aleatoire(n: usize) -> Result<Vec<u8>, String> {
 /// rend l'entité `multipart/signed` qui la porte, signature détachée en
 /// SHA-256 avec les intermédiaires du `.p12`, lisible sans S/MIME.
 pub fn signer(entite: &[u8], cle: &Cle, maintenant: i64) -> Result<Vec<u8>, String> {
-    use aws_lc_rs::signature::{RsaKeyPair, RSA_PKCS1_SHA256};
+    use aws_lc_rs::signature::{
+        EcdsaKeyPair, RsaKeyPair, ECDSA_P256_SHA256_ASN1_SIGNING, ECDSA_P384_SHA384_ASN1_SIGNING,
+        ECDSA_P521_SHA512_ASN1_SIGNING, RSA_PKCS1_SHA256,
+    };
     use cms::signed_data::{EncapsulatedContentInfo, SignerInfo, SignerInfos};
     let cert = Certificate::from_der(&cle.certificat).map_err(|_| "certificat de la clé illisible".to_string())?;
-    let paire = RsaKeyPair::from_pkcs8(&cle.privee).map_err(|_| "clé de signature non prise en charge (RSA seulement)".to_string())?;
-    let empreinte = digest::digest(&digest::SHA256, entite);
+    // RSA avec SHA-256 ; ECDSA avec l'empreinte de la taille de la courbe.
+    let courbe = oid_courbe(&cle.certificat);
+    let (hachage, oid_hachage, micalg) = match courbe {
+        Some(P384) => (&digest::SHA384, SHA384, "sha-384"),
+        Some(P521) => (&digest::SHA512, SHA512, "sha-512"),
+        _ => (&digest::SHA256, SHA256, "sha-256"),
+    };
+    let empreinte = digest::digest(hachage, entite);
     let heure = x509_cert::time::Time::try_from(std::time::UNIX_EPOCH + Duration::from_secs(maintenant.max(0) as u64))
         .map_err(|e| format!("heure de signature : {e}"))?;
     let capacites = vec![
@@ -1215,17 +1224,33 @@ pub fn signer(entite: &[u8], cle: &Cle, maintenant: i64) -> Result<Vec<u8>, Stri
     .map_err(|e| format!("encodage : {e}"))?;
     // Ce qui est signé : les attributs, sous leur forme DER d'ensemble (SET).
     let a_signer = attributs.to_der().map_err(|e| format!("encodage : {e}"))?;
-    let mut signature = vec![0u8; paire.public_modulus_len()];
-    paire
-        .sign(&RSA_PKCS1_SHA256, &aws_lc_rs::rand::SystemRandom::new(), &a_signer, &mut signature)
-        .map_err(|_| "signature impossible".to_string())?;
-    let nul = any(&der::asn1::Null)?;
+    let alea = aws_lc_rs::rand::SystemRandom::new();
+    let (signature, procede) = match courbe {
+        None => {
+            let paire = RsaKeyPair::from_pkcs8(&cle.privee)
+                .map_err(|_| "clé de signature non prise en charge (RSA, ou courbe P-256, P-384, P-521)".to_string())?;
+            let mut signature = vec![0u8; paire.public_modulus_len()];
+            paire.sign(&RSA_PKCS1_SHA256, &alea, &a_signer, &mut signature).map_err(|_| "signature impossible".to_string())?;
+            (signature, spki::AlgorithmIdentifierOwned { oid: RSA, parameters: Some(any(&der::asn1::Null)?) })
+        }
+        Some(c) => {
+            let (alg, oid) = match c {
+                P256 => (&ECDSA_P256_SHA256_ASN1_SIGNING, ECDSA_SHA256),
+                P384 => (&ECDSA_P384_SHA384_ASN1_SIGNING, ECDSA_SHA384),
+                P521 => (&ECDSA_P521_SHA512_ASN1_SIGNING, ECDSA_SHA512),
+                _ => return Err("clé de signature sur une courbe non prise en charge".into()),
+            };
+            let paire = EcdsaKeyPair::from_pkcs8(alg, &cle.privee).map_err(|_| "clé de signature elliptique illisible".to_string())?;
+            let signature = paire.sign(&alea, &a_signer).map_err(|_| "signature impossible".to_string())?;
+            (signature.as_ref().to_vec(), spki::AlgorithmIdentifierOwned { oid, parameters: None })
+        }
+    };
     let signataire = SignerInfo {
         version: cms::content_info::CmsVersion::V1,
         sid: SignerIdentifier::IssuerAndSerialNumber(designation(&cert)),
-        digest_alg: spki::AlgorithmIdentifierOwned { oid: SHA256, parameters: None },
+        digest_alg: spki::AlgorithmIdentifierOwned { oid: oid_hachage, parameters: None },
         signed_attrs: Some(attributs),
-        signature_algorithm: spki::AlgorithmIdentifierOwned { oid: RSA, parameters: Some(nul) },
+        signature_algorithm: procede,
         signature: OctetString::new(signature).map_err(|e| e.to_string())?,
         unsigned_attrs: None,
     };
@@ -1238,7 +1263,7 @@ pub fn signer(entite: &[u8], cle: &Cle, maintenant: i64) -> Result<Vec<u8>, Stri
     let sd = SignedData {
         version: cms::content_info::CmsVersion::V1,
         digest_algorithms: der::asn1::SetOfVec::try_from(vec![spki::AlgorithmIdentifierOwned {
-            oid: SHA256,
+            oid: oid_hachage,
             parameters: None,
         }])
         .map_err(|e| e.to_string())?,
@@ -1258,7 +1283,7 @@ pub fn signer(entite: &[u8], cle: &Cle, maintenant: i64) -> Result<Vec<u8>, Stri
     let mut sortie = Vec::with_capacity(entite.len() + der.len() * 2 + 512);
     sortie.extend_from_slice(
         format!(
-            "Content-Type: multipart/signed; protocol=\"application/pkcs7-signature\"; micalg=sha-256;\r\n boundary=\"{frontiere}\"\r\n\r\nThis is an S/MIME signed message\r\n\r\n--{frontiere}\r\n"
+            "Content-Type: multipart/signed; protocol=\"application/pkcs7-signature\"; micalg={micalg};\r\n boundary=\"{frontiere}\"\r\n\r\nThis is an S/MIME signed message\r\n\r\n--{frontiere}\r\n"
         )
         .as_bytes(),
     );
@@ -1285,12 +1310,18 @@ pub fn chiffrer(entite: &[u8], certificats: &[Vec<u8>]) -> Result<Vec<u8>, Strin
     }
     let cle_contenu = aleatoire(32)?;
     let mut destinataires = Vec::new();
+    let mut elliptique = false;
     for der_cert in certificats {
         let c = Certificate::from_der(der_cert).map_err(|_| "certificat de destinataire illisible".to_string())?;
         let spki = c.tbs_certificate().subject_public_key_info();
         let nom = titulaire(der_cert).map(|t| t.adresses.join(", ")).unwrap_or_default();
+        if spki.algorithm.oid == EC_PUBLIC_KEY {
+            destinataires.push(RecipientInfo::Kari(accord_pour(&c, der_cert, &cle_contenu, &nom)?));
+            elliptique = true;
+            continue;
+        }
         if spki.algorithm.oid != RSA {
-            return Err(format!("le certificat de {nom} a une clé elliptique : chiffrement pas encore pris en charge"));
+            return Err(format!("le certificat de {nom} a une clé d'un type non pris en charge"));
         }
         let publique = PublicEncryptingKey::from_der(&spki.to_der().map_err(|e| e.to_string())?)
             .map_err(|_| format!("clé publique de {nom} illisible"))?;
@@ -1310,7 +1341,9 @@ pub fn chiffrer(entite: &[u8], certificats: &[Vec<u8>]) -> Result<Vec<u8>, Strin
     let contexte = cle.encrypt(&mut donnees).map_err(|_| "chiffrement impossible".to_string())?;
     let iv: &[u8] = (&contexte).try_into().map_err(|_| "vecteur d'initialisation absent".to_string())?;
     let ed = EnvelopedData {
-        version: cms::content_info::CmsVersion::V0,
+        // Version 2 dès qu'un destinataire passe par l'accord de clé
+        // (RFC 5652, 6.1).
+        version: if elliptique { cms::content_info::CmsVersion::V2 } else { cms::content_info::CmsVersion::V0 },
         originator_info: None,
         recip_infos: RecipientInfos(der::asn1::SetOfVec::try_from(destinataires).map_err(|e| e.to_string())?),
         encrypted_content: EncryptedContentInfo {
@@ -1331,6 +1364,46 @@ pub fn chiffrer(entite: &[u8], certificats: &[Vec<u8>]) -> Result<Vec<u8>, Strin
     );
     sortie.extend_from_slice(base64_mime(&der).as_bytes());
     Ok(sortie)
+}
+
+/// Destinataire à clé elliptique (RFC 5753) : clé éphémère sur sa courbe,
+/// secret partagé dérivé (X9.63, empreinte de la taille de la courbe) en clé
+/// d'emballage AES-256, qui emballe la clé de contenu — la forme qu'écrit
+/// OpenSSL.
+fn accord_pour(c: &Certificate, der_cert: &[u8], cle_contenu: &[u8], nom: &str) -> Result<KeyAgreeRecipientInfo, String> {
+    use aws_lc_rs::agreement::{agree, PrivateKey, UnparsedPublicKey as ClePublique};
+    use aws_lc_rs::key_wrap::{AesKek, KeyWrap};
+    use cms::enveloped_data::{OriginatorPublicKey, RecipientEncryptedKey};
+    let courbe = courbe_de(der_cert).ok_or_else(|| format!("le certificat de {nom} est sur une courbe non prise en charge"))?;
+    let (empreinte, procede) = match oid_courbe(der_cert) {
+        Some(P384) => (&digest::SHA384, ECDH_SHA384[0]),
+        Some(P521) => (&digest::SHA512, ECDH_SHA512[0]),
+        _ => (&digest::SHA256, ECDH_SHA256[0]),
+    };
+    let ephemere = PrivateKey::generate(courbe).map_err(|_| "clé éphémère impossible".to_string())?;
+    let publique = ephemere.compute_public_key().map_err(|_| "clé éphémère impossible".to_string())?;
+    let point = c.tbs_certificate().subject_public_key_info().subject_public_key.raw_bytes();
+    let emballage = spki::AlgorithmIdentifierOwned { oid: AES256_WRAP, parameters: None };
+    let info = info_partagee(&emballage, None, 256)?;
+    let kek = agree(&ephemere, ClePublique::new(courbe, point), format!("clé publique de {nom} refusée"), |z| {
+        Ok(derivation_x963(empreinte, z, &info, 32))
+    })?;
+    let kek = AesKek::new(&aws_lc_rs::key_wrap::AES_256, &kek).map_err(|_| "clé d'emballage refusée".to_string())?;
+    let mut tampon = vec![0u8; cle_contenu.len() + 8];
+    let emballee = kek.wrap(cle_contenu, &mut tampon).map_err(|_| format!("chiffrement pour {nom} impossible"))?.to_vec();
+    Ok(KeyAgreeRecipientInfo {
+        version: cms::content_info::CmsVersion::V3,
+        originator: OriginatorIdentifierOrKey::OriginatorKey(OriginatorPublicKey {
+            algorithm: spki::AlgorithmIdentifierOwned { oid: EC_PUBLIC_KEY, parameters: None },
+            public_key: der::asn1::BitString::from_bytes(publique.as_ref()).map_err(|e| e.to_string())?,
+        }),
+        ukm: None,
+        key_enc_alg: spki::AlgorithmIdentifierOwned { oid: procede, parameters: Some(any(&emballage)?) },
+        recipient_enc_keys: vec![RecipientEncryptedKey {
+            rid: KeyAgreeRecipientIdentifier::IssuerAndSerialNumber(designation(c)),
+            enc_key: OctetString::new(emballee).map_err(|e| e.to_string())?,
+        }],
+    })
 }
 
 /// Les en-têtes `Content-*` d'un bloc d'en-têtes (lignes de suite comprises),
@@ -1407,7 +1480,8 @@ pub fn cle_active(compte: i64, maintenant: i64) -> Option<Cle> {
 
 /// Le certificat à qui chiffrer pour `adresse` : le plus récent des
 /// certificats recueillis qui soit à cette adresse, valide maintenant, à clé
-/// RSA, et garanti par une autorité de confiance.
+/// RSA ou elliptique (P-256, P-384, P-521), et garanti par une autorité de
+/// confiance.
 pub fn certificat_pour(profil: &str, adresse: &str, autorites: &Autorites, maintenant: i64) -> Option<Vec<u8>> {
     let adresse = adresse.trim().to_ascii_lowercase();
     let recueillis = intermediaires_recueillis(profil);
@@ -1423,7 +1497,7 @@ pub fn certificat_pour(profil: &str, adresse: &str, autorites: &Autorites, maint
         let Ok(cert) = Certificate::from_der(&c) else {
             continue;
         };
-        if cert.tbs_certificate().subject_public_key_info().algorithm.oid != RSA {
+        if cert.tbs_certificate().subject_public_key_info().algorithm.oid != RSA && courbe_de(&c).is_none() {
             continue;
         }
         let fin = CertificateDer::from(c.as_slice());

@@ -33,8 +33,14 @@ Menu {
                 onTriggered: fenetre.choisirApparence(modelData)
             }
         }
-        MenuSeparator {}
+        // Apparence imposée par l'organisation (0.8.6) : rien d'autre à créer.
+        MenuSeparator {
+            visible: !fenetre.apparenceImposee
+            height: visible ? implicitHeight : 0
+        }
         MenuItem {
+            visible: !fenetre.apparenceImposee
+            height: visible ? implicitHeight : 0
             text: qsTr("Créer mon apparence…")
             onTriggered: dlgApparence.ouvrir()
         }

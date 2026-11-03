@@ -9,6 +9,8 @@
 #include <QtCore/QDir>
 #include <QtCore/QFile>
 #include <QtCore/QFileInfo>
+#include <QtCore/QJsonDocument>
+#include <QtCore/QJsonObject>
 #include <QtCore/QLockFile>
 #include <QtCore/QRegularExpression>
 #include <QtCore/QSettings>
@@ -148,6 +150,105 @@ static QString reglageMachine(const char* variable, const QString& cle)
   QSettings machine(QSettings::NativeFormat, QSettings::SystemScope, QCoreApplication::organizationName(),
                     QCoreApplication::applicationName());
   return machine.value(cle).toString().trimmed();
+}
+
+/// Personnalisation à l'installation (0.8.6) : le dossier des paramètres
+/// d'une organisation — icône, logo, couleurs. Le réglage du poste
+/// `Personnalisation` (ou `MMAIL_PERSONNALISATION`) le désigne, un partage
+/// réseau pour tout un parc ; sinon, `personnalisation` à côté du programme
+/// (de l'AppImage sous Linux : le programme, lui, est dans son image montée).
+/// Vide s'il n'y en a pas.
+static QString dossierPersonnalisation()
+{
+  QString dossier = reglageMachine("MMAIL_PERSONNALISATION", QStringLiteral("Personnalisation"));
+  if (dossier.isEmpty()) {
+    const QString appimage = qEnvironmentVariable("APPIMAGE");
+    const QString base = appimage.isEmpty() ? QCoreApplication::applicationDirPath() : QFileInfo(appimage).absolutePath();
+    dossier = QDir(base).filePath(QStringLiteral("personnalisation"));
+  }
+  const QFileInfo info(dossier);
+  return info.isDir() ? info.absoluteFilePath() : QString();
+}
+
+/// Icône des fenêtres et de la barre des tâches fournie par l'organisation :
+/// `icone.ico`, `icone.png` ou `icone.svg`, d'1 Mio au plus. Rend son chemin,
+/// vide si aucune ne convient.
+static QString poserIconePersonnalisee(const QString& dossier)
+{
+  for (const QString& nom : {QStringLiteral("icone.ico"), QStringLiteral("icone.png"), QStringLiteral("icone.svg")}) {
+    const QFileInfo info(QDir(dossier).filePath(nom));
+    if (!info.isFile())
+      continue;
+    const QIcon icone(info.absoluteFilePath());
+    if (info.size() > 1024 * 1024 || icone.pixmap(32, 32).isNull()) {
+      qWarning("personnalisation : icône %s écartée (illisible, ou plus d'1 Mio)", qUtf8Printable(nom));
+      continue;
+    }
+    QGuiApplication::setWindowIcon(icone);
+    return info.absoluteFilePath();
+  }
+  return QString();
+}
+
+/// Ce que l'interface reprend du dossier de personnalisation :
+/// - `nom` : celui de l'apparence de l'organisation (40 caractères au plus) ;
+/// - `apparence` : JSON de la forme de l'apparence personnelle (0.6.37),
+///   `{base, bandeau, accent, surbrillance, fond, lien}`, couleurs en
+///   `#RRGGBB` ; une couleur invalide est écartée, une apparence sans `base`
+///   aussi ;
+/// - `imposer` : pas d'autre apparence au choix ;
+/// - `logo` : `logo.svg` ou `logo.png` (2 Mio au plus), en adresse de fichier.
+/// Un fichier illisible n'empêche rien : MMail garde ses couleurs.
+static QVariantMap lirePersonnalisation(const QString& dossier)
+{
+  QVariantMap p;
+  if (dossier.isEmpty())
+    return p;
+  const QDir d(dossier);
+  p.insert(QStringLiteral("dossier"), dossier);
+  QFile fichier(d.filePath(QStringLiteral("personnalisation.json")));
+  if (fichier.exists()) {
+    QJsonParseError erreur;
+    const QJsonDocument document = fichier.size() <= 64 * 1024 && fichier.open(QIODevice::ReadOnly)
+                                       ? QJsonDocument::fromJson(fichier.readAll(), &erreur)
+                                       : QJsonDocument();
+    if (!document.isObject()) {
+      qWarning("personnalisation : personnalisation.json illisible (%s)", qUtf8Printable(erreur.errorString()));
+    } else {
+      const QJsonObject o = document.object();
+      const QString nom = o.value(QStringLiteral("nom")).toString().trimmed().left(40);
+      if (!nom.isEmpty())
+        p.insert(QStringLiteral("nom"), nom);
+      const QJsonObject a = o.value(QStringLiteral("apparence")).toObject();
+      QJsonObject propre;
+      const QString base = a.value(QStringLiteral("base")).toString().trimmed();
+      if (!base.isEmpty())
+        propre.insert(QStringLiteral("base"), base);
+      static const QRegularExpression forme(QStringLiteral("^#[0-9A-Fa-f]{6}$"));
+      for (const QString& cle : {QStringLiteral("bandeau"), QStringLiteral("accent"), QStringLiteral("surbrillance"),
+                                 QStringLiteral("fond"), QStringLiteral("lien")}) {
+        const QString couleur = a.value(cle).toString().trimmed();
+        if (forme.match(couleur).hasMatch())
+          propre.insert(cle, couleur);
+        else if (!couleur.isEmpty())
+          qWarning("personnalisation : couleur « %s » écartée pour %s", qUtf8Printable(couleur), qUtf8Printable(cle));
+      }
+      if (propre.contains(QStringLiteral("base"))) {
+        p.insert(QStringLiteral("apparence"), QString::fromUtf8(QJsonDocument(propre).toJson(QJsonDocument::Compact)));
+        p.insert(QStringLiteral("imposer"), o.value(QStringLiteral("imposer")).toBool(false));
+      } else if (!a.isEmpty()) {
+        qWarning("personnalisation : apparence sans « base », écartée");
+      }
+    }
+  }
+  for (const QString& nom : {QStringLiteral("logo.svg"), QStringLiteral("logo.png")}) {
+    const QFileInfo info(d.filePath(nom));
+    if (info.isFile() && info.size() <= 2 * 1024 * 1024) {
+      p.insert(QStringLiteral("logo"), QUrl::fromLocalFile(info.absoluteFilePath()).toString());
+      break;
+    }
+  }
+  return p;
 }
 
 /// Vrai si la machine n'a aucune carte graphique : Direct3D n'y trouve que
@@ -375,6 +476,18 @@ int main(int argc, char* argv[])
   QCoreApplication::setOrganizationDomain(QStringLiteral("mmedia.fr"));
   QCoreApplication::setApplicationVersion(QStringLiteral(MMAIL_VERSION));
   QGuiApplication::setWindowIcon(QIcon(QStringLiteral(":/assets/mmail.ico")));
+  // Personnalisation à l'installation (0.8.6) : l'icône d'abord, avant la
+  // première fenêtre ; le reste passe à l'interface (`personnalisationMachine`).
+  const QString dossierPerso = dossierPersonnalisation();
+  QVariantMap personnalisation = lirePersonnalisation(dossierPerso);
+  if (!dossierPerso.isEmpty()) {
+    const QString icone = poserIconePersonnalisee(dossierPerso);
+    if (!icone.isEmpty())
+      personnalisation.insert(QStringLiteral("icone"), icone);
+    qInfo("personnalisation : %s | apparence %s | icône %s | logo %s", qUtf8Printable(dossierPerso),
+          personnalisation.contains(QStringLiteral("apparence")) ? "oui" : "non", icone.isEmpty() ? "non" : "oui",
+          personnalisation.contains(QStringLiteral("logo")) ? "oui" : "non");
+  }
 
   // Jours de messages gardés sur le poste (31 par défaut, 0 : aucun), réglables
   // pour la machine : le noyau les lit dans l'environnement.
@@ -534,6 +647,7 @@ int main(int argc, char* argv[])
     engine.rootContext()->setContextProperty(QStringLiteral("gestesEssai"), &gestesEssai);
   }
   engine.rootContext()->setContextProperty(QStringLiteral("identifiantsEssai"), essai);
+  engine.rootContext()->setContextProperty(QStringLiteral("personnalisationMachine"), personnalisation);
 
   // Dossier proposé à l'enregistrement d'une pièce jointe : celui des
   // téléchargements de l'utilisateur, résolu par le système.

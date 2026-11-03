@@ -4071,6 +4071,45 @@ QtObject {
         })
     }
 
+    /// Scénario « personnalisation » (0.8.6) : le dossier de MMAIL_PERSONNALISATION
+    /// donne une apparence au nom de l'organisation, ses couleurs, et son logo
+    /// en tête du bandeau. MMAIL_DOSSIER « imposer » : elle est la seule au
+    /// choix, et l'emporte sur l'apparence déjà choisie (le banc en range
+    /// une) ; « libre » : elle s'ajoute, le choix rangé reste.
+    function etapeScenarioPersonnalisation() {
+        var echecs = 0
+        var bilan = function(texte, bon) {
+            if (!bon)
+                ++echecs
+            console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
+        }
+        var p = fenetre.personnalisation
+        console.log("scenario: personnalisation", JSON.stringify(p))
+        var org = fenetre.jeuxApparence["organisation"]
+        bilan("apparence de l'organisation, « " + (org ? org.libelle : "") + " »", !!org && org.libelle === "Exemple essai")
+        bilan("bandeau " + (org ? org.bandeau : ""), !!org && org.bandeau === "#1F4E79")
+        bilan("couleur invalide écartée", !!org && org.surbrillance !== "rouge")
+        if (identifiantsEssai.dossier === "imposer") {
+            bilan("imposée : seule au choix " + JSON.stringify(fenetre.nomsApparence),
+                  fenetre.nomsApparence.length === 1 && fenetre.nomsApparence[0] === "organisation")
+            bilan("imposée : en vigueur (" + fenetre.apparence + ")", fenetre.apparence === "organisation")
+        } else {
+            bilan("libre : au choix", fenetre.nomsApparence.indexOf("organisation") >= 0 && fenetre.nomsApparence.length > 1)
+            bilan("libre : le choix rangé reste (" + fenetre.apparence + ")", fenetre.apparence !== "organisation")
+            fenetre.choisirApparence("organisation")
+        }
+        // Le bandeau est la `menuBar` de la fenêtre, hors de son contentItem.
+        var signe = objetNomme(fenetre.menuBar, "signeEntete")
+        plusTard(800, function() {
+            bilan("logo en tête : " + (signe ? signe.source : "absent"),
+                  !!signe && String(signe.source) === p.logo && signe.visible)
+            bilan("icône retenue", !!p.icone)
+            console.log("scenario: personnalisation " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
+            if (identifiantsEssai.sortie === "" || identifiantsEssai.sortie === "file:")
+                Qt.quit()
+        })
+    }
+
     /// Premier objet nommé `nom` sous `racine` (objectName), ou null.
     function objetNomme(racine, nom) {
         if (!racine)

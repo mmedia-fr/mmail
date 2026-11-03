@@ -308,7 +308,7 @@ fn chiffrement_refuse_sans_destinataire_ni_cle_elliptique() {
 fn certificat_du_correspondant_choisi_parmi_les_recueillis() {
     let profil = std::env::temp_dir().join(format!("mmail-smime-choix-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&profil);
-    let p = profil.to_string_lossy().into_owned();
+    let p = profil.join("index.sqlite").to_string_lossy().into_owned();
     assert!(certificat_pour(&p, "alice@exemple.fr", &autorites(), MAINTENANT).is_none());
     let o = ouvrir_essai("signe-detache.eml", &[], MAINTENANT);
     recueillir(&p, o.securite.signature.as_ref().unwrap());

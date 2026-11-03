@@ -548,6 +548,8 @@ ColumnLayout {
             MiseEnForme {
                 id: mefLecture
                 document: vueCorps.textDocument
+                // Liens lisibles sur la page blanche du message (0.6.32).
+                couleurLien: fenetre.couleurLienPage
             }
             // Les GIF animés s'animent (0.6.18).
             ImagesAnimees {

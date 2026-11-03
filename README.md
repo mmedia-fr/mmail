@@ -724,6 +724,17 @@ installeur Windows, AppImage, APK — sont produits par l'intégration continue
 précédentes portaient une clé d'essai : passer de l'une à l'autre demande de
 désinstaller MMail une fois).
 
+**Windows Server 2016** (0.6.39). Qt 6.8 vise Windows 10 1809 et au-delà ; sur
+Windows Server 2016 (build 14393), MMail ne démarrait pas (« point d'entrée
+introuvable »). Il n'y manque que deux fonctions importées par Qt :
+`SetThreadDescription` (dans `KERNELBASE` seulement en 1607) et
+`UiaRaiseNotificationEvent` (Windows 10 1709). À la fabrication du paquet,
+`build/cales-server2016.py` les fait passer par deux petites DLL posées à côté
+de `MMail.exe` — `MMKRNL32.dll`, que des renvois, et `MMUIACORE.dll`, qui
+appelle la vraie fonction si le système l'a et ne fait rien sinon — en
+changeant, dans `Qt6Core.dll` et `platforms/qwindows.dll`, le seul nom de la
+DLL importée. Un seul paquet pour tous les Windows.
+
 **Ni macOS ni iOS.** Les systèmes d'Apple ne sont pas des cibles de MMail, et
 leur prise en charge est retirée du code et de l'intégration continue depuis le
 02/11/2026 : la distribution par l'App Store est incompatible avec la licence

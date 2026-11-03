@@ -215,6 +215,11 @@ jobs:
           # rien ne peut être contrôlé sans session ouverte — ni ici, ni sur un
           # poste, où c'est le seul moyen de vérifier une installation à distance.
           cp "$QT_ROOT_DIR/plugins/platforms/qoffscreen.dll" dist/MMail/platforms/
+          # Windows Server 2016 (0.6.39) : les deux fonctions que Qt 6.8 importe
+          # et que la build 14393 n'a pas passent par deux cales posées à côté
+          # de MMail.exe (cf. build/cales-server2016.py) ; le contrôle du paquet
+          # qui suit vérifie qu'il démarre toujours.
+          python build/cales-server2016.py dist/MMail
           iscc="/c/Program Files (x86)/Inno Setup 6/ISCC.exe"
           test -f "$iscc"
           # Double barre : sous Git Bash, « /DAppVersion=… » serait pris pour un

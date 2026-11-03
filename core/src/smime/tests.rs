@@ -250,3 +250,27 @@ fn cles_et_autorites_rangees_a_cote_de_l_index() {
     assert!(ranger_cle(&p, "../x", BOB_P12, &bob()).is_err());
     let _ = std::fs::remove_dir_all(&profil);
 }
+
+#[test]
+fn messages_malformes_sans_panique() {
+    // En-têtes S/MIME, contenu absurde : rien ne doit paniquer.
+    let cas: [&[u8]; 4] = [
+        b"From: a@exemple.fr\r\nContent-Type: application/pkcs7-mime; smime-type=enveloped-data\r\nContent-Transfer-Encoding: base64\r\n\r\nMIAGCSqGSIb3DQEHA6CAMIA=\r\n",
+        b"From: a@exemple.fr\r\nContent-Type: multipart/signed; protocol=\"application/pkcs7-signature\"; boundary=\"b\"\r\n\r\n--b\r\nContent-Type: text/plain\r\n\r\nx\r\n--b\r\nContent-Type: application/pkcs7-signature\r\nContent-Transfer-Encoding: base64\r\n\r\nAAAA\r\n--b--\r\n",
+        b"From: a@exemple.fr\r\nContent-Type: multipart/signed; protocol=\"application/pkcs7-signature\"; boundary=\"b\"\r\n\r\n--b\r\nsans fin",
+        b"From: a@exemple.fr\r\nContent-Type: application/pkcs7-mime\r\n\r\n",
+    ];
+    for brut in cas {
+        assert!(est_smime(brut));
+        let _ = ouvrir(brut, &[bob()], &autorites(), MAINTENANT);
+    }
+    // BER profondément imbriqué : refusé sans débordement de pile.
+    let mut profond = Vec::new();
+    for _ in 0..5000 {
+        profond.extend_from_slice(&[0x30, 0x80]);
+    }
+    let corps = crate::smtp::base64(&profond);
+    let brut = format!("From: a@exemple.fr\r\nContent-Type: application/pkcs7-mime\r\nContent-Transfer-Encoding: base64\r\n\r\n{corps}\r\n");
+    let o = ouvrir(brut.as_bytes(), &[bob()], &autorites(), MAINTENANT);
+    assert!(o.map(|o| o.securite.signature.is_none()).unwrap_or(true));
+}

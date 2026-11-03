@@ -107,7 +107,14 @@ de projet interne.
   semaines », « Plus tôt ce mois-ci », « Le mois dernier », « Plus ancien » ;
   dans un dossier, dans « Toutes les BàL » et dans une recherche triée par
   date. Les intitulés suivent le jour (« Aujourd'hui » devient « Hier » passé
-  minuit) ; « Affichage › Regrouper les messages par date » les retire ;
+  minuit) ; « Affichage › Regrouper les messages par date » les retire. Un
+  clic sur un intitulé replie ou déplie son groupe ; le clic droit (l'appui
+  long sous Android) les replie ou les déplie tous — dossier par dossier, le
+  temps de la session. Le clavier et Maj+clic sautent les messages repliés ;
+- **molette** : dans la liste des messages, un cran fait défiler autant de
+  messages que le réglage du poste (« Nombre de lignes à faire défiler » sous
+  Windows, 3 par défaut), comme Outlook ; un pavé tactile garde son défilement
+  fin ;
 - **gros dossiers** : la liste s'affiche dès sa première page (une vingtaine
   de millisecondes pour 40 000 messages), le reste suit par paquets sans figer
   la fenêtre ; de même en sortant d'une recherche ;
@@ -201,6 +208,11 @@ de projet interne.
 - **Supprimer** envoie à la corbeille de la boîte (touche Suppr) ; dans la
   corbeille et les indésirables, d'où un message n'a plus de corbeille où aller,
   il l'efface pour de bon, après confirmation (0.6.24) ;
+- **Ctrl+Z**, comme dans Outlook : défait la dernière suppression ou le dernier
+  déplacement — un autre Ctrl+Z, le précédent, jusqu'à vingt —, les messages
+  reviennent dans leur dossier, d'une boîte à l'autre comprise ; aussi par le
+  menu d'un message (« Annuler la suppression », « Annuler le déplacement »).
+  Un effacement pour de bon (corbeille, indésirables) ne se défait pas ;
 - **dossiers de rôle** — brouillons, éléments envoyés, corbeille — désignés
   par le serveur (SPECIAL-USE) ; à défaut (OVH), reconnus à leur nom usuel,
   « Drafts » ou « Brouillons », « Sent » ou « Éléments envoyés »… : le moins

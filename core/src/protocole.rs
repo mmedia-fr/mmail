@@ -576,6 +576,59 @@ pub fn analyser_appenduid(reponse: &str) -> Option<(u32, u32)> {
     Some((validite, uid))
 }
 
+/// UID donnés par la cible d'un `UID MOVE` ou d'un `UID COPY` (UIDPLUS,
+/// RFC 4315 ; RFC 6851 pour `MOVE`, qui le dit dans une réponse non
+/// étiquetée) : « * OK [COPYUID 38505 304,319:320 3956:3958] » →
+/// (38505, [(304, 3956), (319, 3957), (320, 3958)]), UID de la source et UID
+/// de la cible pris dans l'ordre où le serveur les écrit. Plusieurs réponses
+/// pour un grand ensemble s'ajoutent ; une réponse dont les deux ensembles
+/// n'ont pas la même taille est ignorée.
+pub fn analyser_copyuid(reponse: &str) -> Option<(u32, Vec<(u32, u32)>)> {
+    let mut validite = None;
+    let mut paires = Vec::new();
+    for valeur in reponse.lines().filter_map(|l| valeur_de_code(l, "COPYUID ")) {
+        let mut parties = valeur.split_whitespace();
+        let (Some(v), Some(source), Some(cible)) = (parties.next(), parties.next(), parties.next()) else {
+            continue;
+        };
+        let Ok(v) = v.parse::<u32>() else {
+            continue;
+        };
+        let (source, cible) = (uids_dans_l_ordre(source), uids_dans_l_ordre(cible));
+        if source.is_empty() || source.len() != cible.len() {
+            continue;
+        }
+        validite = Some(v);
+        paires.extend(source.into_iter().zip(cible));
+    }
+    validite.map(|v| (v, paires))
+}
+
+/// UID d'un ensemble, un par un, dans l'ordre où il est écrit (« 7,3:5 » →
+/// [7, 3, 4, 5]) ; un intervalle écrit à l'envers se lit à l'envers. Vide si
+/// l'ensemble est illisible, ou démesuré.
+fn uids_dans_l_ordre(texte: &str) -> Vec<u32> {
+    let mut uids = Vec::new();
+    for morceau in texte.split(',') {
+        let (a, b) = match morceau.split_once(':') {
+            Some((a, b)) => (a.parse::<u32>(), b.parse::<u32>()),
+            None => (morceau.parse::<u32>(), morceau.parse::<u32>()),
+        };
+        let (Ok(a), Ok(b)) = (a, b) else {
+            return Vec::new();
+        };
+        if uids.len() as u64 + u64::from(a.abs_diff(b)) >= 1_000_000 {
+            return Vec::new();
+        }
+        if a <= b {
+            uids.extend(a..=b);
+        } else {
+            uids.extend((b..=a).rev());
+        }
+    }
+    uids
+}
+
 /// UID rendus par `UID SEARCH` : « * SEARCH 3 5 7 ».
 pub fn analyser_search(reponse: &str) -> Vec<u32> {
     reponse
@@ -1113,6 +1166,26 @@ mod tests {
         assert_eq!(analyser_appenduid("m0007 OK Append completed.\n"), None);
         assert_eq!(analyser_search("* SEARCH 3 5 7\r\nm0008 OK\r\n"), vec![3, 5, 7]);
         assert!(analyser_search("* SEARCH\r\nm0008 OK\r\n").is_empty());
+    }
+
+    #[test]
+    fn copyuid_de_move_et_de_copy() {
+        // MOVE (RFC 6851) : réponse non étiquetée, avant les EXPUNGE.
+        let deplace = "* OK [COPYUID 38505 304,319:320 3956:3958] Moved UIDs.\r\n* 2 EXPUNGE\r\nm0009 OK Move completed.\r\n";
+        assert_eq!(analyser_copyuid(deplace), Some((38505, vec![(304, 3956), (319, 3957), (320, 3958)])));
+        // COPY : dans la réponse étiquetée.
+        assert_eq!(analyser_copyuid("m0010 OK [COPYUID 7 12 40] Copy completed.\r\n"), Some((7, vec![(12, 40)])));
+        // Intervalle écrit à l'envers : lu à l'envers, des deux côtés.
+        assert_eq!(analyser_copyuid("* OK [COPYUID 7 5:4 9:10]\r\n"), Some((7, vec![(5, 9), (4, 10)])));
+        // Deux réponses pour un grand ensemble.
+        assert_eq!(
+            analyser_copyuid("* OK [COPYUID 7 1:2 11:12]\r\n* OK [COPYUID 7 3 13]\r\nm1 OK\r\n"),
+            Some((7, vec![(1, 11), (2, 12), (3, 13)]))
+        );
+        assert_eq!(analyser_copyuid("m0009 OK Move completed.\r\n"), None);
+        // Ensembles de tailles différentes, ou illisibles : rien de sûr, rien de rendu.
+        assert_eq!(analyser_copyuid("* OK [COPYUID 7 1:3 11:12]\r\n"), None);
+        assert_eq!(analyser_copyuid("* OK [COPYUID 7 1:x 11]\r\n"), None);
     }
 
     #[test]

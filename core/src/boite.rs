@@ -77,6 +77,9 @@ pub mod qobject {
         /// Augmente à chaque changement d'un catalogue de catégories (0.6.15) :
         /// l'interface relit alors `categories()`.
         #[qproperty(i32, revision_categories, cxx_name = "revisionCategories")]
+        /// Ce que Ctrl+Z défait, comme dans Outlook : « Annuler la
+        /// suppression », « Annuler le déplacement » — vide s'il n'y a rien.
+        #[qproperty(QString, annulation)]
         type Boite = super::BoiteRust;
 
         /// Ouvre l'index local du profil. Local et immédiat ; à appeler avant
@@ -521,6 +524,13 @@ pub mod qobject {
         #[qinvokable]
         #[cxx_name = "supprimerDans"]
         fn supprimer_dans(self: Pin<&mut Boite>, compte: i32, chemin: &QString, uids: &QString) -> bool;
+
+        /// Défait la dernière suppression ou le dernier déplacement demandé
+        /// par l'utilisateur et encore là (`annulation`) : les messages
+        /// reviennent dans leur dossier d'origine. Issue :
+        /// `annulationTerminee`.
+        #[qinvokable]
+        fn annuler(self: Pin<&mut Boite>) -> bool;
 
         /// Vrai si le dossier est la corbeille ou les indésirables du compte
         /// (0.6.24) : un message n'a plus de corbeille où aller, « Supprimer »
@@ -980,10 +990,18 @@ pub mod qobject {
         fn drapeaux_modifies(self: Pin<&mut Boite>);
 
         /// Un déplacement est terminé : `nombre` messages déplacés, `erreurs`
-        /// vide si tout s'est bien passé.
+        /// vide si tout s'est bien passé ; `annulable` : Ctrl+Z le défait.
         #[qsignal]
         #[cxx_name = "deplacementTermine"]
-        fn deplacement_termine(self: Pin<&mut Boite>, nombre: i32, erreurs: &QString);
+        fn deplacement_termine(self: Pin<&mut Boite>, nombre: i32, erreurs: &QString, annulable: bool);
+
+        /// Une annulation (Ctrl+Z) est terminée : `nombre` messages revenus
+        /// dans leur dossier, `absents` introuvables là où le déplacement les
+        /// avait mis (déplacés ou effacés depuis), `erreurs` vide si tout
+        /// s'est bien passé.
+        #[qsignal]
+        #[cxx_name = "annulationTerminee"]
+        fn annulation_terminee(self: Pin<&mut Boite>, nombre: i32, absents: i32, erreurs: &QString);
 
         /// Des filtres ont agi sur la boîte de réception d'un compte :
         /// `touches` messages, `deplacements` déplacements lancés — chacun
@@ -1372,6 +1390,104 @@ struct Cible {
     identifiants: Option<Identifiants>,
 }
 
+/// De quoi défaire un déplacement demandé par l'utilisateur — une suppression
+/// est un déplacement vers la corbeille —, comme Ctrl+Z dans Outlook : où le
+/// déplacement a mis les messages, comment les y retrouver, d'où ils venaient.
+#[derive(Clone)]
+struct Annulation {
+    compte: i64,
+    chemin: String,
+    /// Validité de `chemin` pour les UID ci-dessous ; 0 : aucun UID connu.
+    validite: u32,
+    /// Par message : son UID dans `chemin`, que le serveur a donné au
+    /// déplacement (`COPYUID` ; 0 s'il ne l'a pas dit), et son `Message-ID`
+    /// (vide s'il n'en a pas), qui le retrouve à défaut.
+    reperes: Vec<(u32, String)>,
+    origine_compte: i64,
+    origine: String,
+}
+
+/// Annulations gardées : les plus anciennes sortent.
+const ANNULATIONS_GARDEES: usize = 20;
+
+impl Annulation {
+    /// L'annulation d'un déplacement fait : `message_ids`, un par UID de
+    /// `uids`, lus dans l'index avant le déplacement.
+    fn apres(
+        compte: i64,
+        source: &str,
+        cible: &Cible,
+        uids: &[u32],
+        message_ids: Vec<String>,
+        rapport: &Rapport,
+    ) -> Annulation {
+        let (validite, paires) = rapport.correspondances.clone().unwrap_or_default();
+        let donnes: HashMap<u32, u32> = paires.into_iter().collect();
+        let reperes = uids
+            .iter()
+            .zip(message_ids.into_iter().chain(std::iter::repeat(String::new())))
+            .map(|(uid, message_id)| (donnes.get(uid).copied().unwrap_or(0), message_id))
+            .collect();
+        Annulation {
+            compte: cible.compte,
+            chemin: cible.chemin.clone(),
+            validite,
+            reperes,
+            origine_compte: compte,
+            origine: source.to_string(),
+        }
+    }
+}
+
+/// `Message-ID` de messages d'un dossier, d'après l'index : un par UID, vide
+/// pour un message que l'index ne connaît pas ou qui n'en a pas.
+fn message_ids_de(magasin: &Magasin, compte: i64, chemin: &str, uids: &[u32]) -> Vec<String> {
+    let id = magasin.dossier_id(compte, chemin).ok();
+    uids.iter()
+        .map(|&uid| {
+            id.and_then(|id| magasin.message(id, uid).ok().flatten()).map(|m| m.message_id).unwrap_or_default()
+        })
+        .collect()
+}
+
+/// Les messages d'une annulation, dans le dossier où le déplacement les a mis,
+/// qui est alors sélectionné : par l'UID que le serveur a donné, si la
+/// validité du dossier n'a pas changé et qu'il y est encore ; sinon par le
+/// `Message-ID` — le plus récent s'il y en a plusieurs. Rend leurs UID et le
+/// nombre de messages introuvables (déplacés ou effacés depuis, ou sans
+/// `Message-ID`).
+fn retrouver(client: &mut Client, a: &Annulation) -> Result<(Vec<u32>, usize), Echec> {
+    let selection = client.selectionner(&a.chemin, None)?;
+    let presents: HashSet<u32> = if a.validite != 0 && selection.etat.uid_validity == a.validite {
+        let donnes: Vec<u32> = a.reperes.iter().map(|r| r.0).filter(|&u| u > 0).collect();
+        client.presents(&donnes)?.into_iter().collect()
+    } else {
+        HashSet::new()
+    };
+    let mut trouves: Vec<u32> = Vec::new();
+    let mut a_chercher: Vec<&str> = Vec::new();
+    for (uid, message_id) in &a.reperes {
+        if *uid > 0 && presents.contains(uid) {
+            trouves.push(*uid);
+        } else {
+            a_chercher.push(message_id);
+        }
+    }
+    let mut absents = 0;
+    for message_id in a_chercher {
+        if message_id.is_empty() {
+            absents += 1;
+            continue;
+        }
+        let candidat = client.chercher_message_id(message_id)?.into_iter().filter(|u| !trouves.contains(u)).max();
+        match candidat {
+            Some(uid) => trouves.push(uid),
+            None => absents += 1,
+        }
+    }
+    Ok((trouves, absents))
+}
+
 /// Déplacement d'un filtre vers une autre boîte, qui n'était pas connectée
 /// quand le filtre a joué (0.6.33) : au démarrage, l'ordre des connexions
 /// n'est pas fixé. Il part dès que source et cible sont connectées.
@@ -1409,7 +1525,13 @@ enum Commande {
     Confirmer { chemin: String, uid: u32, identifiants: Option<Identifiants> },
     /// Envoyer les messages différés arrivés à échéance.
     EnvoyerDifferes { identifiants: Identifiants },
-    Deplacer { source: String, uids: Vec<u32>, cible: Cible },
+    /// `annulable` : déplacement demandé par l'utilisateur, que Ctrl+Z
+    /// défait (pas celui d'un filtre).
+    Deplacer { source: String, uids: Vec<u32>, cible: Cible, annulable: bool },
+    /// Défaire un déplacement (Ctrl+Z) : les messages de `annulation`, là où
+    /// il les a mis — dans cette boîte —, reviennent dans `cible`, leur
+    /// dossier d'origine.
+    Rapatrier { annulation: Annulation, cible: Cible },
     /// Vider entièrement les dossiers désignés (corbeille, indésirables) de ce
     /// compte : purge définitive côté serveur.
     ViderDossiers { chemins: Vec<String> },
@@ -1535,7 +1657,11 @@ enum Issue {
     Precharge { chemin: String, reste: bool },
     Piece { fichier: PathBuf, ouvrir: bool, joindre: bool },
     Marque { discret: bool },
-    Deplace { cible: i64, chemin_cible: String, rapport: Rapport },
+    /// `annulation` : de quoi le défaire, s'il était annulable.
+    Deplace { cible: i64, chemin_cible: String, rapport: Rapport, annulation: Option<Annulation> },
+    /// Une annulation (Ctrl+Z) est faite : les messages sont revenus dans
+    /// `chemin_cible` de `cible`, ou `rapport` dit ce qui a manqué.
+    Rapatrie { cible: i64, chemin_cible: String, rapport: Rapport },
     /// Un déplacement n'aura pas lieu (échec, ou commande abandonnée avec la
     /// session) : l'interface remet les lignes qu'elle avait retirées.
     DeplacementEchoue { message: String },
@@ -1664,6 +1790,10 @@ pub struct BoiteRust {
     /// Déplacements des filtres en attente de la connexion de leur boîte
     /// cible (0.6.33).
     filtres_differes: Vec<DeplacementDiffere>,
+    annulation: QString,
+    /// Suppressions et déplacements demandés par l'utilisateur, le dernier à
+    /// la fin : ce que Ctrl+Z défait, l'un après l'autre.
+    annulations: Vec<Annulation>,
 }
 
 /// Décompte d'un vidage partiel (0.6.24) : à la confirmation, ces messages-là
@@ -1756,6 +1886,8 @@ impl Default for BoiteRust {
             purge: None,
             filtres_differes: Vec::new(),
             purge_numero: 0,
+            annulation: QString::from(""),
+            annulations: Vec::new(),
         }
     }
 }
@@ -3608,7 +3740,7 @@ impl qobject::Boite {
             }
         };
         let cible = Cible { compte: cible_compte, chemin: chemin_cible, identifiants };
-        self.as_mut().envoyer(compte, Commande::Deplacer { source, uids, cible })
+        self.as_mut().envoyer(compte, Commande::Deplacer { source, uids, cible, annulable: true })
     }
 
     pub fn supprimer(self: Pin<&mut Self>, uids: &QString) -> bool {
@@ -3625,12 +3757,15 @@ impl qobject::Boite {
         if uids.is_empty() {
             return false;
         }
-        let corbeille =
-            self.magasin.as_ref().and_then(|m| dossier_de_role(&m.dossiers(compte).ok()?, "Trash"));
+        let dossiers = self.magasin.as_ref().and_then(|m| m.dossiers(compte).ok()).unwrap_or_default();
+        let corbeille = dossier_de_role(&dossiers, "Trash");
+        // Un brouillon ne s'annule pas : celui qu'une rédaction remplace part
+        // aussi par ici, sans que l'utilisateur l'ait supprimé.
+        let annulable = dossier_de_role(&dossiers, "Drafts").as_deref() != Some(source.as_str());
         match corbeille {
             Some(corbeille) if corbeille != source => {
                 let cible = Cible { compte, chemin: corbeille, identifiants: None };
-                self.as_mut().envoyer(compte, Commande::Deplacer { source, uids, cible })
+                self.as_mut().envoyer(compte, Commande::Deplacer { source, uids, cible, annulable })
             }
             Some(_) => {
                 self.as_mut().set_erreur(QString::from("ces messages sont déjà dans la corbeille"));
@@ -3641,6 +3776,80 @@ impl qobject::Boite {
                 false
             }
         }
+    }
+
+    pub fn annuler(mut self: Pin<&mut Self>) -> bool {
+        let Some(annulation) = self.as_mut().rust_mut().annulations.pop() else {
+            self.as_mut().set_erreur(QString::from("rien à annuler"));
+            return false;
+        };
+        let identifiants = if annulation.origine_compte == annulation.compte {
+            None
+        } else {
+            match self.identites.get(&annulation.origine_compte) {
+                Some(i) if self.etat(annulation.origine_compte) == Etat::Pret => Some(i.clone()),
+                _ => {
+                    // Rien n'est perdu : l'annulation attend la connexion.
+                    self.as_mut().rust_mut().annulations.push(annulation);
+                    self.as_mut().set_erreur(QString::from(
+                        "la boîte d'origine n'est pas connectée : rien n'est annulé pour l'instant",
+                    ));
+                    return false;
+                }
+            }
+        };
+        let cible = Cible { compte: annulation.origine_compte, chemin: annulation.origine.clone(), identifiants };
+        let compte = annulation.compte;
+        let gardee = annulation.clone();
+        let envoyee = self.as_mut().envoyer(compte, Commande::Rapatrier { annulation, cible });
+        if !envoyee {
+            self.as_mut().rust_mut().annulations.push(gardee);
+        }
+        self.as_mut().poser_libelle_annulation();
+        envoyee
+    }
+
+    /// Après un déplacement ou son annulation : la cible a changé aussi — ses
+    /// compteurs, et sa liste si c'est le dossier ouvert.
+    fn apres_deplacement(mut self: Pin<&mut Self>, compte: i64, cible: i64, chemin_cible: &str) {
+        if cible != compte && self.sessions.contains_key(&cible) {
+            self.as_mut().envoyer(cible, Commande::Arborescence);
+        }
+        let courant = self.courant.clone();
+        if let Some((c, chemin, _)) = courant {
+            if c == cible && chemin == chemin_cible {
+                self.as_mut().envoyer(cible, Commande::OuvrirDossier(chemin));
+            }
+        }
+        self.as_mut().rafraichir_attente();
+        self.as_mut().reviser();
+    }
+
+    fn retenir_annulation(mut self: Pin<&mut Self>, annulation: Annulation) {
+        {
+            let mut noyau = self.as_mut().rust_mut();
+            noyau.annulations.push(annulation);
+            let trop = noyau.annulations.len().saturating_sub(ANNULATIONS_GARDEES);
+            noyau.annulations.drain(..trop);
+        }
+        self.as_mut().poser_libelle_annulation();
+    }
+
+    /// `annulation`, d'après la dernière annulation gardée : une suppression
+    /// a mis les messages dans la corbeille de leur compte.
+    fn poser_libelle_annulation(mut self: Pin<&mut Self>) {
+        let libelle = match self.annulations.last() {
+            None => "",
+            Some(a) => {
+                let dossiers = self.magasin.as_ref().and_then(|m| m.dossiers(a.compte).ok()).unwrap_or_default();
+                if dossier_de_role(&dossiers, "Trash").as_deref() == Some(a.chemin.as_str()) {
+                    "Annuler la suppression"
+                } else {
+                    "Annuler le déplacement"
+                }
+            }
+        };
+        self.as_mut().set_annulation(QString::from(libelle));
     }
 
     pub fn effacable(&self, compte: i32, chemin: &QString) -> bool {
@@ -3682,7 +3891,7 @@ impl qobject::Boite {
         };
         let chemin = if source == indesirables { "INBOX".to_string() } else { indesirables };
         let cible = Cible { compte, chemin, identifiants: None };
-        self.as_mut().envoyer(compte, Commande::Deplacer { source, uids, cible })
+        self.as_mut().envoyer(compte, Commande::Deplacer { source, uids, cible, annulable: true })
     }
 
     pub fn carnet(&self, filtre: &QString) -> QString {
@@ -4314,7 +4523,7 @@ impl qobject::Boite {
                     continue;
                 }
                 let cible = Cible { compte, chemin: chemin_cible, identifiants: None };
-                if self.as_mut().envoyer(compte, Commande::Deplacer { source: source.clone(), uids, cible }) {
+                if self.as_mut().envoyer(compte, Commande::Deplacer { source: source.clone(), uids, cible, annulable: false }) {
                     lances += 1;
                 }
                 continue;
@@ -4325,7 +4534,7 @@ impl qobject::Boite {
             match self.identites.get(&cible_compte).filter(|_| pret).cloned() {
                 Some(identifiants) => {
                     let cible = Cible { compte: cible_compte, chemin: chemin_cible, identifiants: Some(identifiants) };
-                    if self.as_mut().envoyer(compte, Commande::Deplacer { source: source.clone(), uids, cible }) {
+                    if self.as_mut().envoyer(compte, Commande::Deplacer { source: source.clone(), uids, cible, annulable: false }) {
                         lances += 1;
                     }
                 }
@@ -4358,7 +4567,7 @@ impl qobject::Boite {
             match self.identites.get(&d.cible_compte).filter(|_| prets).cloned() {
                 Some(identifiants) => {
                     let cible = Cible { compte: d.cible_compte, chemin: d.chemin, identifiants: Some(identifiants) };
-                    self.as_mut().envoyer(d.compte, Commande::Deplacer { source: d.source, uids: d.uids, cible });
+                    self.as_mut().envoyer(d.compte, Commande::Deplacer { source: d.source, uids: d.uids, cible, annulable: false });
                 }
                 None => restants.push(d),
             }
@@ -5202,31 +5411,35 @@ impl qobject::Boite {
                     self.as_mut().drapeaux_modifies();
                 }
             }
-            Issue::Deplace { cible, chemin_cible, rapport } => {
-                // La cible a changé aussi : ses compteurs, et sa liste si c'est
-                // le dossier ouvert.
-                if cible != compte && self.sessions.contains_key(&cible) {
-                    self.as_mut().envoyer(cible, Commande::Arborescence);
-                }
-                let courant = self.courant.clone();
-                if let Some((c, chemin, _)) = courant {
-                    if c == cible && chemin == chemin_cible {
-                        self.as_mut().envoyer(cible, Commande::OuvrirDossier(chemin));
-                    }
-                }
-                self.as_mut().rafraichir_attente();
-                self.as_mut().reviser();
+            Issue::Deplace { cible, chemin_cible, rapport, annulation } => {
+                self.as_mut().apres_deplacement(compte, cible, &chemin_cible);
                 let erreurs = rapport.erreurs.join("\n");
                 if !erreurs.is_empty() {
                     self.as_mut().set_erreur(QString::from(&erreurs));
                 }
+                let annulable = annulation.is_some();
+                if let Some(annulation) = annulation {
+                    self.as_mut().retenir_annulation(annulation);
+                }
                 self.as_mut()
-                    .deplacement_termine(rapport.deplaces as i32, &QString::from(&erreurs));
+                    .deplacement_termine(rapport.deplaces as i32, &QString::from(&erreurs), annulable);
+            }
+            Issue::Rapatrie { cible, chemin_cible, rapport } => {
+                self.as_mut().apres_deplacement(compte, cible, &chemin_cible);
+                let erreurs = rapport.erreurs.join("\n");
+                if !erreurs.is_empty() {
+                    self.as_mut().set_erreur(QString::from(&erreurs));
+                }
+                self.as_mut().annulation_terminee(
+                    rapport.deplaces as i32,
+                    rapport.absents as i32,
+                    &QString::from(&erreurs),
+                );
             }
             Issue::DeplacementEchoue { message } => {
                 // Le message d'erreur arrive par l'échec qui suit, ou par celui
                 // de la connexion : ici, seulement de quoi rendre les lignes.
-                self.as_mut().deplacement_termine(0, &QString::from(&message));
+                self.as_mut().deplacement_termine(0, &QString::from(&message), false);
             }
             Issue::RecherchePartout { chemin, texte, uids, restants, inacheve } => {
                 if let Some(motif) = inacheve {
@@ -5891,6 +6104,11 @@ impl Travail {
             Commande::Deplacer { .. } => {
                 Issue::DeplacementEchoue { message: format!("{motif} — messages non déplacés") }
             }
+            Commande::Rapatrier { cible, .. } => Issue::Rapatrie {
+                cible: cible.compte,
+                chemin_cible: cible.chemin,
+                rapport: Rapport { erreurs: vec![format!("{motif} — rien n'est rétabli")], ..Default::default() },
+            },
             Commande::Effacer { chemin, .. } => {
                 Issue::Efface { chemin, nombre: 0, erreur: format!("{motif} — rien n'est effacé") }
             }
@@ -6215,10 +6433,13 @@ impl Travail {
                     Err(err) => echec("tri", format!("marquage : {err}"), &err),
                 })
             }
-            Commande::Deplacer { source, uids, cible } => {
+            Commande::Deplacer { source, uids, cible, annulable } => {
                 if let Some(identifiants) = cible.identifiants.clone() {
                     e.identites.insert(cible.compte, identifiants);
                 }
+                // Lus avant le déplacement, qui retire les messages de l'index.
+                let message_ids =
+                    if annulable { message_ids_de(&e.magasin, compte, &source, &uids) } else { Vec::new() };
                 let resultat = if cible.compte == compte {
                     deplacement::dans_la_boite(&mut e.client, &e.magasin, compte, &source, &uids, &cible.chemin)
                 } else {
@@ -6227,13 +6448,44 @@ impl Travail {
                 // Les compteurs des deux dossiers ont changé.
                 let _ = synchro::arborescence(&mut e.client, &e.magasin, compte);
                 Some(match resultat {
-                    Ok(rapport) => Issue::Deplace { cible: cible.compte, chemin_cible: cible.chemin, rapport },
+                    Ok(rapport) => {
+                        let annulation = (annulable && rapport.deplaces > 0)
+                            .then(|| Annulation::apres(compte, &source, &cible, &uids, message_ids, &rapport));
+                        Issue::Deplace { cible: cible.compte, chemin_cible: cible.chemin, rapport, annulation }
+                    }
                     Err(err) => {
                         let issue = self.echec_de_tri(e, cible.compte, err);
                         // Avant l'échec, qui peut fermer la session : l'interface
                         // doit remettre les lignes quoi qu'il arrive ensuite.
                         if let Issue::Echec { message, .. } = &issue {
                             self.remettre(Issue::DeplacementEchoue { message: message.clone() });
+                        }
+                        issue
+                    }
+                })
+            }
+            Commande::Rapatrier { annulation, cible } => {
+                if let Some(identifiants) = cible.identifiants.clone() {
+                    e.identites.insert(cible.compte, identifiants);
+                }
+                // Comme `ailleurs` : la veille relit le dossier sélectionné,
+                // qui doit redevenir celui que l'utilisateur regarde.
+                let avant = e.client.selection().map(str::to_string);
+                let resultat = self.rapatrier(e, &annulation, &cible);
+                let _ = synchro::arborescence(&mut e.client, &e.magasin, compte);
+                if let Some(avant) = avant {
+                    let _ = assurer_selection(&mut e.client, &avant);
+                }
+                Some(match resultat {
+                    Ok(rapport) => Issue::Rapatrie { cible: cible.compte, chemin_cible: cible.chemin, rapport },
+                    Err(err) => {
+                        let issue = self.echec_de_tri(e, cible.compte, err);
+                        if let Issue::Echec { message, .. } = &issue {
+                            self.remettre(Issue::Rapatrie {
+                                cible: cible.compte,
+                                chemin_cible: cible.chemin.clone(),
+                                rapport: Rapport { erreurs: vec![message.clone()], ..Default::default() },
+                            });
                         }
                         issue
                     }
@@ -6429,6 +6681,23 @@ impl Travail {
         }
     }
 
+    /// Défait un déplacement (Ctrl+Z) : les messages de `annulation`,
+    /// retrouvés là où il les a mis, retournent dans `cible` — dans cette
+    /// boîte par le serveur, ou vers une autre comme tout déplacement entre
+    /// boîtes. Le rapport compte les introuvables dans `absents`.
+    fn rapatrier(&self, e: &mut Etabli, annulation: &Annulation, cible: &Cible) -> Result<Rapport, Echec> {
+        let (uids, absents) = retrouver(&mut e.client, annulation)?;
+        let mut rapport = if uids.is_empty() {
+            Rapport::default()
+        } else if cible.compte == self.compte {
+            deplacement::dans_la_boite(&mut e.client, &e.magasin, self.compte, &annulation.chemin, &uids, &cible.chemin)?
+        } else {
+            self.entre_boites(e, &annulation.chemin, &uids, cible)?
+        };
+        rapport.absents += absents;
+        Ok(rapport)
+    }
+
     fn entre_boites(
         &self,
         e: &mut Etabli,
@@ -6493,7 +6762,7 @@ impl Travail {
             return None;
         }
         let _ = synchro::arborescence(&mut e.client, &e.magasin, self.compte);
-        Some(Issue::Repris { rapport: Rapport { deplaces: soldees, absents: 0, erreurs } })
+        Some(Issue::Repris { rapport: Rapport { deplaces: soldees, absents: 0, erreurs, ..Default::default() } })
     }
 
     /// Un déplacement a échoué : si c'est la boîte cible qui a lâché, la
@@ -8124,6 +8393,7 @@ mod tests {
                 Commande::Confirmer { .. } => "confirmer".into(),
                 Commande::EnvoyerDifferes { .. } => "differes".into(),
                 Commande::Deplacer { .. } => "deplacer".into(),
+                Commande::Rapatrier { .. } => "rapatrier".into(),
                 Commande::ViderDossiers { .. } => "vider".into(),
                 Commande::Effacer { .. } => "effacer".into(),
                 Commande::PreparerPurge { .. } => "preparer-purge".into(),
@@ -8185,6 +8455,7 @@ mod tests {
             source: "INBOX".into(),
             uids: vec![1],
             cible: Cible { compte: 1, chemin: "Archives".into(), identifiants: None },
+            annulable: true,
         };
         let marquer = Commande::MarquerLu { chemin: "INBOX".into(), uids: vec![2], lu: true, discret: false };
         let (file, abandonnees) =
@@ -8363,6 +8634,41 @@ mod tests {
         let sans: Vec<_> = entetes.iter().filter(|e| e.uid != 14).cloned().collect();
         assert!(differes_interrompus(&sans, &mut vus, 9_000).is_empty());
         assert!(vus.is_empty());
+    }
+
+    #[test]
+    fn annulation_retrouve_par_uid_puis_par_message_id() {
+        use crate::simule::{echange, session, DOVECOT};
+        // 4, 5 et 6 mis à la corbeille ; le serveur a donné 21 et 22 aux deux
+        // premiers, et rien dit du troisième, sans Message-ID.
+        let cible = Cible { compte: 1, chemin: "Trash".into(), identifiants: None };
+        let rapport = Rapport { deplaces: 3, correspondances: Some((9, vec![(4, 21), (5, 22)])), ..Default::default() };
+        let a = Annulation::apres(1, "INBOX", &cible, &[4, 5, 6], vec!["a@x".into(), "b@x".into(), String::new()], &rapport);
+        assert_eq!(a.reperes, vec![(21, "a@x".to_string()), (22, "b@x".to_string()), (0, String::new())]);
+        assert_eq!((a.compte, a.chemin.as_str(), a.origine_compte, a.origine.as_str()), (1, "Trash", 1, "INBOX"));
+        // 22 a quitté la corbeille, mais une copie de b@x y est, sous 30 — et
+        // une plus ancienne sous 3 : la plus récente revient.
+        let (mut client, journal) = session(
+            DOVECOT,
+            vec![
+                echange("SELECT \"Trash\"", "* 3 EXISTS\r\n* OK [UIDVALIDITY 9] v\r\n* OK [UIDNEXT 31] n\r\n", "OK fait"),
+                echange("UID SEARCH UID 21:22", "* SEARCH 21\r\n", "OK"),
+                echange("UID SEARCH HEADER Message-ID \"b@x\"", "* SEARCH 3 30\r\n", "OK"),
+            ],
+        );
+        assert_eq!(retrouver(&mut client, &a).unwrap(), (vec![21, 30], 1));
+        assert_eq!(journal.lock().unwrap().len(), 3);
+        // Dossier renuméroté depuis : ses UID ne valent plus, tout se cherche.
+        let (mut client, journal) = session(
+            DOVECOT,
+            vec![
+                echange("SELECT \"Trash\"", "* 2 EXISTS\r\n* OK [UIDVALIDITY 10] v\r\n", "OK fait"),
+                echange("UID SEARCH HEADER Message-ID \"a@x\"", "* SEARCH 2\r\n", "OK"),
+                echange("UID SEARCH HEADER Message-ID \"b@x\"", "* SEARCH\r\n", "OK"),
+            ],
+        );
+        assert_eq!(retrouver(&mut client, &a).unwrap(), (vec![2], 2));
+        assert_eq!(journal.lock().unwrap().len(), 3);
     }
 
     #[test]

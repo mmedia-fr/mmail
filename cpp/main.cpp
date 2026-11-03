@@ -56,6 +56,7 @@ extern const std::size_t nombreTraductionsQt;
 #include "correcteur.h"
 #include "mise_en_forme.h"
 #include "rendu_complet.h"
+#include "essai.h"
 
 #ifdef Q_OS_WIN
 #  include <windows.h>  // GetCommandLineW / CommandLineToArgvW
@@ -419,6 +420,9 @@ int main(int argc, char* argv[])
   // Long texte riche dessiné en entier (cf. cpp/rendu_complet.h).
   qmlRegisterType<RenduComplet>("fr.mmedia.mmail.natif", 1, 0, "RenduComplet");
 
+  // Gestes simulés des scénarios d'essai (cf. essai.h) : déclarés avant le
+  // moteur, qui s'arrête avant eux.
+  GestesEssai gestesEssai;
   QQmlApplicationEngine engine;
   // En contrôle de fabrication, l'interface ne touche ni au coffre ni au réseau
   // de sa propre initiative.
@@ -464,6 +468,7 @@ int main(int argc, char* argv[])
     essai.insert(QStringLiteral("taille"), QString::fromUtf8(qgetenv("MMAIL_TAILLE")));
     essai.insert(QStringLiteral("sortie"),
                  QUrl::fromLocalFile(QString::fromUtf8(qgetenv("MMAIL_SORTIE"))).toString());
+    engine.rootContext()->setContextProperty(QStringLiteral("gestesEssai"), &gestesEssai);
   }
   engine.rootContext()->setContextProperty(QStringLiteral("identifiantsEssai"), essai);
 

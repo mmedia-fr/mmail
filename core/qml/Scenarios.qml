@@ -3040,32 +3040,39 @@ QtObject {
                     plusTard(500, function() {
                         var attendu = Math.min(lignes * hauteur, Math.max(hauteur, v.height - hauteur))
                         y0 = v.contentY
-                        var pris = cran(-120, 0)
+                        cran(-120, 0)
                         var un = v.contentY - y0
                         bilan("un cran = " + Math.round(un) + " px (" + (un / hauteur).toFixed(2) + " lignes, attendu "
-                              + Math.round(attendu) + "), pris " + pris, Math.abs(un - attendu) < 1 && pris)
-                        y0 = v.contentY
-                        cran(-120, 0); cran(-120, 0); cran(-120, 0)
-                        var trois = v.contentY - y0
-                        bilan("trois crans = " + Math.round(trois) + " px", Math.abs(trois - 3 * attendu) < 1)
-                        y0 = v.contentY
-                        cran(120, 0)
-                        bilan("un cran vers le haut = " + Math.round(v.contentY - y0) + " px",
-                              Math.abs(v.contentY - y0 + attendu) < 1)
-                        y0 = v.contentY
-                        cran(-120, -40)
-                        bilan("pavé tactile, 40 px : " + Math.round(v.contentY - y0) + " px", Math.abs(v.contentY - y0 - 40) < 1)
-                        for (var k = 0; k < 80; ++k)
-                            cran(-120, 0)
-                        var bas = v.originY + v.contentHeight - v.height
-                        bilan("tout en bas : contentY " + Math.round(v.contentY) + ", bas " + Math.round(bas),
-                              Math.abs(v.contentY - bas) < 1)
-                        for (var j = 0; j < 80; ++j)
+                              + Math.round(attendu) + ")", Math.abs(un - attendu) < 1)
+                        var apresUn = v.contentY
+                        // Une seconde plus tard, rien n'a bougé : pas d'élan de
+                        // Flickable par-dessus.
+                        plusTard(1000, function() {
+                            bilan("sans élan : " + Math.round(v.contentY) + " une seconde après, " + Math.round(apresUn)
+                                  + " au cran", Math.abs(v.contentY - apresUn) < 1)
+                            y0 = v.contentY
+                            cran(-120, 0); cran(-120, 0); cran(-120, 0)
+                            var trois = v.contentY - y0
+                            bilan("trois crans = " + Math.round(trois) + " px", Math.abs(trois - 3 * attendu) < 1)
+                            y0 = v.contentY
                             cran(120, 0)
-                        bilan("tout en haut : contentY " + Math.round(v.contentY) + ", haut " + Math.round(v.originY),
-                              Math.abs(v.contentY - v.originY) < 1)
-                        console.log("scenario: molette " + (s.echecs === 0 ? "OK" : "ECHEC (" + s.echecs + ")"))
-                        Qt.quit()
+                            bilan("un cran vers le haut = " + Math.round(v.contentY - y0) + " px",
+                                  Math.abs(v.contentY - y0 + attendu) < 1)
+                            y0 = v.contentY
+                            cran(-120, -40)
+                            bilan("pavé tactile, 40 px : " + Math.round(v.contentY - y0) + " px", Math.abs(v.contentY - y0 - 40) < 1)
+                            for (var k = 0; k < 80; ++k)
+                                cran(-120, 0)
+                            var bas = v.originY + v.contentHeight - v.height
+                            bilan("tout en bas : contentY " + Math.round(v.contentY) + ", bas " + Math.round(bas),
+                                  Math.abs(v.contentY - bas) < 1)
+                            for (var j = 0; j < 80; ++j)
+                                cran(120, 0)
+                            bilan("tout en haut : contentY " + Math.round(v.contentY) + ", haut " + Math.round(v.originY),
+                                  Math.abs(v.contentY - v.originY) < 1)
+                            console.log("scenario: molette " + (s.echecs === 0 ? "OK" : "ECHEC (" + s.echecs + ")"))
+                            Qt.quit()
+                        })
                     })
                 })
             })

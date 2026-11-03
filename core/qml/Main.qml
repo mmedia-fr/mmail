@@ -2214,7 +2214,10 @@ ApplicationWindow {
         infoDossier = texte
     }
 
-    onSelectionChanged: majInfoDossier()
+    onSelectionChanged: {
+        majInfoDossier()
+        Qt.callLater(majEtatChoix)
+    }
 
     // ------------------------------------------------------- presse-papier
     Timer {
@@ -5093,7 +5096,8 @@ ApplicationWindow {
         e.nombre = listeMulti ? (cleChoisie.length > 0 ? 1 : 0) : uidsChoisis().length
         etatChoix = e
     }
-    onSelectionChanged: Qt.callLater(majEtatChoix)
+    // `onSelectionChanged` est déjà posé (majInfoDossier) : il appelle aussi
+    // majEtatChoix.
     onCleChoisieChanged: Qt.callLater(majEtatChoix)
     Connections {
         target: modeleMessages

@@ -208,7 +208,11 @@ de projet interne.
   au serveur, pour qui il coûte cher sur un gros dossier ;
 - **Supprimer** envoie à la corbeille de la boîte (touche Suppr) ; dans la
   corbeille et les indésirables, d'où un message n'a plus de corbeille où aller,
-  il l'efface pour de bon, après confirmation (0.6.24) ;
+  il l'efface pour de bon, après confirmation (0.6.24). Dans une **boîte
+  partagée**, c'est la corbeille de cette boîte, visible des autres, et non
+  celle du compte ; dans cette corbeille, effacement pour de bon après
+  confirmation (0.6.35). Si la corbeille de la boîte partagée n'est pas visible
+  depuis le compte, rien n'est supprimé ;
 - **Ctrl+Z**, comme dans Outlook : défait la dernière suppression ou le dernier
   déplacement — un autre Ctrl+Z, le précédent, jusqu'à vingt —, les messages
   reviennent dans leur dossier, d'une boîte à l'autre comprise ; aussi par le

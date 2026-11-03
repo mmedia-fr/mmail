@@ -3948,7 +3948,18 @@ impl qobject::Boite {
             return false;
         }
         let dossiers = self.magasin.as_ref().and_then(|m| m.dossiers(compte).ok()).unwrap_or_default();
-        let corbeille = dossier_de_role(&dossiers, "Trash");
+        let partagees =
+            self.magasin.as_ref().and_then(|m| m.compte_par_id(compte).ok().flatten()).map(|c| c.partagees).unwrap_or_default();
+        // Dans une boîte partagée (0.6.35), sa corbeille à elle : celle du
+        // compte retirait le message aux autres sans qu'ils le sachent.
+        let corbeille = match corbeille_partagee(&dossiers, &source, &partagees) {
+            Some(Some(c)) => Some(c),
+            Some(None) => {
+                self.as_mut().set_erreur(QString::from("la corbeille de cette boîte partagée n'est pas visible depuis ce compte : rien n'est supprimé"));
+                return false;
+            }
+            None => dossier_de_role(&dossiers, "Trash"),
+        };
         // Un brouillon ne s'annule pas : celui qu'une rédaction remplace part
         // aussi par ici, sans que l'utilisateur l'ait supprimé.
         let annulable = dossier_de_role(&dossiers, "Drafts").as_deref() != Some(source.as_str());
@@ -4091,8 +4102,11 @@ impl qobject::Boite {
     }
 
     pub fn effacable(&self, compte: i32, chemin: &QString) -> bool {
-        let dossiers = self.magasin.as_ref().and_then(|m| m.dossiers(compte as i64).ok()).unwrap_or_default();
-        dossier_effacable(&dossiers, &chemin.to_string())
+        let compte = compte as i64;
+        let dossiers = self.magasin.as_ref().and_then(|m| m.dossiers(compte).ok()).unwrap_or_default();
+        let partagees =
+            self.magasin.as_ref().and_then(|m| m.compte_par_id(compte).ok().flatten()).map(|c| c.partagees).unwrap_or_default();
+        effacable_dans(&dossiers, &chemin.to_string(), &partagees)
     }
 
     pub fn effacer_dans(mut self: Pin<&mut Self>, compte: i32, chemin: &QString, uids: &QString) -> bool {
@@ -4103,7 +4117,9 @@ impl qobject::Boite {
             return false;
         }
         let dossiers = self.magasin.as_ref().and_then(|m| m.dossiers(compte).ok()).unwrap_or_default();
-        if !dossier_effacable(&dossiers, &chemin) {
+        let partagees =
+            self.magasin.as_ref().and_then(|m| m.compte_par_id(compte).ok().flatten()).map(|c| c.partagees).unwrap_or_default();
+        if !effacable_dans(&dossiers, &chemin, &partagees) {
             self.as_mut().set_erreur(QString::from(
                 "seules la corbeille et les indésirables s'effacent pour de bon : ailleurs, « Supprimer » met à la corbeille",
             ));
@@ -6386,6 +6402,50 @@ fn dossiers_a_vider(dossiers: &[DossierLocal]) -> Vec<String> {
 /// le pourriel (« Signalements spam ») n'efface jamais pour de bon.
 fn dossier_effacable(dossiers: &[DossierLocal], chemin: &str) -> bool {
     !chemin.is_empty() && dossiers_a_vider(dossiers).iter().any(|c| c == chemin)
+}
+
+/// Corbeille de la boîte partagée qui contient `chemin` (0.6.35) : le dossier
+/// de premier niveau de cette boîte qui porte `\Trash`, à défaut celui que
+/// `protocole::role_partage` lit « Trash » à son nom — l'espace partagé de
+/// Mailcow n'annonce pas SPECIAL-USE. « Supprimer » y met les messages de la
+/// boîte partagée : ils partaient dans la corbeille personnelle de qui les
+/// supprimait, hors de la vue des autres, et y compris depuis la corbeille
+/// partagée elle-même. `None` hors d'une boîte partagée ; `Some(None)` pour
+/// une boîte partagée sans corbeille.
+pub(crate) fn corbeille_partagee(dossiers: &[DossierLocal], chemin: &str, partagees: &[String]) -> Option<Option<String>> {
+    let separateur = dossiers
+        .iter()
+        .find(|d| d.chemin == chemin)
+        .map(|d| d.separateur.clone())
+        .filter(|s| !s.is_empty() && !s.eq_ignore_ascii_case("NIL"))
+        .unwrap_or_else(|| "/".into());
+    let (rang, _) = crate::protocole::boite_partagee(chemin, &separateur, partagees)?;
+    let racine = chemin.split(separateur.as_str()).take(rang + 1).collect::<Vec<_>>().join(&separateur);
+    let prefixe = format!("{racine}{separateur}");
+    let candidats: Vec<&DossierLocal> = dossiers
+        .iter()
+        .filter(|d| d.selectionnable)
+        .filter(|d| d.chemin.strip_prefix(&prefixe).is_some_and(|reste| !reste.is_empty() && !reste.contains(separateur.as_str())))
+        .collect();
+    let par_role = candidats.iter().find(|d| d.role == "Trash");
+    // Plusieurs noms possibles : « Trash » d'abord, celui de Mailcow.
+    let par_nom = || {
+        candidats
+            .iter()
+            .filter(|d| crate::protocole::role_partage(&d.nom) == "Trash")
+            .min_by_key(|d| !d.nom.eq_ignore_ascii_case("trash"))
+    };
+    Some(par_role.or_else(par_nom).map(|d| d.chemin.clone()))
+}
+
+/// Vrai si « Supprimer » efface pour de bon dans `chemin`, après
+/// confirmation : la corbeille ou les indésirables du compte
+/// (`dossier_effacable`), ou la corbeille d'une boîte partagée (0.6.35), d'où
+/// un message n'a plus de corbeille où aller. « Vider les corbeilles » et le
+/// vidage partiel n'y touchent pas : elle est aux autres aussi.
+fn effacable_dans(dossiers: &[DossierLocal], chemin: &str, partagees: &[String]) -> bool {
+    dossier_effacable(dossiers, chemin)
+        || corbeille_partagee(dossiers, chemin, partagees).flatten().as_deref() == Some(chemin)
 }
 
 /// Pourquoi le dossier `chemin` d'un compte ne se renomme pas depuis MMail ;
@@ -9208,6 +9268,67 @@ mod tests {
         assert_eq!(effacables, vec!["Corbeille", "Spam"]);
         assert!(!dossier_effacable(&sans_roles, ""));
         assert!(!dossier_effacable(&sans_roles, "Inconnu"));
+    }
+
+    /// Supprimer dans une boîte partagée (0.6.35) : sa corbeille, jamais celle
+    /// du compte ; dans cette corbeille, effacement après confirmation, sans
+    /// que « Vider les corbeilles » y touche.
+    #[test]
+    fn corbeille_d_une_boite_partagee() {
+        let avec = |chemin: &str, role: &str| DossierLocal { separateur: "/".into(), ..local(chemin, role) };
+        let mut racine = avec("Shared", "");
+        racine.selectionnable = false;
+        let mut boite = avec("Shared/contact@exemple.fr", "");
+        boite.selectionnable = false;
+        let dossiers = vec![
+            avec("INBOX", ""),
+            avec("Trash", "Trash"),
+            avec("Junk", "Junk"),
+            racine,
+            boite,
+            avec("Shared/contact@exemple.fr/INBOX", ""),
+            avec("Shared/contact@exemple.fr/INBOX/Commandes", ""),
+            avec("Shared/contact@exemple.fr/INBOX/Commandes/Trash", ""),
+            avec("Shared/contact@exemple.fr/Trash", ""),
+            avec("Shared/contact@exemple.fr/Junk", ""),
+            avec("Shared/admin@x.fr/INBOX", ""),
+        ];
+        let partagees = vec!["contact@exemple.fr".to_string(), "admin@x.fr".to_string()];
+        let corbeille = |chemin: &str| corbeille_partagee(&dossiers, chemin, &partagees);
+        let partagee = Some(Some("Shared/contact@exemple.fr/Trash".to_string()));
+        assert_eq!(corbeille("Shared/contact@exemple.fr/INBOX"), partagee);
+        // Un sous-dossier nommé « Trash » n'est pas la corbeille de la boîte.
+        assert_eq!(corbeille("Shared/contact@exemple.fr/INBOX/Commandes"), partagee);
+        assert_eq!(corbeille("Shared/contact@exemple.fr/INBOX/Commandes/Trash"), partagee);
+        assert_eq!(corbeille("Shared/contact@exemple.fr/Junk"), partagee);
+        assert_eq!(corbeille("Shared/contact@exemple.fr/Trash"), partagee);
+        // Boîte partagée sans corbeille : rien, plutôt que celle du compte.
+        assert_eq!(corbeille("Shared/admin@x.fr/INBOX"), Some(None));
+        // Hors d'une boîte partagée : la corbeille du compte, comme avant.
+        assert_eq!(corbeille("INBOX"), None);
+        assert_eq!(corbeille("Shared/inconnu@exemple.fr/INBOX"), None);
+        assert_eq!(dossier_de_role(&dossiers, "Trash").as_deref(), Some("Trash"));
+
+        let effacable = |chemin: &str| effacable_dans(&dossiers, chemin, &partagees);
+        assert!(effacable("Trash"));
+        assert!(effacable("Junk"));
+        assert!(effacable("Shared/contact@exemple.fr/Trash"));
+        assert!(!effacable("Shared/contact@exemple.fr/Junk"));
+        assert!(!effacable("Shared/contact@exemple.fr/INBOX"));
+        assert!(!effacable("Shared/contact@exemple.fr/INBOX/Commandes/Trash"));
+        assert!(!effacable("INBOX"));
+        assert_eq!(dossiers_a_vider(&dossiers), vec!["Trash", "Junk"]);
+
+        // Un serveur qui annonce le rôle dans l'espace partagé : il prime sur le nom.
+        let annonce = vec![
+            avec("Shared/contact@exemple.fr/INBOX", ""),
+            avec("Shared/contact@exemple.fr/Trash", ""),
+            avec("Shared/contact@exemple.fr/Corbeille", "Trash"),
+        ];
+        assert_eq!(
+            corbeille_partagee(&annonce, "Shared/contact@exemple.fr/INBOX", &partagees),
+            Some(Some("Shared/contact@exemple.fr/Corbeille".to_string()))
+        );
     }
 
     #[test]

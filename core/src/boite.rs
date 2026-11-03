@@ -7171,7 +7171,9 @@ impl Travail {
         let brut = message_entier(e, &self.profil, self.compte, chemin, uid)
             .map_err(|x| format!("lecture du message : {x}"))?;
         let ouvert = crate::smime::ouvrir_pour(&self.profil, self.compte, &brut);
-        let etait_chiffre = ouvert.as_ref().is_some_and(|o| o.securite.chiffre);
+        // Seulement s'il a pu être lu : sans certificat, la réponse part comme
+        // avant, en clair.
+        let etait_chiffre = ouvert.as_ref().is_some_and(|o| o.securite.chiffre && o.securite.illisible.is_empty());
         let octets = ouvert.map(|o| o.message).unwrap_or(brut);
         // L'adresse du compte, puis ses autres adresses d'envoi.
         let mut propres: Vec<String> =

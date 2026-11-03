@@ -826,6 +826,7 @@ fn verifier_signature(
                 Some(P256) => &sig::ECDSA_P256_SHA256_ASN1,
                 Some(P384) if hachage == &digest::SHA256 => &sig::ECDSA_P384_SHA256_ASN1,
                 Some(P384) => &sig::ECDSA_P384_SHA384_ASN1,
+                Some(P521) => par_hachage(&sig::ECDSA_P521_SHA256_ASN1, &sig::ECDSA_P521_SHA384_ASN1, &sig::ECDSA_P521_SHA512_ASN1),
                 _ => return false,
             }
         }
@@ -961,15 +962,21 @@ fn designe(cle: &Cle, ias: Option<&IssuerAndSerialNumber>, ski: Option<&SubjectK
     }
 }
 
-/// Courbe de la clé publique d'un certificat elliptique, pour l'accord de
-/// clé ; `None` pour une autre clé.
-fn courbe_de(certificat: &[u8]) -> Option<&'static aws_lc_rs::agreement::Algorithm> {
+/// OID de la courbe de la clé publique d'un certificat elliptique ; `None`
+/// pour une autre clé.
+fn oid_courbe(certificat: &[u8]) -> Option<ObjectIdentifier> {
     let cert = Certificate::from_der(certificat).ok()?;
     let spki = cert.tbs_certificate().subject_public_key_info();
     if spki.algorithm.oid != EC_PUBLIC_KEY {
         return None;
     }
-    match spki.algorithm.parameters.as_ref()?.decode_as::<ObjectIdentifier>().ok()? {
+    spki.algorithm.parameters.as_ref()?.decode_as::<ObjectIdentifier>().ok()
+}
+
+/// Courbe de la clé publique d'un certificat elliptique, pour l'accord de
+/// clé ; `None` pour une autre clé.
+fn courbe_de(certificat: &[u8]) -> Option<&'static aws_lc_rs::agreement::Algorithm> {
+    match oid_courbe(certificat)? {
         P256 => Some(&aws_lc_rs::agreement::ECDH_P256),
         P384 => Some(&aws_lc_rs::agreement::ECDH_P384),
         P521 => Some(&aws_lc_rs::agreement::ECDH_P521),

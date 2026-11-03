@@ -74,19 +74,6 @@ gif = "0.14"
 # (0.6.18). Déjà tirée par gif, même version.
 color_quant = "1.1"
 
-# Autorités de certification : celles du système sur le bureau, par le
-# vérificateur de plateforme. Sous Android, ce vérificateur exige un composant
-# Java et une initialisation JNI que l'APK n'embarque pas : on y prend les
-# autorités de Mozilla, compilées avec le programme.
-[target.'cfg(not(target_os = "android"))'.dependencies]
-rustls-platform-verifier = "0.6"
-# Autorités du système pour les signatures S/MIME (le vérificateur de
-# plateforme ne sert qu'aux serveurs TLS) ; déjà tiré sous Linux.
-rustls-native-certs = "0.8"
-
-[target.'cfg(target_os = "android")'.dependencies]
-webpki-roots = "1"
-
 # S/MIME (0.8.0) : structures CMS et X.509, en Rust et sans cryptographie —
 # AWS-LC (aws-lc-rs) fait les calculs, rustls-webpki contrôle les chaînes.
 # `der` 0.8 lit le BER : Outlook et Thunderbird écrivent leurs enveloppes en
@@ -105,6 +92,19 @@ p12-keystore = "0.4.1"
 # Déjà tirés par p12-keystore.
 des = "0.9"
 cbc = { version = "0.2", features = ["alloc", "block-padding"] }
+
+# Autorités de certification : celles du système sur le bureau, par le
+# vérificateur de plateforme. Sous Android, ce vérificateur exige un composant
+# Java et une initialisation JNI que l'APK n'embarque pas : on y prend les
+# autorités de Mozilla, compilées avec le programme.
+[target.'cfg(not(target_os = "android"))'.dependencies]
+rustls-platform-verifier = "0.6"
+# Autorités du système pour les signatures S/MIME (le vérificateur de
+# plateforme ne sert qu'aux serveurs TLS) ; déjà tiré sous Linux.
+rustls-native-certs = "0.8"
+
+[target.'cfg(target_os = "android")'.dependencies]
+webpki-roots = "1"
 
 [build-dependencies]
 cxx-qt-build = "0.10"

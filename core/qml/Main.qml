@@ -231,8 +231,13 @@ ApplicationWindow {
     // `Boite.invitationRecue`) ; et la réponse en cours d'envoi.
     property var invitation: ({})
     property string reponseInvitation: ""
+    // Signature et chiffrement S/MIME du message affiché (0.8.0, cf.
+    // `Boite.securiteRecue`) : vide pour un message ordinaire.
+    property var securite: ({})
+    property bool securiteAttendue: false
     onUidCourantChanged: {
         invitation = ({})
+        securite = ({})
         majCategoriesAffichees()
     }
     property bool sourceVisible: false
@@ -2574,6 +2579,7 @@ ApplicationWindow {
     DialogueLogiciels { id: dlgLogiciels }
 
     DialogueExpediteursConfiance { id: dlgExpediteursConfiance }
+    DialogueCertificats { id: dlgCertificats }
 
     FileDialog {
         id: dlgEnregistrerPiece
@@ -2989,6 +2995,15 @@ ApplicationWindow {
         id: coffre
 
         onLu: function(cle, secret, trouve, erreur) {
+            // Mot de passe d'une clé S/MIME (0.8.0) : la clé s'ouvre, ses
+            // messages se lisent.
+            if (cle.indexOf("smime:") === 0) {
+                if (trouve && boite.deverrouillerCle(cle.substring(6), secret))
+                    fenetre.clesSmimeChangees()
+                else if (!trouve)
+                    console.warn("clé S/MIME " + cle.substring(6, 14) + " : mot de passe absent du coffre")
+                return
+            }
             var compte = fenetre.compteParCle(cle)
             if (!compte)
                 return
@@ -6834,6 +6849,25 @@ ApplicationWindow {
         }
         for (var i = 0; i < comptes.length; ++i)
             connecterCompte(comptes[i])
+        deverrouillerClesSmime()
+    }
+
+    // Clés S/MIME (0.8.0) : chacune s'ouvre par son mot de passe, au coffre
+    // sous `smime:<empreinte>` (cf. `coffre.onLu`).
+    property int versionClesSmime: 0
+    function deverrouillerClesSmime() {
+        var cles = []
+        try { cles = JSON.parse(boite.clesSmime()) } catch (e) {}
+        for (var i = 0; i < cles.length; ++i)
+            if (!cles[i].deverrouillee && cles[i].compte > 0)
+                coffre.lire("smime:" + cles[i].empreinte)
+    }
+    /// Une clé vient de s'ouvrir ou de partir : le message affiché se relit,
+    /// les fenêtres de compte se mettent à jour.
+    function clesSmimeChangees() {
+        versionClesSmime++
+        if (uidCourant > 0 && (securite.chiffre || securite.signature))
+            boite.demanderCorps(uidCourant)
     }
 
     Scenarios { id: scenarios }

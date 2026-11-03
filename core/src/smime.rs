@@ -918,5 +918,250 @@ fn dechiffrer_cle(cle: &Cle, algorithme: &spki::AlgorithmIdentifierOwned, chiffr
     None
 }
 
+// ---------------------------------------------------------------- profil
+
+/// Rangement dans le profil : `smime/cles/<adresse>/<empreinte>.p12`, chaque
+/// fichier toujours protégé par son mot de passe (au coffre du système, sous
+/// `smime:<empreinte>`) ; `smime/autorites/<empreinte>.cer`, les autorités
+/// ajoutées dans MMail.
+fn dossier_cles(profil: &str) -> std::path::PathBuf {
+    std::path::Path::new(profil).join("smime").join("cles")
+}
+
+fn dossier_autorites(profil: &str) -> std::path::PathBuf {
+    std::path::Path::new(profil).join("smime").join("autorites")
+}
+
+/// Écrit un fichier entier ou pas du tout (fichier provisoire, puis
+/// renommage), comme le cache.
+fn ecrire_entier(chemin: &std::path::Path, octets: &[u8]) -> std::io::Result<()> {
+    let provisoire = chemin.with_extension("partiel");
+    std::fs::write(&provisoire, octets)?;
+    std::fs::rename(&provisoire, chemin)
+}
+
+/// Une clé rangée dans le profil.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Rangee {
+    pub adresse: String,
+    pub empreinte: String,
+    pub chemin: std::path::PathBuf,
+}
+
+/// Range le `.p12` d'une clé lue, pour le compte `adresse`. Les anciennes
+/// clés restent : elles déchiffrent les anciens messages.
+pub fn ranger_cle(profil: &str, adresse: &str, p12: &[u8], cle: &Cle) -> std::io::Result<Rangee> {
+    let adresse = adresse.trim().to_ascii_lowercase();
+    if adresse.is_empty() || adresse.contains(['/', '\\']) || adresse.starts_with('.') {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "adresse invalide"));
+    }
+    let dossier = dossier_cles(profil).join(&adresse);
+    std::fs::create_dir_all(&dossier)?;
+    let empreinte = cle.empreinte();
+    let chemin = dossier.join(format!("{empreinte}.p12"));
+    ecrire_entier(&chemin, p12)?;
+    // Le certificat à côté, en clair (il est public) : de quoi présenter la
+    // clé avant de l'avoir ouverte.
+    ecrire_entier(&chemin.with_extension("cer"), &cle.certificat)?;
+    Ok(Rangee { adresse, empreinte, chemin })
+}
+
+impl Rangee {
+    /// Le certificat de la clé, rangé à côté d'elle.
+    pub fn certificat(&self) -> Option<Vec<u8>> {
+        std::fs::read(self.chemin.with_extension("cer")).ok()
+    }
+}
+
+/// Les clés rangées dans le profil, toutes adresses.
+pub fn cles_rangees(profil: &str) -> Vec<Rangee> {
+    let mut sortie = Vec::new();
+    let Ok(adresses) = std::fs::read_dir(dossier_cles(profil)) else {
+        return sortie;
+    };
+    for a in adresses.flatten() {
+        let adresse = a.file_name().to_string_lossy().into_owned();
+        let Ok(fichiers) = std::fs::read_dir(a.path()) else {
+            continue;
+        };
+        for f in fichiers.flatten() {
+            let nom = f.file_name().to_string_lossy().into_owned();
+            if let Some(empreinte) = nom.strip_suffix(".p12") {
+                sortie.push(Rangee { adresse: adresse.clone(), empreinte: empreinte.to_string(), chemin: f.path() });
+            }
+        }
+    }
+    sortie.sort_by(|a, b| (&a.adresse, &a.empreinte).cmp(&(&b.adresse, &b.empreinte)));
+    sortie
+}
+
+/// Retire une clé du profil (sur demande, après avertissement : les messages
+/// chiffrés pour elle deviennent illisibles).
+pub fn retirer_cle(profil: &str, empreinte: &str) -> std::io::Result<bool> {
+    let mut retiree = false;
+    for r in cles_rangees(profil) {
+        if r.empreinte == empreinte {
+            std::fs::remove_file(&r.chemin)?;
+            let _ = std::fs::remove_file(r.chemin.with_extension("cer"));
+            retiree = true;
+        }
+    }
+    oublier(empreinte);
+    Ok(retiree)
+}
+
+/// Lit un certificat d'autorité, PEM ou DER.
+pub fn lire_certificat(octets: &[u8]) -> Result<Vec<u8>, String> {
+    let der = match std::str::from_utf8(octets) {
+        Ok(texte) if texte.contains("-----BEGIN CERTIFICATE-----") => {
+            let debut = texte.find("-----BEGIN CERTIFICATE-----").unwrap_or(0) + "-----BEGIN CERTIFICATE-----".len();
+            let fin = texte[debut..].find("-----END CERTIFICATE-----").map(|f| debut + f).unwrap_or(texte.len());
+            crate::rendu::base64(&texte[debut..fin]).ok_or("certificat PEM illisible")?
+        }
+        _ => octets.to_vec(),
+    };
+    Certificate::from_der(&der).map_err(|_| "ce fichier n'est pas un certificat X.509".to_string())?;
+    Ok(der)
+}
+
+/// Ajoute une autorité de confiance au profil (autorité interne d'une
+/// entreprise, en particulier sous Android).
+pub fn ranger_autorite(profil: &str, der: &[u8]) -> std::io::Result<std::path::PathBuf> {
+    let dossier = dossier_autorites(profil);
+    std::fs::create_dir_all(&dossier)?;
+    let chemin = dossier.join(format!("{}.cer", empreinte(der)));
+    ecrire_entier(&chemin, der)?;
+    if let Ok(mut a) = AUTORITES.write() {
+        *a = None;
+    }
+    Ok(chemin)
+}
+
+/// Les autorités ajoutées au profil.
+pub fn autorites_ajoutees(profil: &str) -> Vec<Vec<u8>> {
+    let Ok(fichiers) = std::fs::read_dir(dossier_autorites(profil)) else {
+        return Vec::new();
+    };
+    let mut sortie: Vec<Vec<u8>> = fichiers
+        .flatten()
+        .filter(|f| f.file_name().to_string_lossy().ends_with(".cer"))
+        .filter_map(|f| std::fs::read(f.path()).ok())
+        .collect();
+    sortie.sort();
+    sortie
+}
+
+/// Recueille le certificat d'un signataire dont la signature est bonne :
+/// `smime/correspondants/<adresse>/<empreinte>.cer`, de quoi lui écrire
+/// chiffré ensuite. Rend vrai s'il est nouveau.
+pub fn recueillir(profil: &str, signature: &Signature) -> bool {
+    if !signature.recueillable() {
+        return false;
+    }
+    let Some(t) = titulaire(&signature.certificat) else {
+        return false;
+    };
+    let mut nouveau = false;
+    for adresse in &t.adresses {
+        if adresse.is_empty() || adresse.contains(['/', '\\']) || adresse.starts_with('.') {
+            continue;
+        }
+        let dossier = std::path::Path::new(profil).join("smime").join("correspondants").join(adresse);
+        let chemin = dossier.join(format!("{}.cer", t.empreinte));
+        if chemin.exists() {
+            continue;
+        }
+        if std::fs::create_dir_all(&dossier).is_ok() && ecrire_entier(&chemin, &signature.certificat).is_ok() {
+            nouveau = true;
+        }
+    }
+    nouveau
+}
+
+/// Les certificats recueillis pour une adresse.
+pub fn certificats_de(profil: &str, adresse: &str) -> Vec<Vec<u8>> {
+    let dossier =
+        std::path::Path::new(profil).join("smime").join("correspondants").join(adresse.trim().to_ascii_lowercase());
+    let Ok(fichiers) = std::fs::read_dir(dossier) else {
+        return Vec::new();
+    };
+    fichiers
+        .flatten()
+        .filter(|f| f.file_name().to_string_lossy().ends_with(".cer"))
+        .filter_map(|f| std::fs::read(f.path()).ok())
+        .collect()
+}
+
+// --------------------------------------------------------------- session
+
+/// Les clés déverrouillées de la session, par compte (identifiant de
+/// l'index) : lues sur tous les fils, posées par l'interface, qui tient les
+/// mots de passe du coffre.
+static TROUSSEAU: std::sync::Mutex<Vec<(i64, Cle)>> = std::sync::Mutex::new(Vec::new());
+
+/// Autorités chargées à la première vérification (le magasin du système est
+/// long à lire), et rechargées après un ajout.
+static AUTORITES: std::sync::RwLock<Option<std::sync::Arc<Autorites>>> = std::sync::RwLock::new(None);
+
+pub fn deposer(compte: i64, cle: Cle) {
+    let mut t = TROUSSEAU.lock().unwrap_or_else(|e| e.into_inner());
+    let empreinte = cle.empreinte();
+    t.retain(|(c, k)| !(*c == compte && k.empreinte() == empreinte));
+    t.push((compte, cle));
+}
+
+pub fn oublier(empreinte: &str) {
+    TROUSSEAU.lock().unwrap_or_else(|e| e.into_inner()).retain(|(_, k)| k.empreinte() != empreinte);
+}
+
+/// Les clés d'un compte, la plus récente en dernier.
+pub fn cles(compte: i64) -> Vec<Cle> {
+    TROUSSEAU
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .filter(|(c, _)| *c == compte)
+        .map(|(_, k)| k.clone())
+        .collect()
+}
+
+pub fn deverrouillee(empreinte: &str) -> bool {
+    TROUSSEAU.lock().unwrap_or_else(|e| e.into_inner()).iter().any(|(_, k)| k.empreinte() == empreinte)
+}
+
+/// Les autorités de confiance du profil (système et ajoutées).
+pub fn autorites(profil: &str) -> std::sync::Arc<Autorites> {
+    if let Some(a) = AUTORITES.read().ok().and_then(|a| a.clone()) {
+        return a;
+    }
+    let a = std::sync::Arc::new(Autorites::du_systeme(&autorites_ajoutees(profil)));
+    if let Ok(mut place) = AUTORITES.write() {
+        *place = Some(a.clone());
+    }
+    a
+}
+
+/// Ouvre un message pour l'affichage avec les clés du compte et les
+/// autorités du profil ; `None` s'il n'est ni signé ni chiffré.
+pub fn ouvrir_pour(profil: &str, compte: i64, brut: &[u8]) -> Option<Ouvert> {
+    if !est_smime(brut) {
+        return None;
+    }
+    let maintenant = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    ouvrir(brut, &cles(compte), &autorites(profil), maintenant)
+}
+
+/// Le message à lire : ouvert s'il est signé ou chiffré, tel quel sinon
+/// (réponse, transfert, pièces jointes).
+pub fn lisible(profil: &str, compte: i64, brut: Vec<u8>) -> Vec<u8> {
+    match ouvrir_pour(profil, compte, &brut) {
+        Some(o) => o.message,
+        None => brut,
+    }
+}
+
 #[cfg(test)]
 mod tests;

@@ -250,6 +250,12 @@ ColumnLayout {
         }
     }
 
+    // Signé ou chiffré (S/MIME, 0.8.0) : ce que vaut la signature.
+    BandeauSecurite {
+        Layout.fillWidth: true
+        securite: fenetre.uidCourant > 0 && !fenetre.sourceVisible ? fenetre.securite : ({})
+    }
+
     // Liste de diffusion ou lettre d'information : « Se désabonner… »
     // (0.6.30), après confirmation.
     BandeauDesabonnement {

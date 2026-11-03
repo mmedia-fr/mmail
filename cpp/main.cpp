@@ -56,6 +56,7 @@ extern const std::size_t nombreTraductionsQt;
 #include "correcteur.h"
 #include "mise_en_forme.h"
 #include "rendu_complet.h"
+#include "lecteur_fichier.h"
 
 #ifdef Q_OS_WIN
 #  include <windows.h>  // GetCommandLineW / CommandLineToArgvW
@@ -418,6 +419,8 @@ int main(int argc, char* argv[])
   qmlRegisterType<Correcteur>("fr.mmedia.mmail.natif", 1, 0, "Correcteur");
   // Long texte riche dessiné en entier (cf. cpp/rendu_complet.h).
   qmlRegisterType<RenduComplet>("fr.mmedia.mmail.natif", 1, 0, "RenduComplet");
+  // Certificats S/MIME choisis dans le sélecteur (content:// sous Android).
+  qmlRegisterType<LecteurFichier>("fr.mmedia.mmail.natif", 1, 0, "LecteurFichier");
 
   QQmlApplicationEngine engine;
   // En contrôle de fabrication, l'interface ne touche ni au coffre ni au réseau

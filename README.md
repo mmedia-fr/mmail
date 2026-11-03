@@ -266,6 +266,17 @@ de projet interne.
   navigateur — jamais celui d'une réponse ou d'un transfert, qui désabonnerait
   le premier destinataire. Aucun bandeau quand le serveur a noté l'échec de
   l'authentification de l'expéditeur (DMARC) ;
+- **messagerie de Windows** : MMail peut être la messagerie dans laquelle les
+  autres logiciels créent un courriel — « Envoyer vers › Destinataire » de
+  l'Explorateur, envoi d'un document ou d'un état « par courriel » depuis un
+  logiciel de gestion (MAPI simple, logiciels 32 et 64 bits). Le courriel
+  s'ouvre dans une rédaction de MMail, pièces jointes comprises : on le relit,
+  on complète le destinataire et on l'envoie ; rien ne part sans « Envoyer ».
+  Le choix se fait pour la session dans « Réglages › Messagerie par
+  défaut… », comme Outlook ou Thunderbird le proposent ; MMail n'y figure que
+  s'il a été installé pour tous les utilisateurs (droits d'administrateur).
+  MMail se propose aussi pour les liens « mailto: », dans les applications par
+  défaut de Windows ;
 - **masquage local** des dossiers peu utilisés, réaffichage en un clic ;
 - affichage du **message brut** (bouton « Source ») ;
 - **copie automatique de la sélection**, comme dans MMdedit : un texte

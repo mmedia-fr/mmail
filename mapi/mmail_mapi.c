@@ -916,7 +916,7 @@ ULONG WINAPI MAPIResolveName(LHANDLE session, ULONG_PTR fenetre, LPSTR nom, FLAG
 // Le reste de MAPI simple — lecture de la boîte, carnet d'adresses — n'est pas
 // offert : MMail a sa propre interface pour cela.
 ULONG WINAPI MAPIAddress(LHANDLE a, ULONG_PTR b, LPSTR c, ULONG d, LPSTR e, ULONG f, lpMapiRecipDesc g, FLAGS h,
-                         ULONG i, LPULONG j, lpMapiRecipDesc* k)
+                         ULONG i, ULONG* j, lpMapiRecipDesc* k)
 {
   (void)a, (void)b, (void)c, (void)d, (void)e, (void)f, (void)g, (void)h, (void)i, (void)j, (void)k;
   return MAPI_E_NOT_SUPPORTED;

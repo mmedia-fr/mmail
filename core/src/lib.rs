@@ -36,6 +36,7 @@ pub mod rendu;
 pub mod saisie;
 pub mod sauvegarde;
 pub mod signature;
+pub mod smime;
 pub mod smtp;
 pub mod socle;
 pub mod protocole;

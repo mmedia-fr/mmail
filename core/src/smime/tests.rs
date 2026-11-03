@@ -1,0 +1,210 @@
+//! Messages et certificats d'essai fabriqués par OpenSSL
+//! (`essais/fabriquer.sh`) : ce que MMail en lit doit être ce qu'OpenSSL y a
+//! mis.
+
+use super::*;
+
+const RACINE: &[u8] = include_bytes!("essais/racine.pem");
+const INTERMEDIAIRE: &[u8] = include_bytes!("essais/intermediaire.pem");
+const ALICE_P12: &[u8] = include_bytes!("essais/alice.p12");
+const BOB_P12: &[u8] = include_bytes!("essais/bob.p12");
+const BOB_ANCIEN_P12: &[u8] = include_bytes!("essais/bob-ancien.p12");
+const BOB_PEM: &[u8] = include_bytes!("essais/bob.pem");
+
+/// Le 01/01/2027 : les certificats d'essai, faits le 03/11/2026 pour vingt
+/// ans, sont valides.
+const MAINTENANT: i64 = 1_798_761_600;
+/// Le 01/01/2050 : ils ont expiré.
+const PLUS_TARD: i64 = 2_524_608_000;
+
+fn der(pem: &[u8]) -> Vec<u8> {
+    let texte = std::str::from_utf8(pem).unwrap();
+    let corps: String = texte.lines().filter(|l| !l.starts_with("-----")).collect();
+    crate::rendu::base64(&corps).unwrap()
+}
+
+fn autorites() -> Autorites {
+    Autorites::de(&[der(RACINE)])
+}
+
+fn alice() -> Cle {
+    Cle::depuis_p12(ALICE_P12, "essai-alice").unwrap()
+}
+
+fn bob() -> Cle {
+    Cle::depuis_p12(BOB_P12, "essai-bob").unwrap()
+}
+
+fn ouvrir_essai(nom: &str, cles: &[Cle], quand: i64) -> Ouvert {
+    let brut = std::fs::read(format!("{}/src/smime/essais/{nom}", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    ouvrir(&brut, cles, &autorites(), quand).unwrap_or_else(|| panic!("{nom} : pas reconnu comme S/MIME"))
+}
+
+fn etat(o: &Ouvert) -> &str {
+    o.securite.signature.as_ref().map(|s| s.etat.as_str()).unwrap_or("")
+}
+
+/// Le contenu d'essai se lit après ouverture, comme un message ordinaire.
+fn contenu_lisible(o: &Ouvert) {
+    let texte = crate::index::corps_affichable(&o.message);
+    assert!(texte.contains("Bonjour Bob, voici le devis signé."), "corps : {texte}");
+    let pieces: Vec<String> = crate::index::pieces_jointes(&o.message).into_iter().map(|p| p.nom).collect();
+    assert_eq!(pieces, vec!["devis.txt".to_string()], "pièces : {pieces:?}");
+    let m = MessageParser::default().parse(&o.message).unwrap();
+    assert_eq!(m.subject(), Some("Devis"));
+}
+
+#[test]
+fn p12_recents_et_anciens() {
+    let a = alice();
+    let t = a.titulaire().unwrap();
+    assert_eq!(t.nom, "Alice Essai");
+    assert_eq!(t.adresses, vec!["alice@exemple.fr".to_string()]);
+    assert_eq!(t.emetteur, "Intermediaire d'essai");
+    assert_eq!(a.intermediaires.len(), 1);
+    // 3DES et RC2-40 : les exports anciens.
+    let ancien = Cle::depuis_p12(BOB_ANCIEN_P12, "essai-bob").unwrap();
+    assert_eq!(ancien.certificat, der(BOB_PEM));
+    assert_eq!(ancien.empreinte(), bob().empreinte());
+    assert!(Cle::depuis_p12(BOB_P12, "pas-le-bon").is_err());
+}
+
+#[test]
+fn message_ordinaire_non_concerne() {
+    let brut = b"From: a@exemple.fr\r\nTo: b@exemple.fr\r\nSubject: s\r\n\r\ncorps\r\n";
+    assert!(!est_smime(brut));
+    assert!(ouvrir(brut, &[], &autorites(), MAINTENANT).is_none());
+}
+
+#[test]
+fn signature_detachee_verifiee() {
+    let o = ouvrir_essai("signe-detache.eml", &[], MAINTENANT);
+    assert_eq!(etat(&o), "verifiee", "{:?}", o.securite);
+    let s = o.securite.signature.as_ref().unwrap();
+    assert!(s.texte.contains("Alice Essai <alice@exemple.fr>"), "{}", s.texte);
+    assert!(s.signe_le > 0);
+    assert!(s.recueillable());
+    assert!(!o.securite.chiffre);
+    contenu_lisible(&o);
+}
+
+#[test]
+fn signature_opaque_verifiee() {
+    let o = ouvrir_essai("signe-opaque.eml", &[], MAINTENANT);
+    assert_eq!(etat(&o), "verifiee", "{:?}", o.securite);
+    contenu_lisible(&o);
+}
+
+#[test]
+fn signature_ecdsa_verifiee() {
+    let o = ouvrir_essai("signe-ecdsa.eml", &[], MAINTENANT);
+    assert_eq!(etat(&o), "verifiee", "{:?}", o.securite);
+}
+
+#[test]
+fn contenu_modifie_repere() {
+    let brut = std::fs::read(format!("{}/src/smime/essais/signe-detache.eml", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    let texte = String::from_utf8(brut).unwrap().replace("1 234,56", "9 234,56");
+    let o = ouvrir(texte.as_bytes(), &[], &autorites(), MAINTENANT).unwrap();
+    assert_eq!(etat(&o), "modifiee", "{:?}", o.securite);
+    assert!(!o.securite.signature.as_ref().unwrap().recueillable());
+}
+
+#[test]
+fn fins_de_ligne_reecrites_par_un_relais() {
+    let brut = std::fs::read(format!("{}/src/smime/essais/signe-detache.eml", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    let lf = String::from_utf8(brut).unwrap().replace("\r\n", "\n");
+    let o = ouvrir(lf.as_bytes(), &[], &autorites(), MAINTENANT).unwrap();
+    assert_eq!(etat(&o), "verifiee", "{:?}", o.securite);
+}
+
+#[test]
+fn adresse_de_l_expediteur_differente() {
+    let brut = std::fs::read(format!("{}/src/smime/essais/signe-detache.eml", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    let texte = String::from_utf8(brut).unwrap().replace("From: alice@exemple.fr", "From: mallory@exemple.fr");
+    let o = ouvrir(texte.as_bytes(), &[], &autorites(), MAINTENANT).unwrap();
+    assert_eq!(etat(&o), "adresse", "{:?}", o.securite);
+    assert!(o.securite.signature.as_ref().unwrap().texte.contains("mallory@exemple.fr"));
+}
+
+#[test]
+fn autorite_inconnue() {
+    let o = ouvrir_essai("signe-inconnu.eml", &[], MAINTENANT);
+    assert_eq!(etat(&o), "inconnue", "{:?}", o.securite);
+    // Sans la racine d'essai, Alice aussi est d'une autorité inconnue.
+    let brut = std::fs::read(format!("{}/src/smime/essais/signe-detache.eml", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    let o = ouvrir(&brut, &[], &Autorites::de(&[]), MAINTENANT).unwrap();
+    assert_eq!(etat(&o), "inconnue", "{:?}", o.securite);
+}
+
+#[test]
+fn certificat_non_prevu_pour_le_courrier() {
+    let o = ouvrir_essai("signe-serveur.eml", &[], MAINTENANT);
+    assert_eq!(etat(&o), "usage", "{:?}", o.securite);
+}
+
+#[test]
+fn sha1_refuse() {
+    let o = ouvrir_essai("signe-sha1.eml", &[], MAINTENANT);
+    assert_eq!(etat(&o), "faible", "{:?}", o.securite);
+}
+
+#[test]
+fn certificat_expire_apres_la_signature() {
+    let o = ouvrir_essai("signe-detache.eml", &[], PLUS_TARD);
+    assert_eq!(etat(&o), "expiree", "{:?}", o.securite);
+}
+
+#[test]
+fn chiffre_aes_pour_deux_destinataires() {
+    for cle in [bob(), alice()] {
+        let o = ouvrir_essai("chiffre-aes.eml", &[cle], MAINTENANT);
+        assert!(o.securite.chiffre && o.securite.illisible.is_empty(), "{:?}", o.securite);
+        assert!(!o.securite.ancien);
+        assert!(o.securite.signature.is_none());
+        contenu_lisible(&o);
+    }
+}
+
+#[test]
+fn chiffre_variantes_d_openssl() {
+    // 3DES (ancien), destinataire désigné par identifiant de clé, RSA-OAEP,
+    // longueurs indéfinies (BER).
+    for nom in ["chiffre-3des.eml", "chiffre-ski.eml", "chiffre-oaep.eml", "chiffre-ber.eml"] {
+        let o = ouvrir_essai(nom, &[bob()], MAINTENANT);
+        assert!(o.securite.chiffre && o.securite.illisible.is_empty(), "{nom} : {:?}", o.securite);
+        assert_eq!(o.securite.ancien, nom == "chiffre-3des.eml", "{nom}");
+        contenu_lisible(&o);
+    }
+}
+
+#[test]
+fn chiffre_illisible_sans_la_bonne_cle() {
+    let o = ouvrir_essai("chiffre-pour-alice.eml", &[bob()], MAINTENANT);
+    assert!(o.securite.chiffre);
+    assert!(o.securite.illisible.contains("destinataires"), "{}", o.securite.illisible);
+    let texte = crate::index::corps_affichable(&o.message);
+    assert!(texte.contains("chiffré"), "{texte}");
+    // Sans aucune clé.
+    let o = ouvrir_essai("chiffre-pour-alice.eml", &[], MAINTENANT);
+    assert!(o.securite.illisible.contains("aucun certificat"), "{}", o.securite.illisible);
+    // L'ancienne clé d'Alice parmi d'autres suffit.
+    let o = ouvrir_essai("chiffre-pour-alice.eml", &[bob(), alice()], MAINTENANT);
+    assert!(o.securite.illisible.is_empty(), "{:?}", o.securite);
+}
+
+#[test]
+fn signe_puis_chiffre_comme_outlook() {
+    let o = ouvrir_essai("signe-chiffre.eml", &[bob()], MAINTENANT);
+    assert!(o.securite.chiffre && o.securite.illisible.is_empty(), "{:?}", o.securite);
+    assert_eq!(etat(&o), "verifiee", "{:?}", o.securite);
+    contenu_lisible(&o);
+}
+
+#[test]
+fn intermediaires_hors_du_message() {
+    // La chaîne s'établit par les intermédiaires que porte la signature :
+    // l'autorité racine seule suffit côté lecteur.
+    assert_eq!(Autorites::de(&[der(RACINE)]).nombre(), 1);
+    assert_eq!(Autorites::de(&[der(RACINE), der(INTERMEDIAIRE)]).nombre(), 2);
+}

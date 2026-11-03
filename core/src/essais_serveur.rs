@@ -207,6 +207,65 @@ fn categories_sur_boite_partagee() {
     }
 }
 
+/// Supprimer dans une boîte partagée (0.6.35) : B partage sa boîte de
+/// réception et sa corbeille avec A. La corbeille que MMail retient pour un
+/// message de la boîte partagée est celle de B, et le déplacement y aboutit :
+/// B l'y retrouve, la corbeille de A n'en reçoit rien.
+#[test]
+#[ignore = "exige un serveur IMAP à boîtes partagées et deux comptes"]
+fn suppression_dans_une_boite_partagee() {
+    let ua = variable("MMAIL_UTILISATEUR");
+    let mut b = session2();
+    let (id_message, brut) = message_essai("Corbeille partagée");
+    b.deposer("INBOX", &[], DATE_ESSAI, &brut).unwrap();
+    b.brute(&format!("SETACL INBOX \"{ua}\" lrswiptek")).expect("SETACL INBOX");
+    b.brute(&format!("SETACL Trash \"{ua}\" lrswiptek")).expect("SETACL Trash");
+    let resultat = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut a = session();
+        let (magasin, ca, _) = index(&mut a, None);
+        let partagees = magasin.compte_par_id(ca).unwrap().unwrap().partagees;
+        let dossiers = magasin.dossiers(ca).unwrap();
+        let chemins: Vec<String> = dossiers
+            .iter()
+            .filter(|d| d.selectionnable && d.chemin.starts_with("Shared/"))
+            .map(|d| d.chemin.clone())
+            .collect();
+        // « Shared/<B>/INBOX » chez Mailcow, « Shared/<B> » sinon (CI).
+        let reception = chemins
+            .iter()
+            .find(|c| c.ends_with("/INBOX"))
+            .or_else(|| chemins.iter().find(|c| !c["Shared/".len()..].contains('/')))
+            .cloned()
+            .expect("boîte partagée vue par A");
+        let corbeille = crate::boite::corbeille_partagee(&dossiers, &reception, &partagees)
+            .expect("dossier d'une boîte partagée")
+            .expect("corbeille partagée vue par A");
+        println!("corbeille de {reception} : {corbeille}");
+        assert!(corbeille.starts_with("Shared/") && corbeille.ends_with("/Trash"), "{corbeille}");
+        // Le même déplacement que « Supprimer » envoie au fil de la boîte.
+        synchro::synchroniser(&mut a, &magasin, ca, &reception).expect("synchro A");
+        a.selectionner(&reception, None).unwrap();
+        let uids = a.chercher_message_id(&id_message).unwrap();
+        assert_eq!(uids.len(), 1, "{uids:?}");
+        let rapport = deplacement::dans_la_boite(&mut a, &magasin, ca, &reception, &uids, &corbeille)
+            .unwrap_or_else(|e| panic!("déplacement : {e:?}"));
+        assert_eq!(rapport.deplaces, 1);
+        assert_eq!(compter(&mut b, "Trash", &id_message).len(), 1, "absent de la corbeille de B");
+        assert!(compter(&mut b, "INBOX", &id_message).is_empty(), "resté dans la boîte de réception de B");
+        assert!(compter(&mut a, "Trash", &id_message).is_empty(), "arrivé dans la corbeille de A");
+    }));
+    // Retirés avant tout constat : un échec ne laisse ni partage ni message.
+    b.brute(&format!("DELETEACL INBOX \"{ua}\"")).expect("DELETEACL INBOX");
+    b.brute(&format!("DELETEACL Trash \"{ua}\"")).expect("DELETEACL Trash");
+    nettoyer(&mut b, "INBOX", &id_message);
+    nettoyer(&mut b, "Trash", &id_message);
+    let mut a = session();
+    nettoyer(&mut a, "Trash", &id_message);
+    if let Err(e) = resultat {
+        std::panic::resume_unwind(e);
+    }
+}
+
 #[test]
 #[ignore = "exige un serveur IMAP et un compte"]
 fn sous_dossier_cree_et_abonne() {

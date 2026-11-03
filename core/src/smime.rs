@@ -1232,12 +1232,21 @@ pub fn certificat_pour(profil: &str, adresse: &str, autorites: &Autorites, maint
 /// fichier toujours protégé par son mot de passe (au coffre du système, sous
 /// `smime:<empreinte>`) ; `smime/autorites/<empreinte>.cer`, les autorités
 /// ajoutées dans MMail.
+/// `profil` est le chemin de l'index (`…/index.sqlite`), comme pour les
+/// autres dossiers du profil : `smime/` est à côté de lui.
+fn racine(profil: &str) -> std::path::PathBuf {
+    std::path::Path::new(profil)
+        .parent()
+        .map(|p| p.join("smime"))
+        .unwrap_or_else(|| std::path::PathBuf::from("smime"))
+}
+
 fn dossier_cles(profil: &str) -> std::path::PathBuf {
-    std::path::Path::new(profil).join("smime").join("cles")
+    racine(profil).join("cles")
 }
 
 fn dossier_autorites(profil: &str) -> std::path::PathBuf {
-    std::path::Path::new(profil).join("smime").join("autorites")
+    racine(profil).join("autorites")
 }
 
 /// Écrit un fichier entier ou pas du tout (fichier provisoire, puis
@@ -1374,7 +1383,7 @@ pub fn recueillir(profil: &str, signature: &Signature) -> bool {
         if adresse.is_empty() || adresse.contains(['/', '\\']) || adresse.starts_with('.') {
             continue;
         }
-        let dossier = std::path::Path::new(profil).join("smime").join("correspondants").join(adresse);
+        let dossier = racine(profil).join("correspondants").join(adresse);
         let chemin = dossier.join(format!("{}.cer", t.empreinte));
         if chemin.exists() {
             continue;
@@ -1383,7 +1392,7 @@ pub fn recueillir(profil: &str, signature: &Signature) -> bool {
             nouveau = true;
         }
     }
-    let dossier = std::path::Path::new(profil).join("smime").join("intermediaires");
+    let dossier = racine(profil).join("intermediaires");
     for i in &signature.intermediaires {
         let chemin = dossier.join(format!("{}.cer", empreinte(i)));
         if !chemin.exists() && Certificate::from_der(i).is_ok() && std::fs::create_dir_all(&dossier).is_ok() {
@@ -1395,7 +1404,7 @@ pub fn recueillir(profil: &str, signature: &Signature) -> bool {
 
 /// Les certificats intermédiaires recueillis sur les messages signés.
 pub fn intermediaires_recueillis(profil: &str) -> Vec<Vec<u8>> {
-    let Ok(fichiers) = std::fs::read_dir(std::path::Path::new(profil).join("smime").join("intermediaires")) else {
+    let Ok(fichiers) = std::fs::read_dir(racine(profil).join("intermediaires")) else {
         return Vec::new();
     };
     fichiers
@@ -1408,7 +1417,7 @@ pub fn intermediaires_recueillis(profil: &str) -> Vec<Vec<u8>> {
 /// Les certificats recueillis pour une adresse.
 pub fn certificats_de(profil: &str, adresse: &str) -> Vec<Vec<u8>> {
     let dossier =
-        std::path::Path::new(profil).join("smime").join("correspondants").join(adresse.trim().to_ascii_lowercase());
+        racine(profil).join("correspondants").join(adresse.trim().to_ascii_lowercase());
     let Ok(fichiers) = std::fs::read_dir(dossier) else {
         return Vec::new();
     };

@@ -213,7 +213,8 @@ fn intermediaires_hors_du_message() {
 fn recueil_du_signataire_et_de_ses_intermediaires() {
     let profil = std::env::temp_dir().join(format!("mmail-smime-recueil-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&profil);
-    let p = profil.to_string_lossy().into_owned();
+    // Le profil se désigne par son index, comme dans MMail.
+    let p = profil.join("index.sqlite").to_string_lossy().into_owned();
     let o = ouvrir_essai("signe-detache.eml", &[], MAINTENANT);
     let s = o.securite.signature.as_ref().unwrap();
     assert!(recueillir(&p, s));
@@ -225,6 +226,28 @@ fn recueil_du_signataire_et_de_ses_intermediaires() {
     let o = ouvrir_essai("signe-inconnu.eml", &[], MAINTENANT);
     assert!(!recueillir(&p, o.securite.signature.as_ref().unwrap()));
     assert!(certificats_de(&p, "inconnu@exemple.fr").is_empty());
+    assert!(profil.join("smime").join("correspondants").join("alice@exemple.fr").is_dir());
+    let _ = std::fs::remove_dir_all(&profil);
+}
+
+#[test]
+fn cles_et_autorites_rangees_a_cote_de_l_index() {
+    let profil = std::env::temp_dir().join(format!("mmail-smime-rangement-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&profil);
+    std::fs::create_dir_all(&profil).unwrap();
+    let p = profil.join("index.sqlite").to_string_lossy().into_owned();
+    std::fs::write(&p, b"").unwrap();
+    let r = ranger_cle(&p, "Bob@Exemple.fr", BOB_P12, &bob()).unwrap();
+    assert_eq!(r.adresse, "bob@exemple.fr");
+    let rangees = cles_rangees(&p);
+    assert_eq!(rangees, vec![r.clone()]);
+    assert_eq!(rangees[0].certificat(), Some(der(BOB_PEM)));
+    let a = lire_certificat(RACINE).unwrap();
+    ranger_autorite(&p, &a).unwrap();
+    assert_eq!(autorites_ajoutees(&p), vec![der(RACINE)]);
+    assert!(retirer_cle(&p, &r.empreinte).unwrap());
+    assert!(cles_rangees(&p).is_empty());
+    assert!(ranger_cle(&p, "../x", BOB_P12, &bob()).is_err());
     let _ = std::fs::remove_dir_all(&profil);
 }
 

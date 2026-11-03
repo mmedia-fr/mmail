@@ -755,6 +755,19 @@ pub mod qobject {
         #[cxx_name = "ajouterAutorite"]
         fn ajouter_autorite(self: Pin<&mut Boite>, donnees: &QString) -> QString;
 
+        /// Le titulaire du certificat qui signe pour ce compte, en JSON ;
+        /// vide sans certificat ouvert.
+        #[qinvokable]
+        #[cxx_name = "cleSmime"]
+        fn cle_smime(&self, compte: i32) -> QString;
+
+        /// Ceux des destinataires saisis (« a@b.fr; c@d.fr ») qui n'ont pas
+        /// de certificat valide recueilli, en JSON : un message chiffré ne
+        /// peut pas leur partir.
+        #[qinvokable]
+        #[cxx_name = "sansCertificat"]
+        fn sans_certificat(&self, compte: i32, adresses: &QString) -> QString;
+
         /// Prépare une rédaction à partir d'un message du dossier ouvert.
         /// `mode` : « repondre », « repondre_tous », « transferer » ou
         /// « brouillon » ; `adresses` : les autres adresses d'envoi du compte
@@ -4718,6 +4731,31 @@ impl qobject::Boite {
         })();
         let v = issue.unwrap_or_else(|erreur| serde_json::json!({ "ok": false, "erreur": erreur }));
         QString::from(&v.to_string())
+    }
+
+    pub fn cle_smime(&self, compte: i32) -> QString {
+        let t = crate::smime::cle_active(compte as i64, maintenant()).and_then(|k| k.titulaire());
+        QString::from(&t.map(|t| serde_json::to_string(&t).unwrap_or_default()).unwrap_or_default())
+    }
+
+    pub fn sans_certificat(&self, compte: i32, adresses: &QString) -> QString {
+        let heure = maintenant();
+        let autorites = crate::smime::autorites(&self.profil);
+        let propres: Vec<String> = crate::smime::cle_active(compte as i64, heure)
+            .and_then(|k| k.titulaire())
+            .map(|t| t.adresses)
+            .unwrap_or_default();
+        let mut manquants: Vec<String> = Vec::new();
+        for (_, a) in redaction::adresses(&adresses.to_string()).unwrap_or_default() {
+            let propre = propres.iter().any(|p| p.eq_ignore_ascii_case(&a));
+            if !propre
+                && !manquants.iter().any(|m| m.eq_ignore_ascii_case(&a))
+                && crate::smime::certificat_pour(&self.profil, &a, &autorites, heure).is_none()
+            {
+                manquants.push(a);
+            }
+        }
+        QString::from(&serde_json::to_string(&manquants).unwrap_or_default())
     }
 
     pub fn preparer(self: Pin<&mut Self>, uid: i32, mode: &QString, jeton: &QString, adresses: &QString) -> bool {

@@ -210,6 +210,12 @@ Dialog {
             visible: dlg.message.length > 0
             text: dlg.message
         }
+        CheckBox {
+            text: qsTr("Signer par défaut les messages de ce compte")
+            enabled: dlg.cles.length > 0
+            checked: fenetre.signeParDefaut(dlg.adresse)
+            onToggled: fenetre.poserSigneParDefaut(dlg.adresse, checked)
+        }
         MenuSeparator { Layout.fillWidth: true }
         Button {
             text: qsTr("Ajouter une autorité de confiance…")

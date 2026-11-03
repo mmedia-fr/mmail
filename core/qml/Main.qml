@@ -426,6 +426,9 @@ ApplicationWindow {
     Settings {
         id: reglages
         category: "interface"
+        // Comptes qui signent par défaut leurs messages (S/MIME, 0.8.0) :
+        // adresses, en JSON.
+        property string signatureSmime: "[]"
         property bool afficherMasques: false
         property bool memoriser: true
         property real largeurArborescence: 260
@@ -6860,6 +6863,17 @@ ApplicationWindow {
     // Clés S/MIME (0.8.0) : chacune s'ouvre par son mot de passe, au coffre
     // sous `smime:<empreinte>` (cf. `coffre.onLu`).
     property int versionClesSmime: 0
+    function signeParDefaut(adresse) {
+        try { return JSON.parse(reglages.signatureSmime).indexOf(adresse) >= 0 } catch (e) { return false }
+    }
+    function poserSigneParDefaut(adresse, oui) {
+        var l = []
+        try { l = JSON.parse(reglages.signatureSmime) } catch (e) {}
+        l = l.filter(function(a) { return a !== adresse })
+        if (oui)
+            l.push(adresse)
+        reglages.signatureSmime = JSON.stringify(l)
+    }
     function deverrouillerClesSmime() {
         var cles = []
         try { cles = JSON.parse(boite.clesSmime()) } catch (e) {}

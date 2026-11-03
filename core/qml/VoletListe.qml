@@ -255,7 +255,6 @@ ColumnLayout {
         Layout.fillWidth: true
         Layout.margins: 4
         spacing: 4
-        // Sur une ligne, « Non lus » et la portée viennent ici, après ✕.
         RowLayout {
             id: ligneRecherche
             objectName: "ligneRecherche"
@@ -369,17 +368,19 @@ ColumnLayout {
                 ToolTip.text: qsTr("Effacer la recherche (Échap)")
             }
         }
+        // « Non lus » et la portée : sous le champ, ou au bout de sa ligne
+        // quand elle a la place — la rangée entière change de parent, et
+        // garde son ordre.
         RowLayout {
             id: ligneOptionsRecherche
             objectName: "ligneOptionsRecherche"
-            Layout.fillWidth: true
-            visible: blocRecherche.deuxLignes
+            parent: blocRecherche.deuxLignes ? blocRecherche : ligneRecherche
+            Layout.fillWidth: blocRecherche.deuxLignes
             spacing: 4
             // Non lus seulement (0.8.2), dans la portée choisie.
             CheckBox {
                 id: nonLusRecherche
                 objectName: "nonLusRecherche"
-                parent: blocRecherche.deuxLignes ? ligneOptionsRecherche : ligneRecherche
                 text: qsTr("Non lus")
                 onToggled: if (champRecherche.text.trim().length > 0) fenetre.lancerRecherche()
                 ToolTip.visible: hovered
@@ -388,7 +389,6 @@ ColumnLayout {
             }
             ComboBox {
                 id: porteeRecherche
-                parent: blocRecherche.deuxLignes ? ligneOptionsRecherche : ligneRecherche
                 // « Cette boîte » (0.8.3) : tous les dossiers et sous-dossiers du
                 // compte du dossier ouvert.
                 readonly property bool partout: currentIndex === 2

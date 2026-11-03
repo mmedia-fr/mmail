@@ -4134,7 +4134,12 @@ QtObject {
             var largeur = Math.round(colonneListe.width)
             bilan(cas + " : colonne de " + largeur + " (seuil " + Math.round(bloc.seuil) + "), deux lignes " + bloc.deuxLignes,
                   bloc.deuxLignes === (largeur < bloc.seuil))
-            var rangs = [objetNomme(bloc, "ligneRecherche"), objetNomme(bloc, "ligneOptionsRecherche")]
+            var options = objetNomme(bloc, "ligneOptionsRecherche")
+            bilan(cas + " : « Non lus » puis la portée",
+                  colonneListe.nonLusRecherche.mapToItem(bloc, 0, 0).x < colonneListe.porteeRecherche.mapToItem(bloc, 0, 0).x)
+            bilan(cas + " : options " + (bloc.deuxLignes ? "sous le champ" : "au bout de sa ligne"),
+                  bloc.deuxLignes ? options.parent === bloc : options.parent === objetNomme(bloc, "ligneRecherche"))
+            var rangs = [objetNomme(bloc, "ligneRecherche")].concat(bloc.deuxLignes ? [options] : [])
             for (var r = 0; r < rangs.length; ++r) {
                 var rang = rangs[r]
                 if (!rang.visible)

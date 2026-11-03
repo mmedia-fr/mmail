@@ -6629,11 +6629,18 @@ impl Travail {
             Commande::OuvrirDossier(chemin) => {
                 e.ouvert = Some(chemin.clone());
                 Some(match synchro::synchroniser(&mut e.client, &e.magasin, compte, &chemin) {
+                    Ok(_) if e.graph.is_none() => Issue::Dossier { chemin, veille: false },
+                    // Microsoft 365 : la liste s'affiche d'abord ; les
+                    // catégories lues dans Graph — au premier passage, des
+                    // milliers de messages — la font relire si l'une a changé.
+                    // Un refus de Graph n'empêche pas le dossier de s'ouvrir.
                     Ok(_) => {
-                        // Microsoft 365 : les catégories viennent de Graph. Un
-                        // refus de Graph n'empêche pas le dossier de s'ouvrir.
-                        let _ = self.categories_graph(e, &chemin);
-                        Issue::Dossier { chemin, veille: false }
+                        self.remettre(Issue::Dossier { chemin: chemin.clone(), veille: false });
+                        if self.categories_graph(e, &chemin).unwrap_or(false) {
+                            Issue::Dossier { chemin, veille: true }
+                        } else {
+                            Issue::Arborescence
+                        }
                     }
                     Err(err) => echec("dossier", format!("ouverture de {chemin} : {err}"), &err),
                 })

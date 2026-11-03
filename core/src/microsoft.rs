@@ -607,9 +607,11 @@ fn dossier_graph_par(t: &mut Transport, jeton: &str, chemin: &str, separateur: &
     parent.ok_or_else(|| ErreurOAuth::refus("DossierInconnu", "chemin vide"))
 }
 
-/// Pages lues au plus par passage : au-delà, la suite viendra au passage
-/// suivant, à partir du lien rendu.
-const PAGES_DELTA: usize = 50;
+/// Pages lues au plus par passage (4 000 messages, une dizaine de secondes
+/// pendant lesquelles le fil du compte ne fait rien d'autre) : au-delà, la
+/// suite viendra au passage suivant — la veille, toutes les deux minutes —
+/// à partir du lien rendu.
+const PAGES_DELTA: usize = 20;
 
 /// Catégories des messages d'un dossier par la requête « delta » de Graph : la
 /// première fois (`lien` vide), tout le dossier ; ensuite, ce qui a changé

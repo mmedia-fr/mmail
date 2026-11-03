@@ -6356,6 +6356,14 @@ ApplicationWindow {
                 pause.start()
                 return
             }
+            // Scénario « recherche-etroite » : la ligne de recherche d'une
+            // colonne étroite, puis large.
+            if (essai.scenario === "recherche-etroite") {
+                var attenteRecherche = Qt.createQmlObject('import QtQuick; Timer { interval: 2500 }', fenetre)
+                attenteRecherche.triggered.connect(scenarios.etapeScenarioRechercheEtroite)
+                attenteRecherche.start()
+                return
+            }
             if (essai.scenario === "reprise")
                 return
             // Scénario « lien-saut » (0.6.33) : un lien coupé sur plusieurs

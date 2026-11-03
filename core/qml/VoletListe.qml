@@ -240,141 +240,170 @@ ColumnLayout {
     // Vue tactile : la recherche se montre par la loupe de la barre
     // d'application, et se range une fois vide et quittée.
     property bool rechercheOuverte: false
-    RowLayout {
+    // Colonne étroite (et toujours au doigt) : le champ et
+    // ✕ en haut, « Non lus » et la portée dessous. Sur une seule ligne, la
+    // portée gardait sa largeur, et le champ et la case se recouvraient
+    // (0.8.2, 0.8.3).
+    ColumnLayout {
+        id: blocRecherche
+        objectName: "blocRecherche"
+        // Largeur d'une seule ligne : 150 points au champ, plus la case et
+        // la portée à leur largeur.
+        readonly property real seuil: 150 + nonLusRecherche.implicitWidth + porteeRecherche.implicitWidth + 24
+        readonly property bool deuxLignes: fenetre.tactile || colonneListe.width < seuil
         visible: !fenetre.tactile || colonneListe.rechercheOuverte || champRecherche.text.length > 0
         Layout.fillWidth: true
         Layout.margins: 4
         spacing: 4
-        TextField {
-            id: champRecherche
-            MenuSaisie {}
+        // Sur une ligne, « Non lus » et la portée viennent ici, après ✕.
+        RowLayout {
+            id: ligneRecherche
+            objectName: "ligneRecherche"
             Layout.fillWidth: true
-            placeholderText: fenetre.tactile ? qsTr("Rechercher") : qsTr("Rechercher (Ctrl+E)")
-            selectByMouse: true
-            // Mis en valeur (demande de Manu, 08/10) : une loupe, un
-            // cadre de la couleur d'accent sur un fond teinté ; le cadre
-            // s'épaissit quand le champ a la main.
-            leftPadding: loupe.width + 13
-            background: Rectangle {
-                implicitHeight: 30
-                radius: fenetre.marque ? height / 2 : 4
-                color: champRecherche.activeFocus ? fenetre.palette.base
-                       : Qt.rgba(fenetre.accent.r, fenetre.accent.g, fenetre.accent.b, 0.08)
-                border.width: champRecherche.activeFocus ? 2 : 1
-                border.color: fenetre.accent
-            }
-            Canvas {
-                id: loupe
-                anchors.left: parent.left
-                anchors.leftMargin: 7
-                anchors.verticalCenter: parent.verticalCenter
-                height: Math.round(parent.height * 0.5)
-                width: height
-                property color encre: fenetre.accent
-                onEncreChanged: requestPaint()
-                onWidthChanged: requestPaint()
-                onPaint: fenetre.dessinerLoupe(getContext("2d"), width, height, encre)
-            }
-            // La frappe ne cherche plus : elle propose les dernières
-            // recherches, que l'on choisit ; Entrée lance la recherche
-            // (demande de Manu, 09/10).
-            onActiveFocusChanged: {
-                if (activeFocus)
-                    fenetre.proposerHistorique()
-                else if (text.length === 0)
-                    colonneListe.rechercheOuverte = false
-            }
-            // Le mot effacé au clavier, la liste de départ revient, comme par
-            // ✕ (0.6.12, demande de Fabienne : elle restait filtrée).
-            onTextEdited: {
-                if (text.length === 0 && fenetre.recherche.length > 0)
-                    fenetre.quitterRecherche()
-                else
-                    fenetre.proposerHistorique()
-            }
-            onAccepted: {
-                if (panneauHistorique.opened && vueHistorique.currentIndex >= 0)
-                    fenetre.lancerRecherche(panneauHistorique.entrees[vueHistorique.currentIndex])
-                else
-                    fenetre.lancerRecherche()
-            }
-            Keys.onDownPressed: function(ev) {
-                if (panneauHistorique.opened)
-                    vueHistorique.incrementCurrentIndex()
-                else
-                    fenetre.proposerHistorique()
-            }
-            Keys.onUpPressed: if (panneauHistorique.opened) vueHistorique.decrementCurrentIndex()
-            Keys.onEscapePressed: {
-                if (panneauHistorique.opened)
-                    panneauHistorique.close()
-                else
-                    fenetre.quitterRecherche()
-            }
-            // Dernières recherches sous le champ : dix visibles au plus,
-            // un ascenseur au-delà.
-            Popup {
-                id: panneauHistorique
-                property var entrees: []
-                y: champRecherche.height + 2
-                width: champRecherche.width
-                padding: 1
-                closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutsideParent
-                onAboutToShow: vueHistorique.currentIndex = -1
+            spacing: 4
+            TextField {
+                id: champRecherche
+                MenuSaisie {}
+                Layout.fillWidth: true
+                placeholderText: fenetre.tactile ? qsTr("Rechercher") : qsTr("Rechercher (Ctrl+E)")
+                selectByMouse: true
+                // Mis en valeur (demande de Manu, 08/10) : une loupe, un
+                // cadre de la couleur d'accent sur un fond teinté ; le cadre
+                // s'épaissit quand le champ a la main.
+                leftPadding: loupe.width + 13
                 background: Rectangle {
-                    color: fenetre.palette.base
+                    implicitHeight: 30
+                    radius: fenetre.marque ? height / 2 : 4
+                    color: champRecherche.activeFocus ? fenetre.palette.base
+                           : Qt.rgba(fenetre.accent.r, fenetre.accent.g, fenetre.accent.b, 0.08)
+                    border.width: champRecherche.activeFocus ? 2 : 1
                     border.color: fenetre.accent
-                    radius: 3
                 }
-                contentItem: ListView {
-                    id: vueHistorique
-                    implicitHeight: Math.min(panneauHistorique.entrees.length, 10) * 30
-                    clip: true
-                    model: panneauHistorique.entrees
-                    currentIndex: -1
-                    ScrollBar.vertical: ScrollBar {
-                        policy: panneauHistorique.entrees.length > 10 ? ScrollBar.AlwaysOn : ScrollBar.AsNeeded
+                Canvas {
+                    id: loupe
+                    anchors.left: parent.left
+                    anchors.leftMargin: 7
+                    anchors.verticalCenter: parent.verticalCenter
+                    height: Math.round(parent.height * 0.5)
+                    width: height
+                    property color encre: fenetre.accent
+                    onEncreChanged: requestPaint()
+                    onWidthChanged: requestPaint()
+                    onPaint: fenetre.dessinerLoupe(getContext("2d"), width, height, encre)
+                }
+                // La frappe ne cherche plus : elle propose les dernières
+                // recherches, que l'on choisit ; Entrée lance la recherche
+                // (demande de Manu, 09/10).
+                onActiveFocusChanged: {
+                    if (activeFocus)
+                        fenetre.proposerHistorique()
+                    else if (text.length === 0)
+                        colonneListe.rechercheOuverte = false
+                }
+                // Le mot effacé au clavier, la liste de départ revient, comme par
+                // ✕ (0.6.12, demande de Fabienne : elle restait filtrée).
+                onTextEdited: {
+                    if (text.length === 0 && fenetre.recherche.length > 0)
+                        fenetre.quitterRecherche()
+                    else
+                        fenetre.proposerHistorique()
+                }
+                onAccepted: {
+                    if (panneauHistorique.opened && vueHistorique.currentIndex >= 0)
+                        fenetre.lancerRecherche(panneauHistorique.entrees[vueHistorique.currentIndex])
+                    else
+                        fenetre.lancerRecherche()
+                }
+                Keys.onDownPressed: function(ev) {
+                    if (panneauHistorique.opened)
+                        vueHistorique.incrementCurrentIndex()
+                    else
+                        fenetre.proposerHistorique()
+                }
+                Keys.onUpPressed: if (panneauHistorique.opened) vueHistorique.decrementCurrentIndex()
+                Keys.onEscapePressed: {
+                    if (panneauHistorique.opened)
+                        panneauHistorique.close()
+                    else
+                        fenetre.quitterRecherche()
+                }
+                // Dernières recherches sous le champ : dix visibles au plus,
+                // un ascenseur au-delà.
+                Popup {
+                    id: panneauHistorique
+                    property var entrees: []
+                    y: champRecherche.height + 2
+                    width: champRecherche.width
+                    padding: 1
+                    closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutsideParent
+                    onAboutToShow: vueHistorique.currentIndex = -1
+                    background: Rectangle {
+                        color: fenetre.palette.base
+                        border.color: fenetre.accent
+                        radius: 3
                     }
-                    delegate: ItemDelegate {
-                        width: ListView.view.width
-                        height: 30
-                        text: modelData
-                        highlighted: ListView.isCurrentItem
-                        onClicked: fenetre.lancerRecherche(modelData)
+                    contentItem: ListView {
+                        id: vueHistorique
+                        implicitHeight: Math.min(panneauHistorique.entrees.length, 10) * 30
+                        clip: true
+                        model: panneauHistorique.entrees
+                        currentIndex: -1
+                        ScrollBar.vertical: ScrollBar {
+                            policy: panneauHistorique.entrees.length > 10 ? ScrollBar.AlwaysOn : ScrollBar.AsNeeded
+                        }
+                        delegate: ItemDelegate {
+                            width: ListView.view.width
+                            height: 30
+                            text: modelData
+                            highlighted: ListView.isCurrentItem
+                            onClicked: fenetre.lancerRecherche(modelData)
+                        }
                     }
                 }
             }
+            ToolButton {
+                text: "✕"
+                visible: champRecherche.text.length > 0 || fenetre.recherche.length > 0
+                onClicked: fenetre.quitterRecherche()
+                ToolTip.visible: hovered
+                ToolTip.text: qsTr("Effacer la recherche (Échap)")
+            }
         }
-        // Non lus seulement (0.8.2), dans la portée choisie.
-        CheckBox {
-            id: nonLusRecherche
-            objectName: "nonLusRecherche"
-            text: qsTr("Non lus")
-            onToggled: if (champRecherche.text.trim().length > 0) fenetre.lancerRecherche()
-            ToolTip.visible: hovered
-            ToolTip.delay: 600
-            ToolTip.text: qsTr("Ne garder que les messages non lus")
-        }
-        ComboBox {
-            id: porteeRecherche
-            // « Cette boîte » (0.8.3) : tous les dossiers et sous-dossiers du
-            // compte du dossier ouvert.
-            readonly property bool partout: currentIndex === 2
-            readonly property bool boiteSeule: currentIndex === 1
-            readonly property bool globale: currentIndex >= 1
-            model: [qsTr("Dossier actif"), qsTr("Cette boîte (tous dossiers)"), qsTr("Toutes les boîtes")]
-            implicitContentWidthPolicy: ComboBox.WidestText
-            // Le champ s'étire, la portée garde sa largeur : « Toutes les
-            // boîtes » était tronqué.
-            Layout.minimumWidth: Math.max(implicitWidth, 150)
-            onActivated: if (champRecherche.text.trim().length > 0) fenetre.lancerRecherche()
-        }
-        ToolButton {
-            text: "✕"
-            visible: champRecherche.text.length > 0 || fenetre.recherche.length > 0
-            onClicked: fenetre.quitterRecherche()
-            ToolTip.visible: hovered
-            ToolTip.text: qsTr("Effacer la recherche (Échap)")
+        RowLayout {
+            id: ligneOptionsRecherche
+            objectName: "ligneOptionsRecherche"
+            Layout.fillWidth: true
+            visible: blocRecherche.deuxLignes
+            spacing: 4
+            // Non lus seulement (0.8.2), dans la portée choisie.
+            CheckBox {
+                id: nonLusRecherche
+                objectName: "nonLusRecherche"
+                parent: blocRecherche.deuxLignes ? ligneOptionsRecherche : ligneRecherche
+                text: qsTr("Non lus")
+                onToggled: if (champRecherche.text.trim().length > 0) fenetre.lancerRecherche()
+                ToolTip.visible: hovered
+                ToolTip.delay: 600
+                ToolTip.text: qsTr("Ne garder que les messages non lus")
+            }
+            ComboBox {
+                id: porteeRecherche
+                parent: blocRecherche.deuxLignes ? ligneOptionsRecherche : ligneRecherche
+                // « Cette boîte » (0.8.3) : tous les dossiers et sous-dossiers du
+                // compte du dossier ouvert.
+                readonly property bool partout: currentIndex === 2
+                readonly property bool boiteSeule: currentIndex === 1
+                readonly property bool globale: currentIndex >= 1
+                model: [qsTr("Dossier actif"), qsTr("Cette boîte (tous dossiers)"), qsTr("Toutes les boîtes")]
+                implicitContentWidthPolicy: ComboBox.WidestText
+                // Le champ s'étire, la portée garde sa largeur : « Toutes les
+                // boîtes » était tronqué.
+                // Sur deux lignes, elle prend la place qui reste, quitte à
+                // abréger son libellé.
+                Layout.minimumWidth: blocRecherche.deuxLignes ? 0 : Math.max(implicitWidth, 150)
+                Layout.fillWidth: blocRecherche.deuxLignes
+                onActivated: if (champRecherche.text.trim().length > 0) fenetre.lancerRecherche()
+            }
         }
     }
 

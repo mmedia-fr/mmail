@@ -4071,6 +4071,60 @@ QtObject {
         })
     }
 
+    /// Scénario « recherche-etroite » : dans la colonne de la liste, le champ
+    /// de recherche, ✕, « Non lus » et la portée ne se chevauchent pas — sur
+    /// deux lignes dans une colonne étroite (0.8.2 et 0.8.3 les mettaient sur
+    /// une seule, le champ et la case se recouvraient), sur une ligne dans une
+    /// colonne large. Le champ garde une largeur où taper.
+    function etapeScenarioRechercheEtroite() {
+        var echecs = 0
+        var bilan = function(texte, bon) {
+            if (!bon)
+                ++echecs
+            console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
+        }
+        var verifier = function(cas) {
+            var bloc = objetNomme(colonneListe, "blocRecherche")
+            var largeur = Math.round(colonneListe.width)
+            bilan(cas + " : colonne de " + largeur + " (seuil " + Math.round(bloc.seuil) + "), deux lignes " + bloc.deuxLignes,
+                  bloc.deuxLignes === (largeur < bloc.seuil))
+            var rangs = [objetNomme(bloc, "ligneRecherche"), objetNomme(bloc, "ligneOptionsRecherche")]
+            for (var r = 0; r < rangs.length; ++r) {
+                var rang = rangs[r]
+                if (!rang.visible)
+                    continue
+                var elements = []
+                for (var i = 0; i < rang.children.length; ++i) {
+                    var e = rang.children[i]
+                    if (e.visible && e.width > 0)
+                        elements.push(e)
+                }
+                elements.sort(function(a, b) { return a.x - b.x })
+                console.log("scenario: " + cas + " | ligne " + (r + 1) + " : " + elements.map(function(e) {
+                    return (e.text || e.displayText || e.placeholderText || "?") + " (" + Math.round(e.x) + "+" + Math.round(e.width) + ")"
+                }).join(", "))
+                for (var j = 0; j < elements.length; ++j) {
+                    var el = elements[j]
+                    bilan(cas + " : ligne " + (r + 1) + ", élément " + (j + 1) + " dans la ligne", el.x >= -0.5 && el.x + el.width <= rang.width + 0.5)
+                    if (j > 0)
+                        bilan(cas + " : ligne " + (r + 1) + ", élément " + (j + 1) + " après le précédent",
+                              el.x >= elements[j - 1].x + elements[j - 1].width - 0.5)
+                }
+            }
+            bilan(cas + " : champ de " + Math.round(colonneListe.champRecherche.width) + " points", colonneListe.champRecherche.width >= 100)
+        }
+        reglages.largeurListe = 260
+        plusTard(800, function() {
+            verifier("étroite")
+            reglages.largeurListe = 700
+            plusTard(800, function() {
+                verifier("large")
+                console.log("scenario: recherche-etroite " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
+                Qt.quit()
+            })
+        })
+    }
+
     /// Premier objet nommé `nom` sous `racine` (objectName), ou null.
     function objetNomme(racine, nom) {
         if (!racine)

@@ -11,6 +11,7 @@
 //
 // Rien de Qt ici : la tâche peut tourner sans que MMail ait démarré (Android
 // relance alors le seul processus, sans activité), et Qt n'est pas initialisé.
+// Releve.vu, lui, est appelé dans le processus de MMail, quand on le quitte.
 
 #include <jni.h>
 
@@ -18,7 +19,8 @@
 
 extern "C" {
 char* mmail_releve_comptes(const char* index);
-char* mmail_releve(const char* index, const char* secrets, const char* etat);
+char* mmail_releve_vu(const char* index);
+char* mmail_releve(const char* index, const char* secrets, const char* etat, const char* vu);
 void mmail_releve_liberer(char* texte);
 }
 
@@ -53,9 +55,15 @@ extern "C" JNIEXPORT jbyteArray JNICALL Java_fr_mmedia_mmail_Releve_comptes(JNIE
   return rendre(env, mmail_releve_comptes(octets(env, index).c_str()));
 }
 
-extern "C" JNIEXPORT jbyteArray JNICALL Java_fr_mmedia_mmail_Releve_relever(JNIEnv* env, jclass, jbyteArray index,
-                                                                           jbyteArray secrets, jbyteArray etat)
+extern "C" JNIEXPORT jbyteArray JNICALL Java_fr_mmedia_mmail_Releve_vu(JNIEnv* env, jclass, jbyteArray index)
 {
-  const std::string i = octets(env, index), s = octets(env, secrets), e = octets(env, etat);
-  return rendre(env, mmail_releve(i.c_str(), s.c_str(), e.c_str()));
+  return rendre(env, mmail_releve_vu(octets(env, index).c_str()));
+}
+
+extern "C" JNIEXPORT jbyteArray JNICALL Java_fr_mmedia_mmail_Releve_relever(JNIEnv* env, jclass, jbyteArray index,
+                                                                           jbyteArray secrets, jbyteArray etat,
+                                                                           jbyteArray vu)
+{
+  const std::string i = octets(env, index), s = octets(env, secrets), e = octets(env, etat), v = octets(env, vu);
+  return rendre(env, mmail_releve(i.c_str(), s.c_str(), e.c_str(), v.c_str()));
 }

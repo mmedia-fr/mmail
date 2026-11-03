@@ -18,7 +18,8 @@
 // préférences, qu'un processus garde en mémoire.
 //
 // MMail au premier plan, la tâche ne fait rien : MMail relève lui-même. Ses
-// notifications s'effacent à chaque reprise de son activité (suivre).
+// notifications s'effacent à chaque reprise de son activité, et ce qu'il a
+// montré est noté quand on le quitte (suivre).
 package fr.mmedia.mmail;
 
 import android.Manifest;
@@ -65,7 +66,8 @@ public class Releve extends JobService {
     private static boolean suivi;
 
     private static native byte[] comptes(byte[] index);
-    private static native byte[] relever(byte[] index, byte[] secrets, byte[] etat);
+    private static native byte[] vu(byte[] index);
+    private static native byte[] relever(byte[] index, byte[] secrets, byte[] etat, byte[] vu);
 
     /**
      * Programme la tâche pour le profil {@code index} (chemin de index.sqlite),
@@ -122,10 +124,13 @@ public class Releve extends JobService {
 
     /**
      * MMail au premier plan, ses notifications s'effacent : tout de suite, puis
-     * à chaque reprise de son activité. Le cycle de vie d'Android, et non
-     * l'état de l'application Qt : MMail rouvert depuis le lanceur après un
-     * passage en arrière-plan, l'effacement qui en dépendait ne se faisait
-     * pas (constaté sur l'émulateur, 03/11/2026).
+     * à chaque reprise de son activité. Quand on le quitte, ce qu'il a montré
+     * est noté (vu.json) : la relève part de là, et non de l'index d'après,
+     * où MMail range encore en arrière-plan la fin de sa synchronisation —
+     * des messages que personne n'a vus, jamais signalés sinon (constaté sur
+     * l'émulateur). Le cycle de vie d'Android, et non l'état de l'application
+     * Qt : MMail rouvert depuis le lanceur après un passage en arrière-plan,
+     * l'effacement qui en dépendait ne se faisait pas (03/11/2026).
      */
     private static synchronized void suivre(Context contexte) {
         effacer(contexte);
@@ -138,10 +143,37 @@ public class Releve extends JobService {
                     @Override public void onActivityCreated(Activity activite, Bundle etat) {}
                     @Override public void onActivityStarted(Activity activite) {}
                     @Override public void onActivityPaused(Activity activite) {}
-                    @Override public void onActivityStopped(Activity activite) {}
+                    @Override public void onActivityStopped(Activity activite) { noterVu(activite.getApplicationContext()); }
                     @Override public void onActivitySaveInstanceState(Activity activite, Bundle etat) {}
                     @Override public void onActivityDestroyed(Activity activite) {}
                 });
+    }
+
+    /** Note ce que l'index de MMail connaît, à l'instant où on le quitte (hors du fil de l'interface). */
+    private static void noterVu(Context contexte) {
+        new Thread(() -> {
+            try {
+                JSONObject reglage = new JSONObject(lire(contexte, "reglage.json", "{}"));
+                String index = reglage.optString("index");
+                if (!reglage.optBoolean("actif", true) || index.isEmpty() || !new File(index).isFile())
+                    return;
+                // Dans le processus de MMail, Qt a déjà chargé la bibliothèque.
+                String v;
+                try {
+                    v = texte(vu(octets(index)));
+                } catch (UnsatisfiedLinkError e) {
+                    charger();
+                    v = texte(vu(octets(index)));
+                }
+                JSONObject note = new JSONObject(v);
+                if (note.has("erreur"))
+                    Log.w(JOURNAL, "relève : " + note.optString("erreur"));
+                else
+                    ecrire(contexte, "vu.json", v);
+            } catch (Throwable e) {
+                Log.w(JOURNAL, "relève : " + e);
+            }
+        }, "MMail-vu").start();
     }
 
     /** Le processus de l'application est-il au premier plan ? Vu d'ici, un autre processus. */
@@ -262,7 +294,8 @@ public class Releve extends JobService {
             if (secret != null)
                 secrets.put(cle, secret);
         }
-        String bilanTexte = texte(relever(octets(index), octets(secrets.toString()), octets(lire(this, "etat.json", "{}"))));
+        String bilanTexte = texte(relever(octets(index), octets(secrets.toString()), octets(lire(this, "etat.json", "{}")),
+                                          octets(lire(this, "vu.json", "{}"))));
         JSONObject bilan = new JSONObject(bilanTexte);
         if (bilan.has("erreur")) {
             Log.w(JOURNAL, "relève : " + bilan.optString("erreur"));

@@ -7,23 +7,23 @@
 //! `packaging/android/src/fr/mmedia/mmail/Releve.java`) regarde la boîte de
 //! réception de chaque compte et montre en notification les messages arrivés.
 //!
-//! Lecture seule : `EXAMINE` et des en-têtes, ni l'index ni le serveur ne
+//! Lecture seule : `EXAMINE`, une recherche et des en-têtes, ni l'index ni le serveur ne
 //! changent — MMail rouvert se synchronise comme d'habitude. Ce qui a déjà
 //! été signalé est tenu par la tâche (`Etat`), rendu à chaque appel.
 //!
-//! Seuil d'un compte : le plus grand UID de la boîte de réception que l'index
-//! connaît (ce que MMail a déjà montré), ou le dernier signalé s'il est plus
-//! grand. Sans l'un ni l'autre (compte jamais relevé, `UIDVALIDITY` changé),
-//! la relève pose le seuil sans rien signaler : pas de notification pour tout
-//! un historique. Seuls les messages non lus sont signalés.
+//! Seuil d'un compte : ce que MMail a montré — le plus grand UID de la boîte
+//! de réception que l'index connaissait quand on a quitté MMail (`vu`, noté
+//! par Releve.java) —, ou le dernier signalé s'il est plus grand. L'index
+//! d'après ne compte pas : MMail quitté finit en arrière-plan la
+//! synchronisation en cours, et range des messages que personne n'a vus.
+//! Sans l'un ni l'autre (compte jamais relevé, `UIDVALIDITY` changé), la
+//! relève pose le seuil sans rien signaler : pas de notification pour tout un
+//! historique. Seuls les messages non lus sont signalés.
 //!
 //! La notification d'un compte reprend tous les messages non lus arrivés
 //! depuis ce que MMail a montré, et pas seulement ceux de la dernière
 //! relève ; elle n'est reposée (et ne sonne) que si quelque chose est arrivé
-//! depuis la précédente. Limite : un
-//! message que MMail range lui-même dans l'index après qu'on l'a quitté (une
-//! synchronisation encore en cours, celle d'un compte qu'on vient d'ajouter)
-//! passe pour déjà montré, et n'est pas signalé.
+//! depuis la précédente.
 //!
 //! Les filtres ne passent pas ici : un message qu'un filtre rangera à la
 //! prochaine ouverture de MMail est signalé quand même.
@@ -93,6 +93,22 @@ pub fn cle(compte: &CompteLocal) -> String {
     format!("{}@{}", compte.adresse, compte.hote)
 }
 
+/// Ce que MMail a montré, noté quand on le quitte : par compte, l'`UIDVALIDITY`
+/// et le plus grand UID que l'index connaît de sa boîte de réception. Un
+/// compte dont la boîte n'a pas encore été relevée n'y figure pas.
+pub fn vu(index: &str) -> Result<Etat, String> {
+    let mut vu = Etat::new();
+    let Some(magasin) = ouvrir(index)? else {
+        return Ok(vu);
+    };
+    for compte in magasin.comptes().map_err(|e| e.to_string())? {
+        if let Ok(Some((uidvalidity, uid))) = magasin.reception(compte.id) {
+            vu.insert(cle(&compte), Repere { uidvalidity, uid });
+        }
+    }
+    Ok(vu)
+}
+
 /// Comptes du profil, pour que la tâche lise leurs secrets au coffre. Un
 /// index absent : aucun (rien n'est créé).
 pub fn comptes(index: &str) -> Result<Vec<CompteReleve>, String> {
@@ -111,8 +127,10 @@ fn ouvrir(index: &str) -> Result<Option<Magasin>, String> {
 }
 
 /// Relève les comptes du profil dont la tâche a le secret (`secrets`, par
-/// clé : mot de passe, ou ce que le coffre garde des jetons OAuth2).
-pub fn relever(index: &str, secrets: &HashMap<String, String>, etat: &Etat) -> Result<Bilan, String> {
+/// clé : mot de passe, ou ce que le coffre garde des jetons OAuth2). `vu` :
+/// ce que MMail a montré (cf. `vu`) ; un compte qui n'y figure pas prend
+/// l'index tel qu'il est.
+pub fn relever(index: &str, secrets: &HashMap<String, String>, etat: &Etat, vu: &Etat) -> Result<Bilan, String> {
     let mut bilan = Bilan::default();
     let Some(magasin) = ouvrir(index)? else {
         return Ok(bilan);
@@ -129,7 +147,10 @@ pub fn relever(index: &str, secrets: &HashMap<String, String>, etat: &Etat) -> R
             }
             continue;
         };
-        let reception = magasin.reception(compte.id).unwrap_or(None);
+        let reception = match vu.get(&cle) {
+            Some(r) => Some((r.uidvalidity, r.uid)),
+            None => magasin.reception(compte.id).unwrap_or(None),
+        };
         let issue = Client::connecter(&compte.hote, compte.port)
             .and_then(|mut client| {
                 authentifier(&mut client, compte, secret)?;
@@ -168,9 +189,9 @@ fn authentifier(client: &mut Client, compte: &CompteLocal, secret: &str) -> Resu
     client.ouvrir_session_jeton(&compte.utilisateur, &jeton)
 }
 
-/// Seuil au-delà duquel un message est nouveau, d'après l'index (`reception` :
-/// `UIDVALIDITY` et plus grand UID connus de la boîte de réception) et le
-/// dernier repère ; `None` quand ni l'un ni l'autre ne vaut pour
+/// Seuil au-delà duquel un message est nouveau, d'après ce que MMail a montré
+/// (`reception` : `UIDVALIDITY` et plus grand UID de la boîte de réception
+/// connus de l'index) et le dernier repère ; `None` quand ni l'un ni l'autre ne vaut pour
 /// l'`UIDVALIDITY` du serveur.
 pub fn seuil(uidvalidity: u32, reception: Option<(u32, u32)>, repere: Option<Repere>) -> Option<u32> {
     let index = reception.filter(|&(v, uid)| v == uidvalidity && uid > 0).map(|(_, uid)| uid);
@@ -195,7 +216,7 @@ fn relever_boite(client: &mut Client, reception: Option<(u32, u32)>, repere: Opt
     if etat.messages == 0 || (etat.uid_next != 0 && haut <= seuil) {
         return Ok((0, Vec::new(), neuf));
     }
-    // Depuis ce que MMail a montré (l'index), ou à défaut le dernier signalé.
+    // Depuis ce que MMail a montré, ou à défaut le dernier signalé.
     let montre = reception.filter(|&(v, uid)| v == etat.uid_validity && uid > 0).map(|(_, uid)| uid);
     let depuis = montre.unwrap_or(seuil).min(seuil);
     let mut non_lus: Vec<u32> = client
@@ -256,15 +277,31 @@ mod interface {
         })
     }
 
-    /// Relève : `secrets` `{clé: secret}`, `etat` le dernier rendu (`{}` la
-    /// première fois). Rend le bilan, ou `{"erreur": …}`.
+    /// Ce que MMail a montré : `{clé: {"uidvalidity", "uid"}}`, ou
+    /// `{"erreur": …}`. Appelé par MMail quand on le quitte.
     #[no_mangle]
-    pub extern "C" fn mmail_releve(index: *const c_char, secrets: *const c_char, etat: *const c_char) -> *mut c_char {
-        let (index, secrets, etat) = (texte(index), texte(secrets), texte(etat));
+    pub extern "C" fn mmail_releve_vu(index: *const c_char) -> *mut c_char {
+        let index = texte(index);
+        let r = std::panic::catch_unwind(|| super::vu(&index));
+        rendre(match r {
+            Ok(Ok(v)) => serde_json::to_string(&v).unwrap_or_else(|_| "{}".into()),
+            Ok(Err(e)) => serde_json::json!({ "erreur": e }).to_string(),
+            Err(_) => serde_json::json!({ "erreur": "erreur interne" }).to_string(),
+        })
+    }
+
+    /// Relève : `secrets` `{clé: secret}`, `etat` le dernier rendu (`{}` la
+    /// première fois), `vu` le dernier noté par MMail (`{}` sans). Rend le
+    /// bilan, ou `{"erreur": …}`.
+    #[no_mangle]
+    pub extern "C" fn mmail_releve(index: *const c_char, secrets: *const c_char, etat: *const c_char, vu: *const c_char) -> *mut c_char {
+        let (index, secrets, etat, vu) = (texte(index), texte(secrets), texte(etat), texte(vu));
         let r = std::panic::catch_unwind(|| {
             let secrets: HashMap<String, String> = serde_json::from_str(&secrets).unwrap_or_default();
             let etat: super::Etat = serde_json::from_str(&etat).unwrap_or_default();
-            super::relever(&index, &secrets, &etat)
+            // `{"erreur": …}` ou illisible : rien de noté.
+            let vu: super::Etat = serde_json::from_str(&vu).unwrap_or_default();
+            super::relever(&index, &secrets, &etat, &vu)
         });
         rendre(match r {
             Ok(Ok(b)) => serde_json::to_string(&b).unwrap_or_else(|_| "{}".into()),
@@ -273,7 +310,7 @@ mod interface {
         })
     }
 
-    /// Libère une chaîne rendue par l'une des deux fonctions ci-dessus.
+    /// Libère une chaîne rendue par l'une des fonctions ci-dessus.
     #[no_mangle]
     pub extern "C" fn mmail_releve_liberer(p: *mut c_char) {
         if !p.is_null() {

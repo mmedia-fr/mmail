@@ -730,6 +730,57 @@ fn poser_categorie_par(
     Ok(changes)
 }
 
+/// Renomme une catégorie sur tous les messages de la boîte qui la portent,
+/// tous dossiers confondus (0.9.0) : ce que fait Outlook quand on renomme une
+/// catégorie. Rend le nombre de messages changés.
+pub fn renommer_categorie(jeton: &str, ancien: &str, nouveau: &str) -> Result<usize, ErreurOAuth> {
+    renommer_categorie_par(&mut |d: &Demande| http::envoyer(d), jeton, ancien, nouveau)
+}
+
+/// Pages lues au plus pour un renommage (100 messages chacune).
+const PAGES_RENOMMAGE: usize = 500;
+
+fn renommer_categorie_par(t: &mut Transport, jeton: &str, ancien: &str, nouveau: &str) -> Result<usize, ErreurOAuth> {
+    let filtre = format!("categories/any(c:c eq '{}')", ancien.replace('\'', "''"));
+    let mut url = format!("{GRAPH}/messages?$filter={}&$select=id,categories&$top=100", encoder(&filtre));
+    // Tout relever d'abord : changer les messages pendant la lecture
+    // déplacerait les pages suivantes, qui portent sur le même filtre.
+    let mut a_changer: Vec<(String, Vec<String>)> = Vec::new();
+    for _ in 0..PAGES_RENOMMAGE {
+        let page = reponse_json(&appeler(t, jeton, "GET", &url, "", b"", REPONSE_MAX)?)?;
+        for m in page.get("value").and_then(|v| v.as_array()).into_iter().flatten() {
+            let Some(id) = m.get("id").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            let actuelles: Vec<String> = m
+                .get("categories")
+                .and_then(|v| v.as_array())
+                .map(|l| l.iter().filter_map(|c| c.as_str()).map(str::to_string).collect())
+                .unwrap_or_default();
+            a_changer.push((id.to_string(), actuelles));
+        }
+        match page.get("@odata.nextLink").and_then(|v| v.as_str()) {
+            Some(suivant) => url = suivant.to_string(),
+            None => break,
+        }
+    }
+    let mut changes = 0;
+    for (id, actuelles) in a_changer {
+        let mut nouvelles: Vec<String> = Vec::new();
+        for c in actuelles {
+            let c = if c.eq_ignore_ascii_case(ancien) { nouveau.to_string() } else { c };
+            if !nouvelles.iter().any(|n| n.eq_ignore_ascii_case(&c)) {
+                nouvelles.push(c);
+            }
+        }
+        let corps = serde_json::json!({ "categories": nouvelles }).to_string();
+        let r = appeler(t, jeton, "PATCH", &format!("{GRAPH}/messages/{}", encoder(&id)), "application/json", corps.as_bytes(), REPONSE_MAX)?;
+        succes(&r)?;
+        changes += 1;
+    }
+    Ok(changes)
+}
+
 /// Le message, avec un en-tête `Bcc` pour les destinataires de l'enveloppe
 /// absents de `To` et `Cc`.
 pub fn avec_cci(octets: &[u8], destinataires: &[String]) -> Vec<u8> {
@@ -1296,5 +1347,26 @@ mod tests {
         assert_eq!(poser_categorie_par(&mut graph_categories(&mut journal, &reponses), "J", "<a@x>", None, "Devis", false).unwrap(), 1);
         let corps: serde_json::Value = serde_json::from_slice(&journal.last().unwrap().corps).unwrap();
         assert_eq!(corps, serde_json::json!({"categories": ["Urgent"]}));
+    }
+
+    #[test]
+    fn categorie_renommee_sur_tous_les_messages() {
+        let mut journal = Vec::new();
+        let reponses = [
+            ("GET", "https://graph.microsoft.com/v1.0/me/messages?$filter=", 200,
+             r#"{"value":[{"id":"M1","categories":["Devis","Urgent"]}],"@odata.nextLink":"https://graph.microsoft.com/v1.0/me/messages?$skiptoken=2"}"#),
+            ("GET", "https://graph.microsoft.com/v1.0/me/messages?$skiptoken=2", 200,
+             r#"{"value":[{"id":"M2","categories":["devis","Commande"]}]}"#),
+            ("PATCH", "https://graph.microsoft.com/v1.0/me/messages/", 200, "{}"),
+        ];
+        let n = renommer_categorie_par(&mut graph_categories(&mut journal, &reponses), "J", "Devis", "Commande").unwrap();
+        assert_eq!(n, 2);
+        assert!(journal[0].url.contains(&encoder("categories/any(c:c eq 'Devis')")), "{}", journal[0].url);
+        // Les deux pages sont lues avant le premier changement.
+        assert_eq!(journal.iter().map(|r| r.methode.as_str()).collect::<Vec<_>>(), ["GET", "GET", "PATCH", "PATCH"]);
+        let corps = |i: usize| serde_json::from_slice::<serde_json::Value>(&journal[i].corps).unwrap();
+        assert_eq!(corps(2), serde_json::json!({"categories": ["Commande", "Urgent"]}));
+        // Déjà porteur du nouveau nom : il n'apparaît qu'une fois.
+        assert_eq!(corps(3), serde_json::json!({"categories": ["Commande"]}));
     }
 }

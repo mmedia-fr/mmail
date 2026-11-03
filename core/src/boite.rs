@@ -6717,6 +6717,35 @@ impl Travail {
                     Err(err) => echec("tri", format!("catégorie : {err}"), &err),
                 },
             ),
+            // Microsoft 365 (0.9.0) : un nom qui change — renommage, ou
+            // catégorie d'origine qui reprend le sien — change aussi sur les
+            // messages qui la portent, comme dans Outlook. Un retrait les
+            // laisse, comme Outlook aussi.
+            Commande::Catalogue { boite, changement } if e.graph.is_some() => {
+                let mot_cle = match &changement {
+                    Changement::Poser(c) => c.mot_cle.clone(),
+                    Changement::Retirer(m) => m.clone(),
+                };
+                let nom = |magasin: &Magasin| {
+                    let (valeur, _) = magasin.catalogue(compte, &boite).ok().flatten().unwrap_or_default();
+                    Catalogue::lire(&valeur).liste().into_iter().find(|c| c.mot_cle.eq_ignore_ascii_case(&mot_cle)).map(|c| c.nom)
+                };
+                let avant = nom(&e.magasin);
+                if let Err(err) = synchro::changer_catalogue(&mut e.client, &e.magasin, compte, &boite, &changement) {
+                    return Some(echec("tri", format!("catégories : {err}"), &err));
+                }
+                match (avant, nom(&e.magasin)) {
+                    (Some(ancien), Some(nouveau)) if ancien != nouveau => Some(match self.renommer_categorie_graph(e, &ancien, &nouveau) {
+                        Ok(()) => Issue::Marque { discret: true },
+                        Err(message) => Issue::Echec {
+                            etape: "tri",
+                            message: format!("catégorie renommée dans MMail, mais pas sur les messages dans Outlook : {message}"),
+                            session_perdue: false,
+                        },
+                    }),
+                    _ => Some(Issue::Marque { discret: true }),
+                }
+            }
             Commande::Catalogue { boite, changement } => Some(
                 match synchro::changer_catalogue(&mut e.client, &e.magasin, compte, &boite, &changement) {
                     // Le catalogue rangé a pu changer : l'interface le relit.
@@ -7088,6 +7117,17 @@ impl Travail {
             let _ = e.magasin.poser_lien_delta(compte, chemin, &nouveau);
         }
         Ok(change)
+    }
+
+    /// Renomme une catégorie sur les messages de la boîte Microsoft 365 qui
+    /// la portent (0.9.0).
+    fn renommer_categorie_graph(&self, e: &mut Etabli, ancien: &str, nouveau: &str) -> Result<(), String> {
+        let Some(jetons) = e.graph.clone() else {
+            return Ok(());
+        };
+        let jeton = crate::microsoft::jeton_acces(&jetons, crate::microsoft::PORTEE_ENVOI).map_err(|x| x.to_string())?;
+        crate::microsoft::renommer_categorie(&jeton, ancien, nouveau).map_err(|x| x.to_string())?;
+        Ok(())
     }
 
     /// Pose ou retire une catégorie par Graph (Microsoft 365, 0.9.0) : sur

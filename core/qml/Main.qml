@@ -1087,6 +1087,18 @@ ApplicationWindow {
             text: qsTr("Actualiser")
             onClicked: fenetre.module === "agenda" ? boite.synchroniserAgendas(true) : boite.actualiser()
         }
+        // 0.8.1 : marquer la sélection lue (ou non lue, si tout y est lu), sans
+        // passer par le menu.
+        BoutonOutil {
+            objectName: "boutonMarquerLuBarre"
+            sombre: ae.sombre
+            visible: fenetre.module !== "agenda"
+            enabled: fenetre.etatChoix.nombre > 0
+            dessin: fenetre.dessinerLu
+            iconeSeule: fenetre.enteteSerree
+            text: fenetre.etatChoix.nonLu || fenetre.etatChoix.nombre === 0 ? qsTr("Marquer comme lu") : qsTr("Marquer comme non lu")
+            onClicked: fenetre.marquerSelection(fenetre.etatChoix.nonLu)
+        }
         SeparateurEntete { sombre: ae.sombre }
         // Boîte de réception unifiée : les réceptions de tous les comptes,
         // avec leurs non-lus (emplacement choisi par Manu le 10/10). Éteinte,
@@ -3166,6 +3178,21 @@ ApplicationWindow {
     }
 
     /// Flèche en cercle du bouton « Actualiser », pointe en haut à gauche.
+    // Enveloppe cochée : « Marquer comme lu » (0.8.1).
+    function dessinerLu(ctx, w, h, encre) {
+        ctx.reset()
+        ctx.strokeStyle = encre
+        ctx.lineWidth = Math.max(1.5, w * 0.11)
+        ctx.lineJoin = "round"
+        var g = w * 0.12, d = w * 0.88, haut = h * 0.24, bas = h * 0.76
+        ctx.strokeRect(g, haut, d - g, bas - haut)
+        ctx.beginPath()
+        ctx.moveTo(g, haut)
+        ctx.lineTo(w / 2, h * 0.52)
+        ctx.lineTo(d, haut)
+        ctx.stroke()
+    }
+
     function dessinerActualiser(ctx, w, h, encre) {
         ctx.reset()
         ctx.strokeStyle = encre
@@ -5058,6 +5085,22 @@ ApplicationWindow {
 
     /// Ce que portent les messages choisis, pour le menu d'un message : au
     /// moins un non lu, au moins un sans drapeau.
+    // État de la sélection, tenu à jour pour les boutons « Marquer comme
+    // lu / non lu » (0.8.1) : un message non lu parmi les choisis.
+    property var etatChoix: ({ nonLu: false, sansDrapeau: false, nombre: 0 })
+    function majEtatChoix() {
+        var e = etatSelection()
+        e.nombre = listeMulti ? (cleChoisie.length > 0 ? 1 : 0) : uidsChoisis().length
+        etatChoix = e
+    }
+    onSelectionChanged: Qt.callLater(majEtatChoix)
+    onCleChoisieChanged: Qt.callLater(majEtatChoix)
+    Connections {
+        target: modeleMessages
+        function onDataChanged() { Qt.callLater(fenetre.majEtatChoix) }
+        function onCountChanged() { Qt.callLater(fenetre.majEtatChoix) }
+    }
+
     function etatSelection() {
         var etat = { nonLu: false, sansDrapeau: false }
         for (var i = 0; i < modeleMessages.count; ++i) {
@@ -6676,6 +6719,9 @@ ApplicationWindow {
             // Scénario « desabonnement » (0.6.30, banc DESABO=1).
             if (essai.scenario === "desabonnement")
                 scenarios.lancerScenarioDesabonnement()
+            // Scénario « marquer-lu » (0.8.1).
+            if (essai.scenario === "marquer-lu")
+                scenarios.lancerScenarioMarquerLu()
             // Scénario « zoom-lecture » (0.6.29) : le zoom du volet de lecture
             // laisse les boutons à leur taille (banc PIECE=1).
             if (essai.scenario === "zoom-lecture")

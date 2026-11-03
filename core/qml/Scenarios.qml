@@ -3336,6 +3336,45 @@ QtObject {
     /// préparée vers l'adresse de la liste ; « Lettre lien du corps » : lien
     /// repéré dans le corps ; « TR : Lettre transférée » et « Essai 1 » : pas
     /// de bandeau.
+    // Scénario « marquer-lu » (0.8.1) : les boutons « Marquer comme lu / non
+    // lu » du volet de lecture et de la barre du haut suivent l'état du
+    // message choisi, et le basculent.
+    function lancerScenarioMarquerLu(essais) {
+        var n = essais || 0
+        if (modeleMessages.count < 1 && n < 40) {
+            plusTard(1000, function() { lancerScenarioMarquerLu(n + 1) })
+            return
+        }
+        var echecs = 0
+        var bilan = function(texte, bon) {
+            if (!bon)
+                echecs += 1
+            console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
+        }
+        var volet = function() { return objetNomme(colonneLecture, "boutonMarquerLu") }
+        var barre = function() { return objetNomme(fenetre.menuBar, "boutonMarquerLuBarre") }
+        choisir(0, 0)
+        plusTard(2500, function() {
+            var v = volet(), b = barre()
+            bilan("message affiché, marqué lu : boutons « " + (v ? v.text : "?") + " » / « " + (b ? b.text : "?") + " »",
+                  modeleMessages.get(0).lu === true && !!v && v.text === qsTr("Marquer comme non lu")
+                  && !!b && b.text === qsTr("Marquer comme non lu") && b.enabled)
+            v.clicked()
+            plusTard(2000, function() {
+                bilan("« Marquer comme non lu » : ligne non lue, bouton « " + volet().text + " »",
+                      modeleMessages.get(0).lu === false && volet().text === qsTr("Marquer comme lu")
+                      && barre().text === qsTr("Marquer comme lu"))
+                barre().clicked()
+                plusTard(2000, function() {
+                    bilan("« Marquer comme lu » de la barre : ligne lue, bouton « " + volet().text + " »",
+                          modeleMessages.get(0).lu === true && volet().text === qsTr("Marquer comme non lu"))
+                    console.log("scenario: marquer-lu " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
+                    Qt.quit()
+                })
+            })
+        })
+    }
+
     function lancerScenarioDesabonnement() {
         var suivi = { echecs: 0 }
         var bilan = function(texte, bon) {

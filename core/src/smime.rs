@@ -779,6 +779,9 @@ static ALGORITHMES: &[&dyn rustls::pki_types::SignatureVerificationAlgorithm] = 
     webpki::aws_lc_rs::ECDSA_P256_SHA384,
     webpki::aws_lc_rs::ECDSA_P384_SHA256,
     webpki::aws_lc_rs::ECDSA_P384_SHA384,
+    webpki::aws_lc_rs::ECDSA_P521_SHA256,
+    webpki::aws_lc_rs::ECDSA_P521_SHA384,
+    webpki::aws_lc_rs::ECDSA_P521_SHA512,
     webpki::aws_lc_rs::ED25519,
 ];
 

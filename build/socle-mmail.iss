@@ -197,7 +197,9 @@ begin
       if FileExists(Ancien) then
         DeleteFile(Ancien);
     end;
-    if FileExists(Chemin) and not DeleteFile(Chemin) then
+    if FileExists(Chemin) and DeleteFile(Chemin) then
+      Log('Fournisseur MAPI remplacé : ' + Chemin)
+    else if FileExists(Chemin) then
       for I := 1 to 20 do
       begin
         Ancien := Chemin + '.ancien' + IntToStr(I);

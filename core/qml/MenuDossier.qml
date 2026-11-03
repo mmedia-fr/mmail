@@ -27,10 +27,13 @@ Menu {
     property string motifRenommage: ""
     // Corbeille ou indésirables : il se vide aussi en partie (0.6.24).
     property bool effacable: false
+    // Dans la corbeille (0.8.5) : le supprimer l'efface pour de bon.
+    property bool dansLaCorbeille: false
     function ouvrir(c, ch, f, m, n, sel, item, x, y) {
         compte = c; chemin = ch; favori = f; masque = m; nom = n; selectionnable = sel
         motifRenommage = boite.motifRenommage(c, ch)
         effacable = boite.effacable(c, ch)
+        dansLaCorbeille = boite.dansLaCorbeille(c, ch)
         if (item)
             popup(item, x, y)
         else
@@ -66,6 +69,16 @@ Menu {
         enabled: menuDossier.motifRenommage.length === 0
         onTriggered: dlgRenommerDossier.ouvrir(menuDossier.compte, menuDossier.chemin, menuDossier.nom)
     }
+    // 0.8.5, comme Outlook : à la corbeille avec ses sous-dossiers (Ctrl+Z le
+    // remet) ; dans la corbeille, effacé pour de bon. Pas les dossiers du
+    // système ni ceux d'une boîte partagée (les mêmes que « Renommer… »).
+    MenuItem {
+        text: menuDossier.dansLaCorbeille ? qsTr("Effacer définitivement ce dossier…") : qsTr("Supprimer ce dossier…")
+        enabled: menuDossier.motifRenommage.length === 0
+        onTriggered: dlgSupprimerDossier.ouvrir(menuDossier.compte, menuDossier.chemin, menuDossier.nom,
+                                                menuDossier.dansLaCorbeille)
+    }
+    MenuSeparator {}
     MenuItem {
         text: qsTr("Propriétés…")
         onTriggered: dlgProprietesDossier.ouvrir(menuDossier.compte, menuDossier.chemin)

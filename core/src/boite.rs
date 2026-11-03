@@ -737,6 +737,27 @@ pub mod qobject {
         #[cxx_name = "renommerDossier"]
         fn renommer_dossier(self: Pin<&mut Boite>, compte: i32, chemin: &QString, nom: &QString) -> QString;
 
+        /// « Supprimer le dossier » (0.8.5), comme Outlook : le dossier et ses
+        /// sous-dossiers vont dans la corbeille du compte, et Ctrl+Z les remet
+        /// à leur place. Vide si c'est lancé, sinon le motif du refus. Issue :
+        /// `dossierRenomme`.
+        #[qinvokable]
+        #[cxx_name = "supprimerDossier"]
+        fn supprimer_dossier(self: Pin<&mut Boite>, compte: i32, chemin: &QString) -> QString;
+
+        /// Vrai si le dossier est dans la corbeille du compte (sous elle) :
+        /// le supprimer l'efface alors pour de bon (`effacerDossier`).
+        #[qinvokable]
+        #[cxx_name = "dansLaCorbeille"]
+        fn dans_la_corbeille(&self, compte: i32, chemin: &QString) -> bool;
+
+        /// Efface pour de bon un dossier de la corbeille, ses sous-dossiers et
+        /// leurs messages (0.8.5), après confirmation dans l'interface : cela ne
+        /// se défait pas. Vide si c'est lancé, sinon le motif du refus.
+        #[qinvokable]
+        #[cxx_name = "effacerDossier"]
+        fn effacer_dossier(self: Pin<&mut Boite>, compte: i32, chemin: &QString) -> QString;
+
         /// Fait passer la veille de chaque compte — compteurs, boîte de
         /// réception si elle a changé, dossier ouvert ; reconnecte les comptes
         /// dont la session est tombée.
@@ -1438,6 +1459,15 @@ struct Annulation {
     origine: String,
 }
 
+/// Un geste que Ctrl+Z défait : un déplacement de messages (une suppression
+/// en est un), ou un dossier mis à la corbeille (0.8.5), que le serveur a
+/// renommé avec ses sous-dossiers.
+#[derive(Clone)]
+enum Geste {
+    Messages(Annulation),
+    Dossier { compte: i64, dans_corbeille: String, origine: String, separateur: String },
+}
+
 /// Annulations gardées : les plus anciennes sortent.
 const ANNULATIONS_GARDEES: usize = 20;
 
@@ -1578,6 +1608,9 @@ enum Commande {
     /// Renommer le dossier `ancien` en `nouveau` — `nom`, tel que tapé —,
     /// ses sous-dossiers avec lui.
     RenommerDossier { ancien: String, nouveau: String, nom: String, separateur: String },
+    /// Effacer des dossiers de la corbeille, avec leurs messages, les plus
+    /// profonds d'abord (0.8.5).
+    EffacerDossiers { chemins: Vec<String> },
     /// Reprendre les déplacements interrompus dont ce compte est la source.
     Reprendre(HashMap<i64, Identifiants>),
     /// Préparer une réponse, un transfert ou la reprise d'un brouillon.
@@ -1824,7 +1857,11 @@ pub struct BoiteRust {
     annulation: QString,
     /// Suppressions et déplacements demandés par l'utilisateur, le dernier à
     /// la fin : ce que Ctrl+Z défait, l'un après l'autre.
-    annulations: Vec<Annulation>,
+    annulations: Vec<Geste>,
+    /// Dossiers en route vers la corbeille (0.8.5) : (compte, chemin dans la
+    /// corbeille, chemin d'origine, séparateur). Le geste n'est retenu qu'une
+    /// fois le renommage fait.
+    suppressions_dossiers: Vec<(i64, String, String, String)>,
 }
 
 /// Décompte d'un vidage partiel (0.6.24) : à la confirmation, ces messages-là
@@ -1919,6 +1956,7 @@ impl Default for BoiteRust {
             purge_numero: 0,
             annulation: QString::from(""),
             annulations: Vec::new(),
+            suppressions_dossiers: Vec::new(),
         }
     }
 }
@@ -3868,9 +3906,15 @@ impl qobject::Boite {
     }
 
     pub fn annuler(mut self: Pin<&mut Self>) -> bool {
-        let Some(annulation) = self.as_mut().rust_mut().annulations.pop() else {
+        let Some(geste) = self.as_mut().rust_mut().annulations.pop() else {
             self.as_mut().set_erreur(QString::from("rien à annuler"));
             return false;
+        };
+        let annulation = match geste {
+            Geste::Messages(a) => a,
+            Geste::Dossier { compte, dans_corbeille, origine, separateur } => {
+                return self.as_mut().remettre_dossier(compte, dans_corbeille, origine, separateur);
+            }
         };
         let identifiants = if annulation.origine_compte == annulation.compte {
             None
@@ -3879,7 +3923,7 @@ impl qobject::Boite {
                 Some(i) if self.etat(annulation.origine_compte) == Etat::Pret => Some(i.clone()),
                 _ => {
                     // Rien n'est perdu : l'annulation attend la connexion.
-                    self.as_mut().rust_mut().annulations.push(annulation);
+                    self.as_mut().rust_mut().annulations.push(Geste::Messages(annulation));
                     self.as_mut().set_erreur(QString::from(
                         "la boîte d'origine n'est pas connectée : rien n'est annulé pour l'instant",
                     ));
@@ -3892,10 +3936,51 @@ impl qobject::Boite {
         let gardee = annulation.clone();
         let envoyee = self.as_mut().envoyer(compte, Commande::Rapatrier { annulation, cible });
         if !envoyee {
-            self.as_mut().rust_mut().annulations.push(gardee);
+            self.as_mut().rust_mut().annulations.push(Geste::Messages(gardee));
         }
         self.as_mut().poser_libelle_annulation();
         envoyee
+    }
+
+    /// Ctrl+Z après « Supprimer le dossier » : le dossier sort de la corbeille
+    /// et reprend son chemin, sous-dossiers compris. Le geste reste gardé si
+    /// rien n'a pu partir.
+    fn remettre_dossier(mut self: Pin<&mut Self>, compte: i64, dans_corbeille: String, origine: String, separateur: String) -> bool {
+        let dossiers = self.magasin.as_ref().and_then(|m| m.dossiers(compte).ok()).unwrap_or_default();
+        let garder = |mut boite: Pin<&mut Self>, motif: &str| {
+            boite.as_mut().rust_mut().annulations.push(Geste::Dossier {
+                compte,
+                dans_corbeille: dans_corbeille.clone(),
+                origine: origine.clone(),
+                separateur: separateur.clone(),
+            });
+            boite.as_mut().set_erreur(QString::from(motif));
+            boite.as_mut().poser_libelle_annulation();
+            false
+        };
+        if !dossiers.iter().any(|d| d.chemin == dans_corbeille) {
+            // Effacé de la corbeille, ou déplacé ailleurs entre-temps : rien à
+            // remettre, le geste s'oublie.
+            self.as_mut().set_erreur(QString::from("le dossier n'est plus dans la corbeille : rien n'est annulé"));
+            self.as_mut().poser_libelle_annulation();
+            return false;
+        }
+        if dossiers.iter().any(|d| d.chemin == origine) {
+            return garder(self, "un dossier porte de nouveau ce nom à son ancienne place : renommez-le d'abord");
+        }
+        if !self.sessions.contains_key(&compte) {
+            return garder(self, "ce compte n'est pas connecté : rien n'est annulé pour l'instant");
+        }
+        let nom = crate::protocole::decoder_utf7(&feuille(&origine, &separateur));
+        let envoyee = self.as_mut().envoyer(
+            compte,
+            Commande::RenommerDossier { ancien: dans_corbeille.clone(), nouveau: origine.clone(), nom, separateur: separateur.clone() },
+        );
+        if !envoyee {
+            return garder(self, "annulation impossible pour l'instant");
+        }
+        self.as_mut().poser_libelle_annulation();
+        true
     }
 
     /// Après un déplacement ou son annulation : la cible a changé aussi — ses
@@ -3914,10 +3999,10 @@ impl qobject::Boite {
         self.as_mut().reviser();
     }
 
-    fn retenir_annulation(mut self: Pin<&mut Self>, annulation: Annulation) {
+    fn retenir_annulation(mut self: Pin<&mut Self>, geste: Geste) {
         {
             let mut noyau = self.as_mut().rust_mut();
-            noyau.annulations.push(annulation);
+            noyau.annulations.push(geste);
             let trop = noyau.annulations.len().saturating_sub(ANNULATIONS_GARDEES);
             noyau.annulations.drain(..trop);
         }
@@ -3929,7 +4014,8 @@ impl qobject::Boite {
     fn poser_libelle_annulation(mut self: Pin<&mut Self>) {
         let libelle = match self.annulations.last() {
             None => "",
-            Some(a) => {
+            Some(Geste::Dossier { .. }) => "Annuler la suppression du dossier",
+            Some(Geste::Messages(a)) => {
                 let dossiers = self.magasin.as_ref().and_then(|m| m.dossiers(a.compte).ok()).unwrap_or_default();
                 if dossier_de_role(&dossiers, "Trash").as_deref() == Some(a.chemin.as_str()) {
                     "Annuler la suppression"
@@ -4820,6 +4906,99 @@ impl qobject::Boite {
         QString::from("")
     }
 
+    pub fn supprimer_dossier(mut self: Pin<&mut Self>, compte: i32, chemin: &QString) -> QString {
+        let compte = compte as i64;
+        let ancien = chemin.to_string();
+        let Some(magasin) = self.magasin.as_ref() else {
+            return QString::from("index indisponible");
+        };
+        let dossiers = magasin.dossiers(compte).unwrap_or_default();
+        let partagees = magasin.compte_par_id(compte).ok().flatten().map(|c| c.partagees).unwrap_or_default();
+        if let Some(motif) = motif_non_renommable(&ancien, &dossiers, &partagees) {
+            return QString::from(&motif.replace("ne se renomme pas", "ne se supprime pas").replace("ne se renomment pas", "ne se suppriment pas"));
+        }
+        let Some(corbeille) = dossier_de_role(&dossiers, "Trash") else {
+            return QString::from("ce compte n'a pas de corbeille déclarée");
+        };
+        let separateur = dossiers.iter().find(|d| d.chemin == ancien).map(|d| d.separateur.clone()).unwrap_or_default();
+        if sous_dossier_de(&ancien, &corbeille, &separateur) {
+            return QString::from("ce dossier est déjà dans la corbeille");
+        }
+        if crate::protocole::chemin_de_sous_dossier(&corbeille, &separateur, "x").is_err() {
+            return QString::from("la corbeille de ce compte ne peut pas recevoir de dossier");
+        }
+        // Le nom tel que l'utilisateur le lit : le serveur le garde encodé
+        // (UTF-7 modifié), et le chemin de destination le réencode.
+        let nom = crate::protocole::decoder_utf7(&feuille(&ancien, &separateur));
+        // Un nom déjà pris dans la corbeille : « Projets (2) », comme Outlook.
+        let mut nouveau = String::new();
+        for n in 1..100 {
+            let essai = if n == 1 { nom.clone() } else { format!("{nom} ({n})") };
+            match crate::protocole::chemin_de_sous_dossier(&corbeille, &separateur, &essai) {
+                Ok(c) if !dossiers.iter().any(|d| d.chemin == c) => {
+                    nouveau = c;
+                    break;
+                }
+                Ok(_) => continue,
+                Err(motif) => return QString::from(&motif),
+            }
+        }
+        if nouveau.is_empty() {
+            return QString::from("trop de dossiers de ce nom dans la corbeille : videz-la d'abord");
+        }
+        if magasin.deplacements_en_attente(compte, &ancien, &separateur).unwrap_or(0) > 0 {
+            return QString::from("des messages sont en cours de déplacement vers ce dossier ou depuis lui : réessayez quand ils seront arrivés");
+        }
+        if !self.sessions.contains_key(&compte) {
+            return QString::from("ce compte n'est pas connecté");
+        }
+        self.as_mut().rust_mut().suppressions_dossiers.push((compte, nouveau.clone(), ancien.clone(), separateur.clone()));
+        self.as_mut().envoyer(compte, Commande::RenommerDossier { ancien, nouveau, nom, separateur });
+        QString::from("")
+    }
+
+    pub fn dans_la_corbeille(&self, compte: i32, chemin: &QString) -> bool {
+        let dossiers = self.magasin.as_ref().and_then(|m| m.dossiers(compte as i64).ok()).unwrap_or_default();
+        let chemin = chemin.to_string();
+        let separateur = dossiers.iter().find(|d| d.chemin == chemin).map(|d| d.separateur.clone()).unwrap_or_default();
+        dossier_de_role(&dossiers, "Trash").is_some_and(|c| sous_dossier_de(&chemin, &c, &separateur))
+    }
+
+    pub fn effacer_dossier(mut self: Pin<&mut Self>, compte: i32, chemin: &QString) -> QString {
+        let compte = compte as i64;
+        let chemin = chemin.to_string();
+        let Some(magasin) = self.magasin.as_ref() else {
+            return QString::from("index indisponible");
+        };
+        let dossiers = magasin.dossiers(compte).unwrap_or_default();
+        let Some(d) = dossiers.iter().find(|d| d.chemin == chemin) else {
+            return QString::from(&format!("dossier inconnu : {chemin}"));
+        };
+        let separateur = d.separateur.clone();
+        let Some(corbeille) = dossier_de_role(&dossiers, "Trash") else {
+            return QString::from("ce compte n'a pas de corbeille déclarée");
+        };
+        if !sous_dossier_de(&chemin, &corbeille, &separateur) {
+            return QString::from("seul un dossier de la corbeille s'efface pour de bon : supprimez-le d'abord");
+        }
+        if magasin.deplacements_en_attente(compte, &chemin, &separateur).unwrap_or(0) > 0 {
+            return QString::from("des messages sont en cours de déplacement vers ce dossier ou depuis lui : réessayez quand ils seront arrivés");
+        }
+        if !self.sessions.contains_key(&compte) {
+            return QString::from("ce compte n'est pas connecté");
+        }
+        // Le dossier et ses sous-dossiers, les plus profonds d'abord : un
+        // serveur refuse d'effacer un dossier qui en a encore.
+        let mut chemins: Vec<String> = dossiers
+            .iter()
+            .filter(|x| x.chemin == chemin || sous_dossier_de(&x.chemin, &chemin, &separateur))
+            .map(|x| x.chemin.clone())
+            .collect();
+        chemins.sort_by_key(|c| std::cmp::Reverse(c.len()));
+        self.as_mut().envoyer(compte, Commande::EffacerDossiers { chemins });
+        QString::from("")
+    }
+
     pub fn actualiser(mut self: Pin<&mut Self>) {
         let comptes: Vec<i64> = self
             .magasin
@@ -5514,7 +5693,7 @@ impl qobject::Boite {
                 }
                 let annulable = annulation.is_some();
                 if let Some(annulation) = annulation {
-                    self.as_mut().retenir_annulation(annulation);
+                    self.as_mut().retenir_annulation(Geste::Messages(annulation));
                 }
                 self.as_mut()
                     .deplacement_termine(rapport.deplaces as i32, &QString::from(&erreurs), annulable);
@@ -5638,6 +5817,15 @@ impl qobject::Boite {
                 self.as_mut().dossier_cree(compte_qt, &QString::from(&chemin), &QString::from(&nom));
             }
             Issue::DossierRenomme { ancien, nouveau, nom, separateur } => {
+                // « Supprimer le dossier » fait (0.8.5) : Ctrl+Z le remettra.
+                let attendue = self
+                    .suppressions_dossiers
+                    .iter()
+                    .position(|(c, dans, origine, _)| *c == compte && *dans == nouveau && *origine == ancien);
+                if let Some(i) = attendue {
+                    let (_, dans_corbeille, origine, sep) = self.as_mut().rust_mut().suppressions_dossiers.remove(i);
+                    self.as_mut().retenir_annulation(Geste::Dossier { compte, dans_corbeille, origine, separateur: sep });
+                }
                 // Le dossier affiché, s'il était l'un des renommés, suit.
                 if self.compte_courant as i64 == compte {
                     let courant = self.dossier_courant.to_string();
@@ -6018,6 +6206,23 @@ fn dossier_effacable(dossiers: &[DossierLocal], chemin: &str) -> bool {
 /// compte. Dossiers du système : ceux qui portent un rôle, et ceux que MMail
 /// tient pour tels faute de rôle annoncé — brouillons, envois, corbeille,
 /// indésirables, sur lesquels Mailcow fait apprendre son filtre.
+/// Dernier segment d'un chemin de dossier : son nom.
+fn feuille(chemin: &str, separateur: &str) -> String {
+    if separateur.is_empty() || separateur.eq_ignore_ascii_case("NIL") {
+        return chemin.to_string();
+    }
+    chemin.rsplit(separateur).next().unwrap_or(chemin).to_string()
+}
+
+/// Vrai si `chemin` est sous `parent` (pas `parent` lui-même).
+fn sous_dossier_de(chemin: &str, parent: &str, separateur: &str) -> bool {
+    !separateur.is_empty()
+        && !separateur.eq_ignore_ascii_case("NIL")
+        && chemin.len() > parent.len() + separateur.len()
+        && chemin.starts_with(parent)
+        && chemin[parent.len()..].starts_with(separateur)
+}
+
 fn motif_non_renommable(chemin: &str, dossiers: &[DossierLocal], partagees: &[String]) -> Option<String> {
     let Some(d) = dossiers.iter().find(|d| d.chemin == chemin) else {
         return Some(format!("dossier inconnu : {chemin}"));
@@ -6666,6 +6871,28 @@ impl Travail {
                     Err(err) => {
                         let echec_imap = Echec::Imap(err);
                         echec("dossier", format!("création de « {nom} » : {echec_imap}"), &echec_imap)
+                    }
+                })
+            }
+            Commande::EffacerDossiers { chemins } => {
+                let mut erreur = None;
+                for chemin in &chemins {
+                    if let Err(err) = e.client.supprimer_dossier(chemin) {
+                        erreur = Some((chemin.clone(), err));
+                        break;
+                    }
+                    if e.ouvert.as_deref() == Some(chemin.as_str()) {
+                        e.ouvert = None;
+                    }
+                }
+                // L'arborescence relue retire de l'index ce qui n'est plus sur le
+                // serveur, effacé ou non.
+                let _ = synchro::arborescence(&mut e.client, &e.magasin, compte);
+                Some(match erreur {
+                    None => Issue::Arborescence,
+                    Some((chemin, err)) => {
+                        let echec_imap = Echec::Imap(err);
+                        echec("dossier", format!("effacement de « {chemin} » : {echec_imap}"), &echec_imap)
                     }
                 })
             }
@@ -8468,6 +8695,22 @@ fn texte_json(valeur: &str) -> String {
 mod tests {
     use super::*;
 
+    /// « Supprimer ce dossier » (0.8.5) : le nom d'un dossier, et ce qui est
+    /// sous un autre (la corbeille).
+    #[test]
+    fn dossiers_sous_la_corbeille() {
+        assert_eq!(feuille("Projets/2025/Devis", "/"), "Devis");
+        assert_eq!(feuille("INBOX.Projets", "."), "Projets");
+        assert_eq!(feuille("Projets", ""), "Projets");
+        assert!(sous_dossier_de("Trash/Projets", "Trash", "/"));
+        assert!(sous_dossier_de("Trash/Projets/2025", "Trash", "/"));
+        assert!(!sous_dossier_de("Trash", "Trash", "/"));
+        // « Trash2 » n'est pas sous « Trash ».
+        assert!(!sous_dossier_de("Trash2/Projets", "Trash", "/"));
+        assert!(!sous_dossier_de("Trash/Projets", "Trash", ""));
+        assert!(sous_dossier_de("INBOX.Trash.Projets", "INBOX.Trash", "."));
+    }
+
     fn dossier(chemin: &str) -> Commande {
         Commande::OuvrirDossier(chemin.into())
     }
@@ -8494,6 +8737,7 @@ mod tests {
                 Commande::PreparerPurge { .. } => "preparer-purge".into(),
                 Commande::CreerDossier { .. } => "creer".into(),
                 Commande::RenommerDossier { .. } => "renommer".into(),
+                Commande::EffacerDossiers { .. } => "effacer-dossiers".into(),
                 Commande::Arborescence => "arborescence".into(),
                 Commande::Reprendre(_) => "reprendre".into(),
                 Commande::Veille => "veille".into(),

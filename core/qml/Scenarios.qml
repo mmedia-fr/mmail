@@ -425,6 +425,87 @@ QtObject {
         }
     }
 
+    // Scénario « supprimer-dossier » (0.8.5) : « Archive/Projets » et
+    // « Archive/Projets/2025 », créés ici — les dossiers du banc (« Essais »)
+    // sont recréés d'office par Dovecot (auto = subscribe). Le dossier va
+    // dans la corbeille avec son sous-dossier, Ctrl+Z l'en sort, puis, supprimé
+    // de nouveau, il s'efface de la corbeille pour de bon.
+    function lancerScenarioSupprimerDossier(essais) {
+        var n = essais || 0
+        var chemins = function() {
+            var l = []
+            for (var k = 0; k < modeleArborescence.count; ++k) {
+                var d = modeleArborescence.get(k)
+                if (d.genre === "dossier" && d.compte === boite.compteCourant)
+                    l.push(d.chemin)
+            }
+            return l
+        }
+        var echecs = 0
+        var bilan = function(texte, bon) {
+            if (!bon)
+                echecs += 1
+            console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
+        }
+        var finir = function() {
+            console.log("scenario: supprimer-dossier " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
+            Qt.quit()
+        }
+        if ((boite.compteCourant <= 0 || chemins().indexOf("Archive") < 0) && n < 40) {
+            plusTard(1000, function() { lancerScenarioSupprimerDossier(n + 1) })
+            return
+        }
+        var compte = boite.compteCourant
+        if (chemins().indexOf("Archive/Projets/2025") < 0) {
+            if (n < 100) {
+                if (chemins().indexOf("Archive/Projets") < 0)
+                    boite.creerSousDossier(compte, "Archive", "Projets")
+                else
+                    boite.creerSousDossier(compte, "Archive/Projets", "2025")
+                plusTard(3000, function() { lancerScenarioSupprimerDossier(100) })
+                return
+            }
+            if (n === 100) {
+                boite.creerSousDossier(compte, "Archive/Projets", "2025")
+                plusTard(3000, function() { lancerScenarioSupprimerDossier(101) })
+                return
+            }
+            bilan("dossiers d'essai créés : " + chemins().join(", "), false)
+            finir()
+            return
+        }
+        bilan("système protégé : « " + boite.supprimerDossier(compte, "INBOX") + " »",
+              boite.supprimerDossier(compte, "INBOX").length > 0)
+        bilan("pas dans la corbeille au départ", !boite.dansLaCorbeille(compte, "Archive/Projets"))
+        var motif = boite.supprimerDossier(compte, "Archive/Projets")
+        bilan("suppression lancée (« " + motif + " »)", motif === "")
+        plusTard(4000, function() {
+            var l = chemins()
+            bilan("dans la corbeille avec son sous-dossier : " + l.join(", "),
+                  l.indexOf("Archive/Projets") < 0 && l.indexOf("Trash/Projets") >= 0 && l.indexOf("Trash/Projets/2025") >= 0)
+            bilan("Ctrl+Z proposé : « " + boite.annulation + " »", boite.annulation === qsTr("Annuler la suppression du dossier"))
+            bilan("dans la corbeille désormais", boite.dansLaCorbeille(compte, "Trash/Projets"))
+            fenetre.annuler()
+            plusTard(4000, function() {
+                var l2 = chemins()
+                bilan("Ctrl+Z : remis à sa place : " + l2.join(", "),
+                      l2.indexOf("Archive/Projets") >= 0 && l2.indexOf("Archive/Projets/2025") >= 0 && l2.indexOf("Trash/Projets") < 0)
+                bilan("plus rien à annuler", boite.annulation === "")
+                boite.supprimerDossier(compte, "Archive/Projets")
+                plusTard(4000, function() {
+                    var m = boite.effacerDossier(compte, "Trash/Projets")
+                    bilan("effacement définitif lancé (« " + m + " »)", m === "")
+                    plusTard(4000, function() {
+                        var l3 = chemins()
+                        bilan("effacé de la corbeille : " + l3.join(", "),
+                              l3.indexOf("Trash/Projets") < 0 && l3.indexOf("Trash/Projets/2025") < 0 && l3.indexOf("Archive/Projets") < 0)
+                        finir()
+                    })
+                })
+            })
+        })
+    }
+
     function etapeScenarioCollerImage() {
         var r = ouvrirRedaction(comptesConnus[0].compte)
         r.pret()

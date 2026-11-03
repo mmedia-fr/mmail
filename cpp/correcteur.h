@@ -9,6 +9,13 @@
 //
 // Le mot sous le curseur n'est pas souligné tant qu'on le tape : il l'est
 // quand le curseur le quitte.
+//
+// Le dessin des vagues revient à l'interface (0.6.33) : Qt Quick ne trace ni
+// le soulignement « orthographe » ni le soulignement ondulé d'un format, et
+// dessine un soulignement simple dans la couleur du texte — les fautes étaient
+// trouvées, rien ne se voyait. Le surligneur garde donc les fautes de chaque
+// paragraphe (données du bloc) et publie leurs positions dans « zones », sous
+// lesquelles Redaction.qml trace les vagues rouges.
 #pragma once
 
 #include <QtCore/QJsonDocument>
@@ -20,6 +27,9 @@
 #include <QtCore/QPair>
 #include <QtCore/QString>
 #include <QtCore/QStringList>
+#include <QtCore/QTimer>
+#include <QtCore/QVariantList>
+#include <QtCore/QVariantMap>
 #include <QtGui/QColor>
 #include <QtGui/QSyntaxHighlighter>
 #include <QtGui/QTextBlock>
@@ -28,6 +38,13 @@
 #include <QtGui/QTextDocument>
 #include <QtQuick/QQuickTextDocument>
 
+/// Fautes d'un paragraphe : début et longueur, relatifs au paragraphe.
+class FautesBloc : public QTextBlockUserData
+{
+public:
+  QList<QPair<int, int>> fautes;
+};
+
 class Correcteur : public QSyntaxHighlighter
 {
   Q_OBJECT
@@ -35,11 +52,19 @@ class Correcteur : public QSyntaxHighlighter
   Q_PROPERTY(QObject* orthographe READ orthographe WRITE setOrthographe NOTIFY orthographeChange)
   Q_PROPERTY(bool actif READ actif WRITE setActif NOTIFY actifChange)
   Q_PROPERTY(int curseur READ curseur WRITE setCurseur NOTIFY curseurChange)
+  /// Mots à souligner, `{debut, fin}` en positions du document : ceux que
+  /// l'interface marque d'une vague rouge.
+  Q_PROPERTY(QVariantList zones READ zones NOTIFY zonesChange)
 
 public:
   explicit Correcteur(QObject* parent = nullptr)
     : QSyntaxHighlighter(parent)
   {
+    // Une frappe relit un paragraphe, un collage plusieurs : une seule
+    // publication des zones pour l'ensemble.
+    m_publication.setSingleShot(true);
+    m_publication.setInterval(120);
+    connect(&m_publication, &QTimer::timeout, this, &Correcteur::zonesChange);
   }
 
   QQuickTextDocument* documentQuick() const { return m_document; }
@@ -133,27 +158,48 @@ public:
   /// Relit tout le document : un mot ajouté au dictionnaire.
   Q_INVOKABLE void rafraichir() { rehighlight(); }
 
+  QVariantList zones() const
+  {
+    QVariantList liste;
+    QTextDocument* d = document();
+    if (!d || !m_actif)
+      return liste;
+    for (QTextBlock b = d->begin(); b.isValid(); b = b.next()) {
+      const auto* donnees = dynamic_cast<const FautesBloc*>(b.userData());
+      if (!donnees)
+        continue;
+      for (const auto& [debut, longueur] : donnees->fautes) {
+        QVariantMap z;
+        z.insert(QStringLiteral("debut"), b.position() + debut);
+        z.insert(QStringLiteral("fin"), b.position() + debut + longueur);
+        liste.append(z);
+      }
+    }
+    return liste;
+  }
+
 Q_SIGNALS:
   void documentChange();
   void orthographeChange();
   void actifChange();
   void curseurChange();
+  void zonesChange();
 
 protected:
   void highlightBlock(const QString& texte) override
   {
-    if (!m_actif || !m_orthographe || texte.isEmpty())
-      return;
-    QTextCharFormat format;
-    format.setUnderlineStyle(QTextCharFormat::SpellCheckUnderline);
-    format.setUnderlineColor(QColor(0xd0, 0x20, 0x20));
-    const int curseurDansBloc = m_curseur - currentBlock().position();
-    for (const auto& [debut, longueur] : fautes(texte)) {
-      // Le mot en train d'être tapé : pas encore.
-      if (curseurDansBloc >= debut && curseurDansBloc <= debut + longueur)
-        continue;
-      setFormat(debut, longueur, format);
+    auto* donnees = new FautesBloc;
+    if (m_actif && m_orthographe && !texte.isEmpty()) {
+      const int curseurDansBloc = m_curseur - currentBlock().position();
+      for (const auto& [debut, longueur] : fautes(texte)) {
+        // Le mot en train d'être tapé : pas encore.
+        if (curseurDansBloc >= debut && curseurDansBloc <= debut + longueur)
+          continue;
+        donnees->fautes.append({ debut, longueur });
+      }
     }
+    setCurrentBlockUserData(donnees);
+    m_publication.start();
   }
 
 private:
@@ -177,4 +223,5 @@ private:
   QPointer<QObject> m_orthographe;
   bool m_actif = true;
   int m_curseur = -1;
+  QTimer m_publication;
 };

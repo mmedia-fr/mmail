@@ -51,6 +51,8 @@ QtObject {
         console.log("scenario: mot juste |", c.motA(texte.indexOf("Bonjour") + 2) === "",
                     "| élision |", c.motA(texte.indexOf("école") + 2) === "")
         console.log("scenario: suggestions |", JSON.stringify(suggestionsOrthographe("factrue")))
+        // Les vagues dessinées (0.6.33) : une zone, celle de « factrue ».
+        console.log("scenario: zones |", JSON.stringify(c.zones))
         if (fautif.length > 0) {
             var f = JSON.parse(fautif)
             c.remplacer(f.debut, f.fin, "facture")

@@ -982,6 +982,42 @@ Page {
                     actif: reglagesRedaction.orthographe && !redac.chargement
                     curseur: corpsRedaction.cursorPosition
                 }
+                // Les vagues rouges sous les mots inconnus (0.6.33) : Qt Quick
+                // ne dessine pas le soulignement ondulé d'un format, on le
+                // trace ici, sous chaque zone du correcteur. Canvas : rendu
+                // aussi par le moteur logiciel (serveur RDS sans GPU).
+                Repeater {
+                    model: correcteurCorps.zones
+                    delegate: Canvas {
+                        // Relu quand le texte se remet en page (largeur, zoom).
+                        readonly property rect debut: {
+                            corpsRedaction.width; corpsRedaction.contentHeight; corpsRedaction.font.pointSize
+                            return corpsRedaction.positionToRectangle(modelData.debut)
+                        }
+                        readonly property rect fin: {
+                            corpsRedaction.width; corpsRedaction.contentHeight; corpsRedaction.font.pointSize
+                            return corpsRedaction.positionToRectangle(modelData.fin)
+                        }
+                        // Un mot coupé en fin de ligne n'a pas de vague.
+                        visible: fin.y === debut.y && fin.x > debut.x
+                        x: Math.round(debut.x)
+                        y: Math.round(debut.y + debut.height) - 3
+                        width: Math.max(1, Math.round(fin.x - debut.x))
+                        height: 4
+                        onWidthChanged: requestPaint()
+                        onPaint: {
+                            var ctx = getContext("2d")
+                            ctx.reset()
+                            ctx.strokeStyle = "#d02020"
+                            ctx.lineWidth = 1
+                            ctx.beginPath()
+                            ctx.moveTo(0, 3)
+                            for (var px = 2; px <= width + 2; px += 2)
+                                ctx.lineTo(px, (px / 2) % 2 === 0 ? 3 : 1)
+                            ctx.stroke()
+                        }
+                    }
+                }
                 textFormat: TextEdit.RichText
                 wrapMode: TextEdit.Wrap
                 // Au doigt, glisser fait défiler : le choix du texte passe par

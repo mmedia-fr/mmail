@@ -455,14 +455,23 @@ jobs:
           # Mise à jour pendant qu'un processus tient la DLL chargée (l'Explorateur
           # après un « Envoyer vers ») : elle doit passer, sans redémarrage.
           $tenue = Start-Process pwsh -PassThru -WindowStyle Hidden -ArgumentList '-NoProfile', '-Command', `
-            "[Runtime.InteropServices.NativeLibrary]::Load('$dll64') | Out-Null; Start-Sleep 120"
-          Start-Sleep 5
+            "[Runtime.InteropServices.NativeLibrary]::Load('$dll64') | Out-Null; Start-Sleep 300"
+          # Attendre que la DLL soit réellement chargée : le démarrage de pwsh
+          # dépasse parfois cinq secondes.
+          $echeance = (Get-Date).AddSeconds(90)
+          do {
+            Start-Sleep 1
+            $chargee = (Get-Process -Id $tenue.Id).Modules | Where-Object { $_.FileName -like '*\MMailMAPI.dll' }
+          } until ($chargee -or (Get-Date) -gt $echeance)
+          if (-not $chargee) { throw "la DLL n'a pas pu être chargée par le processus témoin" }
           InstallerMachine "$env:RUNNER_TEMP\installation-machine-2.log"
           Stop-Process $tenue -Force
           Get-ChildItem "$env:SystemRoot\System32\MMailMAPI.dll*" | ForEach-Object { Write-Host "$($_.Name) $($_.Length)" }
+          Select-String -Path "$env:RUNNER_TEMP\installation-machine-2.log" -Pattern 'MAPI' | ForEach-Object { $_.Line }
           if (-not (Select-String -Path "$env:RUNNER_TEMP\installation-machine-2.log" -Pattern 'Fournisseur MAPI en service \S+cart\S* :' -Quiet)) {
             throw "la DLL chargée n'a pas été écartée à la mise à jour"
           }
+          if (-not (Test-Path "$dll64.ancien1")) { throw "copie écartée absente" }
           Set-ItemProperty 'HKLM:\SOFTWARE\Clients\Mail' -Name '(default)' -Value 'Messagerie absente'
           New-Item 'HKCU:\Software\Clients\Mail' -Force | Out-Null
           Set-ItemProperty 'HKCU:\Software\Clients\Mail' -Name '(default)' -Value 'MMail'

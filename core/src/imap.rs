@@ -576,17 +576,32 @@ impl Client {
     /// Déplace des messages du dossier sélectionné vers un autre dossier de la
     /// même boîte. `MOVE` (RFC 6851) quand le serveur le sait : l'opération est
     /// alors atomique ; à défaut copie, marquage et purge ciblée.
-    pub fn deplacer(&mut self, uids: &[u32], cible: &str) -> Resultat<()> {
+    ///
+    /// Rend ce que le serveur dit des UID donnés dans la cible (`COPYUID`,
+    /// UIDPLUS) : sa validité et, pour chaque message, (UID source, UID
+    /// cible) — de quoi annuler le déplacement sans chercher les messages.
+    /// `None` si le serveur ne le dit pas.
+    pub fn deplacer(&mut self, uids: &[u32], cible: &str) -> Resultat<Option<(u32, Vec<(u32, u32)>)>> {
         if uids.is_empty() {
-            return Ok(());
+            return Ok(None);
         }
         let ensemble = protocole::ensemble_uid(uids);
         if self.sait("MOVE") {
-            self.commande(&format!("UID MOVE {ensemble} {}", citer(cible)))?;
-            return Ok(());
+            let (texte, _) = self.commande(&format!("UID MOVE {ensemble} {}", citer(cible)))?;
+            return Ok(protocole::analyser_copyuid(&texte));
         }
-        self.commande(&format!("UID COPY {ensemble} {}", citer(cible)))?;
-        self.supprimer(uids)
+        let (texte, _) = self.commande(&format!("UID COPY {ensemble} {}", citer(cible)))?;
+        self.supprimer(uids)?;
+        Ok(protocole::analyser_copyuid(&texte))
+    }
+
+    /// Ceux des UID donnés qui sont encore dans le dossier sélectionné.
+    pub fn presents(&mut self, uids: &[u32]) -> Resultat<Vec<u32>> {
+        if uids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let (texte, _) = self.commande(&format!("UID SEARCH UID {}", protocole::ensemble_uid(uids)))?;
+        Ok(protocole::analyser_search(&texte))
     }
 
     /// Retire définitivement des messages du dossier sélectionné : marquage

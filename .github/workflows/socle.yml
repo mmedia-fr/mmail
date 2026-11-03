@@ -467,8 +467,8 @@ jobs:
           InstallerMachine "$env:RUNNER_TEMP\installation-machine-2.log"
           Get-ChildItem "$env:SystemRoot\System32\MMailMAPI.dll*" | ForEach-Object { Write-Host "$($_.Name) $($_.Length)" }
           Select-String -Path "$env:RUNNER_TEMP\installation-machine-2.log" -Pattern 'MAPI|application|Restart Manager' | ForEach-Object { $_.Line }
-          # Selon la version de Windows, la DLL chargée se supprime (Server 2022)
-          # ou doit être écartée sous un autre nom : l'un ou l'autre, jamais
+          # Une DLL chargée ne se supprime pas : elle est écartée sous un autre
+          # nom (« .ancien1 »), une DLL libre est remplacée — jamais
           # « impossible ».
           $lignes = Select-String -Path "$env:RUNNER_TEMP\installation-machine-2.log" -Pattern 'Fournisseur MAPI'
           if ($lignes | Where-Object { $_.Line -match 'impossible' }) { throw "la DLL chargée n'a pas pu être remplacée" }

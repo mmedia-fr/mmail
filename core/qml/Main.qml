@@ -3021,6 +3021,8 @@ ApplicationWindow {
 
     DialogueRenommerDossier { id: dlgRenommerDossier }
 
+    DialogueSupprimerDossier { id: dlgSupprimerDossier }
+
     DialogueCategorie { id: dlgCategorie }
 
     DialogueCategories { id: dlgCategories }
@@ -5900,11 +5902,14 @@ ApplicationWindow {
     function annuler() {
         if (boite.annulation.length === 0)
             return false
+        // Un dossier mis à la corbeille (0.8.5) revient avec ses sous-dossiers.
+        var dossier = boite.annulation === qsTr("Annuler la suppression du dossier")
         if (!boite.annuler()) {
             messageEtat.texte = boite.erreur
             return false
         }
-        messageEtat.texte = qsTr("Annulation : les messages reviennent dans leur dossier…")
+        messageEtat.texte = dossier ? qsTr("Annulation : le dossier revient à sa place…")
+                                    : qsTr("Annulation : les messages reviennent dans leur dossier…")
         return true
     }
 
@@ -6943,6 +6948,9 @@ ApplicationWindow {
                 attenteNotif.triggered.connect(scenarios.lancerScenarioNotification)
                 attenteNotif.start()
             }
+            // Scénario « supprimer-dossier » (0.8.5).
+            if (essai.scenario === "supprimer-dossier")
+                scenarios.lancerScenarioSupprimerDossier()
             if (essai.scenario === "coller-image") {
                 var attenteImage = Qt.createQmlObject('import QtQuick; Timer { interval: 6000 }', fenetre)
                 attenteImage.triggered.connect(scenarios.etapeScenarioCollerImage)

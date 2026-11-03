@@ -146,6 +146,12 @@ ColumnLayout {
                                   ? qsTr("Remettre en boîte de réception ; le filtre du serveur apprend que le message est légitime (Ctrl+Alt+J).")
                                   : qsTr("Classer en courrier indésirable ; le filtre du serveur l'apprend (Ctrl+Alt+J).")
                 }
+                // 0.8.1 : lu ou non lu, à côté du message ; Ctrl+Q, Ctrl+U.
+                BoutonAction {
+                    objectName: "boutonMarquerLu"
+                    text: fenetre.etatChoix.nonLu ? qsTr("Marquer comme lu") : qsTr("Marquer comme non lu")
+                    onClicked: fenetre.marquerSelection(fenetre.etatChoix.nonLu)
+                }
                 BoutonAction {
                     text: qsTr("Supprimer")
                     onClicked: fenetre.supprimerSelection()

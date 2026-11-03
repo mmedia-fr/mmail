@@ -86,6 +86,14 @@ Menu {
         raccourci: qsTr("Suppr")
         onTriggered: fenetre.supprimerSelection()
     }
+    // « Annuler la suppression », « Annuler le déplacement » : ce que
+    // Ctrl+Z défait, s'il y a quelque chose.
+    EntreeMenu {
+        visible: boite.annulation.length > 0
+        text: boite.annulation
+        raccourci: qsTr("Ctrl+Z")
+        onTriggered: fenetre.annuler()
+    }
     MenuSeparator {}
     // Dans « Toutes les BàL » et la recherche dans toutes les boîtes, un seul
     // message se choisit à la fois.

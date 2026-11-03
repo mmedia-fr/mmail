@@ -37,8 +37,9 @@ de projet interne.
   même quand on change « De » (0.6.24) ; le dossier Brouillons affiche entre
   crochets le nombre de ses éléments, comme Outlook ;
 - **correcteur d'orthographe** (0.6.36) : à la rédaction, les mots inconnus du
-  dictionnaire sont soulignés en rouge — pas celui qu'on est en train de
-  taper —, et le clic droit sur l'un d'eux propose ses corrections et « Ajouter
+  dictionnaire sont soulignés d'une vague rouge — pas celui qu'on est en train
+  de taper — (la vague ne s'affichait pas avant la 0.6.33 : Qt Quick ne trace
+  pas ce soulignement, MMail le dessine lui-même), et le clic droit sur l'un d'eux propose ses corrections et « Ajouter
   au dictionnaire » (les mots ajoutés suivent la sauvegarde de la
   configuration). Dictionnaire français de Grammalecte (version 7.7, licence
   MPL 2.0, celui de LibreOffice et de Firefox), embarqué dans MMail : rien à
@@ -107,7 +108,14 @@ de projet interne.
   semaines », « Plus tôt ce mois-ci », « Le mois dernier », « Plus ancien » ;
   dans un dossier, dans « Toutes les BàL » et dans une recherche triée par
   date. Les intitulés suivent le jour (« Aujourd'hui » devient « Hier » passé
-  minuit) ; « Affichage › Regrouper les messages par date » les retire ;
+  minuit) ; « Affichage › Regrouper les messages par date » les retire. Un
+  clic sur un intitulé replie ou déplie son groupe ; le clic droit (l'appui
+  long sous Android) les replie ou les déplie tous — dossier par dossier, le
+  temps de la session. Le clavier et Maj+clic sautent les messages repliés ;
+- **molette** : dans la liste des messages, un cran fait défiler autant de
+  messages que le réglage du poste (« Nombre de lignes à faire défiler » sous
+  Windows, 3 par défaut), comme Outlook ; un pavé tactile garde son défilement
+  fin ;
 - **gros dossiers** : la liste s'affiche dès sa première page (une vingtaine
   de millisecondes pour 40 000 messages), le reste suit par paquets sans figer
   la fenêtre ; de même en sortant d'une recherche ;
@@ -201,6 +209,11 @@ de projet interne.
 - **Supprimer** envoie à la corbeille de la boîte (touche Suppr) ; dans la
   corbeille et les indésirables, d'où un message n'a plus de corbeille où aller,
   il l'efface pour de bon, après confirmation (0.6.24) ;
+- **Ctrl+Z**, comme dans Outlook : défait la dernière suppression ou le dernier
+  déplacement — un autre Ctrl+Z, le précédent, jusqu'à vingt —, les messages
+  reviennent dans leur dossier, d'une boîte à l'autre comprise ; aussi par le
+  menu d'un message (« Annuler la suppression », « Annuler le déplacement »).
+  Un effacement pour de bon (corbeille, indésirables) ne se défait pas ;
 - **dossiers de rôle** — brouillons, éléments envoyés, corbeille — désignés
   par le serveur (SPECIAL-USE) ; à défaut (OVH), reconnus à leur nom usuel,
   « Drafts » ou « Brouillons », « Sent » ou « Éléments envoyés »… : le moins
@@ -266,6 +279,17 @@ de projet interne.
   navigateur — jamais celui d'une réponse ou d'un transfert, qui désabonnerait
   le premier destinataire. Aucun bandeau quand le serveur a noté l'échec de
   l'authentification de l'expéditeur (DMARC) ;
+- **messagerie de Windows** : MMail peut être la messagerie dans laquelle les
+  autres logiciels créent un courriel — « Envoyer vers › Destinataire » de
+  l'Explorateur, envoi d'un document ou d'un état « par courriel » depuis un
+  logiciel de gestion (MAPI simple, logiciels 32 et 64 bits). Le courriel
+  s'ouvre dans une rédaction de MMail, pièces jointes comprises : on le relit,
+  on complète le destinataire et on l'envoie ; rien ne part sans « Envoyer ».
+  Le choix se fait pour la session dans « Réglages › Messagerie par
+  défaut… », comme Outlook ou Thunderbird le proposent ; MMail n'y figure que
+  s'il a été installé pour tous les utilisateurs (droits d'administrateur).
+  MMail se propose aussi pour les liens « mailto: », dans les applications par
+  défaut de Windows ;
 - **masquage local** des dossiers peu utilisés, réaffichage en un clic ;
 - affichage du **message brut** (bouton « Source ») ;
 - **copie automatique de la sélection**, comme dans MMdedit : un texte

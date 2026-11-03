@@ -5609,6 +5609,7 @@ ApplicationWindow {
     /// Lien survolé, tel que la barre d'état le montre (0.6.32) : le numéro
     /// à appeler, l'adresse cherchée sur la carte, sinon le lien lui-même.
     function libelleLien(lien) {
+        lien = lienNettoye(lien)
         if (lien.toLowerCase().indexOf("tel:") === 0)
             return qsTr("Appeler le %1").arg(lien.substring(4))
         var carte = "https://www.openstreetmap.org/search?query="
@@ -5621,10 +5622,21 @@ ApplicationWindow {
         return lien
     }
 
+    /// Un lien tel qu'un navigateur le lit (0.6.33) : sans les tabulations ni
+    /// les sauts de ligne qu'il contient, sans les espaces et caractères de
+    /// contrôle qui l'entourent (norme URL du WHATWG, « remove all ASCII tab
+    /// or newline »). Des expéditeurs coupent leurs longs liens en plusieurs
+    /// lignes dans le HTML, jeton d'accès compris ; Qt garde ces sauts de
+    /// ligne, et le navigateur recevait « %0A » au milieu du jeton : page vide.
+    function lienNettoye(lien) {
+        return String(lien).replace(/[\t\n\r]/g, "").replace(/^[\u0000-\u0020]+|[\u0000-\u0020]+$/g, "")
+    }
+
     /// Un lien du message : une adresse de courriel ouvre une rédaction dans
     /// MMail, une adresse web part au navigateur, un numéro de téléphone au
     /// logiciel d'appel du poste (`tel:`), une adresse postale à la carte.
     function ouvrirLien(lien) {
+        lien = lienNettoye(lien)
         if (lien.toLowerCase().indexOf("mailto:") !== 0) {
             Qt.openUrlExternally(lien)
             return
@@ -6237,6 +6249,17 @@ ApplicationWindow {
             }
             if (essai.scenario === "reprise")
                 return
+            // Scénario « lien-saut » (0.6.33) : un lien coupé sur plusieurs
+            // lignes dans le HTML part au navigateur d'un seul tenant.
+            if (essai.scenario === "lien-saut") {
+                var coupe = "https://essai.test/suivi?type=a&jeton=abcdef\nghijkl\r\nmnop\n"
+                console.log("scenario: nettoyé |", lienNettoye(coupe), "| barre d'état |", libelleLien(coupe))
+                ouvrirLien(coupe)
+                var finLien = Qt.createQmlObject('import QtQuick; Timer { interval: 2000 }', fenetre)
+                finLien.triggered.connect(Qt.quit)
+                finLien.start()
+                return
+            }
             // Scénario « restauration » : un profil neuf, dont le compte
             // retrouve la sauvegarde du scénario « sauvegarde ».
             if (essai.scenario === "restauration")

@@ -2214,10 +2214,7 @@ ApplicationWindow {
         infoDossier = texte
     }
 
-    onSelectionChanged: {
-        majInfoDossier()
-        Qt.callLater(majEtatChoix)
-    }
+    onSelectionChanged: majInfoDossier()
 
     // ------------------------------------------------------- presse-papier
     Timer {
@@ -5089,20 +5086,21 @@ ApplicationWindow {
     /// Ce que portent les messages choisis, pour le menu d'un message : au
     /// moins un non lu, au moins un sans drapeau.
     // État de la sélection, tenu à jour pour les boutons « Marquer comme
-    // lu / non lu » (0.8.1) : un message non lu parmi les choisis.
-    property var etatChoix: ({ nonLu: false, sansDrapeau: false, nombre: 0 })
-    function majEtatChoix() {
-        var e = etatSelection()
-        e.nombre = listeMulti ? (cleChoisie.length > 0 ? 1 : 0) : uidsChoisis().length
-        etatChoix = e
-    }
-    // `onSelectionChanged` est déjà posé (majInfoDossier) : il appelle aussi
-    // majEtatChoix.
-    onCleChoisieChanged: Qt.callLater(majEtatChoix)
+    // lu / non lu » (0.8.1) : un message non lu parmi les choisis. Liaison :
+    // elle se recalcule quand la sélection change, ou la liste (lu, non lu
+    // posés à l'affichage), que `versionListe` compte.
+    property int versionListe: 0
     Connections {
         target: modeleMessages
-        function onDataChanged() { Qt.callLater(fenetre.majEtatChoix) }
-        function onCountChanged() { Qt.callLater(fenetre.majEtatChoix) }
+        function onDataChanged() { fenetre.versionListe++ }
+        function onCountChanged() { fenetre.versionListe++ }
+    }
+    readonly property var etatChoix: {
+        // Dépendances de la liaison.
+        var dependances = [selection, cleChoisie, versionListe, listeMulti]
+        var e = etatSelection()
+        e.nombre = listeMulti ? (cleChoisie.length > 0 ? 1 : 0) : Object.keys(selection).length
+        return e
     }
 
     function etatSelection() {

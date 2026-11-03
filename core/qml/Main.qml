@@ -6394,6 +6394,8 @@ ApplicationWindow {
                 var attente = Qt.createQmlObject('import QtQuick; Timer { interval: 1500 }', fenetre)
                 attente.triggered.connect(scenarios.etapeScenarioBarreRedaction)
                 attente.start()
+                return
+            }
             // Scénario « personnalisation » (0.8.6) : au banc,
             // MMAIL_PERSONNALISATION=<dossier>, MMAIL_DOSSIER « imposer » ou
             // « libre ».

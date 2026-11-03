@@ -4113,6 +4113,10 @@ QtObject {
             }
             console.log("scenario: barre-redaction " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
             if (identifiantsEssai.dossier !== "garder")
+                Qt.quit()
+        })
+    }
+
     /// Scénario « personnalisation » (0.8.6) : le dossier de MMAIL_PERSONNALISATION
     /// donne une apparence au nom de l'organisation, ses couleurs, et son logo
     /// en tête du bandeau. MMAIL_DOSSIER « imposer » : elle est la seule au

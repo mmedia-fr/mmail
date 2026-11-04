@@ -3656,6 +3656,9 @@ QtObject {
             bilan("colonne ajoutée", r.ajouterAuTableau("colonne"))
             mef.inserer(corps.cursorPosition, "OK pour moi")
             var h = mef.html()
+            var tableau = /<table[\s\S]*<\/table>/.exec(h)
+            if (compter(h, /<td/g) !== 6 || compter(h, /bgcolor="#1f4e79"/g) !== 3)
+                console.log("scenario: tableau après la colonne :", tableau ? tableau[0] : h)
             bilan("3 colonnes, 6 cases : " + compter(h, /<td/g), compter(h, /<td/g) === 6)
             bilan("l'en-tête ajouté garde le fond bleu : " + compter(h, /bgcolor="#1f4e79"/g),
                   compter(h, /bgcolor="#1f4e79"/g) === 3)

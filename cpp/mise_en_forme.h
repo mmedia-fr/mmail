@@ -767,7 +767,10 @@ private:
   /// La case `nouvelle` prend la mise en forme de `source` : format de case
   /// (fond, bordures, marges ; Qt garde les fusions de la case), format de
   /// paragraphe, et format de ce qui s'y écrira — celui du premier caractère
-  /// de `source`, sans lien ni image.
+  /// de `source`, sans lien ni image. Le format de la case et celui du début
+  /// de son premier paragraphe sont un seul et même format, porté par le
+  /// caractère qui ouvre la case : le second se fusionne au premier, sans
+  /// quoi le fond de la case se perdait.
   static void copierCase(const QTextTableCell& source, const QTextTableCell& nouvelle)
   {
     if (!source.isValid() || !nouvelle.isValid())
@@ -777,19 +780,19 @@ private:
     QTextCursor dans = cible.firstCursorPosition();
     const QTextCursor de = source.firstCursorPosition();
     dans.setBlockFormat(de.block().blockFormat());
-    QTextCharFormat ecriture = de.blockCharFormat();
-    if (source.lastCursorPosition().position() > de.position()) {
-      QTextCursor premier = de;
-      premier.movePosition(QTextCursor::NextCharacter);
-      const QTextCharFormat f = premier.charFormat();
-      if (!f.isImageFormat())
-        ecriture = f;
-    }
+    if (source.lastCursorPosition().position() <= de.position())
+      return;
+    QTextCursor premier = de;
+    premier.movePosition(QTextCursor::NextCharacter);
+    QTextCharFormat ecriture = premier.charFormat();
+    if (ecriture.isImageFormat())
+      return;
     ecriture.setAnchor(false);
     ecriture.clearProperty(QTextFormat::AnchorHref);
     ecriture.clearProperty(QTextFormat::AnchorName);
     ecriture.clearProperty(QTextFormat::ObjectType);
-    dans.setBlockCharFormat(ecriture);
+    ecriture.clearProperty(QTextFormat::ObjectIndex);
+    dans.mergeBlockCharFormat(ecriture);
   }
 
   void fusionner(const QTextCharFormat& f)

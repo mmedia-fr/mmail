@@ -6,6 +6,7 @@
 // HTML et sa version en texte brut (décision 7 du dossier de projet).
 #pragma once
 
+#include <functional>
 #include <memory>
 
 #include <QtCore/QFileInfo>
@@ -30,6 +31,8 @@
 #include <QtGui/QTextCursor>
 #include <QtGui/QTextDocument>
 #include <QtGui/QTextList>
+#include <QtGui/QTextTable>
+#include <QtGui/QTextTableCell>
 #include <QtQuick/QQuickTextDocument>
 
 class MiseEnForme : public QObject
@@ -46,6 +49,13 @@ class MiseEnForme : public QObject
   Q_PROPERTY(bool souligne READ souligne NOTIFY etatChange)
   Q_PROPERTY(bool puces READ puces NOTIFY etatChange)
   Q_PROPERTY(bool numeros READ numeros NOTIFY etatChange)
+  // Couleur du texte et du surlignage sous le curseur (0.8.7), en #rrggbb ;
+  // vide : celle par défaut, aucun surlignage.
+  Q_PROPERTY(QString couleur READ couleur NOTIFY etatChange)
+  Q_PROPERTY(QString surlignage READ surlignage NOTIFY etatChange)
+  // Le curseur est dans un tableau : la barre propose d'y ajouter une
+  // colonne ou une ligne (0.8.7).
+  Q_PROPERTY(bool dansTableau READ dansTableau NOTIFY etatChange)
   // Couleur des liens d'un message lu (0.6.32) : sans elle, Qt prend celle
   // de la palette du système, trop pâle sur la page blanche d'un message.
   // Elle passe par la feuille de style par défaut du document, que les styles
@@ -89,6 +99,19 @@ public:
   bool souligne() const { return format().fontUnderline(); }
   bool puces() const { return styleDeListe() == QTextListFormat::ListDisc; }
   bool numeros() const { return styleDeListe() == QTextListFormat::ListDecimal; }
+  QString couleur() const
+  {
+    const QTextCharFormat f = format();
+    return f.hasProperty(QTextFormat::ForegroundBrush) ? f.foreground().color().name() : QString();
+  }
+  QString surlignage() const
+  {
+    const QTextCharFormat f = format();
+    return f.hasProperty(QTextFormat::BackgroundBrush) && f.background().style() != Qt::NoBrush
+               ? f.background().color().name()
+               : QString();
+  }
+  bool dansTableau() const { return texte_() && curseur().currentTable() != nullptr; }
 
   Q_INVOKABLE void basculerGras()
   {
@@ -160,6 +183,86 @@ public:
     else
       c.insertText(cible, f);
     Q_EMIT etatChange();
+  }
+
+  /// Couleur du texte (0.8.7, demande d'un utilisateur : distinguer ses
+  /// commentaires dans un message cité) : celle de la sélection, du mot sous
+  /// le curseur, ou de ce qui s'écrira dans un paragraphe vide — une case
+  /// de tableau neuve, par exemple. `couleur` vide : la couleur par défaut.
+  Q_INVOKABLE void poserCouleur(const QString& couleur)
+  {
+    const QColor c(couleur);
+    modifier([&](QTextCharFormat& f) {
+      if (couleur.isEmpty() || !c.isValid())
+        f.clearForeground();
+      else
+        f.setForeground(c);
+    });
+  }
+
+  /// Surlignage, de même ; `couleur` vide : aucun.
+  Q_INVOKABLE void poserSurlignage(const QString& couleur)
+  {
+    const QColor c(couleur);
+    modifier([&](QTextCharFormat& f) {
+      if (couleur.isEmpty() || !c.isValid())
+        f.clearBackground();
+      else
+        f.setBackground(c);
+    });
+  }
+
+  /// Ajoute une colonne à droite de celle du curseur (0.8.7) : qui répond
+  /// dans un tableau cité écrit « à la suite » de la ligne. Chaque nouvelle
+  /// case reprend la mise en forme de sa voisine de gauche — fond, bordures,
+  /// marges, alignement, police et couleur de ce qui s'y écrira —, là où Qt
+  /// donnait à une colonne ajoutée en bout de tableau un format quelconque.
+  /// Rend la position de la nouvelle case de la ligne du curseur, -1 hors
+  /// d'un tableau.
+  Q_INVOKABLE int ajouterColonne()
+  {
+    QTextCursor c = curseur();
+    QTextTable* t = c.currentTable();
+    if (!t)
+      return -1;
+    const QTextTableCell ici = t->cellAt(c);
+    const int ligne = ici.row();
+    const int colonne = ici.column() + ici.columnSpan() - 1;
+    c.beginEditBlock();
+    t->insertColumns(colonne + 1, 1);
+    for (int r = 0; r < t->rows(); ++r) {
+      const QTextTableCell nouvelle = t->cellAt(r, colonne + 1);
+      // Une case fusionnée qui s'étend sur la nouvelle colonne la couvre.
+      if (nouvelle.isValid() && nouvelle.row() == r && nouvelle.column() == colonne + 1)
+        copierCase(t->cellAt(r, colonne), nouvelle);
+    }
+    c.endEditBlock();
+    Q_EMIT etatChange();
+    return t->cellAt(ligne, colonne + 1).firstCursorPosition().position();
+  }
+
+  /// Ajoute une ligne sous celle du curseur, chaque case reprenant la mise
+  /// en forme de celle du dessus. Rend la position de la nouvelle case de la
+  /// colonne du curseur, -1 hors d'un tableau.
+  Q_INVOKABLE int ajouterLigne()
+  {
+    QTextCursor c = curseur();
+    QTextTable* t = c.currentTable();
+    if (!t)
+      return -1;
+    const QTextTableCell ici = t->cellAt(c);
+    const int ligne = ici.row() + ici.rowSpan() - 1;
+    const int colonne = ici.column();
+    c.beginEditBlock();
+    t->insertRows(ligne + 1, 1);
+    for (int k = 0; k < t->columns(); ++k) {
+      const QTextTableCell nouvelle = t->cellAt(ligne + 1, k);
+      if (nouvelle.isValid() && nouvelle.row() == ligne + 1 && nouvelle.column() == k)
+        copierCase(t->cellAt(ligne, k), nouvelle);
+    }
+    c.endEditBlock();
+    Q_EMIT etatChange();
+    return t->cellAt(ligne + 1, colonne).firstCursorPosition().position();
   }
 
   /// Retire gras, italique, soulignement et liens de la sélection.
@@ -610,6 +713,85 @@ private:
 
   /// Applique un format à la sélection ; sans sélection, au mot sous le
   /// curseur, comme le fait un traitement de texte.
+  /// Modifie le format de chaque morceau de la sélection — sans sélection,
+  /// du mot sous le curseur ; sans mot, d'un paragraphe vide, pour ce qui s'y
+  /// écrira. À la différence de `fusionner`, une propriété peut s'y retirer
+  /// (couleur « automatique »).
+  void modifier(const std::function<void(QTextCharFormat&)>& m)
+  {
+    QTextDocument* doc = texte_();
+    if (!doc)
+      return;
+    QTextCursor c = curseur();
+    if (!c.hasSelection())
+      c.select(QTextCursor::WordUnderCursor);
+    if (!c.hasSelection()) {
+      if (c.block().length() <= 1) {
+        QTextCharFormat f = c.blockCharFormat();
+        m(f);
+        c.setBlockCharFormat(f);
+        Q_EMIT etatChange();
+      }
+      return;
+    }
+    const int debut = c.selectionStart();
+    const int fin = c.selectionEnd();
+    // Morceaux relevés d'abord : changer un format pendant le parcours
+    // invaliderait les fragments.
+    QList<QPair<int, int>> plages;
+    QList<QTextCharFormat> formats;
+    for (QTextBlock b = doc->findBlock(debut); b.isValid() && b.position() < fin; b = b.next()) {
+      for (auto it = b.begin(); !it.atEnd(); ++it) {
+        const QTextFragment fr = it.fragment();
+        const int a = qMax(debut, fr.position());
+        const int z = qMin(fin, fr.position() + fr.length());
+        if (fr.isValid() && a < z) {
+          plages.append({a, z});
+          formats.append(fr.charFormat());
+        }
+      }
+    }
+    c.beginEditBlock();
+    for (qsizetype i = 0; i < plages.size(); ++i) {
+      QTextCursor e(doc);
+      e.setPosition(plages[i].first);
+      e.setPosition(plages[i].second, QTextCursor::KeepAnchor);
+      QTextCharFormat f = formats[i];
+      m(f);
+      e.setCharFormat(f);
+    }
+    c.endEditBlock();
+    Q_EMIT etatChange();
+  }
+
+  /// La case `nouvelle` prend la mise en forme de `source` : format de case
+  /// (fond, bordures, marges ; Qt garde les fusions de la case), format de
+  /// paragraphe, et format de ce qui s'y écrira — celui du premier caractère
+  /// de `source`, sans lien ni image.
+  static void copierCase(const QTextTableCell& source, const QTextTableCell& nouvelle)
+  {
+    if (!source.isValid() || !nouvelle.isValid())
+      return;
+    QTextTableCell cible = nouvelle;
+    cible.setFormat(source.format());
+    QTextCursor dans = cible.firstCursorPosition();
+    const QTextCursor de = source.firstCursorPosition();
+    dans.setBlockFormat(de.block().blockFormat());
+    QTextCharFormat ecriture = de.blockCharFormat();
+    if (source.lastCursorPosition().position() > de.position()) {
+      QTextCursor premier = de;
+      premier.movePosition(QTextCursor::NextCharacter);
+      const QTextCharFormat f = premier.charFormat();
+      if (!f.isImageFormat())
+        ecriture = f;
+    }
+    ecriture.setAnchor(false);
+    ecriture.clearProperty(QTextFormat::AnchorHref);
+    ecriture.clearProperty(QTextFormat::AnchorName);
+    ecriture.clearProperty(QTextFormat::ObjectType);
+    dans.setBlockCharFormat(ecriture);
+  }
+
   void fusionner(const QTextCharFormat& f)
   {
     QTextCursor c = curseur();

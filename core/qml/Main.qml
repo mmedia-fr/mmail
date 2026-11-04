@@ -365,7 +365,6 @@ ApplicationWindow {
         property string identites: "{}"
         property string signatures: "[]"
         property string adressesEnvoi: "{}"
-        property bool miseEnForme: true
         // Correcteur d'orthographe (0.6.36) : actif, et les mots ajoutés au
         // dictionnaire, un par ligne — ils suivent la sauvegarde.
         property bool orthographe: true
@@ -6413,6 +6412,14 @@ ApplicationWindow {
             // second compte) : la boîte de réception de deux@, partagée avec
             // un@, entre dans « Toutes les BàL » — messages et compteur — ;
             // ses dossiers se disent en français, son favori à son adresse.
+            // Scénario « editeur-tableau » (0.8.7) : couleurs, colonne et ligne
+            // ajoutées dans un tableau cité.
+            if (essai.scenario === "editeur-tableau") {
+                var attenteEditeur = Qt.createQmlObject('import QtQuick; Timer { interval: 2500 }', fenetre)
+                attenteEditeur.triggered.connect(scenarios.etapeScenarioEditeurTableau)
+                attenteEditeur.start()
+                return
+            }
             if (essai.scenario === "unifiee-partagee") {
                 var attentePartagee = Qt.createQmlObject('import QtQuick; Timer { interval: 15000 }', fenetre)
                 attentePartagee.triggered.connect(function() {

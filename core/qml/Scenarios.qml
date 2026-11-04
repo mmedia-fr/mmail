@@ -3768,25 +3768,25 @@ QtObject {
                   bloc(h, "Deux").indexOf("Georgia") < 0 && bloc(h, "Deux").indexOf("16pt") < 0)
             var barre = objetNomme(r, "barreMiseEnForme")
             if (!fenetre.tactile && barre) {
-                var uneLigne = barre.implicitHeight
                 bilan("barre du bureau, police et taille visibles", objetNomme(r, "choixPolice").visible && objetNomme(r, "choixTaille").visible)
-                r.Window.window.width = 520
-                plusTard(500, function() {
-                    bilan("fenêtre étroite : la barre va à la ligne (" + uneLigne + " → " + barre.implicitHeight + ")",
-                          barre.implicitHeight > uneLigne)
-                    var hors = []
-                    for (var i = 0; i < barre.children.length; ++i) {
-                        var b = barre.children[i]
-                        if (b.visible && b.width > 0 && b.x + b.width > barre.width + 0.5)
-                            hors.push(b.text || b.objectName)
-                    }
-                    bilan("rien ne dépasse de la barre : " + JSON.stringify(hors), hors.length === 0)
-                    r.Window.window.width = 760
-                    console.log("scenario: editeur-paragraphe " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
-                    if (identifiantsEssai.dossier !== "garder")
-                        Qt.quit()
-                })
-                return
+                // La barre va à la ligne quand ses boutons ne tiennent pas sur
+                // une seule : rien ne dépasse, et elle prend alors plusieurs
+                // lignes.
+                var total = 0
+                var haut = 0
+                var hors = []
+                for (var i = 0; i < barre.children.length; ++i) {
+                    var b = barre.children[i]
+                    if (!b.visible || b.width <= 0)
+                        continue
+                    total += b.width + barre.spacing
+                    haut = Math.max(haut, b.height)
+                    if (b.x + b.width > barre.width + 0.5)
+                        hors.push(b.text || b.objectName)
+                }
+                bilan("rien ne dépasse de la barre (" + Math.round(barre.width) + " points) : " + JSON.stringify(hors), hors.length === 0)
+                bilan("boutons sur " + Math.round(total) + " points pour " + Math.round(barre.width) + " : hauteur " + barre.implicitHeight
+                      + " pour une ligne de " + haut, total <= barre.width || barre.implicitHeight > haut + 0.5)
             }
             console.log("scenario: editeur-paragraphe " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
             if (identifiantsEssai.dossier !== "garder")

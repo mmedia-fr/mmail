@@ -136,10 +136,17 @@ Page {
         ctx.lineTo(w * 0.18, h * 0.82)
         ctx.stroke()
     }
-    property bool miseEnForme: reglagesRedaction.miseEnForme
+    // Tout message se rédige et part mis en forme (HTML, avec sa version en
+    // texte brut) : la case « Mise en forme » est retirée en 0.8.7 (Manu,
+    // 04/11 : le texte seul date des débits d'autrefois ; décochée puis
+    // recochée, elle laissait d'ailleurs le message en texte brut).
+    readonly property bool miseEnForme: true
     // Lus par les scénarios d'essai (cf. Scenarios.qml, « majuscule »).
     readonly property alias corps: corpsRedaction
     readonly property alias mefCorps: mef
+    readonly property alias paletteCouleurs: paletteCouleurs
+    readonly property alias menuTableau: menuTableau
+    readonly property alias dialogueTableau: dlgTableau
     readonly property alias correcteurOrtho: correcteurCorps
     readonly property alias animations: animationsRedaction
     readonly property alias boutonSignature: boutonSignature
@@ -272,7 +279,6 @@ Page {
         var s = identiteChoisie().nouvelle
         if (s.html.length > 0) {
             // Signature avec images : elle exige la mise en forme.
-            miseEnForme = true
             mef.poserTexte("\n\n")
             mef.insererHtml(2, s.html)
         } else {
@@ -302,7 +308,6 @@ Page {
             s = i.nouveaux ? i.nouvelle : i.reponse
         }
         if (s.html.length > 0) {
-            miseEnForme = true
             mef.insererHtml(corpsRedaction.cursorPosition, s.html)
             return
         }
@@ -328,12 +333,53 @@ Page {
         menuSignatures.popup(bouton, 0, bouton.height)
     }
 
-    /// Mise en forme coupée : le texte est ramené au brut, puces et
-    /// numéros compris, pour que ce qui s'affiche soit ce qui part.
-    function basculerMiseEnForme(active) {
-        miseEnForme = active
-        if (!active && mef.enrichi())
-            mef.poserTexte(mef.texte())
+    /// Ajoute une colonne (à droite, `quoi` « colonne ») ou une ligne
+    /// (dessous) au tableau du curseur, et y place le curseur (0.8.7) : la
+    /// nouvelle case reprend la mise en forme de sa voisine.
+    function ajouterAuTableau(quoi) {
+        var p = quoi === "colonne" ? mef.ajouterColonne() : mef.ajouterLigne()
+        if (p < 0)
+            return false
+        corpsRedaction.forceActiveFocus()
+        corpsRedaction.cursorPosition = p
+        modifie = true
+        return true
+    }
+
+    // Menu « Tableau » : retirer la ligne, la colonne ou le tableau du
+    // curseur (`quoi` : « ligne », « colonne », « tableau »).
+    function supprimerDuTableau(quoi) {
+        var p = quoi === "ligne" ? mef.supprimerLigne() : quoi === "colonne" ? mef.supprimerColonne() : mef.supprimerTableau()
+        if (p < 0)
+            return false
+        corpsRedaction.forceActiveFocus()
+        corpsRedaction.cursorPosition = p
+        modifie = true
+        return true
+    }
+
+    function insererTableau(lignes, colonnes) {
+        var p = mef.insererTableau(lignes, colonnes)
+        if (p < 0)
+            return false
+        corpsRedaction.forceActiveFocus()
+        corpsRedaction.cursorPosition = p
+        modifie = true
+        return true
+    }
+
+    // Tab dans un tableau, comme dans Outlook : case suivante, ou précédente
+    // (Maj+Tab) ; depuis la dernière case, une ligne de plus. Faux hors d'un
+    // tableau : Tab y garde son effet.
+    function tabulerTableau(arriere) {
+        var avant = corpsRedaction.length
+        var p = mef.caseVoisine(arriere)
+        if (p < 0)
+            return false
+        corpsRedaction.cursorPosition = p
+        if (corpsRedaction.length !== avant)
+            modifie = true
+        return true
     }
 
     function attendre(texte) {
@@ -367,7 +413,6 @@ Page {
         champCci.text = p.cci || ""
         champObjet.text = p.objet || ""
         if (p.html && p.html.length > 0) {
-            miseEnForme = true
             mef.poserHtml(p.html)
             // Réponse ou transfert d'un message HTML : la signature entre les
             // deux lignes vides et le texte cité, comme en texte brut.
@@ -380,7 +425,6 @@ Page {
             var s = signatureDeRemplissage(p.mode)
             if (s.html.length > 0) {
                 // La signature entre les deux lignes vides et le texte cité.
-                miseEnForme = true
                 mef.poserTexte("\n\n" + (p.texte || ""))
                 mef.insererHtml(2, s.html)
             } else {
@@ -445,7 +489,7 @@ Page {
         return {
             jeton: jeton, de: c ? c.adresse : "", nom: identiteChoisie().nom,
             a: champA.text, cc: champCc.text, cci: champCci.text,
-            objet: champObjet.text, texte: mef.texte(), html: miseEnForme ? mef.html() : "",
+            objet: champObjet.text, texte: mef.texte(), html: mef.html(),
             pieces: pieces.map(function(f) { return f.chemin }),
             enReponseA: enReponseA, references: references, brouillonUid: brouillonUid,
             brouillonChemin: brouillonChemin, brouillonCompte: brouillonCompte,
@@ -479,7 +523,6 @@ Page {
     function insererImages(urls) {
         if (urls.length === 0)
             return false
-        miseEnForme = true
         for (var i = 0; i < urls.length; ++i)
             mef.insererImage(urls[i], 800)
         modifie = true
@@ -1104,74 +1147,181 @@ Page {
         RowLayout {
             Layout.fillWidth: true
             spacing: 2
-            CheckBox {
-                text: qsTr("Mise en forme")
-                checked: redac.miseEnForme
-                focusPolicy: Qt.NoFocus
-                onToggled: redac.basculerMiseEnForme(checked)
+            Flow {
+                id: barreMiseEnForme
+                objectName: "barreMiseEnForme"
+                // Largeur prise sur la place libre, pas sur le contenu : la
+                // barre va à la ligne dans une fenêtre étroite (0.8.7).
+                Layout.fillWidth: true
+                Layout.preferredWidth: 0
+                spacing: 2
+                // Police et taille (0.8.7) : celles du texte sous le curseur ;
+                // rien de posé, le message part en Arial 11.
+                ComboBox {
+                    id: choixPolice
+                    objectName: "choixPolice"
+                    visible: !fenetre.tactile
+                    focusPolicy: Qt.NoFocus
+                    width: 150
+                    model: ["Arial", "Calibri", "Cambria", "Courier New", "Georgia", "Segoe UI", "Tahoma",
+                            "Times New Roman", "Trebuchet MS", "Verdana"]
+                    displayText: mef.police.length > 0 ? mef.police : "Arial"
+                    onActivated: function(i) { mef.poserPolice(model[i]); redac.modifie = true; corpsRedaction.forceActiveFocus() }
+                    ToolTip.visible: hovered
+                    ToolTip.text: qsTr("Police")
+                }
+                ComboBox {
+                    id: choixTaille
+                    objectName: "choixTaille"
+                    visible: !fenetre.tactile
+                    focusPolicy: Qt.NoFocus
+                    width: 64
+                    model: [8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 36]
+                    displayText: String(mef.taille > 0 ? Math.round(mef.taille * 10) / 10 : 11)
+                    onActivated: function(i) { mef.poserTaille(model[i]); redac.modifie = true; corpsRedaction.forceActiveFocus() }
+                    ToolTip.visible: hovered
+                    ToolTip.text: qsTr("Taille, en points")
+                }
+                ToolButton {
+                    visible: redac.miseEnForme && !fenetre.tactile
+                    text: qsTr("G")
+                    font.bold: true
+                    checkable: true
+                    checked: mef.gras
+                    focusPolicy: Qt.NoFocus
+                    onClicked: mef.basculerGras()
+                    ToolTip.visible: hovered
+                    ToolTip.text: qsTr("Gras (Ctrl+B)")
+                }
+                ToolButton {
+                    visible: redac.miseEnForme && !fenetre.tactile
+                    text: qsTr("I")
+                    font.italic: true
+                    checkable: true
+                    checked: mef.italique
+                    focusPolicy: Qt.NoFocus
+                    onClicked: mef.basculerItalique()
+                    ToolTip.visible: hovered
+                    ToolTip.text: qsTr("Italique (Ctrl+I)")
+                }
+                ToolButton {
+                    visible: redac.miseEnForme && !fenetre.tactile
+                    text: qsTr("S")
+                    font.underline: true
+                    checkable: true
+                    checked: mef.souligne
+                    focusPolicy: Qt.NoFocus
+                    onClicked: mef.basculerSouligne()
+                    ToolTip.visible: hovered
+                    ToolTip.text: qsTr("Souligné (Ctrl+U)")
+                }
+                ToolButton {
+                    visible: redac.miseEnForme && !fenetre.tactile
+                    text: qsTr("• Liste")
+                    checkable: true
+                    checked: mef.puces
+                    focusPolicy: Qt.NoFocus
+                    onClicked: mef.basculerListe(false)
+                }
+                ToolButton {
+                    visible: redac.miseEnForme && !fenetre.tactile
+                    text: qsTr("1. Liste")
+                    checkable: true
+                    checked: mef.numeros
+                    focusPolicy: Qt.NoFocus
+                    onClicked: mef.basculerListe(true)
+                }
+                // Couleur du texte et surlignage (0.8.7) : le trait sous la lettre
+                // montre celle du texte sous le curseur.
+                ToolButton {
+                    id: boutonCouleur
+                    objectName: "boutonCouleur"
+                    visible: !fenetre.tactile
+                    text: "A"
+                    font.bold: true
+                    focusPolicy: Qt.NoFocus
+                    onClicked: paletteCouleurs.ouvrir("texte", boutonCouleur)
+                    ToolTip.visible: hovered
+                    ToolTip.text: qsTr("Couleur du texte")
+                    Rectangle {
+                        anchors.bottom: parent.bottom
+                        anchors.bottomMargin: 5
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        width: 14
+                        height: 3
+                        color: mef.couleur.length > 0 ? mef.couleur : corpsRedaction.color
+                    }
+                }
+                ToolButton {
+                    id: boutonSurlignage
+                    objectName: "boutonSurlignage"
+                    visible: !fenetre.tactile
+                    text: "ab"
+                    focusPolicy: Qt.NoFocus
+                    onClicked: paletteCouleurs.ouvrir("surlignage", boutonSurlignage)
+                    ToolTip.visible: hovered
+                    ToolTip.text: qsTr("Surlignage")
+                    Rectangle {
+                        anchors.bottom: parent.bottom
+                        anchors.bottomMargin: 5
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        width: 14
+                        height: 3
+                        color: mef.surlignage.length > 0 ? mef.surlignage : "#ffff00"
+                    }
+                }
+                // Alignement et retrait des paragraphes (0.8.7), en un menu.
+                ToolButton {
+                    id: boutonParagraphe
+                    objectName: "boutonParagraphe"
+                    visible: !fenetre.tactile
+                    text: qsTr("Paragraphe ▾")
+                    focusPolicy: Qt.NoFocus
+                    onClicked: menuParagraphe.popup(boutonParagraphe, 0, boutonParagraphe.height)
+                }
+                ToolButton {
+                    visible: redac.miseEnForme && !fenetre.tactile
+                    text: qsTr("Lien…")
+                    focusPolicy: Qt.NoFocus
+                    onClicked: dlgAdresseLien.open()
+                }
+                // Insérer un tableau ; dans un tableau, en retirer une ligne,
+                // une colonne, ou le tableau entier.
+                ToolButton {
+                    id: boutonTableau
+                    objectName: "boutonTableau"
+                    visible: !fenetre.tactile
+                    text: qsTr("Tableau ▾")
+                    focusPolicy: Qt.NoFocus
+                    onClicked: menuTableau.popup(boutonTableau, 0, boutonTableau.height)
+                }
+                // Dans un tableau (0.8.7) : qui répond dans un tableau cité écrit
+                // à la suite de la ligne, dans une colonne de plus.
+                ToolButton {
+                    objectName: "boutonColonne"
+                    visible: mef.dansTableau && !fenetre.tactile
+                    text: qsTr("+ Colonne")
+                    focusPolicy: Qt.NoFocus
+                    onClicked: redac.ajouterAuTableau("colonne")
+                    ToolTip.visible: hovered
+                    ToolTip.text: qsTr("Ajouter une colonne à droite, à la mise en forme de sa voisine")
+                }
+                ToolButton {
+                    objectName: "boutonLigne"
+                    visible: mef.dansTableau && !fenetre.tactile
+                    text: qsTr("+ Ligne")
+                    focusPolicy: Qt.NoFocus
+                    onClicked: redac.ajouterAuTableau("ligne")
+                    ToolTip.visible: hovered
+                    ToolTip.text: qsTr("Ajouter une ligne dessous, à la mise en forme de celle du dessus")
+                }
+                ToolButton {
+                    visible: redac.miseEnForme && !fenetre.tactile
+                    text: qsTr("Effacer la mise en forme")
+                    focusPolicy: Qt.NoFocus
+                    onClicked: mef.effacerMiseEnForme()
+                }
             }
-            ToolButton {
-                visible: redac.miseEnForme && !fenetre.tactile
-                text: qsTr("G")
-                font.bold: true
-                checkable: true
-                checked: mef.gras
-                focusPolicy: Qt.NoFocus
-                onClicked: mef.basculerGras()
-                ToolTip.visible: hovered
-                ToolTip.text: qsTr("Gras (Ctrl+B)")
-            }
-            ToolButton {
-                visible: redac.miseEnForme && !fenetre.tactile
-                text: qsTr("I")
-                font.italic: true
-                checkable: true
-                checked: mef.italique
-                focusPolicy: Qt.NoFocus
-                onClicked: mef.basculerItalique()
-                ToolTip.visible: hovered
-                ToolTip.text: qsTr("Italique (Ctrl+I)")
-            }
-            ToolButton {
-                visible: redac.miseEnForme && !fenetre.tactile
-                text: qsTr("S")
-                font.underline: true
-                checkable: true
-                checked: mef.souligne
-                focusPolicy: Qt.NoFocus
-                onClicked: mef.basculerSouligne()
-                ToolTip.visible: hovered
-                ToolTip.text: qsTr("Souligné (Ctrl+U)")
-            }
-            ToolButton {
-                visible: redac.miseEnForme && !fenetre.tactile
-                text: qsTr("• Liste")
-                checkable: true
-                checked: mef.puces
-                focusPolicy: Qt.NoFocus
-                onClicked: mef.basculerListe(false)
-            }
-            ToolButton {
-                visible: redac.miseEnForme && !fenetre.tactile
-                text: qsTr("1. Liste")
-                checkable: true
-                checked: mef.numeros
-                focusPolicy: Qt.NoFocus
-                onClicked: mef.basculerListe(true)
-            }
-            ToolButton {
-                visible: redac.miseEnForme && !fenetre.tactile
-                text: qsTr("Lien…")
-                focusPolicy: Qt.NoFocus
-                onClicked: dlgAdresseLien.open()
-            }
-            ToolButton {
-                visible: redac.miseEnForme && !fenetre.tactile
-                text: qsTr("Effacer la mise en forme")
-                focusPolicy: Qt.NoFocus
-                onClicked: mef.effacerMiseEnForme()
-            }
-            Item { Layout.fillWidth: true }
             ToolButton {
                 id: boutonSignature
                 text: qsTr("Signature")
@@ -1335,6 +1485,10 @@ Page {
                 Keys.onPressed: function(ev) {
                     if (ev.matches(StandardKey.Paste) && redac.collerImage())
                         ev.accepted = true
+                    else if ((ev.key === Qt.Key_Tab || ev.key === Qt.Key_Backtab)
+                             && !(ev.modifiers & (Qt.ControlModifier | Qt.AltModifier))
+                             && redac.tabulerTableau(ev.key === Qt.Key_Backtab || !!(ev.modifiers & Qt.ShiftModifier)))
+                        ev.accepted = true
                     else if (redac.majuscule(ev))
                         ev.accepted = true
                 }
@@ -1385,10 +1539,198 @@ Page {
             Button { text: qsTr("• Liste"); font.pointSize: fenetre.tailleBase * 1.15
                      checkable: true; checked: mef.puces; highlighted: checked; focusPolicy: Qt.NoFocus
                      Accessible.name: qsTr("Liste à puces"); onClicked: mef.basculerListe(false) }
+            Button { id: boutonCouleurTactile; text: "A"; font.bold: true; font.pointSize: fenetre.tailleBase * 1.15
+                     focusPolicy: Qt.NoFocus; Accessible.name: qsTr("Couleur du texte")
+                     onClicked: paletteCouleurs.ouvrir("texte", boutonCouleurTactile)
+                     Rectangle { anchors.bottom: parent.bottom; anchors.bottomMargin: 3
+                                 anchors.horizontalCenter: parent.horizontalCenter; width: 16; height: 3
+                                 color: mef.couleur.length > 0 ? mef.couleur : corpsRedaction.color } }
+            Button { id: boutonSurlignageTactile; text: "ab"; font.pointSize: fenetre.tailleBase * 1.15
+                     focusPolicy: Qt.NoFocus; Accessible.name: qsTr("Surlignage")
+                     onClicked: paletteCouleurs.ouvrir("surlignage", boutonSurlignageTactile)
+                     Rectangle { anchors.bottom: parent.bottom; anchors.bottomMargin: 3
+                                 anchors.horizontalCenter: parent.horizontalCenter; width: 16; height: 3
+                                 color: mef.surlignage.length > 0 ? mef.surlignage : "#ffff00" } }
+            Button { id: boutonParagrapheTactile; text: qsTr("Paragraphe"); font.pointSize: fenetre.tailleBase * 1.15
+                     focusPolicy: Qt.NoFocus
+                     onClicked: menuParagraphe.popup(boutonParagrapheTactile, 0, -menuParagraphe.implicitHeight) }
             Button { text: qsTr("Lien…"); font.pointSize: fenetre.tailleBase * 1.15; focusPolicy: Qt.NoFocus
                      onClicked: dlgAdresseLien.open() }
+            Button { id: boutonTableauTactile; objectName: "boutonTableauTactile"; text: qsTr("Tableau"); font.pointSize: fenetre.tailleBase * 1.15
+                     focusPolicy: Qt.NoFocus
+                     onClicked: menuTableau.popup(boutonTableauTactile, 0, -menuTableau.implicitHeight) }
+            Button { visible: mef.dansTableau; text: qsTr("+ Colonne"); font.pointSize: fenetre.tailleBase * 1.15
+                     focusPolicy: Qt.NoFocus; onClicked: redac.ajouterAuTableau("colonne") }
+            Button { visible: mef.dansTableau; text: qsTr("+ Ligne"); font.pointSize: fenetre.tailleBase * 1.15
+                     focusPolicy: Qt.NoFocus; onClicked: redac.ajouterAuTableau("ligne") }
             Button { text: qsTr("Image…"); font.pointSize: fenetre.tailleBase * 1.15; focusPolicy: Qt.NoFocus
                      Accessible.name: qsTr("Insérer une image"); onClicked: choixImages.open() }
+        }
+    }
+
+    // Menu « Paragraphe » (0.8.7) : alignement et retrait des paragraphes
+    // de la sélection. Le retrait passe par la marge de gauche, que le HTML
+    // envoyé porte en CSS ordinaire.
+    Menu {
+        id: menuParagraphe
+        Repeater {
+            model: [
+                { libelle: qsTr("Aligner à gauche"), valeur: Qt.AlignLeft },
+                { libelle: qsTr("Centrer"), valeur: Qt.AlignHCenter },
+                { libelle: qsTr("Aligner à droite"), valeur: Qt.AlignRight },
+                { libelle: qsTr("Justifier"), valeur: Qt.AlignJustify }
+            ]
+            MenuItem {
+                required property var modelData
+                text: modelData.libelle
+                checkable: true
+                checked: mef.alignement === modelData.valeur || (modelData.valeur === Qt.AlignLeft && mef.alignement === 0)
+                onTriggered: { mef.poserAlignement(modelData.valeur); redac.modifie = true }
+            }
+        }
+        MenuSeparator {}
+        MenuItem {
+            text: qsTr("Augmenter le retrait")
+            onTriggered: { mef.changerRetrait(1); redac.modifie = true }
+        }
+        MenuItem {
+            text: qsTr("Diminuer le retrait")
+            onTriggered: { mef.changerRetrait(-1); redac.modifie = true }
+        }
+    }
+
+    // Menu « Tableau » : insérer un tableau ; dans un tableau, ajouter ou
+    // retirer une colonne ou une ligne, retirer le tableau. Tab y passe de
+    // case en case (cf. tabulerTableau).
+    Menu {
+        id: menuTableau
+        objectName: "menuTableau"
+        MenuItem {
+            text: qsTr("Insérer un tableau…")
+            onTriggered: dlgTableau.open()
+        }
+        MenuSeparator {}
+        MenuItem {
+            text: qsTr("Ajouter une colonne à droite")
+            enabled: mef.dansTableau
+            onTriggered: redac.ajouterAuTableau("colonne")
+        }
+        MenuItem {
+            text: qsTr("Ajouter une ligne dessous")
+            enabled: mef.dansTableau
+            onTriggered: redac.ajouterAuTableau("ligne")
+        }
+        MenuSeparator {}
+        MenuItem {
+            text: qsTr("Supprimer la colonne")
+            enabled: mef.dansTableau
+            onTriggered: redac.supprimerDuTableau("colonne")
+        }
+        MenuItem {
+            text: qsTr("Supprimer la ligne")
+            enabled: mef.dansTableau
+            onTriggered: redac.supprimerDuTableau("ligne")
+        }
+        MenuItem {
+            text: qsTr("Supprimer le tableau")
+            enabled: mef.dansTableau
+            onTriggered: redac.supprimerDuTableau("tableau")
+        }
+    }
+
+    // « Insérer un tableau… » : 3 colonnes et 2 lignes d'office.
+    Dialog {
+        id: dlgTableau
+        objectName: "dlgTableau"
+        title: qsTr("Insérer un tableau")
+        modal: true
+        anchors.centerIn: parent
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        // Un nombre tapé sans Entrée n'est pas encore la valeur du champ :
+        // il se relit au moment d'insérer.
+        function lire(champ) {
+            var v = champ.valueFromText(champ.contentItem.text, champ.locale)
+            return isNaN(v) ? champ.value : Math.max(champ.from, Math.min(champ.to, v))
+        }
+        onOpened: {
+            champColonnes.value = 3
+            champLignes.value = 2
+            champColonnes.forceActiveFocus()
+        }
+        onAccepted: redac.insererTableau(lire(champLignes), lire(champColonnes))
+        GridLayout {
+            columns: 2
+            columnSpacing: 12
+            Label { text: qsTr("Colonnes :") }
+            SpinBox { id: champColonnes; objectName: "champColonnes"; from: 1; to: 20; value: 3; editable: true }
+            Label { text: qsTr("Lignes :") }
+            SpinBox { id: champLignes; objectName: "champLignes"; from: 1; to: 50; value: 2; editable: true }
+        }
+    }
+
+    // Palette de la couleur du texte et du surlignage (0.8.7) : les couleurs
+    // standard d'Office, que les destinataires retrouvent chez eux. Les
+    // boutons ne prennent pas le focus : la sélection reste celle du corps.
+    Popup {
+        id: paletteCouleurs
+        objectName: "paletteCouleurs"
+        property string mode: "texte"
+        readonly property var couleursTexte: ["#c00000", "#ff0000", "#ffc000", "#ffff00", "#92d050", "#00b050",
+                                              "#00b0f0", "#0070c0", "#002060", "#7030a0", "#7f7f7f", "#000000"]
+        readonly property var couleursSurlignage: ["#ffff00", "#00ff00", "#00ffff", "#ff00ff", "#ffc000", "#d9d9d9"]
+        padding: 8
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        contentItem: ColumnLayout {
+            spacing: 6
+            Label {
+                text: paletteCouleurs.mode === "texte" ? qsTr("Couleur du texte") : qsTr("Surlignage")
+                font.bold: true
+            }
+            Grid {
+                columns: 6
+                spacing: 4
+                Repeater {
+                    model: paletteCouleurs.mode === "texte" ? paletteCouleurs.couleursTexte
+                                                            : paletteCouleurs.couleursSurlignage
+                    delegate: Rectangle {
+                        required property string modelData
+                        objectName: "couleur-" + modelData
+                        width: fenetre.tactile ? 40 : 24
+                        height: width
+                        radius: 3
+                        color: modelData
+                        border.width: (paletteCouleurs.mode === "texte" ? mef.couleur : mef.surlignage) === modelData ? 3 : 1
+                        border.color: border.width > 1 ? fenetre.palette.highlight : "#808080"
+                        Accessible.role: Accessible.Button
+                        Accessible.name: modelData
+                        TapHandler { onTapped: paletteCouleurs.choisir(parent.modelData) }
+                    }
+                }
+            }
+            Button {
+                Layout.fillWidth: true
+                flat: true
+                focusPolicy: Qt.NoFocus
+                text: paletteCouleurs.mode === "texte" ? qsTr("Automatique") : qsTr("Aucun surlignage")
+                onClicked: paletteCouleurs.choisir("")
+            }
+        }
+        /// Ouvre la palette sous `bouton` (au-dessus dans la vue tactile, où
+        /// la barre est au bas de l'écran, sur le clavier).
+        function ouvrir(m, bouton) {
+            mode = m
+            parent = bouton
+            x = 0
+            y = fenetre.tactile ? -implicitHeight - 4 : bouton.height
+            open()
+        }
+        function choisir(c) {
+            if (mode === "texte")
+                mef.poserCouleur(c)
+            else
+                mef.poserSurlignage(c)
+            redac.modifie = true
+            close()
         }
     }
 

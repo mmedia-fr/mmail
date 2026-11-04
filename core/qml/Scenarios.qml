@@ -691,6 +691,64 @@ QtObject {
         }
     }
 
+    /// Scénario « recherche-entree » (0.6.37) : demande d'un utilisateur du
+    /// 04/11/2026 — deux recherches passées contiennent le mot tapé ; Entrée
+    /// doit chercher le texte tapé, et non la première suggestion. Les flèches
+    /// choisissent toujours une suggestion. La frappe passe par le clavier
+    /// (gestesEssai.touche), lettre par lettre, comme chez l'utilisateur.
+    function lancerScenarioRechercheEntree() {
+        var s = { echecs: 0 }
+        var champ = colonneListe.champRecherche
+        var panneau = colonneListe.panneauHistorique
+        var vue = panneau.contentItem
+        var taper = function(texte) {
+            for (var i = 0; i < texte.length; ++i) {
+                var c = texte[i]
+                gestesEssai.touche(champ, c === " " ? Qt.Key_Space : Qt.Key_A + (c.charCodeAt(0) - 97), c)
+            }
+        }
+        reglages.historiqueRecherches = JSON.stringify(["PAGES LACTALIS", "\"PAGES LACTALIS\""])
+        plusTard(8000, function() {
+            ouvrirDossier(comptesConnus[0].compte, "INBOX")
+            plusTard(4000, function() {
+                champ.forceActiveFocus()
+                plusTard(300, function() {
+                    taper("lactalis")
+                    plusTard(400, function() {
+                        bilanEssai(s, "frappe de « " + champ.text + " » : " + panneau.entrees.length + " suggestions"
+                                   + (panneau.opened ? " ouvertes" : " fermées") + ", rang choisi " + vue.currentIndex,
+                                   champ.text === "lactalis" && panneau.opened && panneau.entrees.length === 2
+                                   && vue.currentIndex === -1)
+                        gestesEssai.touche(champ, Qt.Key_Return, "\r")
+                        plusTard(1500, function() {
+                            bilanEssai(s, "Entrée : recherche « " + fenetre.recherche + " » (attendu « lactalis »)",
+                                       fenetre.recherche === "lactalis")
+                            fenetre.quitterRecherche()
+                            plusTard(500, function() {
+                                champ.forceActiveFocus()
+                                taper("pages")
+                                plusTard(400, function() {
+                                    gestesEssai.touche(champ, Qt.Key_Down, "")
+                                    plusTard(200, function() {
+                                        var choisi = vue.currentIndex
+                                        gestesEssai.touche(champ, Qt.Key_Return, "\r")
+                                        plusTard(1500, function() {
+                                            bilanEssai(s, "flèche bas puis Entrée : rang " + choisi + ", recherche « "
+                                                       + fenetre.recherche + " » (attendu « PAGES LACTALIS »)",
+                                                       choisi === 0 && fenetre.recherche === "PAGES LACTALIS")
+                                            console.log("scenario: recherche-entree " + (s.echecs === 0 ? "OK" : "ECHEC (" + s.echecs + ")"))
+                                            Qt.quit()
+                                        })
+                                    })
+                                })
+                            })
+                        })
+                    })
+                })
+            })
+        })
+    }
+
     function etapeScenarioReprise() {
         console.log("scenario: proposées", redactionsRetrouvees.length, "| dialogue ouvert", dlgReprise.opened)
         dlgReprise.close()
@@ -3350,6 +3408,150 @@ QtObject {
         })
     }
 
+    /// Scénario « groupes-minuit » (banc DATES=1) : signalement d'un
+    /// utilisateur du 04/11/2026 — un groupe déplié sans ses messages, le
+    /// groupe suivant sans intitulé, jusqu'à ce qu'on replie le premier.
+    /// Toutes les combinaisons de groupes repliés, d'abord telles quelles,
+    /// puis au passage de minuit (la liste regroupée comme la veille, puis
+    /// `suivreJour`). Après chaque étape : chaque groupe a un intitulé, dans
+    /// l'ordre, replié ou non selon l'état ; un groupe déplié montre toutes ses
+    /// lignes, avec leur hauteur ; un groupe replié n'en garde qu'une, sans
+    /// hauteur.
+    function lancerScenarioGroupesMinuit() {
+        var s = { echecs: 0 }
+        var v = colonneListe.vueMessages
+        var groupes = function() {
+            var g = []
+            for (var i = 0; i < modeleMessages.count; ++i) {
+                var nom = modeleMessages.get(i).groupe
+                if (g.length === 0 || g[g.length - 1].nom !== nom)
+                    g.push({ nom: nom, debut: i, taille: 0 })
+                g[g.length - 1].taille += 1
+            }
+            return g
+        }
+        var regrouper = function(maintenant) {
+            var bornes = fenetre.bornesGroupes(maintenant)
+            for (var i = 0; i < modeleMessages.count; ++i) {
+                var g = fenetre.groupeDate(modeleMessages.get(i).h, bornes)
+                if (modeleMessages.get(i).groupe !== g)
+                    modeleMessages.setProperty(i, "groupe", g)
+            }
+            colonneListe.appliquerReplis(0)
+        }
+        // Ce que montre la vue : intitulés (dans l'ordre vertical) et lignes.
+        var releve = function() {
+            var enfants = v.contentItem.children
+            var tetes = []
+            for (var k = 0; k < enfants.length; ++k) {
+                var e = enfants[k]
+                if (e.section !== undefined && e.replie !== undefined && e.visible)
+                    tetes.push({ nom: e.section, replie: e.replie, y: e.mapToItem(v.contentItem, 0, 0).y })
+            }
+            tetes.sort(function(a, b) { return a.y - b.y })
+            var lignes = []
+            for (var r = 0; r < v.count; ++r) {
+                var it = v.itemAtIndex(r)
+                lignes.push({ rang: colonneListe.rangModele(r), hauteur: it ? it.height : -1 })
+            }
+            return { tetes: tetes, lignes: lignes }
+        }
+        var controler = function(etiquette) {
+            var g = groupes()
+            var vu = releve()
+            var replis = colonneListe.replisVue
+            var ecarts = []
+            var noms = vu.tetes.map(function(t) { return t.nom + (t.replie ? "(r)" : "") })
+            var attendus = g.map(function(x) { return x.nom + (replis[x.nom] === true ? "(r)" : "") })
+            if (noms.join("|") !== attendus.join("|"))
+                ecarts.push("intitulés [" + noms.join(" | ") + "] au lieu de [" + attendus.join(" | ") + "]")
+            for (var i = 0; i < g.length; ++i) {
+                var rep = replis[g[i].nom] === true
+                var montrees = vu.lignes.filter(function(l) { return l.rang >= g[i].debut && l.rang < g[i].debut + g[i].taille })
+                if (rep) {
+                    if (montrees.length !== 1 || montrees[0].hauteur !== 0)
+                        ecarts.push(g[i].nom + " replié : " + montrees.length + " lignes, hauteurs " + montrees.map(function(l) { return l.hauteur }).join(","))
+                } else {
+                    var basses = montrees.filter(function(l) { return !(l.hauteur > 0) })
+                    if (montrees.length !== g[i].taille || basses.length > 0)
+                        ecarts.push(g[i].nom + " déplié : " + montrees.length + "/" + g[i].taille + " lignes, hauteurs " + montrees.map(function(l) { return l.hauteur }).join(","))
+                }
+            }
+            bilanEssai(s, etiquette + (ecarts.length ? " : " + ecarts.join(" ; ") : ""), ecarts.length === 0)
+        }
+        var etapes = []
+        plusTard(8000, function() {
+            ouvrirDossier(comptesConnus[0].compte, "INBOX")
+            plusTard(5000, function() {
+                fenetre.completerListe()
+                v.positionViewAtBeginning()
+                var g = groupes()
+                console.log("scenario: " + modeleMessages.count + " messages, groupes " + g.map(function(x) { return x.nom + " (" + x.taille + ")" }).join(" | "))
+                var noms = g.map(function(x) { return x.nom })
+                var n = Math.min(noms.length, 6)
+                // 1. Toutes les combinaisons des six premiers groupes, sans changer de jour.
+                for (var masque = 0; masque < (1 << n); ++masque) {
+                    (function(m) {
+                        etapes.push(function(suite) {
+                            var etat = {}
+                            for (var b = 0; b < n; ++b)
+                                if (m & (1 << b))
+                                    etat[noms[b]] = true
+                            colonneListe.poserReplis(etat)
+                            plusTard(250, function() {
+                                controler("même jour, repliés {" + Object.keys(etat).join(", ") + "}")
+                                suite()
+                            })
+                        })
+                    })(masque)
+                }
+                // 2. Passage de minuit : la veille, telle combinaison ; puis le jour change.
+                var hier = new Date(Date.now() - 86400000)
+                var nomsHier = []
+                etapes.push(function(suite) {
+                    colonneListe.poserReplis({})
+                    regrouper(hier)
+                    nomsHier = groupes().map(function(x) { return x.nom })
+                    console.log("scenario: la veille, groupes " + groupes().map(function(x) { return x.nom + " (" + x.taille + ")" }).join(" | "))
+                    plusTard(250, function() { controler("la veille, rien de replié"); suite() })
+                })
+                for (var m2 = 0; m2 < (1 << 5); ++m2) {
+                    (function(m) {
+                        etapes.push(function(suite) {
+                            colonneListe.poserReplis({})
+                            regrouper(hier)
+                            var etat = {}
+                            for (var b = 0; b < Math.min(5, nomsHier.length); ++b)
+                                if (m & (1 << b))
+                                    etat[nomsHier[b]] = true
+                            colonneListe.poserReplis(etat)
+                            plusTard(250, function() {
+                                controler("la veille, repliés {" + Object.keys(etat).join(", ") + "}")
+                                fenetre.jourDesGroupes = hier.toDateString()
+                                fenetre.suivreJour()
+                                plusTard(300, function() {
+                                    controler("après minuit, repliés {" + Object.keys(colonneListe.replisVue).join(", ") + "}")
+                                    suite()
+                                })
+                            })
+                        })
+                    })(m2)
+                }
+                var k = 0
+                var suivante = function() {
+                    if (k >= etapes.length) {
+                        console.log("scenario: groupes-minuit " + (s.echecs === 0 ? "OK" : "ECHEC (" + s.echecs + ")"))
+                        Qt.quit()
+                        return
+                    }
+                    var etape = etapes[k++]
+                    etape(suivante)
+                }
+                suivante()
+            })
+        })
+    }
+
     /// Scénario « marges » (0.6.23) : « Affichage › Marges du message », ses
     /// trois choix l'un après l'autre, dans le volet de lecture et dans la
     /// fenêtre du message. Le texte doit se décaler de la marge choisie, vers
@@ -3594,6 +3796,356 @@ QtObject {
         bilan("« Annuler » : " + noms(), signaturesNommees().length === 1)
         console.log("scenario: bibliotheque-signatures " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
         Qt.quit()
+    }
+
+    /// Scénario « editeur-tableau » (0.8.7, demande d'un utilisateur qui
+    /// répond dans les tableaux cités, et voudrait colorer ses commentaires) :
+    /// plus de case « Mise en forme », le HTML part toujours ; dans un tableau
+    /// à la façon d'Excel (en-tête sur fond bleu, texte en Calibri, couleur),
+    /// « + Colonne » ajoute une colonne dont les cases reprennent fond et
+    /// police de leur voisine, et ce qui s'y écrit aussi ; « + Ligne » de même ;
+    /// la couleur du texte et le surlignage se posent sur la sélection, et
+    /// « Automatique » retire la couleur. MMAIL_DOSSIER « garder » : la
+    /// rédaction reste ouverte, pour une capture.
+    function etapeScenarioEditeurTableau() {
+        var r = fenetre.ouvrirRedaction(comptesConnus.length > 0 ? comptesConnus[0].compte : 0)
+        plusTard(1500, function() {
+            var echecs = 0
+            var bilan = function(texte, bon) {
+                if (!bon)
+                    ++echecs
+                console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
+            }
+            var chercher = function(racine, test) {
+                if (!racine)
+                    return null
+                if (test(racine))
+                    return racine
+                var enfants = racine.children || []
+                for (var i = 0; i < enfants.length; ++i) {
+                    var o = chercher(enfants[i], test)
+                    if (o)
+                        return o
+                }
+                return null
+            }
+            var mef = r.mefCorps
+            var corps = r.corps
+            var compter = function(texte, motif) { return (texte.match(motif) || []).length }
+            // Les cases du tableau cité : le HTML de Qt enveloppe le message
+            // dans un tableau « racine » d'une case (-qt-table-type: root).
+            var cases = function(texte) { return compter(texte, /<td/g) - compter(texte, /-qt-table-type: root/g) }
+            var position = function(mot) { return corps.getText(0, corps.length).indexOf(mot) }
+
+            bilan("plus de case « Mise en forme »",
+                  chercher(r, function(o) { return o.text === "Mise en forme" && o.visible }) === null)
+            mef.poserTexte("Bonjour")
+            bilan("un message sans mise en forme part aussi en HTML", r.contenu().html.indexOf("Bonjour") > 0)
+
+            var cellule = function(fond, couleur, texte) {
+                return "<td" + (fond ? " bgcolor=\"" + fond + "\"" : "") + "><span style=\"font-family:'Calibri'; "
+                       + "font-size:11pt; color:" + couleur + "\">" + texte + "</span></td>"
+            }
+            mef.poserHtml("<p>Avant</p><table border=\"1\" cellspacing=\"0\" cellpadding=\"4\">"
+                          + "<tr>" + cellule("#1f4e79", "#ffffff", "Point") + cellule("#1f4e79", "#ffffff", "Statut") + "</tr>"
+                          + "<tr>" + cellule("", "#203864", "Livraison") + cellule("", "#203864", "En cours") + "</tr>"
+                          + "</table><p>Après</p>")
+            corps.forceActiveFocus()
+            corps.cursorPosition = position("Avant") + 1
+            bilan("hors du tableau : pas de « + Colonne »", !mef.dansTableau)
+            corps.cursorPosition = position("En cours") + 2
+            bilan("dans le tableau", mef.dansTableau)
+            var boutonColonne = chercher(r, function(o) { return o.objectName === "boutonColonne" })
+            bilan("« + Colonne » proposé", !!boutonColonne && boutonColonne.visible === !fenetre.tactile)
+
+            bilan("colonne ajoutée", r.ajouterAuTableau("colonne"))
+            mef.inserer(corps.cursorPosition, "OK pour moi")
+            var h = mef.html()
+            var tableau = /<table[\s\S]*<\/table>/.exec(h)
+            if (cases(h) !== 6 || compter(h, /bgcolor="#1f4e79"/g) !== 3)
+                console.log("scenario: tableau après la colonne :", tableau ? tableau[0] : h)
+            bilan("3 colonnes, 6 cases : " + cases(h), cases(h) === 6)
+            bilan("l'en-tête ajouté garde le fond bleu : " + compter(h, /bgcolor="#1f4e79"/g),
+                  compter(h, /bgcolor="#1f4e79"/g) === 3)
+            var texteAjoute = /<span style="[^"]*">OK pour moi<\/span>/.exec(h)
+            console.log("scenario: écrit dans la colonne ajoutée :", texteAjoute ? texteAjoute[0] : h)
+            bilan("ce qui s'y écrit prend la police et la couleur de la voisine",
+                  !!texteAjoute && texteAjoute[0].indexOf("Calibri") > 0 && texteAjoute[0].indexOf("#203864") > 0)
+
+            corps.cursorPosition = position("OK pour moi") + 1
+            bilan("ligne ajoutée", r.ajouterAuTableau("ligne"))
+            mef.inserer(corps.cursorPosition, "Relance")
+            h = mef.html()
+            bilan("3 lignes, 9 cases : " + cases(h), cases(h) === 9)
+            var relance = /<span style="[^"]*">Relance<\/span>/.exec(h)
+            bilan("la ligne ajoutée prend la police et la couleur de celle du dessus",
+                  !!relance && relance[0].indexOf("Calibri") > 0 && relance[0].indexOf("#203864") > 0)
+            bilan("pas de fond bleu dans la ligne ajoutée", compter(h, /bgcolor="#1f4e79"/g) === 3)
+
+            var debut = position("OK pour moi")
+            corps.select(debut, debut + "OK pour moi".length)
+            r.paletteCouleurs.ouvrir("texte", chercher(r, function(o) { return o.objectName === "boutonCouleur" }) || corps)
+            var cases = chercher(r.paletteCouleurs.contentItem, function(o) { return o.objectName === "couleur-#c00000" })
+            bilan("palette ouverte, rouge foncé proposé", r.paletteCouleurs.opened || r.paletteCouleurs.visible)
+            bilan("case du rouge foncé", !!cases)
+            r.paletteCouleurs.choisir("#c00000")
+            h = mef.html()
+            var colore = /<span style="[^"]*">OK pour moi<\/span>/.exec(h)
+            bilan("couleur posée : " + (colore ? colore[0] : ""), !!colore && colore[0].indexOf("color:#c00000") > 0)
+            bilan("la couleur sous le curseur se lit : " + mef.couleur, mef.couleur === "#c00000")
+            corps.select(debut, debut + "OK pour moi".length)
+            r.paletteCouleurs.ouvrir("surlignage", corps)
+            r.paletteCouleurs.choisir("#ffff00")
+            h = mef.html()
+            colore = /<span style="[^"]*">OK pour moi<\/span>/.exec(h)
+            bilan("surlignage posé", !!colore && colore[0].indexOf("background-color:#ffff00") > 0)
+            corps.select(debut, debut + "OK pour moi".length)
+            mef.poserCouleur("")
+            h = mef.html()
+            colore = /<span style="[^"]*">OK pour moi<\/span>/.exec(h)
+            bilan("« Automatique » retire la couleur, le surlignage reste",
+                  !!colore && colore[0].indexOf(" color:") < 0 && colore[0].indexOf("background-color:#ffff00") > 0)
+            bilan("le reste du tableau garde sa couleur", compter(h, /color:#203864/g) >= 2)
+            var t = mef.texte()
+            bilan("version en texte brut : " + JSON.stringify(t),
+                  t.indexOf("OK pour moi") >= 0 && t.indexOf("Relance") >= 0 && t.indexOf("En cours") >= 0)
+            corps.cursorPosition = position("Relance")
+            console.log("scenario: editeur-tableau " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
+            if (identifiantsEssai.dossier !== "garder")
+                Qt.quit()
+        })
+    }
+
+    /// Scénario « editeur-paragraphe » (0.8.7) : police, taille, alignement
+    /// et retrait se posent, se relisent sous le curseur, et partent dans le
+    /// HTML en CSS ordinaire (pas de `-qt-block-indent`) ; la barre du bureau
+    /// va à la ligne dans une fenêtre étroite. MMAIL_DOSSIER « garder » : la
+    /// rédaction reste ouverte, pour une capture.
+    function etapeScenarioEditeurParagraphe() {
+        var r = fenetre.ouvrirRedaction(comptesConnus.length > 0 ? comptesConnus[0].compte : 0)
+        plusTard(1500, function() {
+            var echecs = 0
+            var bilan = function(texte, bon) {
+                if (!bon)
+                    ++echecs
+                console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
+            }
+            var mef = r.mefCorps
+            var corps = r.corps
+            var position = function(mot) { return corps.getText(0, corps.length).indexOf(mot) }
+            var bloc = function(h, mot) {
+                var m = new RegExp("<p[^>]*>(?:(?!</p>).)*" + mot + "(?:(?!</p>).)*</p>").exec(h)
+                return m ? m[0] : ""
+            }
+            mef.poserTexte("Un premier paragraphe\nDeux\nTrois\nQuatre")
+            corps.forceActiveFocus()
+            corps.select(position("Deux"), position("Deux") + 4)
+            mef.poserPolice("Georgia")
+            mef.poserTaille(16)
+            bilan("police et taille relues : " + mef.police + " " + mef.taille, mef.police === "Georgia" && mef.taille === 16)
+            var h = mef.html()
+            bilan("police et taille dans le HTML : " + bloc(h, "Deux"),
+                  bloc(h, "Deux").indexOf("font-family:'Georgia'") > 0 && bloc(h, "Deux").indexOf("font-size:16pt") > 0)
+            corps.cursorPosition = position("Trois") + 1
+            mef.poserAlignement(Qt.AlignHCenter)
+            bilan("alignement relu : " + mef.alignement, mef.alignement === Qt.AlignHCenter)
+            h = mef.html()
+            bilan("centré dans le HTML : " + bloc(h, "Trois"), bloc(h, "Trois").indexOf('align="center"') > 0)
+            corps.cursorPosition = position("Quatre") + 1
+            mef.changerRetrait(1)
+            mef.changerRetrait(1)
+            h = mef.html()
+            bilan("retrait de deux crans en CSS : " + bloc(h, "Quatre"), bloc(h, "Quatre").indexOf("margin-left:80px") > 0)
+            bilan("pas de retrait propre à Qt", h.indexOf("-qt-block-indent:1") < 0 && h.indexOf("-qt-block-indent:2") < 0)
+            mef.changerRetrait(-1)
+            mef.changerRetrait(-1)
+            mef.changerRetrait(-1)
+            h = mef.html()
+            bilan("le retrait ne descend pas sous zéro : " + bloc(h, "Quatre"), bloc(h, "Quatre").indexOf("margin-left:0px") > 0)
+            corps.select(position("Deux"), position("Deux") + 4)
+            mef.poserPolice("")
+            mef.poserTaille(0)
+            h = mef.html()
+            bilan("police et taille par défaut rétablies : " + bloc(h, "Deux"),
+                  bloc(h, "Deux").indexOf("Georgia") < 0 && bloc(h, "Deux").indexOf("16pt") < 0)
+            var barre = objetNomme(r, "barreMiseEnForme")
+            if (!fenetre.tactile && barre) {
+                bilan("barre du bureau, police et taille visibles", objetNomme(r, "choixPolice").visible && objetNomme(r, "choixTaille").visible)
+                // La barre va à la ligne quand ses boutons ne tiennent pas sur
+                // une seule : rien ne dépasse, et elle prend alors plusieurs
+                // lignes.
+                var total = 0
+                var haut = 0
+                var hors = []
+                for (var i = 0; i < barre.children.length; ++i) {
+                    var b = barre.children[i]
+                    if (!b.visible || b.width <= 0)
+                        continue
+                    total += b.width + barre.spacing
+                    haut = Math.max(haut, b.height)
+                    if (b.x + b.width > barre.width + 0.5)
+                        hors.push(b.text || b.objectName)
+                }
+                bilan("rien ne dépasse de la barre (" + Math.round(barre.width) + " points) : " + JSON.stringify(hors), hors.length === 0)
+                bilan("boutons sur " + Math.round(total) + " points pour " + Math.round(barre.width) + " : hauteur " + barre.implicitHeight
+                      + " pour une ligne de " + haut, total <= barre.width || barre.implicitHeight > haut + 0.5)
+            }
+            console.log("scenario: editeur-paragraphe " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
+            if (identifiantsEssai.dossier !== "garder")
+                Qt.quit()
+        })
+    }
+
+    /// Scénario « editeur-tableau-outils » (0.8.7, suite) : « Tableau ▾ »
+    /// insère un tableau bordé sur chaque case, dont ce qui s'écrit prend la
+    /// police du curseur ; Tab passe de case en case, Maj+Tab revient, et Tab
+    /// depuis la dernière case ajoute une ligne, qu'un seul Ctrl+Z retire ;
+    /// hors d'un tableau, Tab garde son effet ; « Supprimer la colonne »,
+    /// « … la ligne », « … le tableau ». Les touches passent par
+    /// gestesEssai.touche, comme une frappe de l'utilisateur.
+    function etapeScenarioEditeurTableauOutils() {
+        var r = fenetre.ouvrirRedaction(comptesConnus.length > 0 ? comptesConnus[0].compte : 0)
+        plusTard(1500, function() {
+            var echecs = 0
+            var bilan = function(texte, bon) {
+                if (!bon)
+                    ++echecs
+                console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
+            }
+            var mef = r.mefCorps
+            var corps = r.corps
+            var compter = function(texte, motif) { return (texte.match(motif) || []).length }
+            // Le HTML de Qt enveloppe le message dans un tableau « racine »
+            // d'une ligne et d'une case (-qt-table-type: root).
+            var racine = function(h) { return compter(h, /-qt-table-type: root/g) }
+            var tableaux = function(h) { return compter(h, /<table/g) - racine(h) }
+            var lignes = function(h) { return compter(h, /<tr/g) - racine(h) }
+            var cases = function(h) { return compter(h, /<td/g) - racine(h) }
+            var clavier = typeof gestesEssai !== "undefined" && typeof gestesEssai.touche === "function"
+            var tab = function(arriere) {
+                if (clavier)
+                    gestesEssai.touche(corps, arriere ? Qt.Key_Backtab : Qt.Key_Tab, "\t")
+                else
+                    r.tabulerTableau(arriere)
+            }
+            console.log("scenario: Tab " + (clavier ? "frappé au clavier" : "par la fonction (geste « touche » absent)"))
+            var menu = r.menuTableau
+            var entree = function(libelle) {
+                for (var i = 0; i < menu.count; ++i) {
+                    var e = menu.itemAt(i)
+                    if (e && e.text === libelle)
+                        return e
+                }
+                return null
+            }
+
+            if (!fenetre.tactile)
+                bilan("« Tableau ▾ » dans la barre", !!objetNomme(r, "boutonTableau") && objetNomme(r, "boutonTableau").visible)
+            else
+                bilan("« Tableau » au bas de la rédaction", !!objetNomme(r, "boutonTableauTactile") && objetNomme(r, "boutonTableauTactile").visible)
+            mef.poserTexte("Bonjour")
+            corps.forceActiveFocus()
+            corps.select(0, 7)
+            mef.poserPolice("Georgia")
+            corps.cursorPosition = 7
+            bilan("hors d'un tableau, « Supprimer la ligne » grisé",
+                  !!entree("Supprimer la ligne") && !entree("Supprimer la ligne").enabled && entree("Insérer un tableau…").enabled)
+
+            // Fenêtre d'insertion : 4 colonnes tapées sans Entrée, 2 lignes
+            // d'office.
+            r.dialogueTableau.open()
+            plusTard(400, function() {
+                var champ = objetNomme(r.dialogueTableau.contentItem, "champColonnes")
+                if (champ)
+                    champ.contentItem.text = "4"
+                r.dialogueTableau.accept()
+                plusTard(400, function() {
+                    var h = mef.html()
+                    bilan("un tableau inséré, 2 lignes de 4 cases : " + tableaux(h) + " / " + lignes(h) + " / " + cases(h),
+                          tableaux(h) === 1 && lignes(h) === 2 && cases(h) === 8)
+                    bilan("sur toute la largeur", /<table[^>]*width="100%"/.test(h))
+                    bilan("chaque case bordée d'un trait noir : " + compter(h, /border-left-style:solid/g),
+                          compter(h, /border-left-style:solid/g) === 8 && compter(h, /border-left-color:#000000/g) === 8)
+                    bilan("curseur dans la première case", mef.dansTableau)
+                    mef.inserer(corps.cursorPosition, "Point")
+                    h = mef.html()
+                    var point = /<span style="[^"]*">Point<\/span>/.exec(h)
+                    bilan("ce qui s'écrit dans le tableau prend la police du curseur : " + (point ? point[0] : ""),
+                          !!point && point[0].indexOf("Georgia") > 0)
+
+                    tab(false)
+                    mef.inserer(corps.cursorPosition, "Statut")
+                    var t = mef.texte()
+                    bilan("Tab : case suivante, sans tabulation écrite : " + JSON.stringify(t.substring(0, 40)),
+                          t.indexOf("Point\nStatut") >= 0 && t.indexOf("\t") < 0)
+                    tab(true)
+                    mef.inserer(corps.cursorPosition, " A")
+                    t = mef.texte()
+                    bilan("Maj+Tab : fin de la case précédente", t.indexOf("Point A\nStatut") >= 0)
+                    for (var i = 0; i < 7; ++i)
+                        tab(false)
+                    mef.inserer(corps.cursorPosition, "Fin")
+                    r.modifie = false
+                    tab(false)
+                    h = mef.html()
+                    bilan("Tab depuis la dernière case : une ligne de plus (" + lignes(h) + " lignes, " + cases(h) + " cases)",
+                          lignes(h) === 3 && cases(h) === 12)
+                    bilan("message marqué modifié", r.modifie)
+                    corps.undo()
+                    h = mef.html()
+                    bilan("un seul Ctrl+Z retire la ligne : " + lignes(h), lignes(h) === 2 && mef.texte().indexOf("Fin") >= 0)
+                    corps.cursorPosition = corps.getText(0, corps.length).indexOf("Fin") + 3
+                    tab(false)
+                    mef.inserer(corps.cursorPosition, "Nouvelle")
+                    h = mef.html()
+                    var nouvelle = /<span style="[^"]*">Nouvelle<\/span>/.exec(h)
+                    t = mef.texte()
+                    bilan("la nouvelle ligne suit la dernière, à la police de celle du dessus : " + (nouvelle ? nouvelle[0] : ""),
+                          t.indexOf("Fin\nNouvelle") >= 0 && !!nouvelle && nouvelle[0].indexOf("Georgia") > 0)
+                    // MMAIL_DOSSIER « garder » : la rédaction reste ouverte sur
+                    // le tableau, menu « Tableau » déplié, pour une capture.
+                    if (identifiantsEssai.dossier === "garder") {
+                        var bouton = objetNomme(r, fenetre.tactile ? "boutonTableauTactile" : "boutonTableau")
+                        if (bouton)
+                            r.menuTableau.popup(bouton, 0, fenetre.tactile ? -r.menuTableau.implicitHeight : bouton.height)
+                        console.log("scenario: editeur-tableau-outils, rédaction gardée pour la capture "
+                                    + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
+                        return
+                    }
+
+                    corps.cursorPosition = 3
+                    tab(false)
+                    t = mef.texte()
+                    if (clavier)
+                        bilan("hors d'un tableau, Tab écrit une tabulation : " + JSON.stringify(t.substring(0, 12)), t.indexOf("Bon\tjour") === 0)
+                    else
+                        bilan("hors d'un tableau, Tab n'est pas pris", !r.tabulerTableau(false))
+
+                    corps.cursorPosition = corps.getText(0, corps.length).indexOf("Statut") + 2
+                    bilan("« Supprimer la colonne » proposé dans le tableau", !!entree("Supprimer la colonne") && entree("Supprimer la colonne").enabled)
+                    r.supprimerDuTableau("colonne")
+                    h = mef.html()
+                    t = mef.texte()
+                    bilan("colonne retirée : " + lignes(h) + " lignes, " + cases(h) + " cases",
+                          lignes(h) === 3 && cases(h) === 9 && t.indexOf("Statut") < 0 && t.indexOf("Point A") >= 0)
+                    corps.cursorPosition = corps.getText(0, corps.length).indexOf("Nouvelle") + 2
+                    r.supprimerDuTableau("ligne")
+                    h = mef.html()
+                    t = mef.texte()
+                    bilan("ligne retirée : " + lignes(h) + " lignes, " + cases(h) + " cases",
+                          lignes(h) === 2 && cases(h) === 6 && t.indexOf("Nouvelle") < 0 && t.indexOf("Fin") >= 0)
+                    corps.cursorPosition = corps.getText(0, corps.length).indexOf("Point") + 1
+                    r.supprimerDuTableau("tableau")
+                    h = mef.html()
+                    t = mef.texte()
+                    bilan("tableau retiré, le texte d'avant reste : " + JSON.stringify(t),
+                          tableaux(h) === 0 && t.indexOf("Point") < 0 && t.indexOf("jour") >= 0 && !mef.dansTableau)
+                    console.log("scenario: editeur-tableau-outils " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
+                    if (identifiantsEssai.dossier !== "garder")
+                        Qt.quit()
+                })
+            })
+        })
     }
 
     /// Scénario « carnet » (0.6.20) : le carnet d'adresses modifiable, contre
@@ -4131,6 +4683,65 @@ QtObject {
         })
     }
 
+    /// Scénario « recherche-etroite » : dans la colonne de la liste, le champ
+    /// de recherche, ✕, « Non lus » et la portée ne se chevauchent pas — sur
+    /// deux lignes dans une colonne étroite (0.8.2 et 0.8.3 les mettaient sur
+    /// une seule, le champ et la case se recouvraient), sur une ligne dans une
+    /// colonne large. Le champ garde une largeur où taper.
+    function etapeScenarioRechercheEtroite() {
+        var echecs = 0
+        var bilan = function(texte, bon) {
+            if (!bon)
+                ++echecs
+            console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
+        }
+        var verifier = function(cas) {
+            var bloc = objetNomme(colonneListe, "blocRecherche")
+            var largeur = Math.round(colonneListe.width)
+            bilan(cas + " : colonne de " + largeur + " (seuil " + Math.round(bloc.seuil) + "), deux lignes " + bloc.deuxLignes,
+                  bloc.deuxLignes === (largeur < bloc.seuil))
+            var options = objetNomme(bloc, "ligneOptionsRecherche")
+            bilan(cas + " : « Non lus » puis la portée",
+                  colonneListe.nonLusRecherche.mapToItem(bloc, 0, 0).x < colonneListe.porteeRecherche.mapToItem(bloc, 0, 0).x)
+            bilan(cas + " : options " + (bloc.deuxLignes ? "sous le champ" : "au bout de sa ligne"),
+                  bloc.deuxLignes ? options.parent === bloc : options.parent === objetNomme(bloc, "ligneRecherche"))
+            var rangs = [objetNomme(bloc, "ligneRecherche")].concat(bloc.deuxLignes ? [options] : [])
+            for (var r = 0; r < rangs.length; ++r) {
+                var rang = rangs[r]
+                if (!rang.visible)
+                    continue
+                var elements = []
+                for (var i = 0; i < rang.children.length; ++i) {
+                    var e = rang.children[i]
+                    if (e.visible && e.width > 0)
+                        elements.push(e)
+                }
+                elements.sort(function(a, b) { return a.x - b.x })
+                console.log("scenario: " + cas + " | ligne " + (r + 1) + " : " + elements.map(function(e) {
+                    return (e.text || e.displayText || e.placeholderText || "?") + " (" + Math.round(e.x) + "+" + Math.round(e.width) + ")"
+                }).join(", "))
+                for (var j = 0; j < elements.length; ++j) {
+                    var el = elements[j]
+                    bilan(cas + " : ligne " + (r + 1) + ", élément " + (j + 1) + " dans la ligne", el.x >= -0.5 && el.x + el.width <= rang.width + 0.5)
+                    if (j > 0)
+                        bilan(cas + " : ligne " + (r + 1) + ", élément " + (j + 1) + " après le précédent",
+                              el.x >= elements[j - 1].x + elements[j - 1].width - 0.5)
+                }
+            }
+            bilan(cas + " : champ de " + Math.round(colonneListe.champRecherche.width) + " points", colonneListe.champRecherche.width >= 100)
+        }
+        reglages.largeurListe = 260
+        plusTard(800, function() {
+            verifier("étroite")
+            reglages.largeurListe = 700
+            plusTard(800, function() {
+                verifier("large")
+                console.log("scenario: recherche-etroite " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
+                Qt.quit()
+            })
+        })
+    }
+
     /// Scénario « zoom-lecture » (0.6.29) : le zoom du volet de lecture grossit
     /// le message, pas les boutons. « Devis joint » (banc PIECE=1) affiché, le
     /// zoom passe à 1,5 : le corps et l'objet grossissent d'autant ; le bouton
@@ -4298,6 +4909,110 @@ QtObject {
             console.log("scenario: barre-redaction " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
             if (identifiantsEssai.dossier !== "garder")
                 Qt.quit()
+        })
+    }
+
+    /// Scénario « personnalisation » (0.8.6). MMAIL_DOSSIER :
+    /// - « imposer » ou « libre » : le dossier de MMAIL_PERSONNALISATION donne
+    ///   une apparence au nom de l'organisation, ses couleurs, son logo en
+    ///   tête du bandeau, et (« imposer ») le nom du logiciel. « imposer » :
+    ///   elle est la seule au choix, et l'emporte sur l'apparence déjà choisie
+    ///   (le banc en range une) ; « libre » : elle s'ajoute, le choix rangé
+    ///   reste ;
+    /// - « importer:<dossier> » (Android, MMAIL_TACTILE=1) : sans dossier du
+    ///   poste, la personnalisation de <dossier> est importée dans le profil,
+    ///   puis retirée, puis importée de nouveau ;
+    /// - « profil » : celle importée dans le profil est reprise au démarrage,
+    ///   et l'apparence de l'organisation, choisie à l'importation (au banc,
+    ///   THEME=organisation), reste en vigueur.
+    function etapeScenarioPersonnalisation() {
+        var echecs = 0
+        var bilan = function(texte, bon) {
+            if (!bon)
+                ++echecs
+            console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
+        }
+        var finir = function() {
+            console.log("scenario: personnalisation " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
+            if (identifiantsEssai.sortie === "" || identifiantsEssai.sortie === "file:")
+                Qt.quit()
+        }
+        var mode = identifiantsEssai.dossier
+        var p = fenetre.personnalisation
+        console.log("scenario: personnalisation", JSON.stringify(p))
+        var verifierOrganisation = function(libelle) {
+            var org = fenetre.jeuxApparence["organisation"]
+            bilan("apparence de l'organisation, « " + (org ? org.libelle : "") + " »", !!org && org.libelle === libelle)
+            bilan("bandeau " + (org ? org.bandeau : ""), !!org && org.bandeau === "#1F4E79")
+            bilan("couleur invalide écartée", !!org && org.surbrillance !== "rouge")
+        }
+
+        if (mode.indexOf("importer:") === 0) {
+            var source = mode.substring(9)
+            var adresse = function(nom) { return "file://" + source + "/" + nom }
+            bilan("au départ, rien du poste : " + JSON.stringify(p), !p.origine && fenetre.nomLogiciel === "MMail")
+            bilan("importation proposée", fenetre.personnalisationImportable)
+            bilan("un fichier quelconque est refusé",
+                  !fenetre.importerPersonnalisation([adresse("quelconque.txt")]) && !fenetre.personnalisation.origine)
+            bilan("un logo seul est refusé",
+                  !fenetre.importerPersonnalisation([adresse("logo.png")]) && !fenetre.personnalisation.origine)
+            bilan("importée (paramètres et logo)",
+                  fenetre.importerPersonnalisation([adresse("logo.png"), adresse("personnalisation.json")]))
+            p = fenetre.personnalisation
+            console.log("scenario: importée", JSON.stringify(p))
+            bilan("rangée dans le profil : " + p.dossier,
+                  p.origine === "profil" && String(p.dossier).indexOf("/profil/personnalisation") > 0)
+            bilan("logo rangé : " + p.logo, String(p.logo).indexOf("/profil/personnalisation/logo.png") > 0)
+            verifierOrganisation("Exemple essai")
+            bilan("en vigueur (" + fenetre.apparence + ")", fenetre.apparence === "organisation")
+            bilan("nom du logiciel : " + fenetre.nomLogiciel, fenetre.nomLogiciel === "Exemple Mail")
+            bilan("titre : " + fenetre.title, fenetre.title.indexOf("Exemple Mail") === 0)
+            bilan("retrait proposé", fenetre.personnalisation.origine === "profil")
+            bilan("retirée", fenetre.retirerPersonnalisation())
+            bilan("plus rien : " + JSON.stringify(fenetre.personnalisation),
+                  !fenetre.personnalisation.origine && fenetre.jeuxApparence["organisation"] === undefined)
+            bilan("MMail reprend ses couleurs (" + fenetre.apparence + ") et son nom (" + fenetre.nomLogiciel + ")",
+                  fenetre.apparence === "mmedia" && fenetre.nomLogiciel === "MMail")
+            // De nouveau, sans logo : l'importation remplace la précédente.
+            bilan("importée de nouveau, sans logo", fenetre.importerPersonnalisation([adresse("personnalisation.json")]))
+            bilan("sans logo : " + fenetre.personnalisation.logo, !fenetre.personnalisation.logo)
+            finir()
+            return
+        }
+        if (mode === "profil") {
+            bilan("reprise du profil : " + p.dossier, p.origine === "profil")
+            verifierOrganisation("Exemple essai")
+            bilan("le choix rangé, l'organisation, tient (" + fenetre.apparence + ")", fenetre.apparence === "organisation")
+            bilan("nom du logiciel : " + fenetre.nomLogiciel, fenetre.nomLogiciel === "Exemple Mail")
+            bilan("retrait proposé", fenetre.personnalisationImportable)
+            finir()
+            return
+        }
+
+        verifierOrganisation("Exemple essai")
+        bilan("du poste : " + p.origine, p.origine === "poste")
+        bilan("ni importation ni retrait proposés", !fenetre.personnalisationImportable)
+        if (mode === "imposer") {
+            bilan("imposée : seule au choix " + JSON.stringify(fenetre.nomsApparence),
+                  fenetre.nomsApparence.length === 1 && fenetre.nomsApparence[0] === "organisation")
+            bilan("imposée : en vigueur (" + fenetre.apparence + ")", fenetre.apparence === "organisation")
+            bilan("nom du logiciel : " + fenetre.nomLogiciel, fenetre.nomLogiciel === "Exemple Mail")
+            bilan("titre : " + fenetre.title, fenetre.title.indexOf("Exemple Mail") === 0)
+        } else {
+            bilan("libre : au choix", fenetre.nomsApparence.indexOf("organisation") >= 0 && fenetre.nomsApparence.length > 1)
+            bilan("libre : le choix rangé reste (" + fenetre.apparence + ")", fenetre.apparence !== "organisation")
+            bilan("sans « logiciel », le nom reste MMail", fenetre.nomLogiciel === "MMail")
+            fenetre.choisirApparence("organisation")
+        }
+        // Le bandeau est la `menuBar` de la fenêtre, hors de son contentItem.
+        var signe = objetNomme(fenetre.menuBar, "signeEntete")
+        var nom = objetNomme(fenetre.menuBar, "nomEntete")
+        plusTard(800, function() {
+            bilan("logo en tête : " + (signe ? signe.source : "absent"),
+                  !!signe && String(signe.source) === p.logo && signe.visible)
+            bilan("nom en tête : " + (nom ? nom.text : "absent"), !!nom && nom.visible && nom.text === fenetre.nomLogiciel)
+            bilan("icône retenue", !!p.icone)
+            finir()
         })
     }
 

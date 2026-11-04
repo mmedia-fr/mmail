@@ -1,0 +1,12 @@
+{
+  "nom": "Exemple",
+  "logiciel": "Exemple Mail",
+  "apparence": {
+    "base": "mmedia",
+    "bandeau": "#1F4E79",
+    "accent": "#2E75B6",
+    "surbrillance": "#DDEBF7",
+    "lien": "#1F4E79"
+  },
+  "imposer": false
+}

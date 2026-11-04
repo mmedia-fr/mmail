@@ -724,7 +724,11 @@ reproposées.
   (`padding`) des encadrés sont perdus : le texte y touche les bords. Dans un
   tableau à plusieurs colonnes, la largeur d'une cellule fusionnée est ignorée :
   Qt la reportait sur les colonnes qu'elle couvre, au mépris des largeurs des
-  autres lignes.
+  autres lignes. Qt ne dessine pas la bordure d'une cellule : un tableau collé
+  d'Excel ou de Word, dont les cellules sont bordées, reçoit une bordure de
+  tableau d'un pixel, de la couleur des leurs, et ses colonnes se règlent sur
+  leur texte plutôt que sur leurs largeurs fixes, qui coupaient les mots en
+  deux (0.6.37).
 - Sous Android, les pièces jointes s'ouvrent mais ne s'enregistrent pas
   ailleurs ; leur ouverture n'a pas été éprouvée sur un téléphone.
 - Hors connexion, un message ouvert reste non lu sur le serveur ; pas de

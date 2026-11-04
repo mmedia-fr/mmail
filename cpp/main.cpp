@@ -9,6 +9,8 @@
 #include <QtCore/QDir>
 #include <QtCore/QFile>
 #include <QtCore/QFileInfo>
+#include <QtCore/QJsonDocument>
+#include <QtCore/QJsonObject>
 #include <QtCore/QLockFile>
 #include <QtCore/QRegularExpression>
 #include <QtCore/QSettings>
@@ -56,6 +58,7 @@ extern const std::size_t nombreTraductionsQt;
 #include "presse_papier.h"
 #include "correcteur.h"
 #include "releve.h"
+#include "personnalisation.h"
 #include "mise_en_forme.h"
 #include "rendu_complet.h"
 #include "lecteur_fichier.h"
@@ -149,6 +152,51 @@ static QString reglageMachine(const char* variable, const QString& cle)
   QSettings machine(QSettings::NativeFormat, QSettings::SystemScope, QCoreApplication::organizationName(),
                     QCoreApplication::applicationName());
   return machine.value(cle).toString().trimmed();
+}
+
+/// Personnalisation (0.8.6) : le dossier des paramètres d'une organisation —
+/// nom du logiciel, icône, logo, couleurs. Le réglage du poste
+/// `Personnalisation` (ou `MMAIL_PERSONNALISATION`) le désigne, un partage
+/// réseau pour tout un parc ; sinon, `personnalisation` à côté du programme
+/// (de l'AppImage sous Linux : le programme, lui, est dans son image montée) ;
+/// sinon, celui importé dans le profil `index` (Android, cf.
+/// personnalisation.h). `origine` reçoit « poste » ou « profil ». Vide s'il
+/// n'y en a pas.
+static QString dossierPersonnalisation(const QString& index, QString* origine)
+{
+  QString dossier = reglageMachine("MMAIL_PERSONNALISATION", QStringLiteral("Personnalisation"));
+  if (dossier.isEmpty()) {
+    const QString appimage = qEnvironmentVariable("APPIMAGE");
+    const QString base = appimage.isEmpty() ? QCoreApplication::applicationDirPath() : QFileInfo(appimage).absolutePath();
+    dossier = QDir(base).filePath(QStringLiteral("personnalisation"));
+  }
+  *origine = QStringLiteral("poste");
+  QFileInfo info(dossier);
+  if (!info.isDir()) {
+    *origine = QStringLiteral("profil");
+    info = QFileInfo(Personnalisation::dossierDuProfil(index));
+  }
+  return info.isDir() ? info.absoluteFilePath() : QString();
+}
+
+/// Icône des fenêtres et de la barre des tâches fournie par l'organisation :
+/// `icone.ico`, `icone.png` ou `icone.svg`, d'1 Mio au plus. Rend son chemin,
+/// vide si aucune ne convient.
+static QString poserIconePersonnalisee(const QString& dossier)
+{
+  for (const QString& nom : {QStringLiteral("icone.ico"), QStringLiteral("icone.png"), QStringLiteral("icone.svg")}) {
+    const QFileInfo info(QDir(dossier).filePath(nom));
+    if (!info.isFile())
+      continue;
+    const QIcon icone(info.absoluteFilePath());
+    if (info.size() > 1024 * 1024 || icone.pixmap(32, 32).isNull()) {
+      qWarning("personnalisation : icône %s écartée (illisible, ou plus d'1 Mio)", qUtf8Printable(nom));
+      continue;
+    }
+    QGuiApplication::setWindowIcon(icone);
+    return info.absoluteFilePath();
+  }
+  return QString();
 }
 
 /// Vrai si la machine n'a aucune carte graphique : Direct3D n'y trouve que
@@ -376,7 +424,6 @@ int main(int argc, char* argv[])
   QCoreApplication::setOrganizationDomain(QStringLiteral("mmedia.fr"));
   QCoreApplication::setApplicationVersion(QStringLiteral(MMAIL_VERSION));
   QGuiApplication::setWindowIcon(QIcon(QStringLiteral(":/assets/mmail.ico")));
-
   // Jours de messages gardés sur le poste (31 par défaut, 0 : aucun), réglables
   // pour la machine : le noyau les lit dans l'environnement.
   const QString joursCache = reglageMachine("MMAIL_JOURS_CACHE", QStringLiteral("JoursCache"));
@@ -483,6 +530,8 @@ int main(int argc, char* argv[])
   qmlRegisterType<Releve>("fr.mmedia.mmail.natif", 1, 0, "Releve");
   // Long texte riche dessiné en entier (cf. cpp/rendu_complet.h).
   qmlRegisterType<RenduComplet>("fr.mmedia.mmail.natif", 1, 0, "RenduComplet");
+  // Importation d'une personnalisation dans le profil (0.8.6, Android).
+  qmlRegisterType<Personnalisation>("fr.mmedia.mmail.natif", 1, 0, "Personnalisation");
   // Certificats S/MIME choisis dans le sélecteur (content:// sous Android).
   qmlRegisterType<LecteurFichier>("fr.mmedia.mmail.natif", 1, 0, "LecteurFichier");
 
@@ -568,6 +617,23 @@ int main(int argc, char* argv[])
     }
   }
   engine.rootContext()->setContextProperty(QStringLiteral("cheminProfil"), profil);
+
+  // Personnalisation (0.8.6) : l'icône d'abord, avant la première fenêtre ;
+  // le reste passe à l'interface (`personnalisationMachine`).
+  QString originePerso;
+  const QString dossierPerso = dossierPersonnalisation(profil, &originePerso);
+  QVariantMap personnalisation = lirePersonnalisation(dossierPerso, originePerso);
+  if (!dossierPerso.isEmpty()) {
+    const QString icone = poserIconePersonnalisee(dossierPerso);
+    if (!icone.isEmpty())
+      personnalisation.insert(QStringLiteral("icone"), icone);
+    qInfo("personnalisation : %s (%s) | logiciel %s | apparence %s | icône %s | logo %s", qUtf8Printable(dossierPerso),
+          qUtf8Printable(originePerso),
+          qUtf8Printable(personnalisation.value(QStringLiteral("logiciel"), QStringLiteral("MMail")).toString()),
+          personnalisation.contains(QStringLiteral("apparence")) ? "oui" : "non", icone.isEmpty() ? "non" : "oui",
+          personnalisation.contains(QStringLiteral("logo")) ? "oui" : "non");
+  }
+  engine.rootContext()->setContextProperty(QStringLiteral("personnalisationMachine"), personnalisation);
 
   // Un seul MMail par profil. Deux instances videraient l'une sous l'autre
   // les pièces jointes ouvertes, enverraient deux fois les messages différés

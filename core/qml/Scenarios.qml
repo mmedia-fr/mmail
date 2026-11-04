@@ -3740,6 +3740,124 @@ QtObject {
         Qt.quit()
     }
 
+    /// Scénario « editeur-tableau » (0.8.7, demande d'un utilisateur qui
+    /// répond dans les tableaux cités, et voudrait colorer ses commentaires) :
+    /// plus de case « Mise en forme », le HTML part toujours ; dans un tableau
+    /// à la façon d'Excel (en-tête sur fond bleu, texte en Calibri, couleur),
+    /// « + Colonne » ajoute une colonne dont les cases reprennent fond et
+    /// police de leur voisine, et ce qui s'y écrit aussi ; « + Ligne » de même ;
+    /// la couleur du texte et le surlignage se posent sur la sélection, et
+    /// « Automatique » retire la couleur. MMAIL_DOSSIER « garder » : la
+    /// rédaction reste ouverte, pour une capture.
+    function etapeScenarioEditeurTableau() {
+        var r = fenetre.ouvrirRedaction(comptesConnus.length > 0 ? comptesConnus[0].compte : 0)
+        plusTard(1500, function() {
+            var echecs = 0
+            var bilan = function(texte, bon) {
+                if (!bon)
+                    ++echecs
+                console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
+            }
+            var chercher = function(racine, test) {
+                if (!racine)
+                    return null
+                if (test(racine))
+                    return racine
+                var enfants = racine.children || []
+                for (var i = 0; i < enfants.length; ++i) {
+                    var o = chercher(enfants[i], test)
+                    if (o)
+                        return o
+                }
+                return null
+            }
+            var mef = r.mefCorps
+            var corps = r.corps
+            var compter = function(texte, motif) { return (texte.match(motif) || []).length }
+            // Les cases du tableau cité : le HTML de Qt enveloppe le message
+            // dans un tableau « racine » d'une case (-qt-table-type: root).
+            var cases = function(texte) { return compter(texte, /<td/g) - compter(texte, /-qt-table-type: root/g) }
+            var position = function(mot) { return corps.getText(0, corps.length).indexOf(mot) }
+
+            bilan("plus de case « Mise en forme »",
+                  chercher(r, function(o) { return o.text === "Mise en forme" && o.visible }) === null)
+            mef.poserTexte("Bonjour")
+            bilan("un message sans mise en forme part aussi en HTML", r.contenu().html.indexOf("Bonjour") > 0)
+
+            var cellule = function(fond, couleur, texte) {
+                return "<td" + (fond ? " bgcolor=\"" + fond + "\"" : "") + "><span style=\"font-family:'Calibri'; "
+                       + "font-size:11pt; color:" + couleur + "\">" + texte + "</span></td>"
+            }
+            mef.poserHtml("<p>Avant</p><table border=\"1\" cellspacing=\"0\" cellpadding=\"4\">"
+                          + "<tr>" + cellule("#1f4e79", "#ffffff", "Point") + cellule("#1f4e79", "#ffffff", "Statut") + "</tr>"
+                          + "<tr>" + cellule("", "#203864", "Livraison") + cellule("", "#203864", "En cours") + "</tr>"
+                          + "</table><p>Après</p>")
+            corps.forceActiveFocus()
+            corps.cursorPosition = position("Avant") + 1
+            bilan("hors du tableau : pas de « + Colonne »", !mef.dansTableau)
+            corps.cursorPosition = position("En cours") + 2
+            bilan("dans le tableau", mef.dansTableau)
+            var boutonColonne = chercher(r, function(o) { return o.objectName === "boutonColonne" })
+            bilan("« + Colonne » proposé", !!boutonColonne && boutonColonne.visible === !fenetre.tactile)
+
+            bilan("colonne ajoutée", r.ajouterAuTableau("colonne"))
+            mef.inserer(corps.cursorPosition, "OK pour moi")
+            var h = mef.html()
+            var tableau = /<table[\s\S]*<\/table>/.exec(h)
+            if (cases(h) !== 6 || compter(h, /bgcolor="#1f4e79"/g) !== 3)
+                console.log("scenario: tableau après la colonne :", tableau ? tableau[0] : h)
+            bilan("3 colonnes, 6 cases : " + cases(h), cases(h) === 6)
+            bilan("l'en-tête ajouté garde le fond bleu : " + compter(h, /bgcolor="#1f4e79"/g),
+                  compter(h, /bgcolor="#1f4e79"/g) === 3)
+            var texteAjoute = /<span style="[^"]*">OK pour moi<\/span>/.exec(h)
+            console.log("scenario: écrit dans la colonne ajoutée :", texteAjoute ? texteAjoute[0] : h)
+            bilan("ce qui s'y écrit prend la police et la couleur de la voisine",
+                  !!texteAjoute && texteAjoute[0].indexOf("Calibri") > 0 && texteAjoute[0].indexOf("#203864") > 0)
+
+            corps.cursorPosition = position("OK pour moi") + 1
+            bilan("ligne ajoutée", r.ajouterAuTableau("ligne"))
+            mef.inserer(corps.cursorPosition, "Relance")
+            h = mef.html()
+            bilan("3 lignes, 9 cases : " + cases(h), cases(h) === 9)
+            var relance = /<span style="[^"]*">Relance<\/span>/.exec(h)
+            bilan("la ligne ajoutée prend la police et la couleur de celle du dessus",
+                  !!relance && relance[0].indexOf("Calibri") > 0 && relance[0].indexOf("#203864") > 0)
+            bilan("pas de fond bleu dans la ligne ajoutée", compter(h, /bgcolor="#1f4e79"/g) === 3)
+
+            var debut = position("OK pour moi")
+            corps.select(debut, debut + "OK pour moi".length)
+            r.paletteCouleurs.ouvrir("texte", chercher(r, function(o) { return o.objectName === "boutonCouleur" }) || corps)
+            var cases = chercher(r.paletteCouleurs.contentItem, function(o) { return o.objectName === "couleur-#c00000" })
+            bilan("palette ouverte, rouge foncé proposé", r.paletteCouleurs.opened || r.paletteCouleurs.visible)
+            bilan("case du rouge foncé", !!cases)
+            r.paletteCouleurs.choisir("#c00000")
+            h = mef.html()
+            var colore = /<span style="[^"]*">OK pour moi<\/span>/.exec(h)
+            bilan("couleur posée : " + (colore ? colore[0] : ""), !!colore && colore[0].indexOf("color:#c00000") > 0)
+            bilan("la couleur sous le curseur se lit : " + mef.couleur, mef.couleur === "#c00000")
+            corps.select(debut, debut + "OK pour moi".length)
+            r.paletteCouleurs.ouvrir("surlignage", corps)
+            r.paletteCouleurs.choisir("#ffff00")
+            h = mef.html()
+            colore = /<span style="[^"]*">OK pour moi<\/span>/.exec(h)
+            bilan("surlignage posé", !!colore && colore[0].indexOf("background-color:#ffff00") > 0)
+            corps.select(debut, debut + "OK pour moi".length)
+            mef.poserCouleur("")
+            h = mef.html()
+            colore = /<span style="[^"]*">OK pour moi<\/span>/.exec(h)
+            bilan("« Automatique » retire la couleur, le surlignage reste",
+                  !!colore && colore[0].indexOf(" color:") < 0 && colore[0].indexOf("background-color:#ffff00") > 0)
+            bilan("le reste du tableau garde sa couleur", compter(h, /color:#203864/g) >= 2)
+            var t = mef.texte()
+            bilan("version en texte brut : " + JSON.stringify(t),
+                  t.indexOf("OK pour moi") >= 0 && t.indexOf("Relance") >= 0 && t.indexOf("En cours") >= 0)
+            corps.cursorPosition = position("Relance")
+            console.log("scenario: editeur-tableau " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
+            if (identifiantsEssai.dossier !== "garder")
+                Qt.quit()
+        })
+    }
+
     /// Scénario « carnet » (0.6.20) : le carnet d'adresses modifiable, contre
     /// le Radicale du banc (CARNET=1) — carnets et droits, création,
     /// modification, conflit avec une écriture faite ailleurs entre-temps

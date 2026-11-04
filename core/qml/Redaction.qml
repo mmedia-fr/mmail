@@ -1024,127 +1024,171 @@ Page {
         RowLayout {
             Layout.fillWidth: true
             spacing: 2
-            ToolButton {
-                visible: redac.miseEnForme && !fenetre.tactile
-                text: qsTr("G")
-                font.bold: true
-                checkable: true
-                checked: mef.gras
-                focusPolicy: Qt.NoFocus
-                onClicked: mef.basculerGras()
-                ToolTip.visible: hovered
-                ToolTip.text: qsTr("Gras (Ctrl+B)")
-            }
-            ToolButton {
-                visible: redac.miseEnForme && !fenetre.tactile
-                text: qsTr("I")
-                font.italic: true
-                checkable: true
-                checked: mef.italique
-                focusPolicy: Qt.NoFocus
-                onClicked: mef.basculerItalique()
-                ToolTip.visible: hovered
-                ToolTip.text: qsTr("Italique (Ctrl+I)")
-            }
-            ToolButton {
-                visible: redac.miseEnForme && !fenetre.tactile
-                text: qsTr("S")
-                font.underline: true
-                checkable: true
-                checked: mef.souligne
-                focusPolicy: Qt.NoFocus
-                onClicked: mef.basculerSouligne()
-                ToolTip.visible: hovered
-                ToolTip.text: qsTr("Souligné (Ctrl+U)")
-            }
-            ToolButton {
-                visible: redac.miseEnForme && !fenetre.tactile
-                text: qsTr("• Liste")
-                checkable: true
-                checked: mef.puces
-                focusPolicy: Qt.NoFocus
-                onClicked: mef.basculerListe(false)
-            }
-            ToolButton {
-                visible: redac.miseEnForme && !fenetre.tactile
-                text: qsTr("1. Liste")
-                checkable: true
-                checked: mef.numeros
-                focusPolicy: Qt.NoFocus
-                onClicked: mef.basculerListe(true)
-            }
-            // Couleur du texte et surlignage (0.8.7) : le trait sous la lettre
-            // montre celle du texte sous le curseur.
-            ToolButton {
-                id: boutonCouleur
-                objectName: "boutonCouleur"
-                visible: !fenetre.tactile
-                text: "A"
-                font.bold: true
-                focusPolicy: Qt.NoFocus
-                onClicked: paletteCouleurs.ouvrir("texte", boutonCouleur)
-                ToolTip.visible: hovered
-                ToolTip.text: qsTr("Couleur du texte")
-                Rectangle {
-                    anchors.bottom: parent.bottom
-                    anchors.bottomMargin: 5
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    width: 14
-                    height: 3
-                    color: mef.couleur.length > 0 ? mef.couleur : corpsRedaction.color
+            Flow {
+                id: barreMiseEnForme
+                objectName: "barreMiseEnForme"
+                // Largeur prise sur la place libre, pas sur le contenu : la
+                // barre va à la ligne dans une fenêtre étroite (0.8.7).
+                Layout.fillWidth: true
+                Layout.preferredWidth: 0
+                spacing: 2
+                // Police et taille (0.8.7) : celles du texte sous le curseur ;
+                // rien de posé, le message part en Arial 11.
+                ComboBox {
+                    id: choixPolice
+                    objectName: "choixPolice"
+                    visible: !fenetre.tactile
+                    focusPolicy: Qt.NoFocus
+                    width: 150
+                    model: ["Arial", "Calibri", "Cambria", "Courier New", "Georgia", "Segoe UI", "Tahoma",
+                            "Times New Roman", "Trebuchet MS", "Verdana"]
+                    displayText: mef.police.length > 0 ? mef.police : "Arial"
+                    onActivated: function(i) { mef.poserPolice(model[i]); redac.modifie = true; corpsRedaction.forceActiveFocus() }
+                    ToolTip.visible: hovered
+                    ToolTip.text: qsTr("Police")
+                }
+                ComboBox {
+                    id: choixTaille
+                    objectName: "choixTaille"
+                    visible: !fenetre.tactile
+                    focusPolicy: Qt.NoFocus
+                    width: 64
+                    model: [8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 36]
+                    displayText: String(mef.taille > 0 ? Math.round(mef.taille * 10) / 10 : 11)
+                    onActivated: function(i) { mef.poserTaille(model[i]); redac.modifie = true; corpsRedaction.forceActiveFocus() }
+                    ToolTip.visible: hovered
+                    ToolTip.text: qsTr("Taille, en points")
+                }
+                ToolButton {
+                    visible: redac.miseEnForme && !fenetre.tactile
+                    text: qsTr("G")
+                    font.bold: true
+                    checkable: true
+                    checked: mef.gras
+                    focusPolicy: Qt.NoFocus
+                    onClicked: mef.basculerGras()
+                    ToolTip.visible: hovered
+                    ToolTip.text: qsTr("Gras (Ctrl+B)")
+                }
+                ToolButton {
+                    visible: redac.miseEnForme && !fenetre.tactile
+                    text: qsTr("I")
+                    font.italic: true
+                    checkable: true
+                    checked: mef.italique
+                    focusPolicy: Qt.NoFocus
+                    onClicked: mef.basculerItalique()
+                    ToolTip.visible: hovered
+                    ToolTip.text: qsTr("Italique (Ctrl+I)")
+                }
+                ToolButton {
+                    visible: redac.miseEnForme && !fenetre.tactile
+                    text: qsTr("S")
+                    font.underline: true
+                    checkable: true
+                    checked: mef.souligne
+                    focusPolicy: Qt.NoFocus
+                    onClicked: mef.basculerSouligne()
+                    ToolTip.visible: hovered
+                    ToolTip.text: qsTr("Souligné (Ctrl+U)")
+                }
+                ToolButton {
+                    visible: redac.miseEnForme && !fenetre.tactile
+                    text: qsTr("• Liste")
+                    checkable: true
+                    checked: mef.puces
+                    focusPolicy: Qt.NoFocus
+                    onClicked: mef.basculerListe(false)
+                }
+                ToolButton {
+                    visible: redac.miseEnForme && !fenetre.tactile
+                    text: qsTr("1. Liste")
+                    checkable: true
+                    checked: mef.numeros
+                    focusPolicy: Qt.NoFocus
+                    onClicked: mef.basculerListe(true)
+                }
+                // Couleur du texte et surlignage (0.8.7) : le trait sous la lettre
+                // montre celle du texte sous le curseur.
+                ToolButton {
+                    id: boutonCouleur
+                    objectName: "boutonCouleur"
+                    visible: !fenetre.tactile
+                    text: "A"
+                    font.bold: true
+                    focusPolicy: Qt.NoFocus
+                    onClicked: paletteCouleurs.ouvrir("texte", boutonCouleur)
+                    ToolTip.visible: hovered
+                    ToolTip.text: qsTr("Couleur du texte")
+                    Rectangle {
+                        anchors.bottom: parent.bottom
+                        anchors.bottomMargin: 5
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        width: 14
+                        height: 3
+                        color: mef.couleur.length > 0 ? mef.couleur : corpsRedaction.color
+                    }
+                }
+                ToolButton {
+                    id: boutonSurlignage
+                    objectName: "boutonSurlignage"
+                    visible: !fenetre.tactile
+                    text: "ab"
+                    focusPolicy: Qt.NoFocus
+                    onClicked: paletteCouleurs.ouvrir("surlignage", boutonSurlignage)
+                    ToolTip.visible: hovered
+                    ToolTip.text: qsTr("Surlignage")
+                    Rectangle {
+                        anchors.bottom: parent.bottom
+                        anchors.bottomMargin: 5
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        width: 14
+                        height: 3
+                        color: mef.surlignage.length > 0 ? mef.surlignage : "#ffff00"
+                    }
+                }
+                // Alignement et retrait des paragraphes (0.8.7), en un menu.
+                ToolButton {
+                    id: boutonParagraphe
+                    objectName: "boutonParagraphe"
+                    visible: !fenetre.tactile
+                    text: qsTr("Paragraphe ▾")
+                    focusPolicy: Qt.NoFocus
+                    onClicked: menuParagraphe.popup(boutonParagraphe, 0, boutonParagraphe.height)
+                }
+                ToolButton {
+                    visible: redac.miseEnForme && !fenetre.tactile
+                    text: qsTr("Lien…")
+                    focusPolicy: Qt.NoFocus
+                    onClicked: dlgAdresseLien.open()
+                }
+                // Dans un tableau (0.8.7) : qui répond dans un tableau cité écrit
+                // à la suite de la ligne, dans une colonne de plus.
+                ToolButton {
+                    objectName: "boutonColonne"
+                    visible: mef.dansTableau && !fenetre.tactile
+                    text: qsTr("+ Colonne")
+                    focusPolicy: Qt.NoFocus
+                    onClicked: redac.ajouterAuTableau("colonne")
+                    ToolTip.visible: hovered
+                    ToolTip.text: qsTr("Ajouter une colonne à droite, à la mise en forme de sa voisine")
+                }
+                ToolButton {
+                    objectName: "boutonLigne"
+                    visible: mef.dansTableau && !fenetre.tactile
+                    text: qsTr("+ Ligne")
+                    focusPolicy: Qt.NoFocus
+                    onClicked: redac.ajouterAuTableau("ligne")
+                    ToolTip.visible: hovered
+                    ToolTip.text: qsTr("Ajouter une ligne dessous, à la mise en forme de celle du dessus")
+                }
+                ToolButton {
+                    visible: redac.miseEnForme && !fenetre.tactile
+                    text: qsTr("Effacer la mise en forme")
+                    focusPolicy: Qt.NoFocus
+                    onClicked: mef.effacerMiseEnForme()
                 }
             }
-            ToolButton {
-                id: boutonSurlignage
-                objectName: "boutonSurlignage"
-                visible: !fenetre.tactile
-                text: "ab"
-                focusPolicy: Qt.NoFocus
-                onClicked: paletteCouleurs.ouvrir("surlignage", boutonSurlignage)
-                ToolTip.visible: hovered
-                ToolTip.text: qsTr("Surlignage")
-                Rectangle {
-                    anchors.bottom: parent.bottom
-                    anchors.bottomMargin: 5
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    width: 14
-                    height: 3
-                    color: mef.surlignage.length > 0 ? mef.surlignage : "#ffff00"
-                }
-            }
-            ToolButton {
-                visible: redac.miseEnForme && !fenetre.tactile
-                text: qsTr("Lien…")
-                focusPolicy: Qt.NoFocus
-                onClicked: dlgAdresseLien.open()
-            }
-            // Dans un tableau (0.8.7) : qui répond dans un tableau cité écrit
-            // à la suite de la ligne, dans une colonne de plus.
-            ToolButton {
-                objectName: "boutonColonne"
-                visible: mef.dansTableau && !fenetre.tactile
-                text: qsTr("+ Colonne")
-                focusPolicy: Qt.NoFocus
-                onClicked: redac.ajouterAuTableau("colonne")
-                ToolTip.visible: hovered
-                ToolTip.text: qsTr("Ajouter une colonne à droite, à la mise en forme de sa voisine")
-            }
-            ToolButton {
-                objectName: "boutonLigne"
-                visible: mef.dansTableau && !fenetre.tactile
-                text: qsTr("+ Ligne")
-                focusPolicy: Qt.NoFocus
-                onClicked: redac.ajouterAuTableau("ligne")
-                ToolTip.visible: hovered
-                ToolTip.text: qsTr("Ajouter une ligne dessous, à la mise en forme de celle du dessus")
-            }
-            ToolButton {
-                visible: redac.miseEnForme && !fenetre.tactile
-                text: qsTr("Effacer la mise en forme")
-                focusPolicy: Qt.NoFocus
-                onClicked: mef.effacerMiseEnForme()
-            }
-            Item { Layout.fillWidth: true }
             ToolButton {
                 id: boutonSignature
                 text: qsTr("Signature")
@@ -1370,6 +1414,9 @@ Page {
                      Rectangle { anchors.bottom: parent.bottom; anchors.bottomMargin: 3
                                  anchors.horizontalCenter: parent.horizontalCenter; width: 16; height: 3
                                  color: mef.surlignage.length > 0 ? mef.surlignage : "#ffff00" } }
+            Button { id: boutonParagrapheTactile; text: qsTr("Paragraphe"); font.pointSize: fenetre.tailleBase * 1.15
+                     focusPolicy: Qt.NoFocus
+                     onClicked: menuParagraphe.popup(boutonParagrapheTactile, 0, -menuParagraphe.implicitHeight) }
             Button { text: qsTr("Lien…"); font.pointSize: fenetre.tailleBase * 1.15; focusPolicy: Qt.NoFocus
                      onClicked: dlgAdresseLien.open() }
             Button { visible: mef.dansTableau; text: qsTr("+ Colonne"); font.pointSize: fenetre.tailleBase * 1.15
@@ -1378,6 +1425,37 @@ Page {
                      focusPolicy: Qt.NoFocus; onClicked: redac.ajouterAuTableau("ligne") }
             Button { text: qsTr("Image…"); font.pointSize: fenetre.tailleBase * 1.15; focusPolicy: Qt.NoFocus
                      Accessible.name: qsTr("Insérer une image"); onClicked: choixImages.open() }
+        }
+    }
+
+    // Menu « Paragraphe » (0.8.7) : alignement et retrait des paragraphes
+    // de la sélection. Le retrait passe par la marge de gauche, que le HTML
+    // envoyé porte en CSS ordinaire.
+    Menu {
+        id: menuParagraphe
+        Repeater {
+            model: [
+                { libelle: qsTr("Aligner à gauche"), valeur: Qt.AlignLeft },
+                { libelle: qsTr("Centrer"), valeur: Qt.AlignHCenter },
+                { libelle: qsTr("Aligner à droite"), valeur: Qt.AlignRight },
+                { libelle: qsTr("Justifier"), valeur: Qt.AlignJustify }
+            ]
+            MenuItem {
+                required property var modelData
+                text: modelData.libelle
+                checkable: true
+                checked: mef.alignement === modelData.valeur || (modelData.valeur === Qt.AlignLeft && mef.alignement === 0)
+                onTriggered: { mef.poserAlignement(modelData.valeur); redac.modifie = true }
+            }
+        }
+        MenuSeparator {}
+        MenuItem {
+            text: qsTr("Augmenter le retrait")
+            onTriggered: { mef.changerRetrait(1); redac.modifie = true }
+        }
+        MenuItem {
+            text: qsTr("Diminuer le retrait")
+            onTriggered: { mef.changerRetrait(-1); redac.modifie = true }
         }
     }
 

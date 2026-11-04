@@ -35,6 +35,9 @@
 #include <QtGui/QTextTableCell>
 #include <QtQuick/QQuickTextDocument>
 
+/// Cran du retrait des paragraphes, en pixels CSS (0.8.7).
+constexpr qreal CRAN_RETRAIT = 40;
+
 class MiseEnForme : public QObject
 {
   Q_OBJECT
@@ -56,6 +59,12 @@ class MiseEnForme : public QObject
   // Le curseur est dans un tableau : la barre propose d'y ajouter une
   // colonne ou une ligne (0.8.7).
   Q_PROPERTY(bool dansTableau READ dansTableau NOTIFY etatChange)
+  // Police et taille (en points) sous le curseur, alignement du paragraphe
+  // (Qt::Alignment, horizontal seul) : vides ou nuls quand rien n'est posé
+  // — le message part alors en Arial 11.
+  Q_PROPERTY(QString police READ police NOTIFY etatChange)
+  Q_PROPERTY(qreal taille READ taille NOTIFY etatChange)
+  Q_PROPERTY(int alignement READ alignement NOTIFY etatChange)
   // Couleur des liens d'un message lu (0.6.32) : sans elle, Qt prend celle
   // de la palette du système, trop pâle sur la page blanche d'un message.
   // Elle passe par la feuille de style par défaut du document, que les styles
@@ -112,6 +121,22 @@ public:
                : QString();
   }
   bool dansTableau() const { return texte_() && curseur().currentTable() != nullptr; }
+  QString police() const
+  {
+    const QTextCharFormat f = format();
+    const QStringList familles = f.fontFamilies().toStringList();
+    return !familles.isEmpty() ? familles.first() : QString();
+  }
+  qreal taille() const
+  {
+    const QTextCharFormat f = format();
+    return f.hasProperty(QTextFormat::FontPointSize) ? f.fontPointSize() : 0;
+  }
+  int alignement() const
+  {
+    QTextDocument* doc = texte_();
+    return doc ? int(doc->findBlock(borneDebut()).blockFormat().alignment() & Qt::AlignHorizontal_Mask) : 0;
+  }
 
   Q_INVOKABLE void basculerGras()
   {
@@ -210,6 +235,68 @@ public:
       else
         f.setBackground(c);
     });
+  }
+
+  /// Police (0.8.7) de la sélection, du mot sous le curseur ou de ce qui
+  /// s'écrira dans un paragraphe vide ; `famille` vide : celle par défaut.
+  Q_INVOKABLE void poserPolice(const QString& famille)
+  {
+    modifier([&](QTextCharFormat& f) {
+      if (famille.trimmed().isEmpty()) {
+        f.clearProperty(QTextFormat::FontFamilies);
+        f.clearProperty(QTextFormat::FontFamily);
+      } else {
+        f.setFontFamilies(QStringList{famille.trimmed()});
+      }
+    });
+  }
+
+  /// Taille en points, de même ; 0 : celle par défaut.
+  Q_INVOKABLE void poserTaille(qreal points)
+  {
+    modifier([&](QTextCharFormat& f) {
+      if (points <= 0)
+        f.clearProperty(QTextFormat::FontPointSize);
+      else
+        f.setFontPointSize(points);
+    });
+  }
+
+  /// Alignement des paragraphes de la sélection (Qt::AlignLeft,
+  /// AlignHCenter, AlignRight, AlignJustify).
+  Q_INVOKABLE void poserAlignement(int alignement)
+  {
+    if (!texte_())
+      return;
+    QTextBlockFormat bf;
+    bf.setAlignment(Qt::Alignment(alignement) & Qt::AlignHorizontal_Mask);
+    QTextCursor c = curseur();
+    c.mergeBlockFormat(bf);
+    Q_EMIT etatChange();
+  }
+
+  /// Retrait des paragraphes de la sélection, d'un cran de 40 points
+  /// (`delta` 1 ou -1), listes comprises. Il passe par la marge de gauche,
+  /// que le HTML envoyé porte en CSS ordinaire (`margin-left`) : le retrait
+  /// propre à Qt (`-qt-block-indent`) ne se verrait que dans MMail.
+  Q_INVOKABLE void changerRetrait(int delta)
+  {
+    QTextDocument* doc = texte_();
+    if (!doc || delta == 0)
+      return;
+    QTextCursor c = curseur();
+    c.beginEditBlock();
+    const QTextBlock dernier = doc->findBlock(borneFin());
+    for (QTextBlock b = doc->findBlock(borneDebut()); b.isValid(); b = b.next()) {
+      QTextBlockFormat bf = b.blockFormat();
+      bf.setLeftMargin(qMax<qreal>(0, bf.leftMargin() + delta * CRAN_RETRAIT));
+      QTextCursor cb(b);
+      cb.setBlockFormat(bf);
+      if (b == dernier)
+        break;
+    }
+    c.endEditBlock();
+    Q_EMIT etatChange();
   }
 
   /// Ajoute une colonne à droite de celle du curseur (0.8.7) : qui répond

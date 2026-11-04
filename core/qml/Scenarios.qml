@@ -3630,6 +3630,9 @@ QtObject {
             var mef = r.mefCorps
             var corps = r.corps
             var compter = function(texte, motif) { return (texte.match(motif) || []).length }
+            // Les cases du tableau cité : le HTML de Qt enveloppe le message
+            // dans un tableau « racine » d'une case (-qt-table-type: root).
+            var cases = function(texte) { return compter(texte, /<td/g) - compter(texte, /-qt-table-type: root/g) }
             var position = function(mot) { return corps.getText(0, corps.length).indexOf(mot) }
 
             bilan("plus de case « Mise en forme »",
@@ -3657,9 +3660,9 @@ QtObject {
             mef.inserer(corps.cursorPosition, "OK pour moi")
             var h = mef.html()
             var tableau = /<table[\s\S]*<\/table>/.exec(h)
-            if (compter(h, /<td/g) !== 6 || compter(h, /bgcolor="#1f4e79"/g) !== 3)
+            if (cases(h) !== 6 || compter(h, /bgcolor="#1f4e79"/g) !== 3)
                 console.log("scenario: tableau après la colonne :", tableau ? tableau[0] : h)
-            bilan("3 colonnes, 6 cases : " + compter(h, /<td/g), compter(h, /<td/g) === 6)
+            bilan("3 colonnes, 6 cases : " + cases(h), cases(h) === 6)
             bilan("l'en-tête ajouté garde le fond bleu : " + compter(h, /bgcolor="#1f4e79"/g),
                   compter(h, /bgcolor="#1f4e79"/g) === 3)
             var texteAjoute = /<span style="[^"]*">OK pour moi<\/span>/.exec(h)
@@ -3671,7 +3674,7 @@ QtObject {
             bilan("ligne ajoutée", r.ajouterAuTableau("ligne"))
             mef.inserer(corps.cursorPosition, "Relance")
             h = mef.html()
-            bilan("3 lignes, 9 cases : " + compter(h, /<td/g), compter(h, /<td/g) === 9)
+            bilan("3 lignes, 9 cases : " + cases(h), cases(h) === 9)
             var relance = /<span style="[^"]*">Relance<\/span>/.exec(h)
             bilan("la ligne ajoutée prend la police et la couleur de celle du dessus",
                   !!relance && relance[0].indexOf("Calibri") > 0 && relance[0].indexOf("#203864") > 0)

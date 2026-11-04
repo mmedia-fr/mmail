@@ -1361,13 +1361,13 @@ Page {
             Button { id: boutonCouleurTactile; text: "A"; font.bold: true; font.pointSize: fenetre.tailleBase * 1.15
                      focusPolicy: Qt.NoFocus; Accessible.name: qsTr("Couleur du texte")
                      onClicked: paletteCouleurs.ouvrir("texte", boutonCouleurTactile)
-                     Rectangle { anchors.bottom: parent.bottom; anchors.bottomMargin: 8
+                     Rectangle { anchors.bottom: parent.bottom; anchors.bottomMargin: 3
                                  anchors.horizontalCenter: parent.horizontalCenter; width: 16; height: 3
                                  color: mef.couleur.length > 0 ? mef.couleur : corpsRedaction.color } }
             Button { id: boutonSurlignageTactile; text: "ab"; font.pointSize: fenetre.tailleBase * 1.15
                      focusPolicy: Qt.NoFocus; Accessible.name: qsTr("Surlignage")
                      onClicked: paletteCouleurs.ouvrir("surlignage", boutonSurlignageTactile)
-                     Rectangle { anchors.bottom: parent.bottom; anchors.bottomMargin: 8
+                     Rectangle { anchors.bottom: parent.bottom; anchors.bottomMargin: 3
                                  anchors.horizontalCenter: parent.horizontalCenter; width: 16; height: 3
                                  color: mef.surlignage.length > 0 ? mef.surlignage : "#ffff00" } }
             Button { text: qsTr("Lien…"); font.pointSize: fenetre.tailleBase * 1.15; focusPolicy: Qt.NoFocus

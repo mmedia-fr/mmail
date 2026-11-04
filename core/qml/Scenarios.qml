@@ -3350,6 +3350,150 @@ QtObject {
         })
     }
 
+    /// Scénario « groupes-minuit » (banc DATES=1) : signalement d'un
+    /// utilisateur du 04/11/2026 — un groupe déplié sans ses messages, le
+    /// groupe suivant sans intitulé, jusqu'à ce qu'on replie le premier.
+    /// Toutes les combinaisons de groupes repliés, d'abord telles quelles,
+    /// puis au passage de minuit (la liste regroupée comme la veille, puis
+    /// `suivreJour`). Après chaque étape : chaque groupe a un intitulé, dans
+    /// l'ordre, replié ou non selon l'état ; un groupe déplié montre toutes ses
+    /// lignes, avec leur hauteur ; un groupe replié n'en garde qu'une, sans
+    /// hauteur.
+    function lancerScenarioGroupesMinuit() {
+        var s = { echecs: 0 }
+        var v = colonneListe.vueMessages
+        var groupes = function() {
+            var g = []
+            for (var i = 0; i < modeleMessages.count; ++i) {
+                var nom = modeleMessages.get(i).groupe
+                if (g.length === 0 || g[g.length - 1].nom !== nom)
+                    g.push({ nom: nom, debut: i, taille: 0 })
+                g[g.length - 1].taille += 1
+            }
+            return g
+        }
+        var regrouper = function(maintenant) {
+            var bornes = fenetre.bornesGroupes(maintenant)
+            for (var i = 0; i < modeleMessages.count; ++i) {
+                var g = fenetre.groupeDate(modeleMessages.get(i).h, bornes)
+                if (modeleMessages.get(i).groupe !== g)
+                    modeleMessages.setProperty(i, "groupe", g)
+            }
+            colonneListe.appliquerReplis(0)
+        }
+        // Ce que montre la vue : intitulés (dans l'ordre vertical) et lignes.
+        var releve = function() {
+            var enfants = v.contentItem.children
+            var tetes = []
+            for (var k = 0; k < enfants.length; ++k) {
+                var e = enfants[k]
+                if (e.section !== undefined && e.replie !== undefined && e.visible)
+                    tetes.push({ nom: e.section, replie: e.replie, y: e.mapToItem(v.contentItem, 0, 0).y })
+            }
+            tetes.sort(function(a, b) { return a.y - b.y })
+            var lignes = []
+            for (var r = 0; r < v.count; ++r) {
+                var it = v.itemAtIndex(r)
+                lignes.push({ rang: colonneListe.rangModele(r), hauteur: it ? it.height : -1 })
+            }
+            return { tetes: tetes, lignes: lignes }
+        }
+        var controler = function(etiquette) {
+            var g = groupes()
+            var vu = releve()
+            var replis = colonneListe.replisVue
+            var ecarts = []
+            var noms = vu.tetes.map(function(t) { return t.nom + (t.replie ? "(r)" : "") })
+            var attendus = g.map(function(x) { return x.nom + (replis[x.nom] === true ? "(r)" : "") })
+            if (noms.join("|") !== attendus.join("|"))
+                ecarts.push("intitulés [" + noms.join(" | ") + "] au lieu de [" + attendus.join(" | ") + "]")
+            for (var i = 0; i < g.length; ++i) {
+                var rep = replis[g[i].nom] === true
+                var montrees = vu.lignes.filter(function(l) { return l.rang >= g[i].debut && l.rang < g[i].debut + g[i].taille })
+                if (rep) {
+                    if (montrees.length !== 1 || montrees[0].hauteur !== 0)
+                        ecarts.push(g[i].nom + " replié : " + montrees.length + " lignes, hauteurs " + montrees.map(function(l) { return l.hauteur }).join(","))
+                } else {
+                    var basses = montrees.filter(function(l) { return !(l.hauteur > 0) })
+                    if (montrees.length !== g[i].taille || basses.length > 0)
+                        ecarts.push(g[i].nom + " déplié : " + montrees.length + "/" + g[i].taille + " lignes, hauteurs " + montrees.map(function(l) { return l.hauteur }).join(","))
+                }
+            }
+            bilanEssai(s, etiquette + (ecarts.length ? " : " + ecarts.join(" ; ") : ""), ecarts.length === 0)
+        }
+        var etapes = []
+        plusTard(8000, function() {
+            ouvrirDossier(comptesConnus[0].compte, "INBOX")
+            plusTard(5000, function() {
+                fenetre.completerListe()
+                v.positionViewAtBeginning()
+                var g = groupes()
+                console.log("scenario: " + modeleMessages.count + " messages, groupes " + g.map(function(x) { return x.nom + " (" + x.taille + ")" }).join(" | "))
+                var noms = g.map(function(x) { return x.nom })
+                var n = Math.min(noms.length, 6)
+                // 1. Toutes les combinaisons des six premiers groupes, sans changer de jour.
+                for (var masque = 0; masque < (1 << n); ++masque) {
+                    (function(m) {
+                        etapes.push(function(suite) {
+                            var etat = {}
+                            for (var b = 0; b < n; ++b)
+                                if (m & (1 << b))
+                                    etat[noms[b]] = true
+                            colonneListe.poserReplis(etat)
+                            plusTard(250, function() {
+                                controler("même jour, repliés {" + Object.keys(etat).join(", ") + "}")
+                                suite()
+                            })
+                        })
+                    })(masque)
+                }
+                // 2. Passage de minuit : la veille, telle combinaison ; puis le jour change.
+                var hier = new Date(Date.now() - 86400000)
+                var nomsHier = []
+                etapes.push(function(suite) {
+                    colonneListe.poserReplis({})
+                    regrouper(hier)
+                    nomsHier = groupes().map(function(x) { return x.nom })
+                    console.log("scenario: la veille, groupes " + groupes().map(function(x) { return x.nom + " (" + x.taille + ")" }).join(" | "))
+                    plusTard(250, function() { controler("la veille, rien de replié"); suite() })
+                })
+                for (var m2 = 0; m2 < (1 << 5); ++m2) {
+                    (function(m) {
+                        etapes.push(function(suite) {
+                            colonneListe.poserReplis({})
+                            regrouper(hier)
+                            var etat = {}
+                            for (var b = 0; b < Math.min(5, nomsHier.length); ++b)
+                                if (m & (1 << b))
+                                    etat[nomsHier[b]] = true
+                            colonneListe.poserReplis(etat)
+                            plusTard(250, function() {
+                                controler("la veille, repliés {" + Object.keys(etat).join(", ") + "}")
+                                fenetre.jourDesGroupes = hier.toDateString()
+                                fenetre.suivreJour()
+                                plusTard(300, function() {
+                                    controler("après minuit, repliés {" + Object.keys(colonneListe.replisVue).join(", ") + "}")
+                                    suite()
+                                })
+                            })
+                        })
+                    })(m2)
+                }
+                var k = 0
+                var suivante = function() {
+                    if (k >= etapes.length) {
+                        console.log("scenario: groupes-minuit " + (s.echecs === 0 ? "OK" : "ECHEC (" + s.echecs + ")"))
+                        Qt.quit()
+                        return
+                    }
+                    var etape = etapes[k++]
+                    etape(suivante)
+                }
+                suivante()
+            })
+        })
+    }
+
     /// Scénario « marges » (0.6.23) : « Affichage › Marges du message », ses
     /// trois choix l'un après l'autre, dans le volet de lecture et dans la
     /// fenêtre du message. Le texte doit se décaler de la marge choisie, vers

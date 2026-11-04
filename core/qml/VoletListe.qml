@@ -453,8 +453,16 @@ ColumnLayout {
             // ses rangs sont ceux de la vue, cf. rangVue et rangModele.
             model: vueFiltree
             // Les lignes qui sortent de l'écran servent à celles qui entrent,
-            // au lieu d'être détruites et recréées à chaque défilement.
-            reuseItems: true
+            // au lieu d'être détruites et recréées à chaque défilement — tant
+            // qu'aucun groupe n'est replié (0.6.37). DelegateModel rebranche
+            // une ligne recyclée sur son rang dans la vue filtrée, et non sur
+            // son rang dans le modèle (Qt 6.8 à 6.10, `reuseItem(cacheItem,
+            // index, …)` dans qqmldelegatemodel.cpp) : sous un groupe replié,
+            // elle montre un autre message et en prend le groupe. Des lignes
+            // d'un groupe déplié se cachaient, un groupe entier perdait son
+            // intitulé (signalement d'un utilisateur, 04/11/2026). Sans groupe
+            // replié, la vue montre tout le modèle et les deux rangs se valent.
+            reuseItems: !colonneListe.replisActifs
             boundsBehavior: Flickable.StopAtBounds
             currentIndex: -1
             focus: true

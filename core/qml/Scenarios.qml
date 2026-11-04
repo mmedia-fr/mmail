@@ -3916,6 +3916,86 @@ QtObject {
         })
     }
 
+    /// Scénario « editeur-paragraphe » (0.8.7) : police, taille, alignement
+    /// et retrait se posent, se relisent sous le curseur, et partent dans le
+    /// HTML en CSS ordinaire (pas de `-qt-block-indent`) ; la barre du bureau
+    /// va à la ligne dans une fenêtre étroite. MMAIL_DOSSIER « garder » : la
+    /// rédaction reste ouverte, pour une capture.
+    function etapeScenarioEditeurParagraphe() {
+        var r = fenetre.ouvrirRedaction(comptesConnus.length > 0 ? comptesConnus[0].compte : 0)
+        plusTard(1500, function() {
+            var echecs = 0
+            var bilan = function(texte, bon) {
+                if (!bon)
+                    ++echecs
+                console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
+            }
+            var mef = r.mefCorps
+            var corps = r.corps
+            var position = function(mot) { return corps.getText(0, corps.length).indexOf(mot) }
+            var bloc = function(h, mot) {
+                var m = new RegExp("<p[^>]*>(?:(?!</p>).)*" + mot + "(?:(?!</p>).)*</p>").exec(h)
+                return m ? m[0] : ""
+            }
+            mef.poserTexte("Un premier paragraphe\nDeux\nTrois\nQuatre")
+            corps.forceActiveFocus()
+            corps.select(position("Deux"), position("Deux") + 4)
+            mef.poserPolice("Georgia")
+            mef.poserTaille(16)
+            bilan("police et taille relues : " + mef.police + " " + mef.taille, mef.police === "Georgia" && mef.taille === 16)
+            var h = mef.html()
+            bilan("police et taille dans le HTML : " + bloc(h, "Deux"),
+                  bloc(h, "Deux").indexOf("font-family:'Georgia'") > 0 && bloc(h, "Deux").indexOf("font-size:16pt") > 0)
+            corps.cursorPosition = position("Trois") + 1
+            mef.poserAlignement(Qt.AlignHCenter)
+            bilan("alignement relu : " + mef.alignement, mef.alignement === Qt.AlignHCenter)
+            h = mef.html()
+            bilan("centré dans le HTML : " + bloc(h, "Trois"), bloc(h, "Trois").indexOf('align="center"') > 0)
+            corps.cursorPosition = position("Quatre") + 1
+            mef.changerRetrait(1)
+            mef.changerRetrait(1)
+            h = mef.html()
+            bilan("retrait de deux crans en CSS : " + bloc(h, "Quatre"), bloc(h, "Quatre").indexOf("margin-left:80px") > 0)
+            bilan("pas de retrait propre à Qt", h.indexOf("-qt-block-indent:1") < 0 && h.indexOf("-qt-block-indent:2") < 0)
+            mef.changerRetrait(-1)
+            mef.changerRetrait(-1)
+            mef.changerRetrait(-1)
+            h = mef.html()
+            bilan("le retrait ne descend pas sous zéro : " + bloc(h, "Quatre"), bloc(h, "Quatre").indexOf("margin-left:0px") > 0)
+            corps.select(position("Deux"), position("Deux") + 4)
+            mef.poserPolice("")
+            mef.poserTaille(0)
+            h = mef.html()
+            bilan("police et taille par défaut rétablies : " + bloc(h, "Deux"),
+                  bloc(h, "Deux").indexOf("Georgia") < 0 && bloc(h, "Deux").indexOf("16pt") < 0)
+            var barre = objetNomme(r, "barreMiseEnForme")
+            if (!fenetre.tactile && barre) {
+                bilan("barre du bureau, police et taille visibles", objetNomme(r, "choixPolice").visible && objetNomme(r, "choixTaille").visible)
+                // La barre va à la ligne quand ses boutons ne tiennent pas sur
+                // une seule : rien ne dépasse, et elle prend alors plusieurs
+                // lignes.
+                var total = 0
+                var haut = 0
+                var hors = []
+                for (var i = 0; i < barre.children.length; ++i) {
+                    var b = barre.children[i]
+                    if (!b.visible || b.width <= 0)
+                        continue
+                    total += b.width + barre.spacing
+                    haut = Math.max(haut, b.height)
+                    if (b.x + b.width > barre.width + 0.5)
+                        hors.push(b.text || b.objectName)
+                }
+                bilan("rien ne dépasse de la barre (" + Math.round(barre.width) + " points) : " + JSON.stringify(hors), hors.length === 0)
+                bilan("boutons sur " + Math.round(total) + " points pour " + Math.round(barre.width) + " : hauteur " + barre.implicitHeight
+                      + " pour une ligne de " + haut, total <= barre.width || barre.implicitHeight > haut + 0.5)
+            }
+            console.log("scenario: editeur-paragraphe " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
+            if (identifiantsEssai.dossier !== "garder")
+                Qt.quit()
+        })
+    }
+
     /// Scénario « carnet » (0.6.20) : le carnet d'adresses modifiable, contre
     /// le Radicale du banc (CARNET=1) — carnets et droits, création,
     /// modification, conflit avec une écriture faite ailleurs entre-temps

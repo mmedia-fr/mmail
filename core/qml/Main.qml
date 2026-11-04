@@ -6527,6 +6527,12 @@ ApplicationWindow {
             // ses dossiers se disent en français, son favori à son adresse.
             // Scénario « editeur-tableau » (0.8.7) : couleurs, colonne et ligne
             // ajoutées dans un tableau cité.
+            if (essai.scenario === "editeur-paragraphe") {
+                var attenteParagraphe = Qt.createQmlObject('import QtQuick; Timer { interval: 2500 }', fenetre)
+                attenteParagraphe.triggered.connect(scenarios.etapeScenarioEditeurParagraphe)
+                attenteParagraphe.start()
+                return
+            }
             if (essai.scenario === "editeur-tableau") {
                 var attenteEditeur = Qt.createQmlObject('import QtQuick; Timer { interval: 2500 }', fenetre)
                 attenteEditeur.triggered.connect(scenarios.etapeScenarioEditeurTableau)

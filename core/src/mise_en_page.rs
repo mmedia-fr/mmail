@@ -43,7 +43,7 @@
 //! d'un tableau un tableau à colonnes. L'astuce `dir="rtl"` des colonnes
 //! inversées sur téléphone est retirée : Qt la portait sur le texte.
 //!
-//! Un tableau de données collé d'Excel ou de Word (0.6.36) porte une bordure
+//! Un tableau de données collé d'Excel ou de Word (0.6.37) porte une bordure
 //! sur chaque cellule, en style (`border:solid windowtext 1.0pt`), avec une
 //! largeur fixe en pixels et `nowrap`. Qt Quick ne dessine pas la bordure
 //! d'une cellule, seulement celle du tableau, qu'il répète autour de chaque
@@ -360,7 +360,7 @@ fn largeur_fixe(attributs: &[(String, String)]) -> Option<u32> {
     }
 }
 
-/// Couleur des bordures d'un tableau de données (0.6.36) : celle que portent,
+/// Couleur des bordures d'un tableau de données (0.6.37) : celle que portent,
 /// en style, la moitié de ses cellules au moins — noir pour la couleur système
 /// `windowtext` d'Excel, ou faute de couleur dite. `None` pour un tableau dont
 /// les cellules ne sont pas bordées : une lettre d'information, une signature.
@@ -422,7 +422,7 @@ fn bordure_de(attributs: &[(String, String)]) -> Option<String> {
     ((haut || bas) && (gauche || droite)).then(|| couleur.unwrap_or_else(|| "#000000".to_string()))
 }
 
-/// Attributs d'un tableau de données (0.6.36) : une bordure d'un pixel de la
+/// Attributs d'un tableau de données (0.6.37) : une bordure d'un pixel de la
 /// couleur de ses cellules, que le moteur de Qt trace autour du tableau et de
 /// chaque cellule ; ni largeur, ni espacement entre cellules, ni bordure de
 /// style, qui feraient double emploi.
@@ -449,7 +449,7 @@ fn en_grille(attributs: Vec<(String, String)>, couleur: &str) -> Vec<(String, St
 }
 
 /// Ce que deviennent les lignes et les cellules d'un tableau de données
-/// (0.6.36) : les cellules perdent leurs bordures de style, que la bordure du
+/// (0.6.37) : les cellules perdent leurs bordures de style, que la bordure du
 /// tableau remplace, leurs largeurs et `nowrap`, pour que Qt règle chaque
 /// colonne sur son texte.
 fn cellules_de_grille(noeud: Noeud) -> Noeud {
@@ -1099,7 +1099,7 @@ mod tests {
         assert_eq!(aplatir(page), page);
     }
 
-    /// Tableau de données collé d'Excel (0.6.36) : bordure de tableau à la
+    /// Tableau de données collé d'Excel (0.6.37) : bordure de tableau à la
     /// couleur de celles des cellules ; cellules sans bordures, largeurs ni
     /// `nowrap` ; tableau sans largeur.
     #[test]

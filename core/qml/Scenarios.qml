@@ -3794,6 +3794,148 @@ QtObject {
         })
     }
 
+    /// Scénario « editeur-tableau-outils » (0.8.7, suite) : « Tableau ▾ »
+    /// insère un tableau bordé sur chaque case, dont ce qui s'écrit prend la
+    /// police du curseur ; Tab passe de case en case, Maj+Tab revient, et Tab
+    /// depuis la dernière case ajoute une ligne, qu'un seul Ctrl+Z retire ;
+    /// hors d'un tableau, Tab garde son effet ; « Supprimer la colonne »,
+    /// « … la ligne », « … le tableau ». Les touches passent par
+    /// gestesEssai.touche, comme une frappe de l'utilisateur.
+    function etapeScenarioEditeurTableauOutils() {
+        var r = fenetre.ouvrirRedaction(comptesConnus.length > 0 ? comptesConnus[0].compte : 0)
+        plusTard(1500, function() {
+            var echecs = 0
+            var bilan = function(texte, bon) {
+                if (!bon)
+                    ++echecs
+                console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
+            }
+            var mef = r.mefCorps
+            var corps = r.corps
+            var compter = function(texte, motif) { return (texte.match(motif) || []).length }
+            // Le HTML de Qt enveloppe le message dans un tableau « racine »
+            // d'une ligne et d'une case (-qt-table-type: root).
+            var racine = function(h) { return compter(h, /-qt-table-type: root/g) }
+            var tableaux = function(h) { return compter(h, /<table/g) - racine(h) }
+            var lignes = function(h) { return compter(h, /<tr/g) - racine(h) }
+            var cases = function(h) { return compter(h, /<td/g) - racine(h) }
+            var clavier = typeof gestesEssai !== "undefined" && typeof gestesEssai.touche === "function"
+            var tab = function(arriere) {
+                if (clavier)
+                    gestesEssai.touche(corps, arriere ? Qt.Key_Backtab : Qt.Key_Tab, "\t")
+                else
+                    r.tabulerTableau(arriere)
+            }
+            console.log("scenario: Tab " + (clavier ? "frappé au clavier" : "par la fonction (geste « touche » absent)"))
+            var menu = r.menuTableau
+            var entree = function(libelle) {
+                for (var i = 0; i < menu.count; ++i) {
+                    var e = menu.itemAt(i)
+                    if (e && e.text === libelle)
+                        return e
+                }
+                return null
+            }
+
+            if (!fenetre.tactile)
+                bilan("« Tableau ▾ » dans la barre", !!objetNomme(r, "boutonTableau") && objetNomme(r, "boutonTableau").visible)
+            else
+                bilan("« Tableau » au bas de la rédaction", !!objetNomme(r, "boutonTableauTactile") && objetNomme(r, "boutonTableauTactile").visible)
+            mef.poserTexte("Bonjour")
+            corps.forceActiveFocus()
+            corps.select(0, 7)
+            mef.poserPolice("Georgia")
+            corps.cursorPosition = 7
+            bilan("hors d'un tableau, « Supprimer la ligne » grisé",
+                  !!entree("Supprimer la ligne") && !entree("Supprimer la ligne").enabled && entree("Insérer un tableau…").enabled)
+
+            // Fenêtre d'insertion : 4 colonnes tapées sans Entrée, 2 lignes
+            // d'office.
+            r.dialogueTableau.open()
+            plusTard(400, function() {
+                var champ = objetNomme(r.dialogueTableau.contentItem, "champColonnes")
+                if (champ)
+                    champ.contentItem.text = "4"
+                r.dialogueTableau.accept()
+                plusTard(400, function() {
+                    var h = mef.html()
+                    bilan("un tableau inséré, 2 lignes de 4 cases : " + tableaux(h) + " / " + lignes(h) + " / " + cases(h),
+                          tableaux(h) === 1 && lignes(h) === 2 && cases(h) === 8)
+                    bilan("sur toute la largeur", /<table[^>]*width="100%"/.test(h))
+                    bilan("chaque case bordée d'un trait noir : " + compter(h, /border-left-style:solid/g),
+                          compter(h, /border-left-style:solid/g) === 8 && compter(h, /border-left-color:#000000/g) === 8)
+                    bilan("curseur dans la première case", mef.dansTableau)
+                    mef.inserer(corps.cursorPosition, "Point")
+                    h = mef.html()
+                    var point = /<span style="[^"]*">Point<\/span>/.exec(h)
+                    bilan("ce qui s'écrit dans le tableau prend la police du curseur : " + (point ? point[0] : ""),
+                          !!point && point[0].indexOf("Georgia") > 0)
+
+                    tab(false)
+                    mef.inserer(corps.cursorPosition, "Statut")
+                    var t = mef.texte()
+                    bilan("Tab : case suivante, sans tabulation écrite : " + JSON.stringify(t.substring(0, 40)),
+                          t.indexOf("Point\nStatut") >= 0 && t.indexOf("\t") < 0)
+                    tab(true)
+                    mef.inserer(corps.cursorPosition, " A")
+                    t = mef.texte()
+                    bilan("Maj+Tab : fin de la case précédente", t.indexOf("Point A\nStatut") >= 0)
+                    for (var i = 0; i < 7; ++i)
+                        tab(false)
+                    mef.inserer(corps.cursorPosition, "Fin")
+                    r.modifie = false
+                    tab(false)
+                    h = mef.html()
+                    bilan("Tab depuis la dernière case : une ligne de plus (" + lignes(h) + " lignes, " + cases(h) + " cases)",
+                          lignes(h) === 3 && cases(h) === 12)
+                    bilan("message marqué modifié", r.modifie)
+                    corps.undo()
+                    h = mef.html()
+                    bilan("un seul Ctrl+Z retire la ligne : " + lignes(h), lignes(h) === 2 && mef.texte().indexOf("Fin") >= 0)
+                    corps.cursorPosition = corps.getText(0, corps.length).indexOf("Fin") + 3
+                    tab(false)
+                    mef.inserer(corps.cursorPosition, "Nouvelle")
+                    h = mef.html()
+                    var nouvelle = /<span style="[^"]*">Nouvelle<\/span>/.exec(h)
+                    t = mef.texte()
+                    bilan("la nouvelle ligne suit la dernière, à la police de celle du dessus : " + (nouvelle ? nouvelle[0] : ""),
+                          t.indexOf("Fin\nNouvelle") >= 0 && !!nouvelle && nouvelle[0].indexOf("Georgia") > 0)
+
+                    corps.cursorPosition = 3
+                    tab(false)
+                    t = mef.texte()
+                    if (clavier)
+                        bilan("hors d'un tableau, Tab écrit une tabulation : " + JSON.stringify(t.substring(0, 12)), t.indexOf("Bon\tjour") === 0)
+                    else
+                        bilan("hors d'un tableau, Tab n'est pas pris", !r.tabulerTableau(false))
+
+                    corps.cursorPosition = corps.getText(0, corps.length).indexOf("Statut") + 2
+                    bilan("« Supprimer la colonne » proposé dans le tableau", !!entree("Supprimer la colonne") && entree("Supprimer la colonne").enabled)
+                    r.supprimerDuTableau("colonne")
+                    h = mef.html()
+                    t = mef.texte()
+                    bilan("colonne retirée : " + lignes(h) + " lignes, " + cases(h) + " cases",
+                          lignes(h) === 3 && cases(h) === 9 && t.indexOf("Statut") < 0 && t.indexOf("Point A") >= 0)
+                    corps.cursorPosition = corps.getText(0, corps.length).indexOf("Nouvelle") + 2
+                    r.supprimerDuTableau("ligne")
+                    h = mef.html()
+                    t = mef.texte()
+                    bilan("ligne retirée : " + lignes(h) + " lignes, " + cases(h) + " cases",
+                          lignes(h) === 2 && cases(h) === 6 && t.indexOf("Nouvelle") < 0 && t.indexOf("Fin") >= 0)
+                    corps.cursorPosition = corps.getText(0, corps.length).indexOf("Point") + 1
+                    r.supprimerDuTableau("tableau")
+                    h = mef.html()
+                    t = mef.texte()
+                    bilan("tableau retiré, le texte d'avant reste : " + JSON.stringify(t),
+                          tableaux(h) === 0 && t.indexOf("Point") < 0 && t.indexOf("jour") >= 0 && !mef.dansTableau)
+                    console.log("scenario: editeur-tableau-outils " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
+                    if (identifiantsEssai.dossier !== "garder")
+                        Qt.quit()
+                })
+            })
+        })
+    }
+
     /// Scénario « carnet » (0.6.20) : le carnet d'adresses modifiable, contre
     /// le Radicale du banc (CARNET=1) — carnets et droits, création,
     /// modification, conflit avec une écriture faite ailleurs entre-temps

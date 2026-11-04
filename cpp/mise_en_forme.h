@@ -341,15 +341,141 @@ public:
     const int ligne = ici.row() + ici.rowSpan() - 1;
     const int colonne = ici.column();
     c.beginEditBlock();
-    t->insertRows(ligne + 1, 1);
-    for (int k = 0; k < t->columns(); ++k) {
-      const QTextTableCell nouvelle = t->cellAt(ligne + 1, k);
-      if (nouvelle.isValid() && nouvelle.row() == ligne + 1 && nouvelle.column() == k)
-        copierCase(t->cellAt(ligne, k), nouvelle);
-    }
+    ajouterLigneSous(t, ligne);
     c.endEditBlock();
     Q_EMIT etatChange();
     return t->cellAt(ligne + 1, colonne).firstCursorPosition().position();
+  }
+
+  /// Tab dans un tableau : le curseur passe à la case suivante, dans l'ordre
+  /// de lecture (à la précédente avec Maj), les cases couvertes par une
+  /// fusion sautées ; depuis la dernière case, Tab ajoute une ligne, comme
+  /// dans Outlook. Le curseur se pose à la fin du texte de la case, sans le
+  /// choisir — Outlook, lui, le choisit : qui répond dans un tableau cité
+  /// écrit à la suite, et sa frappe ne doit pas remplacer ce qui y est.
+  /// Rend la position du curseur, -1 hors d'un tableau : Tab y garde son
+  /// effet ordinaire.
+  Q_INVOKABLE int caseVoisine(bool arriere)
+  {
+    QTextCursor c = curseur();
+    QTextTable* t = c.currentTable();
+    if (!t)
+      return -1;
+    const QTextTableCell ici = t->cellAt(c);
+    QList<QTextTableCell> cases;
+    int rang = -1;
+    for (int r = 0; r < t->rows(); ++r) {
+      for (int k = 0; k < t->columns(); ++k) {
+        const QTextTableCell une = t->cellAt(r, k);
+        if (une.row() != r || une.column() != k)
+          continue;
+        if (r == ici.row() && k == ici.column())
+          rang = int(cases.size());
+        cases << une;
+      }
+    }
+    if (rang < 0)
+      return -1;
+    if (arriere)
+      return rang > 0 ? cases.at(rang - 1).lastCursorPosition().position() : c.position();
+    if (rang + 1 < cases.size())
+      return cases.at(rang + 1).lastCursorPosition().position();
+    c.beginEditBlock();
+    ajouterLigneSous(t, t->rows() - 1);
+    c.endEditBlock();
+    Q_EMIT etatChange();
+    return t->cellAt(t->rows() - 1, 0).firstCursorPosition().position();
+  }
+
+  /// Retire la ligne du curseur — toutes celles que couvre sa case, si elle
+  /// est fusionnée sur plusieurs —, ou le tableau s'il n'a pas d'autre
+  /// ligne. Une case fusionnée qui déborde sur les lignes voisines reste,
+  /// raccourcie. Rend la position où remettre le curseur, -1 hors d'un
+  /// tableau.
+  Q_INVOKABLE int supprimerLigne()
+  {
+    QTextCursor c = curseur();
+    QTextTable* t = c.currentTable();
+    if (!t)
+      return -1;
+    const QTextTableCell ici = t->cellAt(c);
+    if (ici.rowSpan() >= t->rows())
+      return retirerTableau(t);
+    const int ligne = ici.row();
+    const int colonne = ici.column();
+    t->removeRows(ligne, ici.rowSpan());
+    Q_EMIT etatChange();
+    return t->cellAt(qMin(ligne, t->rows() - 1), qMin(colonne, t->columns() - 1)).lastCursorPosition().position();
+  }
+
+  /// Retire la colonne du curseur, de même.
+  Q_INVOKABLE int supprimerColonne()
+  {
+    QTextCursor c = curseur();
+    QTextTable* t = c.currentTable();
+    if (!t)
+      return -1;
+    const QTextTableCell ici = t->cellAt(c);
+    if (ici.columnSpan() >= t->columns())
+      return retirerTableau(t);
+    const int ligne = ici.row();
+    const int colonne = ici.column();
+    t->removeColumns(colonne, ici.columnSpan());
+    Q_EMIT etatChange();
+    return t->cellAt(qMin(ligne, t->rows() - 1), qMin(colonne, t->columns() - 1)).lastCursorPosition().position();
+  }
+
+  /// Retire le tableau du curseur, son contenu avec.
+  Q_INVOKABLE int supprimerTableau()
+  {
+    QTextTable* t = curseur().currentTable();
+    return t ? retirerTableau(t) : -1;
+  }
+
+  /// Insère au curseur un tableau de `lignes` × `colonnes` cases, sur toute
+  /// la largeur, bordé d'un trait noir d'un point comme le « Tableau »
+  /// d'Outlook — bordures posées sur chaque case, qu'un logiciel de
+  /// messagerie qui ne lit pas celles du tableau les dessine aussi. Ce qui
+  /// s'y écrira prend la police, la taille et la couleur du curseur : Qt
+  /// donnerait aux cases un format vierge. Un paragraphe se coupe au
+  /// curseur, le tableau entre les deux morceaux, comme dans Word. Rend la
+  /// position de la première case, -1 sans document.
+  Q_INVOKABLE int insererTableau(int lignes, int colonnes)
+  {
+    QTextDocument* doc = texte_();
+    if (!doc || lignes < 1 || colonnes < 1)
+      return -1;
+    QTextCharFormat ecriture = format();
+    nettoyerEcriture(ecriture);
+    QTextCursor c = curseur();
+    c.clearSelection();
+    QTextTableFormat f;
+    f.setBorderCollapse(true);
+    f.setBorder(1);
+    f.setBorderBrush(QColor(Qt::black));
+    f.setBorderStyle(QTextFrameFormat::BorderStyle_Solid);
+    f.setCellPadding(4);
+    f.setCellSpacing(0);
+    f.setWidth(QTextLength(QTextLength::PercentageLength, 100));
+    QTextTableCellFormat bordure;
+    bordure.setBorder(1);
+    bordure.setBorderBrush(QColor(Qt::black));
+    bordure.setBorderStyle(QTextFrameFormat::BorderStyle_Solid);
+    c.beginEditBlock();
+    QTextTable* t = c.insertTable(qMin(lignes, 50), qMin(colonnes, 20), f);
+    for (int r = 0; r < t->rows(); ++r) {
+      for (int k = 0; k < t->columns(); ++k) {
+        QTextTableCell une = t->cellAt(r, k);
+        une.setFormat(bordure);
+        // Format de la case et format de caractère de son premier
+        // paragraphe sont un seul et même caractère : fusionner, jamais
+        // remplacer (cf. copierCase).
+        une.firstCursorPosition().mergeBlockCharFormat(ecriture);
+      }
+    }
+    c.endEditBlock();
+    Q_EMIT etatChange();
+    return t->cellAt(0, 0).firstCursorPosition().position();
   }
 
   /// Retire gras, italique, soulignement et liens de la sélection.
@@ -858,6 +984,41 @@ private:
   /// de son premier paragraphe sont un seul et même format, porté par le
   /// caractère qui ouvre la case : le second se fusionne au premier, sans
   /// quoi le fond de la case se perdait.
+  /// Insère une ligne sous `ligne`, chaque case reprenant la mise en forme
+  /// de celle du dessus.
+  static void ajouterLigneSous(QTextTable* t, int ligne)
+  {
+    t->insertRows(ligne + 1, 1);
+    for (int k = 0; k < t->columns(); ++k) {
+      const QTextTableCell nouvelle = t->cellAt(ligne + 1, k);
+      if (nouvelle.isValid() && nouvelle.row() == ligne + 1 && nouvelle.column() == k)
+        copierCase(t->cellAt(ligne, k), nouvelle);
+    }
+  }
+
+  /// Retire le tableau `t` entier ; rend la position qu'il occupait.
+  int retirerTableau(QTextTable* t)
+  {
+    const int avant = t->firstPosition() - 1;
+    // Retirer toutes les lignes retire le tableau lui-même (vérifié sous
+    // Qt 6.11) ; `t` n'est plus valable ensuite.
+    t->removeRows(0, t->rows());
+    Q_EMIT etatChange();
+    QTextDocument* doc = texte_();
+    return doc ? qBound(0, avant, doc->characterCount() - 1) : 0;
+  }
+
+  /// Ce qui s'écrira dans une case : la police, la taille, la couleur d'un
+  /// texte voisin, sans ses liens ni ses images.
+  static void nettoyerEcriture(QTextCharFormat& ecriture)
+  {
+    ecriture.setAnchor(false);
+    ecriture.clearProperty(QTextFormat::AnchorHref);
+    ecriture.clearProperty(QTextFormat::AnchorName);
+    ecriture.clearProperty(QTextFormat::ObjectType);
+    ecriture.clearProperty(QTextFormat::ObjectIndex);
+  }
+
   static void copierCase(const QTextTableCell& source, const QTextTableCell& nouvelle)
   {
     if (!source.isValid() || !nouvelle.isValid())
@@ -874,11 +1035,7 @@ private:
     QTextCharFormat ecriture = premier.charFormat();
     if (ecriture.isImageFormat())
       return;
-    ecriture.setAnchor(false);
-    ecriture.clearProperty(QTextFormat::AnchorHref);
-    ecriture.clearProperty(QTextFormat::AnchorName);
-    ecriture.clearProperty(QTextFormat::ObjectType);
-    ecriture.clearProperty(QTextFormat::ObjectIndex);
+    nettoyerEcriture(ecriture);
     dans.mergeBlockCharFormat(ecriture);
   }
 

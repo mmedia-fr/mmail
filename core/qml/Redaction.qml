@@ -145,6 +145,8 @@ Page {
     readonly property alias corps: corpsRedaction
     readonly property alias mefCorps: mef
     readonly property alias paletteCouleurs: paletteCouleurs
+    readonly property alias menuTableau: menuTableau
+    readonly property alias dialogueTableau: dlgTableau
     readonly property alias correcteurOrtho: correcteurCorps
     readonly property alias animations: animationsRedaction
     readonly property alias boutonSignature: boutonSignature
@@ -280,6 +282,42 @@ Page {
         corpsRedaction.forceActiveFocus()
         corpsRedaction.cursorPosition = p
         modifie = true
+        return true
+    }
+
+    // Menu « Tableau » : retirer la ligne, la colonne ou le tableau du
+    // curseur (`quoi` : « ligne », « colonne », « tableau »).
+    function supprimerDuTableau(quoi) {
+        var p = quoi === "ligne" ? mef.supprimerLigne() : quoi === "colonne" ? mef.supprimerColonne() : mef.supprimerTableau()
+        if (p < 0)
+            return false
+        corpsRedaction.forceActiveFocus()
+        corpsRedaction.cursorPosition = p
+        modifie = true
+        return true
+    }
+
+    function insererTableau(lignes, colonnes) {
+        var p = mef.insererTableau(lignes, colonnes)
+        if (p < 0)
+            return false
+        corpsRedaction.forceActiveFocus()
+        corpsRedaction.cursorPosition = p
+        modifie = true
+        return true
+    }
+
+    // Tab dans un tableau, comme dans Outlook : case suivante, ou précédente
+    // (Maj+Tab) ; depuis la dernière case, une ligne de plus. Faux hors d'un
+    // tableau : Tab y garde son effet.
+    function tabulerTableau(arriere) {
+        var avant = corpsRedaction.length
+        var p = mef.caseVoisine(arriere)
+        if (p < 0)
+            return false
+        corpsRedaction.cursorPosition = p
+        if (corpsRedaction.length !== avant)
+            modifie = true
         return true
     }
 
@@ -1162,6 +1200,16 @@ Page {
                     focusPolicy: Qt.NoFocus
                     onClicked: dlgAdresseLien.open()
                 }
+                // Insérer un tableau ; dans un tableau, en retirer une ligne,
+                // une colonne, ou le tableau entier.
+                ToolButton {
+                    id: boutonTableau
+                    objectName: "boutonTableau"
+                    visible: !fenetre.tactile
+                    text: qsTr("Tableau ▾")
+                    focusPolicy: Qt.NoFocus
+                    onClicked: menuTableau.popup(boutonTableau, 0, boutonTableau.height)
+                }
                 // Dans un tableau (0.8.7) : qui répond dans un tableau cité écrit
                 // à la suite de la ligne, dans une colonne de plus.
                 ToolButton {
@@ -1352,6 +1400,10 @@ Page {
                 Keys.onPressed: function(ev) {
                     if (ev.matches(StandardKey.Paste) && redac.collerImage())
                         ev.accepted = true
+                    else if ((ev.key === Qt.Key_Tab || ev.key === Qt.Key_Backtab)
+                             && !(ev.modifiers & (Qt.ControlModifier | Qt.AltModifier))
+                             && redac.tabulerTableau(ev.key === Qt.Key_Backtab || !!(ev.modifiers & Qt.ShiftModifier)))
+                        ev.accepted = true
                     else if (redac.majuscule(ev))
                         ev.accepted = true
                 }
@@ -1419,6 +1471,9 @@ Page {
                      onClicked: menuParagraphe.popup(boutonParagrapheTactile, 0, -menuParagraphe.implicitHeight) }
             Button { text: qsTr("Lien…"); font.pointSize: fenetre.tailleBase * 1.15; focusPolicy: Qt.NoFocus
                      onClicked: dlgAdresseLien.open() }
+            Button { id: boutonTableauTactile; objectName: "boutonTableauTactile"; text: qsTr("Tableau"); font.pointSize: fenetre.tailleBase * 1.15
+                     focusPolicy: Qt.NoFocus
+                     onClicked: menuTableau.popup(boutonTableauTactile, 0, -menuTableau.implicitHeight) }
             Button { visible: mef.dansTableau; text: qsTr("+ Colonne"); font.pointSize: fenetre.tailleBase * 1.15
                      focusPolicy: Qt.NoFocus; onClicked: redac.ajouterAuTableau("colonne") }
             Button { visible: mef.dansTableau; text: qsTr("+ Ligne"); font.pointSize: fenetre.tailleBase * 1.15
@@ -1456,6 +1511,75 @@ Page {
         MenuItem {
             text: qsTr("Diminuer le retrait")
             onTriggered: { mef.changerRetrait(-1); redac.modifie = true }
+        }
+    }
+
+    // Menu « Tableau » : insérer un tableau ; dans un tableau, ajouter ou
+    // retirer une colonne ou une ligne, retirer le tableau. Tab y passe de
+    // case en case (cf. tabulerTableau).
+    Menu {
+        id: menuTableau
+        objectName: "menuTableau"
+        MenuItem {
+            text: qsTr("Insérer un tableau…")
+            onTriggered: dlgTableau.open()
+        }
+        MenuSeparator {}
+        MenuItem {
+            text: qsTr("Ajouter une colonne à droite")
+            enabled: mef.dansTableau
+            onTriggered: redac.ajouterAuTableau("colonne")
+        }
+        MenuItem {
+            text: qsTr("Ajouter une ligne dessous")
+            enabled: mef.dansTableau
+            onTriggered: redac.ajouterAuTableau("ligne")
+        }
+        MenuSeparator {}
+        MenuItem {
+            text: qsTr("Supprimer la colonne")
+            enabled: mef.dansTableau
+            onTriggered: redac.supprimerDuTableau("colonne")
+        }
+        MenuItem {
+            text: qsTr("Supprimer la ligne")
+            enabled: mef.dansTableau
+            onTriggered: redac.supprimerDuTableau("ligne")
+        }
+        MenuItem {
+            text: qsTr("Supprimer le tableau")
+            enabled: mef.dansTableau
+            onTriggered: redac.supprimerDuTableau("tableau")
+        }
+    }
+
+    // « Insérer un tableau… » : 3 colonnes et 2 lignes d'office.
+    Dialog {
+        id: dlgTableau
+        objectName: "dlgTableau"
+        title: qsTr("Insérer un tableau")
+        modal: true
+        anchors.centerIn: parent
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        // Un nombre tapé sans Entrée n'est pas encore la valeur du champ :
+        // il se relit au moment d'insérer.
+        function lire(champ) {
+            var v = champ.valueFromText(champ.contentItem.text, champ.locale)
+            return isNaN(v) ? champ.value : Math.max(champ.from, Math.min(champ.to, v))
+        }
+        onOpened: {
+            champColonnes.value = 3
+            champLignes.value = 2
+            champColonnes.forceActiveFocus()
+        }
+        onAccepted: redac.insererTableau(lire(champLignes), lire(champColonnes))
+        GridLayout {
+            columns: 2
+            columnSpacing: 12
+            Label { text: qsTr("Colonnes :") }
+            SpinBox { id: champColonnes; objectName: "champColonnes"; from: 1; to: 20; value: 3; editable: true }
+            Label { text: qsTr("Lignes :") }
+            SpinBox { id: champLignes; objectName: "champLignes"; from: 1; to: 50; value: 2; editable: true }
         }
     }
 

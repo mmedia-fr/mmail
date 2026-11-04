@@ -6414,6 +6414,14 @@ ApplicationWindow {
             // ses dossiers se disent en français, son favori à son adresse.
             // Scénario « editeur-tableau » (0.8.7) : couleurs, colonne et ligne
             // ajoutées dans un tableau cité.
+            // Scénario « editeur-tableau-outils » (0.8.7, suite) : insérer un
+            // tableau, Tab de case en case, supprimer ligne, colonne, tableau.
+            if (essai.scenario === "editeur-tableau-outils") {
+                var attenteOutils = Qt.createQmlObject('import QtQuick; Timer { interval: 2500 }', fenetre)
+                attenteOutils.triggered.connect(scenarios.etapeScenarioEditeurTableauOutils)
+                attenteOutils.start()
+                return
+            }
             if (essai.scenario === "editeur-paragraphe") {
                 var attenteParagraphe = Qt.createQmlObject('import QtQuick; Timer { interval: 2500 }', fenetre)
                 attenteParagraphe.triggered.connect(scenarios.etapeScenarioEditeurParagraphe)

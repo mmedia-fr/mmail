@@ -4127,7 +4127,9 @@ QtObject {
     /// - « importer:<dossier> » (Android, MMAIL_TACTILE=1) : sans dossier du
     ///   poste, la personnalisation de <dossier> est importée dans le profil,
     ///   puis retirée, puis importée de nouveau ;
-    /// - « profil » : celle importée dans le profil est reprise au démarrage.
+    /// - « profil » : celle importée dans le profil est reprise au démarrage,
+    ///   et l'apparence de l'organisation, choisie à l'importation (au banc,
+    ///   THEME=organisation), reste en vigueur.
     function etapeScenarioPersonnalisation() {
         var echecs = 0
         var bilan = function(texte, bon) {
@@ -4185,7 +4187,7 @@ QtObject {
         if (mode === "profil") {
             bilan("reprise du profil : " + p.dossier, p.origine === "profil")
             verifierOrganisation("Exemple essai")
-            bilan("celle d'un profil neuf (" + fenetre.apparence + ")", fenetre.apparence === "organisation")
+            bilan("le choix rangé, l'organisation, tient (" + fenetre.apparence + ")", fenetre.apparence === "organisation")
             bilan("nom du logiciel : " + fenetre.nomLogiciel, fenetre.nomLogiciel === "Exemple Mail")
             bilan("retrait proposé", fenetre.personnalisationImportable)
             finir()

@@ -6800,6 +6800,9 @@ ApplicationWindow {
                 scenarios.lancerScenarioMolette()
             if (essai.scenario === "groupes-replier")
                 scenarios.lancerScenarioGroupesReplier()
+            // « groupes-minuit » (banc DATES=1) : signalement du 04/11/2026.
+            if (essai.scenario === "groupes-minuit")
+                scenarios.lancerScenarioGroupesMinuit()
             // Scénario « lu-differe » (0.6.9) : marquage « lu » après un délai,
             // ou jamais.
             if (essai.scenario === "lu-differe")

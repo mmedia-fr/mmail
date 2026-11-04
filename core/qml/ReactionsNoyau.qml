@@ -34,12 +34,12 @@ Connections {
             messageEtat.texte = qsTr("Connexion à Microsoft : %1").arg(message)
     }
 
-    // Autorisation de lire les réglages de la boîte (couleurs d'Outlook,
+    // Autorisation des réglages de la boîte (catégories reliées à Outlook,
     // DialogueCategories.qml).
     function onCouleursOutlook(compte, message) {
         messageEtat.texte = message.length > 0
-            ? qsTr("Couleurs d'Outlook : %1").arg(message)
-            : qsTr("Autorisation reçue : MMail reprend les couleurs d'Outlook.")
+            ? qsTr("Catégories d'Outlook : %1").arg(message)
+            : qsTr("Autorisation reçue : MMail reprend les couleurs d'Outlook, et la liste d'Outlook suivra vos changements.")
     }
 
     function onGoogleConnecte(adresse, hote, jeton) {

@@ -6888,31 +6888,38 @@ impl Travail {
             // Microsoft 365 (0.9.0) : un nom qui change — renommage, ou
             // catégorie d'origine qui reprend le sien — change aussi sur les
             // messages qui la portent, comme dans Outlook. Un retrait les
-            // laisse, comme Outlook aussi.
+            // laisse, comme Outlook aussi. Avec l'autorisation des réglages de
+            // la boîte, la liste d'Outlook suit (`reporter_vers_outlook`).
             Commande::Catalogue { boite, changement } if e.graph.is_some() => {
                 let mot_cle = match &changement {
                     Changement::Poser(c) => c.mot_cle.clone(),
                     Changement::Retirer(m) => m.clone(),
                 };
-                let nom = |magasin: &Magasin| {
+                let categorie = |magasin: &Magasin| {
                     let (valeur, _) = magasin.catalogue(compte, &boite).ok().flatten().unwrap_or_default();
-                    Catalogue::lire(&valeur).liste().into_iter().find(|c| c.mot_cle.eq_ignore_ascii_case(&mot_cle)).map(|c| c.nom)
+                    Catalogue::lire(&valeur).liste().into_iter().find(|c| c.mot_cle.eq_ignore_ascii_case(&mot_cle))
                 };
-                let avant = nom(&e.magasin);
+                let avant = categorie(&e.magasin);
                 if let Err(err) = synchro::changer_catalogue(&mut e.client, &e.magasin, compte, &boite, &changement) {
                     return Some(echec("tri", format!("catégories : {err}"), &err));
                 }
-                match (avant, nom(&e.magasin)) {
-                    (Some(ancien), Some(nouveau)) if ancien != nouveau => Some(match self.renommer_categorie_graph(e, &ancien, &nouveau) {
-                        Ok(()) => Issue::Marque { discret: true },
-                        Err(message) => Issue::Echec {
-                            etape: "tri",
-                            message: format!("catégorie renommée dans MMail, mais pas sur les messages dans Outlook : {message}"),
-                            session_perdue: false,
-                        },
-                    }),
-                    _ => Some(Issue::Marque { discret: true }),
+                let apres = categorie(&e.magasin);
+                let mut problemes = Vec::new();
+                if let (Some(ancien), Some(nouveau)) = (&avant, &apres) {
+                    if ancien.nom != nouveau.nom {
+                        if let Err(message) = self.renommer_categorie_graph(e, &ancien.nom, &nouveau.nom) {
+                            problemes.push(format!("catégorie renommée dans MMail, mais pas sur les messages dans Outlook : {message}"));
+                        }
+                    }
                 }
+                if let Err(message) = self.reporter_vers_outlook(e, avant.as_ref(), apres.as_ref()) {
+                    problemes.push(format!("catégorie changée dans MMail, pas encore dans la liste d'Outlook : {message}"));
+                }
+                Some(if problemes.is_empty() {
+                    Issue::Marque { discret: true }
+                } else {
+                    Issue::Echec { etape: "tri", message: problemes.join(" ; "), session_perdue: false }
+                })
             }
             Commande::Catalogue { boite, changement } => Some(
                 match synchro::changer_catalogue(&mut e.client, &e.magasin, compte, &boite, &changement) {
@@ -7329,7 +7336,8 @@ impl Travail {
     }
 
     /// Reprend toutes les couleurs d'Outlook dans le catalogue de la boîte,
-    /// après l'autorisation (« Couleurs d'Outlook… »).
+    /// après l'autorisation (« Relier à Outlook… »), et complète la liste
+    /// d'Outlook des catégories créées dans MMail.
     fn reprendre_couleurs(&self, e: &mut Etabli) -> Result<(), String> {
         let Some(couleurs) = self.lire_couleurs_outlook(e, true)? else {
             return Err("ce compte ne passe pas par Microsoft 365".into());
@@ -7341,6 +7349,59 @@ impl Travail {
         if colorer(&mut catalogue, &couleurs, true) {
             e.magasin.poser_catalogue(compte, &boite, &catalogue.ecrire(), serveur).map_err(|x| x.to_string())?;
         }
+        // Les catégories créées dans MMail entrent dans la liste d'Outlook ;
+        // celles d'origine (les cinq de MMail et de Thunderbird) non : la
+        // liste d'Outlook sert aussi aux autres postes.
+        let voulues: Vec<(String, Option<String>)> = catalogue
+            .liste()
+            .into_iter()
+            .filter(|c| !categories::est_d_origine(&c.mot_cle))
+            .map(|c| {
+                let connue = !c.couleur.eq_ignore_ascii_case(categories::COULEUR_INCONNUE);
+                (c.nom, connue.then_some(c.couleur))
+            })
+            .collect();
+        if let Some(jetons) = e.graph.clone() {
+            let jeton = crate::microsoft::jeton_acces(&jetons, crate::microsoft::PORTEE_REGLAGES).map_err(|x| x.to_string())?;
+            if crate::microsoft::completer_liste(&jeton, &voulues).map_err(|x| x.to_string())? > 0 {
+                e.couleurs = None;
+            }
+        }
+        Ok(())
+    }
+
+    /// Reporte un changement du catalogue dans la liste des catégories
+    /// d'Outlook (0.9.0), si les réglages de la boîte sont autorisés ; sans
+    /// cette autorisation, rien, et la session ne la redemande pas. Le gris
+    /// d'attente de MMail n'est pas une couleur : il ne recolore rien.
+    fn reporter_vers_outlook(&self, e: &mut Etabli, avant: Option<&Categorie>, apres: Option<&Categorie>) -> Result<(), String> {
+        let Some(jetons) = e.graph.clone() else {
+            return Ok(());
+        };
+        if apres.is_none() || e.couleurs_refusees {
+            return Ok(());
+        }
+        let jeton = match crate::microsoft::jeton_acces(&jetons, crate::microsoft::PORTEE_REGLAGES) {
+            Ok(jeton) => jeton,
+            Err(crate::microsoft::ErreurOAuth::Reseau(message)) => return Err(message),
+            Err(_) => {
+                e.couleurs_refusees = true;
+                return Ok(());
+            }
+        };
+        let decrire = |c: &Categorie| {
+            let couleur = c.couleur.clone();
+            (c.nom.clone(), (!couleur.eq_ignore_ascii_case(categories::COULEUR_INCONNUE)).then_some(couleur))
+        };
+        let (avant, apres) = (avant.map(decrire), apres.map(decrire));
+        crate::microsoft::reporter_categorie(
+            &jeton,
+            avant.as_ref().map(|(n, k)| (n.as_str(), k.as_deref())),
+            apres.as_ref().map(|(n, k)| (n.as_str(), k.as_deref())),
+        )
+        .map_err(|x| x.to_string())?;
+        // La liste d'Outlook a pu changer : relue au prochain passage.
+        e.couleurs = None;
         Ok(())
     }
 

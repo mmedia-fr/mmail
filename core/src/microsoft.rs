@@ -110,12 +110,14 @@ const PORTEE_AUTORISATION: &str = "offline_access openid email \
      https://graph.microsoft.com/Mail.ReadWrite";
 const PORTEE_CODE: &str = "offline_access openid email https://outlook.office.com/IMAP.AccessAsUser.All";
 
-/// Réglages de la boîte (0.9.0) : la liste des catégories d'Outlook, avec
-/// leurs couleurs (`masterCategories`). Demandé à part, quand on reprend ces
-/// couleurs : la connexion d'un compte n'en dépend pas, et un refus n'éteint
-/// que cette fonction.
-pub const PORTEE_REGLAGES: &str = "offline_access https://graph.microsoft.com/MailboxSettings.Read";
-const PORTEE_AUTORISATION_REGLAGES: &str = "offline_access openid https://graph.microsoft.com/MailboxSettings.Read";
+/// Réglages de la boîte (0.9.0) : la liste des catégories d'Outlook
+/// (`masterCategories`), lue pour leurs couleurs, écrite quand une catégorie
+/// est créée, recolorée ou renommée dans MMail. Demandé à part, quand on
+/// relie les catégories à Outlook (décision de Manu du 04/11 : chaque
+/// autorisation nouvelle à part) : la connexion d'un compte n'en dépend pas,
+/// et un refus n'éteint que cette fonction.
+pub const PORTEE_REGLAGES: &str = "offline_access https://graph.microsoft.com/MailboxSettings.ReadWrite";
+const PORTEE_AUTORISATION_REGLAGES: &str = "offline_access openid https://graph.microsoft.com/MailboxSettings.ReadWrite";
 
 /// Identifiant de l'application « MMail » dans l'annuaire Entra où elle est
 /// inscrite (éditeur `mmedia.fr`). Public par nature : application sans
@@ -827,7 +829,12 @@ fn renommer_categorie_par(t: &mut Transport, jeton: &str, ancien: &str, nouveau:
 /// palette Fluent qui les portent. `none` et l'inconnu : rien, la catégorie
 /// garde sa couleur.
 pub fn couleur_outlook(preset: &str) -> Option<&'static str> {
-    const COULEURS: [&str; 25] = [
+    let n: usize = preset.strip_prefix("preset")?.parse().ok()?;
+    COULEURS_OUTLOOK.get(n).copied()
+}
+
+/// Couleurs des `preset0` à `preset24` d'Outlook (cf. `couleur_outlook`).
+const COULEURS_OUTLOOK: [&str; 25] = [
         "#E81123", // rouge
         "#F7630C", // orange
         "#8E562E", // marron
@@ -854,8 +861,137 @@ pub fn couleur_outlook(preset: &str) -> Option<&'static str> {
         "#5C2E91", // violet foncé
         "#77004D", // canneberge foncée
     ];
-    let n: usize = preset.strip_prefix("preset")?.parse().ok()?;
-    COULEURS.get(n).copied()
+
+/// La couleur d'Outlook (`presetN`) la plus proche d'une couleur de MMail
+/// (`#RRGGBB`) : Outlook n'en connaît que vingt-cinq. Distance pondérée selon
+/// la sensibilité de l'œil (rouge 2, vert 4, bleu 3). Illisible : `None`.
+pub fn preset_proche(couleur: &str) -> Option<String> {
+    let rgb = |h: &str| -> Option<[i64; 3]> {
+        let h = h.strip_prefix('#')?;
+        if h.len() != 6 || !h.is_ascii() {
+            return None;
+        }
+        let c = |i: usize| i64::from_str_radix(&h[i..i + 2], 16).ok();
+        Some([c(0)?, c(2)?, c(4)?])
+    };
+    let cible = rgb(couleur)?;
+    COULEURS_OUTLOOK
+        .iter()
+        .enumerate()
+        .filter_map(|(n, c)| rgb(c).map(|v| (n, v)))
+        .min_by_key(|(_, v)| {
+            let d = |i: usize| (v[i] - cible[i]).pow(2);
+            2 * d(0) + 4 * d(1) + 3 * d(2)
+        })
+        .map(|(n, _)| format!("preset{n}"))
+}
+
+/// Une catégorie de la liste d'Outlook : identifiant Graph, nom, couleur
+/// (`presetN`, ou `none`).
+#[derive(Debug, Clone, PartialEq)]
+struct CategorieOutlook {
+    id: String,
+    nom: String,
+    preset: String,
+}
+
+fn liste_outlook_par(t: &mut Transport, jeton: &str) -> Result<Vec<CategorieOutlook>, ErreurOAuth> {
+    let liste = reponse_json(&appeler(t, jeton, "GET", &format!("{GRAPH}/outlook/masterCategories"), "", b"", REPONSE_MAX)?)?;
+    Ok(liste
+        .get("value")
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|c| {
+            let texte = |cle: &str| c.get(cle).and_then(|v| v.as_str()).map(str::to_string);
+            Some(CategorieOutlook { id: texte("id")?, nom: texte("displayName")?, preset: texte("color").unwrap_or_default() })
+        })
+        .collect())
+}
+
+/// Reporte dans la liste d'Outlook un changement fait au catalogue de MMail
+/// (0.9.0) : la catégorie `avant` et `apres` le changement, (nom, couleur) —
+/// couleur `None` quand MMail n'en sait rien (gris d'attente). Créée ou
+/// recolorée dans MMail, elle est créée ou recolorée dans Outlook. Renommée :
+/// Graph ne renomme pas une catégorie de la liste, la nouvelle y est donc
+/// créée et l'ancienne retirée (les messages, eux, se renomment à part,
+/// `renommer_categorie`). Retirée de MMail, elle reste dans Outlook, dont la
+/// liste sert aussi aux autres postes. Rend le nombre d'écritures faites.
+pub fn reporter_categorie(jeton: &str, avant: Option<(&str, Option<&str>)>, apres: Option<(&str, Option<&str>)>) -> Result<usize, ErreurOAuth> {
+    reporter_categorie_par(&mut |d: &Demande| http::envoyer(d), jeton, avant, apres)
+}
+
+fn reporter_categorie_par(
+    t: &mut Transport,
+    jeton: &str,
+    avant: Option<(&str, Option<&str>)>,
+    apres: Option<(&str, Option<&str>)>,
+) -> Result<usize, ErreurOAuth> {
+    let Some((nom, couleur)) = apres else {
+        return Ok(0);
+    };
+    let nom = nom.trim();
+    if nom.is_empty() {
+        return Ok(0);
+    }
+    let liste = liste_outlook_par(t, jeton)?;
+    let trouver = |n: &str| liste.iter().find(|c| c.nom.trim().eq_ignore_ascii_case(n.trim())).cloned();
+    let preset = couleur.and_then(preset_proche);
+    let mut ecritures = 0;
+    match trouver(nom) {
+        Some(c) => {
+            if let Some(preset) = preset.filter(|p| *p != c.preset) {
+                let url = format!("{GRAPH}/outlook/masterCategories/{}", encoder(&c.id));
+                let corps = serde_json::json!({ "color": preset }).to_string();
+                succes(&appeler(t, jeton, "PATCH", &url, "application/json", corps.as_bytes(), REPONSE_MAX)?)?;
+                ecritures += 1;
+            }
+        }
+        None => {
+            let corps = serde_json::json!({ "displayName": nom, "color": preset.as_deref().unwrap_or("none") }).to_string();
+            let url = format!("{GRAPH}/outlook/masterCategories");
+            succes(&appeler(t, jeton, "POST", &url, "application/json", corps.as_bytes(), REPONSE_MAX)?)?;
+            ecritures += 1;
+        }
+    }
+    if let Some((ancien, _)) = avant {
+        if !ancien.trim().eq_ignore_ascii_case(nom) {
+            if let Some(c) = trouver(ancien) {
+                let url = format!("{GRAPH}/outlook/masterCategories/{}", encoder(&c.id));
+                succes(&appeler(t, jeton, "DELETE", &url, "", b"", REPONSE_MAX)?)?;
+                ecritures += 1;
+            }
+        }
+    }
+    Ok(ecritures)
+}
+
+/// Ajoute à la liste d'Outlook les catégories `voulues` (nom, couleur) qui
+/// n'y sont pas, au moment où l'on relie les catégories de MMail à Outlook
+/// (0.9.0). Rend le nombre de catégories ajoutées.
+pub fn completer_liste(jeton: &str, voulues: &[(String, Option<String>)]) -> Result<usize, ErreurOAuth> {
+    completer_liste_par(&mut |d: &Demande| http::envoyer(d), jeton, voulues)
+}
+
+fn completer_liste_par(t: &mut Transport, jeton: &str, voulues: &[(String, Option<String>)]) -> Result<usize, ErreurOAuth> {
+    if voulues.is_empty() {
+        return Ok(0);
+    }
+    let liste = liste_outlook_par(t, jeton)?;
+    let mut ajoutees = 0;
+    let mut vues: Vec<String> = liste.iter().map(|c| c.nom.trim().to_lowercase()).collect();
+    for (nom, couleur) in voulues {
+        let nom = nom.trim();
+        if nom.is_empty() || vues.contains(&nom.to_lowercase()) {
+            continue;
+        }
+        let preset = couleur.as_deref().and_then(preset_proche);
+        let corps = serde_json::json!({ "displayName": nom, "color": preset.as_deref().unwrap_or("none") }).to_string();
+        succes(&appeler(t, jeton, "POST", &format!("{GRAPH}/outlook/masterCategories"), "application/json", corps.as_bytes(), REPONSE_MAX)?)?;
+        vues.push(nom.to_lowercase());
+        ajoutees += 1;
+    }
+    Ok(ajoutees)
 }
 
 /// Les catégories de la liste d'Outlook (`masterCategories`) et leur couleur,
@@ -865,15 +1001,11 @@ pub fn couleurs_categories(jeton: &str) -> Result<Vec<(String, String)>, ErreurO
 }
 
 fn couleurs_categories_par(t: &mut Transport, jeton: &str) -> Result<Vec<(String, String)>, ErreurOAuth> {
-    let liste = reponse_json(&appeler(t, jeton, "GET", &format!("{GRAPH}/outlook/masterCategories"), "", b"", REPONSE_MAX)?)?;
-    Ok(liste
-        .get("value")
-        .and_then(|v| v.as_array())
+    Ok(liste_outlook_par(t, jeton)?
         .into_iter()
-        .flatten()
         .filter_map(|c| {
-            let nom = c.get("displayName").and_then(|v| v.as_str())?.trim();
-            let couleur = couleur_outlook(c.get("color").and_then(|v| v.as_str())?)?;
+            let nom = c.nom.trim();
+            let couleur = couleur_outlook(&c.preset)?;
             (!nom.is_empty()).then(|| (nom.to_string(), couleur.to_string()))
         })
         .collect())
@@ -1468,6 +1600,95 @@ mod tests {
         assert_eq!(corps(2), serde_json::json!({"categories": ["Commande", "Urgent"]}));
         // Déjà porteur du nouveau nom : il n'apparaît qu'une fois.
         assert_eq!(corps(3), serde_json::json!({"categories": ["Commande"]}));
+    }
+
+    #[test]
+    fn couleur_d_outlook_la_plus_proche() {
+        assert_eq!(preset_proche("#E81123").as_deref(), Some("preset0"));
+        assert_eq!(preset_proche("#0078d4").as_deref(), Some("preset7"));
+        assert_eq!(preset_proche("#FF0000").as_deref(), Some("preset0"));
+        assert_eq!(preset_proche("#00FF00").as_deref(), Some("preset4"));
+        assert_eq!(preset_proche("#000000").as_deref(), Some("preset14"));
+        assert_eq!(preset_proche("rouge"), None);
+        assert_eq!(preset_proche("#12345"), None);
+        // Chaque couleur d'Outlook revient à elle-même.
+        for n in 0..25 {
+            assert_eq!(preset_proche(COULEURS_OUTLOOK[n]), Some(format!("preset{n}")));
+        }
+    }
+
+    #[test]
+    fn categorie_reportee_dans_la_liste_d_outlook() {
+        const LISTE: &str = "https://graph.microsoft.com/v1.0/me/outlook/masterCategories";
+        let liste = r#"{"value":[{"id":"id-devis","displayName":"Devis","color":"preset7"},
+                                 {"id":"id-ancien","displayName":"Ancien","color":"preset1"}]}"#;
+        let reponses = [("GET", LISTE, 200, liste), ("POST", LISTE, 201, "{}"), ("PATCH", LISTE, 200, "{}"), ("DELETE", LISTE, 204, "")];
+        let jouer = |avant: Option<(&str, Option<&str>)>, apres: Option<(&str, Option<&str>)>| {
+            let mut journal = Vec::new();
+            let n = reporter_categorie_par(&mut graph_categories(&mut journal, &reponses), "J", avant, apres).unwrap();
+            let vu: Vec<(String, String, String)> = journal
+                .iter()
+                .map(|r| (r.methode.clone(), r.url.trim_start_matches(LISTE).to_string(), String::from_utf8_lossy(&r.corps).to_string()))
+                .collect();
+            (n, vu)
+        };
+        let corps = |v: &str| serde_json::from_str::<serde_json::Value>(v).unwrap();
+
+        // Créée dans MMail : créée dans Outlook, à la couleur la plus proche.
+        let (n, vu) = jouer(None, Some(("Litige", Some("#FF0000"))));
+        assert_eq!(n, 1);
+        assert_eq!(vu.len(), 2);
+        assert_eq!((vu[1].0.as_str(), vu[1].1.as_str()), ("POST", ""));
+        assert_eq!(corps(&vu[1].2), serde_json::json!({"displayName": "Litige", "color": "preset0"}));
+        // Sans couleur connue : « none ».
+        let (_, vu) = jouer(None, Some(("Litige", None)));
+        assert_eq!(corps(&vu[1].2), serde_json::json!({"displayName": "Litige", "color": "none"}));
+        // Déjà là, même couleur (casse indifférente) : rien d'écrit.
+        let (n, vu) = jouer(None, Some(("devis", Some("#0078D4"))));
+        assert_eq!((n, vu.len()), (0, 1));
+        // Déjà là, sans couleur connue dans MMail : la couleur d'Outlook reste.
+        let (n, _) = jouer(Some(("Devis", None)), Some(("Devis", None)));
+        assert_eq!(n, 0);
+        // Recolorée.
+        let (n, vu) = jouer(Some(("Devis", Some("#0078D4"))), Some(("Devis", Some("#13A10E"))));
+        assert_eq!(n, 1);
+        assert_eq!((vu[1].0.as_str(), vu[1].1.as_str()), ("PATCH", "/id-devis"));
+        assert_eq!(corps(&vu[1].2), serde_json::json!({"color": "preset4"}));
+        // Renommée : la nouvelle créée, l'ancienne retirée de la liste.
+        let (n, vu) = jouer(Some(("Ancien", Some("#F7630C"))), Some(("Nouveau", Some("#F7630C"))));
+        assert_eq!(n, 2);
+        assert_eq!((vu[1].0.as_str(), vu[2].0.as_str(), vu[2].1.as_str()), ("POST", "DELETE", "/id-ancien"));
+        assert_eq!(corps(&vu[1].2), serde_json::json!({"displayName": "Nouveau", "color": "preset1"}));
+        // Retirée de MMail : rien dans Outlook, pas même la lecture.
+        let (n, vu) = jouer(Some(("Devis", Some("#0078D4"))), None);
+        assert_eq!((n, vu.len()), (0, 0));
+        // Refus de Graph : l'erreur remonte.
+        let refus = [("GET", LISTE, 403, r#"{"error":{"code":"ErrorAccessDenied","message":"Access is denied."}}"#)];
+        let mut journal = Vec::new();
+        assert!(reporter_categorie_par(&mut graph_categories(&mut journal, &refus), "J", None, Some(("X", None))).is_err());
+    }
+
+    #[test]
+    fn liste_d_outlook_completee() {
+        const LISTE: &str = "https://graph.microsoft.com/v1.0/me/outlook/masterCategories";
+        let reponses = [("GET", LISTE, 200, r#"{"value":[{"id":"1","displayName":"Devis","color":"preset7"}]}"#), ("POST", LISTE, 201, "{}")];
+        let mut journal = Vec::new();
+        let voulues = vec![
+            ("devis".to_string(), Some("#13A10E".to_string())),
+            ("Litige".to_string(), Some("#FF0000".to_string())),
+            ("litige ".to_string(), None),
+            ("Relance".to_string(), None),
+        ];
+        assert_eq!(completer_liste_par(&mut graph_categories(&mut journal, &reponses), "J", &voulues).unwrap(), 2);
+        let corps: Vec<serde_json::Value> = journal.iter().filter(|r| r.methode == "POST").map(|r| serde_json::from_slice(&r.corps).unwrap()).collect();
+        assert_eq!(corps, vec![
+            serde_json::json!({"displayName": "Litige", "color": "preset0"}),
+            serde_json::json!({"displayName": "Relance", "color": "none"}),
+        ]);
+        // Rien à ajouter : pas même la lecture.
+        let mut journal = Vec::new();
+        assert_eq!(completer_liste_par(&mut graph_categories(&mut journal, &reponses), "J", &[]).unwrap(), 0);
+        assert!(journal.is_empty());
     }
 
     #[test]

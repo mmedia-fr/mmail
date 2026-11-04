@@ -5043,6 +5043,12 @@ ApplicationWindow {
             return filtre.length === 0 || t.toLowerCase().indexOf(filtre) >= 0
         })
         colonneListe.panneauHistorique.entrees = h
+        // Chaque lettre tapée refait la liste, et une ListView qui change de
+        // modèle se place sur sa première ligne : Entrée lançait alors la
+        // première recherche passée au lieu du texte tapé (demande d'un
+        // utilisateur, 04/11/2026). Rien n'est choisi tant que les flèches
+        // n'ont pas servi (0.6.37).
+        colonneListe.panneauHistorique.contentItem.currentIndex = -1
         if (h.length > 0 && colonneListe.champRecherche.activeFocus)
             colonneListe.panneauHistorique.open()
         else
@@ -6980,6 +6986,9 @@ ApplicationWindow {
             // Scénario « recherche-portee » (0.8.2, 0.8.3 ; banc LOT1=1).
             if (essai.scenario === "recherche-portee")
                 scenarios.lancerScenarioRecherchePortee()
+            // « recherche-entree » : demande d'un utilisateur du 04/11/2026.
+            if (essai.scenario === "recherche-entree")
+                scenarios.lancerScenarioRechercheEntree()
             // « Affichage › Marges du message » (0.6.23).
             if (essai.scenario === "marges")
                 scenarios.lancerScenarioMarges()

@@ -164,6 +164,9 @@ Page {
     // soi). Proposés quand le compte a un certificat ouvert.
     property bool signer: false
     property bool chiffrer: false
+    // « Chiffrer » coché ou décoché à la main, ou imposé (réponse à un
+    // message chiffré) : le chiffrement automatique ne s'en mêle plus.
+    property bool chiffrerManuel: false
     readonly property string resumeOptions: {
         var t = []
         if (importance > 0) t.push(qsTr("Importance haute"))
@@ -219,9 +222,34 @@ Page {
         return !!c && fenetre.signeParDefaut(c.adresse) && boite.cleSmime(c.compte).length > 0
     }
 
+    /// Le compte chiffre-t-il d'office, avec un certificat ouvert ?
+    function chiffrerParDefaut() {
+        var c = compteChoisi()
+        return !!c && fenetre.chiffreParDefaut(c.adresse) && boite.cleSmime(c.compte).length > 0
+    }
+
+    function destinataires() {
+        return [champA.text, champCc.text, champCci.text].filter(function(t) { return t.trim().length > 0 }).join("; ")
+    }
+
+    /// Chiffrement d'office (choix de Manu du 04/11) : pour un compte qui
+    /// chiffre par défaut, « Chiffrer » se coche quand chaque destinataire a
+    /// un certificat, et se décoche sinon — le message part alors en clair.
+    /// Un choix fait à la main l'emporte.
+    function ajusterChiffrement() {
+        if (chiffrerManuel || !chiffrerParDefaut())
+            return
+        var c = compteChoisi()
+        var liste = destinataires()
+        var manquants = ["?"]
+        try { manquants = JSON.parse(boite.sansCertificat(c.compte, liste)) } catch (e) {}
+        chiffrer = liste.length > 0 && manquants.length === 0
+    }
+
     /// « Chiffrer » coché : dit tout de suite à qui le message ne pourrait pas
     /// partir chiffré, faute de certificat — plutôt qu'à l'envoi.
     function verifierChiffrement() {
+        ajusterChiffrement()
         var c = compteChoisi()
         if (!chiffrer || !c) {
             if (noteErreur && note.indexOf(qsTr("Pas de certificat")) === 0)
@@ -229,7 +257,7 @@ Page {
             return
         }
         var manquants = []
-        try { manquants = JSON.parse(boite.sansCertificat(c.compte, [champA.text, champCc.text, champCci.text].filter(function(t) { return t.trim().length > 0 }).join("; "))) } catch (e) {}
+        try { manquants = JSON.parse(boite.sansCertificat(c.compte, destinataires())) } catch (e) {}
         if (boite.cleSmime(c.compte).length === 0)
             signaler(qsTr("Pas de certificat S/MIME ouvert pour ce compte : « Certificats S/MIME… », dans le menu du compte."), true)
         else if (manquants.length > 0)
@@ -371,6 +399,9 @@ Page {
         envoiDiffere = p.envoiDiffere || 0
         signer = p.signer === true || (p.mode !== "brouillon" && signerParDefaut())
         chiffrer = p.chiffrer === true
+        // Réponse à un message chiffré : chiffrée d'office, comme imposée.
+        chiffrerManuel = p.chiffrerManuel === true || (p.mode !== "brouillon" && p.chiffrer === true)
+        ajusterChiffrement()
         origineChemin = p.origineChemin || ""
         origineUid = p.origineUid || 0
         origineMode = p.origineMode || ""
@@ -421,7 +452,7 @@ Page {
             origineChemin: origineChemin, origineUid: origineUid, origineMode: origineMode,
             importance: importance, accuseRemise: accuseRemise,
             confirmationLecture: confirmationLecture, envoiDiffere: Math.round(envoiDiffere),
-            signer: signer, chiffrer: chiffrer
+            signer: signer, chiffrer: chiffrer, chiffrerManuel: chiffrerManuel
         }
     }
 
@@ -572,6 +603,9 @@ Page {
             champA.forceActiveFocus()
             return
         }
+        // Un destinataire tapé puis « Envoyer » aussitôt : le champ n'a pas
+        // perdu le focus, le chiffrement d'office se règle ici.
+        ajusterChiffrement()
         if (champObjet.text.trim().length === 0 && !sansObjet) {
             dlgSansObjet.open()
             return
@@ -986,7 +1020,7 @@ Page {
                     text: modelData.adresse
                 }
                 Layout.fillWidth: true
-                onActivated: redac.modifie = true
+                onActivated: { redac.modifie = true; redac.ajusterChiffrement() }
             }
             Label { text: qsTr("À :") }
             TextField {
@@ -1477,7 +1511,12 @@ Page {
             text: qsTr("Chiffrer le message (l'objet reste visible)")
             checkable: true
             checked: redac.chiffrer
-            onTriggered: { redac.chiffrer = checked; redac.modifie = true; redac.verifierChiffrement() }
+            onTriggered: {
+                redac.chiffrer = checked
+                redac.chiffrerManuel = true
+                redac.modifie = true
+                redac.verifierChiffrement()
+            }
         }
         MenuSeparator {}
         MenuItem {

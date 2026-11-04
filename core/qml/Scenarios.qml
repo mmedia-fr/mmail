@@ -3992,6 +3992,22 @@ QtObject {
                   !!s.signature && s.signature.etat === "verifiee")
             var r = ouvrirRedaction(un)
             r.pret()
+            // Chiffrement d'office quand chaque destinataire a un certificat
+            // (choix de Manu du 04/11) ; en clair sinon ; la main l'emporte.
+            fenetre.poserChiffreParDefaut("un@essai.test", true)
+            r.remplir({ a: "deux@essai.test", objet: "Office", mode: "nouveau", texte: "Chiffré d'office ?" })
+            bilan("d'office : chiffré pour deux@, dont le certificat est connu",
+                  r.chiffrer === true && r.chiffrerManuel === false)
+            r.remplir({ a: "deux@essai.test; inconnu@essai.test", objet: "Office", mode: "nouveau", texte: "Et là ?" })
+            bilan("d'office : en clair dès qu'un destinataire n'a pas de certificat, sans avertissement",
+                  r.chiffrer === false && !(r.noteErreur && r.note.indexOf("Pas de certificat") === 0))
+            r.chiffrer = true
+            r.chiffrerManuel = true
+            r.ajusterChiffrement()
+            bilan("coché à la main : le choix reste", r.chiffrer === true)
+            fenetre.poserChiffreParDefaut("un@essai.test", false)
+            r.remplir({ a: "deux@essai.test", objet: "Office", mode: "nouveau", texte: "Sans réglage." })
+            bilan("sans le réglage : rien d'office", r.chiffrer === false)
             r.remplir({ a: "inconnu@essai.test", objet: "Refus", mode: "nouveau", texte: "Pas de certificat.",
                         signer: true, chiffrer: true })
             r.envoyer(false)

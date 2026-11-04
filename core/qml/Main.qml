@@ -439,6 +439,9 @@ ApplicationWindow {
         // Comptes qui signent par défaut leurs messages (S/MIME, 0.8.0) :
         // adresses, en JSON.
         property string signatureSmime: "[]"
+        // Comptes qui chiffrent d'office quand chaque destinataire a un
+        // certificat (S/MIME, choix de Manu du 04/11) : adresses, en JSON.
+        property string chiffrementSmime: "[]"
         property bool afficherMasques: false
         property bool memoriser: true
         property real largeurArborescence: 260
@@ -7072,6 +7075,17 @@ ApplicationWindow {
         if (oui)
             l.push(adresse)
         reglages.signatureSmime = JSON.stringify(l)
+    }
+    function chiffreParDefaut(adresse) {
+        try { return JSON.parse(reglages.chiffrementSmime).indexOf(adresse) >= 0 } catch (e) { return false }
+    }
+    function poserChiffreParDefaut(adresse, oui) {
+        var l = []
+        try { l = JSON.parse(reglages.chiffrementSmime) } catch (e) {}
+        l = l.filter(function(a) { return a !== adresse })
+        if (oui)
+            l.push(adresse)
+        reglages.chiffrementSmime = JSON.stringify(l)
     }
     function deverrouillerClesSmime() {
         var cles = []

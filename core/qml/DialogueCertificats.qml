@@ -216,6 +216,17 @@ Dialog {
             checked: fenetre.signeParDefaut(dlg.adresse)
             onToggled: fenetre.poserSigneParDefaut(dlg.adresse, checked)
         }
+        // Choix de Manu du 04/11 : chiffré quand c'est possible pour tous, en
+        // clair sinon — jamais d'envoi bloqué faute de certificat.
+        CheckBox {
+            text: qsTr("Chiffrer quand chaque destinataire a un certificat")
+            enabled: dlg.cles.length > 0
+            checked: fenetre.chiffreParDefaut(dlg.adresse)
+            onToggled: fenetre.poserChiffreParDefaut(dlg.adresse, checked)
+            ToolTip.visible: hovered
+            ToolTip.delay: 600
+            ToolTip.text: qsTr("Sinon, le message part en clair, sauf si vous cochez vous-même « Chiffrer le message ».")
+        }
         MenuSeparator { Layout.fillWidth: true }
         Button {
             text: qsTr("Ajouter une autorité de confiance…")

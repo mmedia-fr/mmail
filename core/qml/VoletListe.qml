@@ -332,13 +332,6 @@ ColumnLayout {
                     clip: true
                     model: panneauHistorique.entrees
                     currentIndex: -1
-                    // Chaque lettre tapée refait la liste (proposerHistorique),
-                    // et une ListView qui change de modèle se place sur sa
-                    // première ligne : Entrée lançait alors la première
-                    // recherche passée au lieu du texte tapé (demande d'un
-                    // utilisateur, 04/11/2026). Rien n'est choisi tant que les
-                    // flèches n'ont pas servi (0.6.37).
-                    onModelChanged: currentIndex = -1
                     ScrollBar.vertical: ScrollBar {
                         policy: panneauHistorique.entrees.length > 10 ? ScrollBar.AlwaysOn : ScrollBar.AsNeeded
                     }

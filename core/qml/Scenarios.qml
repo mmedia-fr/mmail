@@ -3350,6 +3350,64 @@ QtObject {
         })
     }
 
+    /// Scénario « recherche-entree » (0.6.37) : demande d'un utilisateur du
+    /// 04/11/2026 — deux recherches passées contiennent le mot tapé ; Entrée
+    /// doit chercher le texte tapé, et non la première suggestion. Les flèches
+    /// choisissent toujours une suggestion. La frappe passe par le clavier
+    /// (gestesEssai.touche), lettre par lettre, comme chez l'utilisateur.
+    function lancerScenarioRechercheEntree() {
+        var s = { echecs: 0 }
+        var champ = colonneListe.champRecherche
+        var panneau = colonneListe.panneauHistorique
+        var vue = panneau.contentItem
+        var taper = function(texte) {
+            for (var i = 0; i < texte.length; ++i) {
+                var c = texte[i]
+                gestesEssai.touche(champ, c === " " ? Qt.Key_Space : Qt.Key_A + (c.charCodeAt(0) - 97), c)
+            }
+        }
+        reglages.historiqueRecherches = JSON.stringify(["PAGES LACTALIS", "\"PAGES LACTALIS\""])
+        plusTard(8000, function() {
+            ouvrirDossier(comptesConnus[0].compte, "INBOX")
+            plusTard(4000, function() {
+                champ.forceActiveFocus()
+                plusTard(300, function() {
+                    taper("lactalis")
+                    plusTard(400, function() {
+                        bilanEssai(s, "frappe de « " + champ.text + " » : " + panneau.entrees.length + " suggestions"
+                                   + (panneau.opened ? " ouvertes" : " fermées") + ", rang choisi " + vue.currentIndex,
+                                   champ.text === "lactalis" && panneau.opened && panneau.entrees.length === 2
+                                   && vue.currentIndex === -1)
+                        gestesEssai.touche(champ, Qt.Key_Return, "\r")
+                        plusTard(1500, function() {
+                            bilanEssai(s, "Entrée : recherche « " + fenetre.recherche + " » (attendu « lactalis »)",
+                                       fenetre.recherche === "lactalis")
+                            fenetre.quitterRecherche()
+                            plusTard(500, function() {
+                                champ.forceActiveFocus()
+                                taper("pages")
+                                plusTard(400, function() {
+                                    gestesEssai.touche(champ, Qt.Key_Down, "")
+                                    plusTard(200, function() {
+                                        var choisi = vue.currentIndex
+                                        gestesEssai.touche(champ, Qt.Key_Return, "\r")
+                                        plusTard(1500, function() {
+                                            bilanEssai(s, "flèche bas puis Entrée : rang " + choisi + ", recherche « "
+                                                       + fenetre.recherche + " » (attendu « PAGES LACTALIS »)",
+                                                       choisi === 0 && fenetre.recherche === "PAGES LACTALIS")
+                                            console.log("scenario: recherche-entree " + (s.echecs === 0 ? "OK" : "ECHEC (" + s.echecs + ")"))
+                                            Qt.quit()
+                                        })
+                                    })
+                                })
+                            })
+                        })
+                    })
+                })
+            })
+        })
+    }
+
     /// Scénario « marges » (0.6.23) : « Affichage › Marges du message », ses
     /// trois choix l'un après l'autre, dans le volet de lecture et dans la
     /// fenêtre du message. Le texte doit se décaler de la marge choisie, vers

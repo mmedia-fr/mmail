@@ -6800,6 +6800,9 @@ ApplicationWindow {
                 scenarios.lancerScenarioMolette()
             if (essai.scenario === "groupes-replier")
                 scenarios.lancerScenarioGroupesReplier()
+            // « recherche-entree » : demande d'un utilisateur du 04/11/2026.
+            if (essai.scenario === "recherche-entree")
+                scenarios.lancerScenarioRechercheEntree()
             // Scénario « lu-differe » (0.6.9) : marquage « lu » après un délai,
             // ou jamais.
             if (essai.scenario === "lu-differe")

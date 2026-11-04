@@ -29,8 +29,8 @@ ApplicationWindow {
     height: 800
     visible: true
     title: boite.dossierCourant.length > 0
-           ? "MMail — " + libelleCourant()
-           : "MMail"
+           ? nomLogiciel + " — " + libelleCourant()
+           : nomLogiciel
 
     Socle { id: socle }
     // Envois différés : chaque minute, les messages arrivés à échéance partent.
@@ -476,11 +476,18 @@ ApplicationWindow {
     // Celle de l'organisation (0.8.6), si elle en fournit une : par défaut
     // pour un profil neuf, sinon MMEDIA ; un choix déjà fait reste.
     property string apparence: personnalisation.apparence ? "organisation" : "mmedia"
-    // Personnalisation à l'installation (0.8.6, cf. cpp/main.cpp,
-    // `lirePersonnalisation`) : {nom, apparence, imposer, logo, icone,
-    // dossier}, vide sans dossier de personnalisation.
-    readonly property var personnalisation: typeof personnalisationMachine !== "undefined" && personnalisationMachine
-                                            ? personnalisationMachine : ({})
+    // Personnalisation (0.8.6, cf. cpp/personnalisation.h) : {nom,
+    // logiciel, apparence, imposer, logo, icone, dossier, origine}, vide sans
+    // dossier de personnalisation. Celle du poste, sinon celle importée dans
+    // le profil (Android) ; une importation la remplace.
+    property var personnalisation: typeof personnalisationMachine !== "undefined" && personnalisationMachine
+                                   ? personnalisationMachine : ({})
+    // Le nom du logiciel, en tête du bandeau et au titre de la fenêtre.
+    readonly property string nomLogiciel: personnalisation.logiciel ? personnalisation.logiciel : "MMail"
+    // Importation d'une personnalisation (Android) : sans dossier
+    // d'installation, elle passe par le profil. Une personnalisation du poste
+    // l'emporte, et ne se remplace pas.
+    readonly property bool personnalisationImportable: tactile && personnalisation.origine !== "poste"
     // Apparence imposée par l'organisation : seule au choix.
     readonly property bool apparenceImposee: personnalisation.imposer === true && jeuxApparence["organisation"] !== undefined
     // Disposition de l'en-tête du bureau (0.6.14) : « barre », une seule
@@ -1407,7 +1414,7 @@ ApplicationWindow {
             }
             Label {
                 text: fenetre.vueUnifiee ? qsTr("Toutes les BàL")
-                      : boite.dossierCourant.length > 0 ? fenetre.libelleCourant() : "MMail"
+                      : boite.dossierCourant.length > 0 ? fenetre.libelleCourant() : fenetre.nomLogiciel
                 color: fenetre.marque ? fenetre.marque.texteBandeau : fenetre.palette.windowText
                 elide: Text.ElideRight
                 font.bold: true
@@ -1505,8 +1512,11 @@ ApplicationWindow {
                 Layout.leftMargin: 4
             }
             Label {
+                objectName: "nomEntete"
                 visible: fenetre.marque !== null && !fenetre.compact && !fenetre.enteteEtroite
-                text: "MMail"
+                text: fenetre.nomLogiciel
+                elide: Text.ElideRight
+                Layout.maximumWidth: 260
                 color: fenetre.marque ? fenetre.marque.texteBandeau : fenetre.palette.windowText
                 font.family: fenetre.policeTitres
                 font.weight: Font.DemiBold
@@ -6068,6 +6078,54 @@ ApplicationWindow {
     function choisirApparence(nom) {
         apparence = nom
         messageEtat.texte = qsTr("Apparence : %1.").arg(jeuxApparence[nom].libelle)
+    }
+
+    // ---- personnalisation importée (0.8.6, Android)
+
+    Personnalisation { id: personnalisationProfil }
+    FileDialog {
+        id: choixPersonnalisation
+        title: qsTr("Importer une personnalisation")
+        fileMode: FileDialog.OpenFiles
+        // Sous Android, un filtre se traduit en types MIME, et un fichier
+        // .json y passe souvent pour un fichier quelconque : aucun filtre.
+        nameFilters: Qt.platform.os === "android" ? []
+                     : [qsTr("Personnalisation (personnalisation.json logo.png logo.svg)"), qsTr("Tous les fichiers (*)")]
+        onAccepted: {
+            var adresses = []
+            for (var i = 0; i < selectedFiles.length; ++i)
+                adresses.push(selectedFiles[i].toString())
+            fenetre.importerPersonnalisation(adresses)
+        }
+    }
+
+    /// Range dans le profil la personnalisation choisie (`adresses` :
+    /// personnalisation.json, et le logo s'il y en a un) et l'applique ;
+    /// son apparence devient celle en vigueur. Rend vrai si elle a pris.
+    function importerPersonnalisation(adresses) {
+        var p = personnalisationProfil.importer(adresses, cheminProfil)
+        if (p.erreur) {
+            annoncer(qsTr("Personnalisation non importée : %1").arg(p.erreur), true)
+            return false
+        }
+        personnalisation = p
+        if (jeuxApparence["organisation"])
+            apparence = "organisation"
+        messageEtat.texte = qsTr("Personnalisation importée : %1.").arg(p.nom || p.logiciel || qsTr("organisation"))
+        return true
+    }
+
+    /// Retire la personnalisation importée ; MMail reprend ses couleurs.
+    function retirerPersonnalisation() {
+        if (!personnalisationProfil.retirer(cheminProfil)) {
+            annoncer(qsTr("La personnalisation n'a pas pu être retirée du profil."), true)
+            return false
+        }
+        personnalisation = ({})
+        if (apparence === "organisation")
+            apparence = "mmedia"
+        messageEtat.texte = qsTr("Personnalisation retirée.")
+        return true
     }
 
     readonly property var nomsDisposition: ["barre", "etages"]

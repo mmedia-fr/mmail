@@ -35,7 +35,7 @@ Menu {
         }
         // Apparence imposée par l'organisation (0.8.6) : rien d'autre à créer.
         MenuSeparator {
-            visible: !fenetre.apparenceImposee
+            visible: !fenetre.apparenceImposee || fenetre.personnalisationImportable
             height: visible ? implicitHeight : 0
         }
         MenuItem {
@@ -43,6 +43,23 @@ Menu {
             height: visible ? implicitHeight : 0
             text: qsTr("Créer mon apparence…")
             onTriggered: dlgApparence.ouvrir()
+        }
+        // Personnalisation d'une organisation (0.8.6) : sous Android, pas de
+        // dossier d'installation ; on choisit personnalisation.json, avec le
+        // logo s'il y en a un.
+        MenuItem {
+            objectName: "importerPersonnalisation"
+            visible: fenetre.personnalisationImportable
+            height: visible ? implicitHeight : 0
+            text: qsTr("Importer une personnalisation…")
+            onTriggered: choixPersonnalisation.open()
+        }
+        MenuItem {
+            objectName: "retirerPersonnalisation"
+            visible: fenetre.personnalisationImportable && fenetre.personnalisation.origine === "profil"
+            height: visible ? implicitHeight : 0
+            text: qsTr("Retirer la personnalisation")
+            onTriggered: fenetre.retirerPersonnalisation()
         }
     }
     // La vue tactile garde la barre d'application d'Android : pas de

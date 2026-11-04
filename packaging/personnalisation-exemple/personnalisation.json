@@ -1,5 +1,6 @@
 {
   "nom": "Exemple",
+  "logiciel": "Exemple Mail",
   "apparence": {
     "base": "mmedia",
     "bandeau": "#1F4E79",

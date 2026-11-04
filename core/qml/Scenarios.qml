@@ -4117,11 +4117,17 @@ QtObject {
         })
     }
 
-    /// Scénario « personnalisation » (0.8.6) : le dossier de MMAIL_PERSONNALISATION
-    /// donne une apparence au nom de l'organisation, ses couleurs, et son logo
-    /// en tête du bandeau. MMAIL_DOSSIER « imposer » : elle est la seule au
-    /// choix, et l'emporte sur l'apparence déjà choisie (le banc en range
-    /// une) ; « libre » : elle s'ajoute, le choix rangé reste.
+    /// Scénario « personnalisation » (0.8.6). MMAIL_DOSSIER :
+    /// - « imposer » ou « libre » : le dossier de MMAIL_PERSONNALISATION donne
+    ///   une apparence au nom de l'organisation, ses couleurs, son logo en
+    ///   tête du bandeau, et (« imposer ») le nom du logiciel. « imposer » :
+    ///   elle est la seule au choix, et l'emporte sur l'apparence déjà choisie
+    ///   (le banc en range une) ; « libre » : elle s'ajoute, le choix rangé
+    ///   reste ;
+    /// - « importer:<dossier> » (Android, MMAIL_TACTILE=1) : sans dossier du
+    ///   poste, la personnalisation de <dossier> est importée dans le profil,
+    ///   puis retirée, puis importée de nouveau ;
+    /// - « profil » : celle importée dans le profil est reprise au démarrage.
     function etapeScenarioPersonnalisation() {
         var echecs = 0
         var bilan = function(texte, bon) {
@@ -4129,30 +4135,87 @@ QtObject {
                 ++echecs
             console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
         }
+        var finir = function() {
+            console.log("scenario: personnalisation " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
+            if (identifiantsEssai.sortie === "" || identifiantsEssai.sortie === "file:")
+                Qt.quit()
+        }
+        var mode = identifiantsEssai.dossier
         var p = fenetre.personnalisation
         console.log("scenario: personnalisation", JSON.stringify(p))
-        var org = fenetre.jeuxApparence["organisation"]
-        bilan("apparence de l'organisation, « " + (org ? org.libelle : "") + " »", !!org && org.libelle === "Exemple essai")
-        bilan("bandeau " + (org ? org.bandeau : ""), !!org && org.bandeau === "#1F4E79")
-        bilan("couleur invalide écartée", !!org && org.surbrillance !== "rouge")
-        if (identifiantsEssai.dossier === "imposer") {
+        var verifierOrganisation = function(libelle) {
+            var org = fenetre.jeuxApparence["organisation"]
+            bilan("apparence de l'organisation, « " + (org ? org.libelle : "") + " »", !!org && org.libelle === libelle)
+            bilan("bandeau " + (org ? org.bandeau : ""), !!org && org.bandeau === "#1F4E79")
+            bilan("couleur invalide écartée", !!org && org.surbrillance !== "rouge")
+        }
+
+        if (mode.indexOf("importer:") === 0) {
+            var source = mode.substring(9)
+            var adresse = function(nom) { return "file://" + source + "/" + nom }
+            bilan("au départ, rien du poste : " + JSON.stringify(p), !p.origine && fenetre.nomLogiciel === "MMail")
+            bilan("importation proposée", fenetre.personnalisationImportable)
+            bilan("un fichier quelconque est refusé",
+                  !fenetre.importerPersonnalisation([adresse("quelconque.txt")]) && !fenetre.personnalisation.origine)
+            bilan("un logo seul est refusé",
+                  !fenetre.importerPersonnalisation([adresse("logo.png")]) && !fenetre.personnalisation.origine)
+            bilan("importée (paramètres et logo)",
+                  fenetre.importerPersonnalisation([adresse("logo.png"), adresse("personnalisation.json")]))
+            p = fenetre.personnalisation
+            console.log("scenario: importée", JSON.stringify(p))
+            bilan("rangée dans le profil : " + p.dossier,
+                  p.origine === "profil" && String(p.dossier).indexOf("/profil/personnalisation") > 0)
+            bilan("logo rangé : " + p.logo, String(p.logo).indexOf("/profil/personnalisation/logo.png") > 0)
+            verifierOrganisation("Exemple essai")
+            bilan("en vigueur (" + fenetre.apparence + ")", fenetre.apparence === "organisation")
+            bilan("nom du logiciel : " + fenetre.nomLogiciel, fenetre.nomLogiciel === "Exemple Mail")
+            bilan("titre : " + fenetre.title, fenetre.title.indexOf("Exemple Mail") === 0)
+            bilan("retrait proposé", fenetre.personnalisation.origine === "profil")
+            bilan("retirée", fenetre.retirerPersonnalisation())
+            bilan("plus rien : " + JSON.stringify(fenetre.personnalisation),
+                  !fenetre.personnalisation.origine && fenetre.jeuxApparence["organisation"] === undefined)
+            bilan("MMail reprend ses couleurs (" + fenetre.apparence + ") et son nom (" + fenetre.nomLogiciel + ")",
+                  fenetre.apparence === "mmedia" && fenetre.nomLogiciel === "MMail")
+            // De nouveau, sans logo : l'importation remplace la précédente.
+            bilan("importée de nouveau, sans logo", fenetre.importerPersonnalisation([adresse("personnalisation.json")]))
+            bilan("sans logo : " + fenetre.personnalisation.logo, !fenetre.personnalisation.logo)
+            finir()
+            return
+        }
+        if (mode === "profil") {
+            bilan("reprise du profil : " + p.dossier, p.origine === "profil")
+            verifierOrganisation("Exemple essai")
+            bilan("celle d'un profil neuf (" + fenetre.apparence + ")", fenetre.apparence === "organisation")
+            bilan("nom du logiciel : " + fenetre.nomLogiciel, fenetre.nomLogiciel === "Exemple Mail")
+            bilan("retrait proposé", fenetre.personnalisationImportable)
+            finir()
+            return
+        }
+
+        verifierOrganisation("Exemple essai")
+        bilan("du poste : " + p.origine, p.origine === "poste")
+        bilan("ni importation ni retrait proposés", !fenetre.personnalisationImportable)
+        if (mode === "imposer") {
             bilan("imposée : seule au choix " + JSON.stringify(fenetre.nomsApparence),
                   fenetre.nomsApparence.length === 1 && fenetre.nomsApparence[0] === "organisation")
             bilan("imposée : en vigueur (" + fenetre.apparence + ")", fenetre.apparence === "organisation")
+            bilan("nom du logiciel : " + fenetre.nomLogiciel, fenetre.nomLogiciel === "Exemple Mail")
+            bilan("titre : " + fenetre.title, fenetre.title.indexOf("Exemple Mail") === 0)
         } else {
             bilan("libre : au choix", fenetre.nomsApparence.indexOf("organisation") >= 0 && fenetre.nomsApparence.length > 1)
             bilan("libre : le choix rangé reste (" + fenetre.apparence + ")", fenetre.apparence !== "organisation")
+            bilan("sans « logiciel », le nom reste MMail", fenetre.nomLogiciel === "MMail")
             fenetre.choisirApparence("organisation")
         }
         // Le bandeau est la `menuBar` de la fenêtre, hors de son contentItem.
         var signe = objetNomme(fenetre.menuBar, "signeEntete")
+        var nom = objetNomme(fenetre.menuBar, "nomEntete")
         plusTard(800, function() {
             bilan("logo en tête : " + (signe ? signe.source : "absent"),
                   !!signe && String(signe.source) === p.logo && signe.visible)
+            bilan("nom en tête : " + (nom ? nom.text : "absent"), !!nom && nom.visible && nom.text === fenetre.nomLogiciel)
             bilan("icône retenue", !!p.icone)
-            console.log("scenario: personnalisation " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
-            if (identifiantsEssai.sortie === "" || identifiantsEssai.sortie === "file:")
-                Qt.quit()
+            finir()
         })
     }
 

@@ -3900,6 +3900,16 @@ QtObject {
                     t = mef.texte()
                     bilan("la nouvelle ligne suit la dernière, à la police de celle du dessus : " + (nouvelle ? nouvelle[0] : ""),
                           t.indexOf("Fin\nNouvelle") >= 0 && !!nouvelle && nouvelle[0].indexOf("Georgia") > 0)
+                    // MMAIL_DOSSIER « garder » : la rédaction reste ouverte sur
+                    // le tableau, menu « Tableau » déplié, pour une capture.
+                    if (identifiantsEssai.dossier === "garder") {
+                        var bouton = objetNomme(r, fenetre.tactile ? "boutonTableauTactile" : "boutonTableau")
+                        if (bouton)
+                            r.menuTableau.popup(bouton, 0, fenetre.tactile ? -r.menuTableau.implicitHeight : bouton.height)
+                        console.log("scenario: editeur-tableau-outils, rédaction gardée pour la capture "
+                                    + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
+                        return
+                    }
 
                     corps.cursorPosition = 3
                     tab(false)

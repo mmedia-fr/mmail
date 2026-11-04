@@ -29,8 +29,8 @@ ApplicationWindow {
     height: 800
     visible: true
     title: boite.dossierCourant.length > 0
-           ? "MMail — " + libelleCourant()
-           : "MMail"
+           ? nomLogiciel + " — " + libelleCourant()
+           : nomLogiciel
 
     Socle { id: socle }
     // Envois différés : chaque minute, les messages arrivés à échéance partent.
@@ -365,7 +365,6 @@ ApplicationWindow {
         property string identites: "{}"
         property string signatures: "[]"
         property string adressesEnvoi: "{}"
-        property bool miseEnForme: true
         // Correcteur d'orthographe (0.6.36) : actif, et les mots ajoutés au
         // dictionnaire, un par ligne — ils suivent la sauvegarde.
         property bool orthographe: true
@@ -473,7 +472,23 @@ ApplicationWindow {
     // Par défaut « mmedia » depuis la 0.6.20 (Manu, 26/10) ; un profil qui a
     // déjà tourné garde la sienne : Qt.labs.settings écrit la valeur par
     // défaut dans le profil dès le premier démarrage.
-    property string apparence: "mmedia"
+    // Celle de l'organisation (0.8.6), si elle en fournit une : par défaut
+    // pour un profil neuf, sinon MMEDIA ; un choix déjà fait reste.
+    property string apparence: personnalisation.apparence ? "organisation" : "mmedia"
+    // Personnalisation (0.8.6, cf. cpp/personnalisation.h) : {nom,
+    // logiciel, apparence, imposer, logo, icone, dossier, origine}, vide sans
+    // dossier de personnalisation. Celle du poste, sinon celle importée dans
+    // le profil (Android) ; une importation la remplace.
+    property var personnalisation: typeof personnalisationMachine !== "undefined" && personnalisationMachine
+                                   ? personnalisationMachine : ({})
+    // Le nom du logiciel, en tête du bandeau et au titre de la fenêtre.
+    readonly property string nomLogiciel: personnalisation.logiciel ? personnalisation.logiciel : "MMail"
+    // Importation d'une personnalisation (Android) : sans dossier
+    // d'installation, elle passe par le profil. Une personnalisation du poste
+    // l'emporte, et ne se remplace pas.
+    readonly property bool personnalisationImportable: tactile && personnalisation.origine !== "poste"
+    // Apparence imposée par l'organisation : seule au choix.
+    readonly property bool apparenceImposee: personnalisation.imposer === true && jeuxApparence["organisation"] !== undefined
     // Disposition de l'en-tête du bureau (0.6.14) : « barre », une seule
     // ligne, par défaut ; « etages », les onglets et les menus sur le
     // bandeau, les boutons et les interrupteurs sur une bande dessous, comme
@@ -488,6 +503,9 @@ ApplicationWindow {
         // Apparence personnelle (0.6.37, « Créer mon apparence… ») : JSON
         // {base, bandeau, accent, surbrillance, fond}, vide s'il n'y en a pas.
         property string perso: ""
+        // Une fois le choix rangé relu : l'apparence imposée par
+        // l'organisation l'emporte.
+        Component.onCompleted: if (fenetre.apparenceImposee) fenetre.apparence = "organisation"
     }
     readonly property bool deuxEtages: !tactile && disposition === "etages"
     // Une seule ligne sur une fenêtre moyenne : libellés courts, Actualiser
@@ -496,7 +514,8 @@ ApplicationWindow {
     readonly property bool enteteSerree: !deuxEtages && width < 1180
     readonly property bool enteteEtroite: !deuxEtages && width < 940
 
-    readonly property var jeuxApparence: avecApparencePerso(jeuxDeBase, reglagesApparence.perso)
+    readonly property var jeuxApparence: avecApparenceOrganisation(avecApparencePerso(jeuxDeBase, reglagesApparence.perso),
+                                                                   personnalisation)
     readonly property var jeuxDeBase: ({
         "classique": {
             libelle: qsTr("Classique (Windows 9x)"),
@@ -603,8 +622,10 @@ ApplicationWindow {
             texteIndication: "#707070", lien: "#0f6cbd", moyen: "#d1d1d1"
         }
     })
-    readonly property var nomsApparence: ["classique", "moderne", "systeme", "mmedia", "pomme", "outlook", "nuit"]
-                                         .concat(jeuxApparence["perso"] ? ["perso"] : [])
+    readonly property var nomsApparence: apparenceImposee ? ["organisation"]
+        : ["classique", "moderne", "systeme", "mmedia", "pomme", "outlook", "nuit"]
+          .concat(jeuxApparence["organisation"] ? ["organisation"] : [])
+          .concat(jeuxApparence["perso"] ? ["perso"] : [])
 
     // ---- apparence personnelle (0.6.37, « Créer mon apparence… »)
 
@@ -640,7 +661,21 @@ ApplicationWindow {
     function avecApparencePerso(jeux, json) {
         var p = null
         try { p = json ? JSON.parse(json) : null } catch (e) { p = null }
-        if (!p || !jeux[p.base] || p.base === "systeme")
+        return fusionnerApparence(jeux, p, "perso", qsTr("Personnelle"))
+    }
+
+    /// L'apparence de l'organisation (0.8.6), de la même forme que
+    /// l'apparence personnelle, à son nom.
+    function avecApparenceOrganisation(jeux, perso) {
+        var p = null
+        try { p = perso && perso.apparence ? JSON.parse(perso.apparence) : null } catch (e) { p = null }
+        return fusionnerApparence(jeux, p, "organisation", perso && perso.nom ? perso.nom : qsTr("Organisation"))
+    }
+
+    /// `jeux`, plus l'apparence `cle` : celle de base `p.base`, ses couleurs
+    /// remplacées par celles de `p`. Sans base connue, `jeux` tel quel.
+    function fusionnerApparence(jeux, p, cle, libelle) {
+        if (!p || !jeux[p.base] || p.base === "systeme" || p.base === "perso" || p.base === "organisation")
             return jeux
         var j = Object.assign({}, jeux[p.base])
         // Un bandeau suppose les repères de marque : ceux de MMEDIA à défaut.
@@ -688,9 +723,9 @@ ApplicationWindow {
             j.lienPage = p.lien
             j.lien = lisibleSur(p.lien, j.base || "#ffffff")
         }
-        j.libelle = qsTr("Personnelle")
+        j.libelle = libelle
         var copie = Object.assign({}, jeux)
-        copie["perso"] = j
+        copie[cle] = j
         return copie
     }
 
@@ -1378,7 +1413,7 @@ ApplicationWindow {
             }
             Label {
                 text: fenetre.vueUnifiee ? qsTr("Toutes les BàL")
-                      : boite.dossierCourant.length > 0 ? fenetre.libelleCourant() : "MMail"
+                      : boite.dossierCourant.length > 0 ? fenetre.libelleCourant() : fenetre.nomLogiciel
                 color: fenetre.marque ? fenetre.marque.texteBandeau : fenetre.palette.windowText
                 elide: Text.ElideRight
                 font.bold: true
@@ -1463,8 +1498,11 @@ ApplicationWindow {
 
             // Le signe et le nom du logiciel, en tête du bandeau.
             Image {
+                objectName: "signeEntete"
                 visible: fenetre.marque !== null && !fenetre.compact && status === Image.Ready
-                source: Qt.platform.os === "android" ? "" : "qrc:/assets/mmail.png"
+                // Le logo de l'organisation (0.8.6), sinon le signe de MMail.
+                source: fenetre.personnalisation.logo ? fenetre.personnalisation.logo
+                        : Qt.platform.os === "android" ? "" : "qrc:/assets/mmail.png"
                 sourceSize.height: 28
                 fillMode: Image.PreserveAspectFit
                 smooth: true
@@ -1473,8 +1511,11 @@ ApplicationWindow {
                 Layout.leftMargin: 4
             }
             Label {
+                objectName: "nomEntete"
                 visible: fenetre.marque !== null && !fenetre.compact && !fenetre.enteteEtroite
-                text: "MMail"
+                text: fenetre.nomLogiciel
+                elide: Text.ElideRight
+                Layout.maximumWidth: 260
                 color: fenetre.marque ? fenetre.marque.texteBandeau : fenetre.palette.windowText
                 font.family: fenetre.policeTitres
                 font.weight: Font.DemiBold
@@ -5002,6 +5043,12 @@ ApplicationWindow {
             return filtre.length === 0 || t.toLowerCase().indexOf(filtre) >= 0
         })
         colonneListe.panneauHistorique.entrees = h
+        // Chaque lettre tapée refait la liste, et une ListView qui change de
+        // modèle se place sur sa première ligne : Entrée lançait alors la
+        // première recherche passée au lieu du texte tapé (demande d'un
+        // utilisateur, 04/11/2026). Rien n'est choisi tant que les flèches
+        // n'ont pas servi (0.6.37).
+        colonneListe.panneauHistorique.contentItem.currentIndex = -1
         if (h.length > 0 && colonneListe.champRecherche.activeFocus)
             colonneListe.panneauHistorique.open()
         else
@@ -6038,6 +6085,54 @@ ApplicationWindow {
         messageEtat.texte = qsTr("Apparence : %1.").arg(jeuxApparence[nom].libelle)
     }
 
+    // ---- personnalisation importée (0.8.6, Android)
+
+    Personnalisation { id: personnalisationProfil }
+    FileDialog {
+        id: choixPersonnalisation
+        title: qsTr("Importer une personnalisation")
+        fileMode: FileDialog.OpenFiles
+        // Sous Android, un filtre se traduit en types MIME, et un fichier
+        // .json y passe souvent pour un fichier quelconque : aucun filtre.
+        nameFilters: Qt.platform.os === "android" ? []
+                     : [qsTr("Personnalisation (personnalisation.json logo.png logo.svg)"), qsTr("Tous les fichiers (*)")]
+        onAccepted: {
+            var adresses = []
+            for (var i = 0; i < selectedFiles.length; ++i)
+                adresses.push(selectedFiles[i].toString())
+            fenetre.importerPersonnalisation(adresses)
+        }
+    }
+
+    /// Range dans le profil la personnalisation choisie (`adresses` :
+    /// personnalisation.json, et le logo s'il y en a un) et l'applique ;
+    /// son apparence devient celle en vigueur. Rend vrai si elle a pris.
+    function importerPersonnalisation(adresses) {
+        var p = personnalisationProfil.importer(adresses, cheminProfil)
+        if (p.erreur) {
+            annoncer(qsTr("Personnalisation non importée : %1").arg(p.erreur), true)
+            return false
+        }
+        personnalisation = p
+        if (jeuxApparence["organisation"])
+            apparence = "organisation"
+        messageEtat.texte = qsTr("Personnalisation importée : %1.").arg(p.nom || p.logiciel || qsTr("organisation"))
+        return true
+    }
+
+    /// Retire la personnalisation importée ; MMail reprend ses couleurs.
+    function retirerPersonnalisation() {
+        if (!personnalisationProfil.retirer(cheminProfil)) {
+            annoncer(qsTr("La personnalisation n'a pas pu être retirée du profil."), true)
+            return false
+        }
+        personnalisation = ({})
+        if (apparence === "organisation")
+            apparence = "mmedia"
+        messageEtat.texte = qsTr("Personnalisation retirée.")
+        return true
+    }
+
     readonly property var nomsDisposition: ["barre", "etages"]
     readonly property var libellesDisposition: ({
         "barre": qsTr("Une barre"),
@@ -6364,6 +6459,15 @@ ApplicationWindow {
                 attente.start()
                 return
             }
+            // Scénario « personnalisation » (0.8.6) : au banc,
+            // MMAIL_PERSONNALISATION=<dossier>, MMAIL_DOSSIER « imposer » ou
+            // « libre ».
+            if (essai.scenario === "personnalisation") {
+                var attentePerso = Qt.createQmlObject('import QtQuick; Timer { interval: 1500 }', fenetre)
+                attentePerso.triggered.connect(scenarios.etapeScenarioPersonnalisation)
+                attentePerso.start()
+                return
+            }
             if (essai.scenario === "reprise")
                 return
             // Scénario « lien-saut » (0.6.33) : un lien coupé sur plusieurs
@@ -6381,6 +6485,14 @@ ApplicationWindow {
             // retrouve la sauvegarde du scénario « sauvegarde ».
             if (essai.scenario === "restauration")
                 reglagesSauvegarde.aChercher = true
+            // Scénario « recherche-etroite » : la ligne de recherche d'une
+            // colonne étroite, puis large.
+            if (essai.scenario === "recherche-etroite") {
+                var attenteRecherche = Qt.createQmlObject('import QtQuick; Timer { interval: 2500 }', fenetre)
+                attenteRecherche.triggered.connect(scenarios.etapeScenarioRechercheEtroite)
+                attenteRecherche.start()
+                return
+            }
             if (essai.scenario === "garde-serveur") {
                 var delai = Qt.createQmlObject('import QtQuick; Timer { interval: 6000 }', fenetre)
                 delai.triggered.connect(scenarios.etapeScenarioGardeServeur)
@@ -6413,6 +6525,28 @@ ApplicationWindow {
             // second compte) : la boîte de réception de deux@, partagée avec
             // un@, entre dans « Toutes les BàL » — messages et compteur — ;
             // ses dossiers se disent en français, son favori à son adresse.
+            // Scénario « editeur-tableau » (0.8.7) : couleurs, colonne et ligne
+            // ajoutées dans un tableau cité.
+            // Scénario « editeur-tableau-outils » (0.8.7, suite) : insérer un
+            // tableau, Tab de case en case, supprimer ligne, colonne, tableau.
+            if (essai.scenario === "editeur-tableau-outils") {
+                var attenteOutils = Qt.createQmlObject('import QtQuick; Timer { interval: 2500 }', fenetre)
+                attenteOutils.triggered.connect(scenarios.etapeScenarioEditeurTableauOutils)
+                attenteOutils.start()
+                return
+            }
+            if (essai.scenario === "editeur-paragraphe") {
+                var attenteParagraphe = Qt.createQmlObject('import QtQuick; Timer { interval: 2500 }', fenetre)
+                attenteParagraphe.triggered.connect(scenarios.etapeScenarioEditeurParagraphe)
+                attenteParagraphe.start()
+                return
+            }
+            if (essai.scenario === "editeur-tableau") {
+                var attenteEditeur = Qt.createQmlObject('import QtQuick; Timer { interval: 2500 }', fenetre)
+                attenteEditeur.triggered.connect(scenarios.etapeScenarioEditeurTableau)
+                attenteEditeur.start()
+                return
+            }
             if (essai.scenario === "unifiee-partagee") {
                 var attentePartagee = Qt.createQmlObject('import QtQuick; Timer { interval: 15000 }', fenetre)
                 attentePartagee.triggered.connect(function() {
@@ -6800,6 +6934,9 @@ ApplicationWindow {
                 scenarios.lancerScenarioMolette()
             if (essai.scenario === "groupes-replier")
                 scenarios.lancerScenarioGroupesReplier()
+            // « groupes-minuit » (banc DATES=1) : signalement du 04/11/2026.
+            if (essai.scenario === "groupes-minuit")
+                scenarios.lancerScenarioGroupesMinuit()
             // Scénario « lu-differe » (0.6.9) : marquage « lu » après un délai,
             // ou jamais.
             if (essai.scenario === "lu-differe")
@@ -6863,6 +7000,9 @@ ApplicationWindow {
             // Scénario « recherche-portee » (0.8.2, 0.8.3 ; banc LOT1=1).
             if (essai.scenario === "recherche-portee")
                 scenarios.lancerScenarioRecherchePortee()
+            // « recherche-entree » : demande d'un utilisateur du 04/11/2026.
+            if (essai.scenario === "recherche-entree")
+                scenarios.lancerScenarioRechercheEntree()
             // « Affichage › Marges du message » (0.6.23).
             if (essai.scenario === "marges")
                 scenarios.lancerScenarioMarges()

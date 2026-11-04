@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Gestes simulés pour les scénarios d'essai (MMAIL_SCENARIO) : ce que QML ne
 // sait pas produire lui-même — un cran de molette, un clic sur un élément,
+// une touche du clavier,
 // remis à la fenêtre comme le système le ferait, pour éprouver la liste telle
 // qu'un utilisateur la voit. Exposé à QML seulement quand les variables
 // d'essai sont là (cf. main.cpp) ; jamais en usage courant.
@@ -9,6 +10,7 @@
 #include <QtCore/QCoreApplication>
 #include <QtCore/QObject>
 #include <QtCore/QPointF>
+#include <QtGui/QKeyEvent>
 #include <QtGui/QMouseEvent>
 #include <QtGui/QWheelEvent>
 #include <QtQuick/QQuickItem>
@@ -48,6 +50,19 @@ class GestesEssai : public QObject {
     QMouseEvent appui(QEvent::MouseButtonPress, scene, scene, global, b, b, Qt::NoModifier);
     QCoreApplication::sendEvent(fenetre, &appui);
     QMouseEvent relache(QEvent::MouseButtonRelease, scene, scene, global, b, Qt::NoButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(fenetre, &relache);
+  }
+
+  // Touche `touche` (Qt.Key_A, Qt.Key_Return…) frappée dans la fenêtre de
+  // `element`, avec le texte qu'elle produit (« a », « \r ») : elle va à
+  // l'élément qui a la main, comme une frappe au clavier (0.6.37).
+  Q_INVOKABLE void touche(QQuickItem* element, int touche, const QString& texte) {
+    if (!element || !element->window())
+      return;
+    QQuickWindow* fenetre = element->window();
+    QKeyEvent appui(QEvent::KeyPress, touche, Qt::NoModifier, texte);
+    QCoreApplication::sendEvent(fenetre, &appui);
+    QKeyEvent relache(QEvent::KeyRelease, touche, Qt::NoModifier, texte);
     QCoreApplication::sendEvent(fenetre, &relache);
   }
 };

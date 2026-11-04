@@ -87,10 +87,21 @@ Source: "..\dist\MMail\MMailMAPI32.dll"; DestDir: "{syswow64}"; DestName: "MMail
     Flags: ignoreversion uninsrestartdelete; Check: IsAdminInstallMode; \
     BeforeInstall: EcarterFournisseurMapi
 Source: "..\LICENSE";        DestDir: "{app}"; Flags: ignoreversion
+; Personnalisation à l'installation (0.8.6) : un dossier « personnalisation »
+; posé à côté de l'installeur — icône, logo, couleurs d'une organisation —
+; est copié avec MMail. Absent, rien ne change ; une mise à jour, lancée sans
+; lui, garde celui déjà installé.
+Source: "{src}\personnalisation\*"; DestDir: "{app}\personnalisation"; \
+    Flags: external skipifsourcedoesntexist recursesubdirs createallsubdirs ignoreversion
 
 [Icons]
-Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExe}"
-Name: "{autodesktop}\{#AppName}";  Filename: "{app}\{#AppExe}"; Tasks: desktopicon
+; Avec l'icône de l'organisation si elle en fournit une (0.8.6).
+Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExe}"; Check: not IconePersonnalisee
+Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExe}"; \
+    IconFilename: "{app}\personnalisation\icone.ico"; Check: IconePersonnalisee
+Name: "{autodesktop}\{#AppName}";  Filename: "{app}\{#AppExe}"; Tasks: desktopicon; Check: not IconePersonnalisee
+Name: "{autodesktop}\{#AppName}";  Filename: "{app}\{#AppExe}"; Tasks: desktopicon; \
+    IconFilename: "{app}\personnalisation\icone.ico"; Check: IconePersonnalisee
 
 [Run]
 Filename: "{app}\{#AppExe}"; Description: "Lancer {#AppName}"; \
@@ -233,4 +244,11 @@ begin
   if Etape = usPostUninstall then
     if RegQueryStringValue(HKCU, 'Software\Clients\Mail', '', Choix) and (CompareText(Choix, 'MMail') = 0) then
       RegDeleteValue(HKCU, 'Software\Clients\Mail', '');
+end;
+
+// Personnalisation à l'installation (0.8.6) : l'icône de l'organisation, une
+// fois les fichiers copiés, sert aux raccourcis.
+function IconePersonnalisee(): Boolean;
+begin
+  Result := FileExists(ExpandConstant('{app}\personnalisation\icone.ico'));
 end;

@@ -68,6 +68,7 @@ extern const std::size_t nombreTraductionsQt;
 #  include <shellapi.h>
 #  include <aclapi.h>   // droits du profil imposé (reserverProfil)
 #  include <dxgi.h>     // cartes graphiques de la machine (choisirRendu)
+#  include <dwrite_3.h> // IDWriteFactory6 (choisirMoteurPolices)
 #endif
 
 #include <cstdio>
@@ -242,6 +243,48 @@ static bool choisirRendu()
   return logiciel;
 }
 
+/// Moteur de polices sous Windows. Qt 6.8 lit les polices du système par
+/// DirectWrite, et sa base de polices demande IDWriteFactory6 (Windows 10
+/// 1709, build 16299) : sans elle — Windows Server 2016, Windows 10 1607 —,
+/// il renonce sans en charger aucune (« Can't initialize IDWriteFactory6 », qt.qpa.fonts)
+/// et tout le texte sort en carrés, constaté le 05/11/2026 sur un serveur RDS
+/// Server 2016 (sources de Qt 6.8.3 : qwindowsdirectwritefontdatabase.cpp,
+/// populateFontDatabase ; qwindowsintegration.cpp, fontDatabase, qui ne
+/// retombe jamais de lui-même sur GDI). MMail demande alors l'ancien moteur,
+/// GDI, par le paramètre de plateforme « fontengine=gdi », à poser avant la
+/// création de l'application. QT_QPA_PLATFORM, s'il est déjà posé, l'emporte.
+/// Vrai si MMail a posé la variable (à retirer ensuite, pour que les logiciels
+/// lancés par MMail n'en héritent pas).
+static bool choisirMoteurPolices()
+{
+#ifdef Q_OS_WIN
+  if (qEnvironmentVariableIsSet("QT_QPA_PLATFORM"))
+    return false;
+  bool directWrite6 = false;
+  // dwrite.dll existe sur tous les Windows visés ; elle reste chargée, Qt
+  // s'en sert ensuite.
+  if (HMODULE module = LoadLibraryW(L"dwrite.dll")) {
+    using Creation = HRESULT(WINAPI*)(DWRITE_FACTORY_TYPE, REFIID, IUnknown**);
+    const auto creer = reinterpret_cast<Creation>(GetProcAddress(module, "DWriteCreateFactory"));
+    IUnknown* fabrique = nullptr;
+    if (creer && SUCCEEDED(creer(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory), &fabrique))) {
+      IDWriteFactory6* fabrique6 = nullptr;
+      directWrite6 = SUCCEEDED(fabrique->QueryInterface(__uuidof(IDWriteFactory6),
+                                                        reinterpret_cast<void**>(&fabrique6)));
+      if (fabrique6)
+        fabrique6->Release();
+      fabrique->Release();
+    }
+  }
+  if (directWrite6)
+    return false;
+  qputenv("QT_QPA_PLATFORM", "windows:fontengine=gdi");
+  return true;
+#else
+  return false;
+#endif
+}
+
 /// Développe les variables d'un chemin réglé pour toute la machine :
 /// « %USERNAME% » comme « $USER » ou « ${USER} ».
 static QString developper(QString chemin)
@@ -403,6 +446,8 @@ int main(int argc, char* argv[])
   // Connexion Microsoft dans une page intégrée (cf. ConnexionIntegree.qml).
   QtWebView::initialize();
 #endif
+  // Avant l'application : la plateforme se choisit à sa création.
+  const bool moteurPolicesImpose = choisirMoteurPolices();
 #ifdef MMAIL_IMPRESSION
   // La boîte d'impression du système (QtPrintSupport) demande une
   // QApplication (cf. impression.h).
@@ -410,6 +455,8 @@ int main(int argc, char* argv[])
 #else
   QGuiApplication app(argc, argv);
 #endif
+  if (moteurPolicesImpose)
+    qunsetenv("QT_QPA_PLATFORM");
   QCoreApplication::setApplicationName(QStringLiteral("MMail"));
   // Les boutons standard des dialogues (« OK », « Annuler »…) et les boîtes
   // de Qt en français, quelle que soit la langue du système : MMail est en

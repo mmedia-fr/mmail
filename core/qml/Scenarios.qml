@@ -700,14 +700,21 @@ QtObject {
     /// réglages.
     function lancerScenarioRechercheObjet(essais) {
         var n = essais || 0
-        var pret = comptesConnus.length >= 2 && sujetsDeLaListe().some(function(t) { return t.indexOf("réunion") >= 0 })
+        // Messages de la réunion dans la liste.
+        var reunion = function() {
+            var k = 0
+            for (var i = 0; i < modeleMessages.count; ++i)
+                if (String(modeleMessages.get(i).sujet).indexOf("réunion") >= 0)
+                    ++k
+            return k
+        }
+        var pret = comptesConnus.length >= 2 && reunion() > 0
         if (!pret && n < 40) {
             plusTard(1000, function() { lancerScenarioRechercheObjet(n + 1) })
             return
         }
         var s = { echecs: 0 }
         var cas = colonneListe.objetSeulRecherche
-        var reunion = function() { return sujetsDeLaListe().filter(function(t) { return t.indexOf("réunion") >= 0 }).length }
         var cliquer = function() { gestesEssai.clic(cas, 12, cas.height / 2, Qt.LeftButton) }
         reglages.rechercheObjetSeul = false
         colonneListe.porteeRecherche.currentIndex = 0

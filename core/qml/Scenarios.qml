@@ -2238,6 +2238,176 @@ QtObject {
         tic.start()
     }
 
+    /// Scénario « m365-reel » (0.9.0) : essai sur une vraie boîte Microsoft
+    /// 365, sans écran (scratchpad m365-reel/essai.sh). MMAIL_UTILISATEUR
+    /// porte l'adresse ; le profil et le coffre sont gardés d'un passage à
+    /// l'autre. MMAIL_DOSSIER choisit le passage :
+    ///   - « ecrire » : connexion si le profil n'a pas le compte, catégorie
+    ///     « Essai MMail » créée et posée sur le premier message, liste reliée
+    ///     à Outlook, puis recolorée et renommée « Essai MMail renommée » ;
+    ///   - « lire » : reconnexion par le coffre, les catégories posées dans
+    ///     Outlook entre-temps relues, puis les catégories d'essai retirées
+    ///     des messages et de la liste de MMail (Outlook garde la sienne).
+    /// Les adresses d'autorisation sont écrites au journal (« scenario: url »)
+    /// pour le navigateur qui mène la connexion.
+    function lancerScenarioM365Reel() {
+        var tic = Qt.createQmlObject('import QtQuick; Timer { interval: 1000; repeat: true }', fenetre)
+        var adresse = (identifiantsEssai.utilisateur || "").toLowerCase()
+        var passage = identifiantsEssai.dossier || "ecrire"
+        var suivi = { n: 0, etape: 0, depuis: 0, echecs: 0, motCle: "", premier: 0, sujet: "", demande: false, etat: "" }
+        var bilan = function(texte, bon) {
+            if (!bon)
+                suivi.echecs += 1
+            console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
+        }
+        var compte = function() {
+            return comptesConnus.filter(function(x) { return (x.adresse || "").toLowerCase() === adresse })[0]
+        }
+        var catalogue = function(c) {
+            return JSON.parse(boite.categories(c.compte, "INBOX"))
+        }
+        var noms = function(liste) {
+            return liste.map(function(x) { return x.nom + " " + x.couleur }).join(", ")
+        }
+        var essais = function(liste) {
+            return liste.filter(function(x) { return x.nom.indexOf("Essai ") === 0 })
+        }
+        var suivant = function() {
+            suivi.etape += 1
+            suivi.depuis = suivi.n
+        }
+        var finir = function() {
+            tic.stop()
+            console.log("scenario: m365-reel " + passage + " " + (suivi.echecs === 0 ? "OK" : "ECHEC (" + suivi.echecs + ")"))
+            Qt.quit()
+        }
+        var autoriser = function(url, quoi) {
+            bilan(quoi + " : adresse d'autorisation", url.length > 0)
+            if (url.length === 0) {
+                console.log("scenario: erreur " + boite.erreur)
+                return false
+            }
+            console.log("scenario: url " + url)
+            Qt.openUrlExternally(url)
+            return true
+        }
+        tic.triggered.connect(function() {
+            suivi.n += 1
+            var ecoule = suivi.n - suivi.depuis
+            if (messageEtat.texte !== suivi.etat) {
+                suivi.etat = messageEtat.texte
+                console.log("scenario: barre d'état « " + suivi.etat + " »")
+            }
+            var c = compte()
+            if (suivi.etape === 0) {
+                // Le compte : connu du profil (le coffre répond), sinon connexion.
+                if (c) {
+                    bilan("compte ouvert après " + suivi.n + " s", true)
+                    ouvrirDossier(c.compte, "INBOX")
+                    suivant()
+                } else if (suivi.n === 8 && !suivi.demande) {
+                    suivi.demande = true
+                    var connus = listeComptes().filter(function(x) { return (x.adresse || "").toLowerCase() === adresse })
+                    if (connus.length > 0) {
+                        bilan("compte du profil sans session après 8 s", passage === "ecrire")
+                    }
+                    if (passage !== "ecrire") {
+                        finir()
+                        return
+                    }
+                    fenetre.marquerGeste(adresse)
+                    if (!autoriser(boite.connecterMicrosoft(adresse), "connexion"))
+                        finir()
+                } else if (suivi.n > 420) {
+                    bilan("compte jamais ouvert", false)
+                    finir()
+                }
+            } else if (suivi.etape === 1) {
+                // La boîte de réception, puis le temps de la relève par Graph.
+                if (modeleMessages.count > 0 && ecoule >= 25) {
+                    var cat = catalogue(c)
+                    bilan("catalogue Microsoft 365 : " + noms(cat.liste) + " | microsoft " + cat.microsoft
+                          + " | refusées " + cat.refusees, cat.microsoft === true && !cat.refusees)
+                    for (var i = 0; i < Math.min(8, modeleMessages.count); ++i) {
+                        var m = modeleMessages.get(i)
+                        console.log("scenario: message " + i + " | " + m.uid + " | " + m.date + " | " + m.sujet + " | « " + m.motsCles + " »")
+                    }
+                    suivant()
+                } else if (ecoule > 120) {
+                    bilan("boîte de réception vide ou jamais chargée (" + modeleMessages.count + ")", false)
+                    finir()
+                }
+            } else if (passage === "ecrire") {
+                if (suivi.etape === 2) {
+                    choisir(0, 0)
+                    suivi.premier = modeleMessages.get(0).uid
+                    suivi.sujet = modeleMessages.get(0).sujet
+                    suivi.motCle = boite.poserCategorie(c.compte, "INBOX", "", "Essai MMail", "#0B8043")
+                    bilan("créée : " + suivi.motCle, suivi.motCle.length > 0)
+                    basculerCategorie(suivi.motCle, true)
+                    console.log("scenario: posée sur « " + suivi.sujet + " » (" + suivi.premier + ")")
+                    suivant()
+                } else if (suivi.etape === 3 && ecoule >= 20) {
+                    // Relier la liste à Outlook : l'autorisation à part.
+                    if (!autoriser(boite.autoriserCouleursOutlook(c.compte), "liste d'Outlook"))
+                        finir()
+                    suivant()
+                } else if (suivi.etape === 4) {
+                    if (suivi.etat.indexOf(qsTr("Autorisation reçue")) === 0) {
+                        bilan("autorisation des réglages reçue", true)
+                        suivant()
+                    } else if (suivi.etat.indexOf(qsTr("Catégories d'Outlook :")) === 0 || ecoule > 420) {
+                        bilan("autorisation des réglages : « " + suivi.etat + " »", false)
+                        finir()
+                    }
+                } else if (suivi.etape === 5 && ecoule >= 20) {
+                    console.log("scenario: catalogue relié " + noms(catalogue(c).liste))
+                    bilan("recolorée en rouge",
+                          boite.poserCategorie(c.compte, "INBOX", suivi.motCle, "Essai MMail", "#D50000") === suivi.motCle)
+                    suivant()
+                } else if (suivi.etape === 6 && ecoule >= 20) {
+                    bilan("renommée", boite.poserCategorie(c.compte, "INBOX", suivi.motCle, "Essai MMail renommée", "#D50000")
+                          === suivi.motCle)
+                    suivant()
+                } else if (suivi.etape === 7 && ecoule >= 30) {
+                    var i2 = indexDe(suivi.premier)
+                    console.log("scenario: catalogue final " + noms(catalogue(c).liste))
+                    bilan("le message garde la catégorie : « " + (i2 >= 0 ? modeleMessages.get(i2).motsCles : "?") + " »",
+                          i2 >= 0 && (" " + modeleMessages.get(i2).motsCles + " ").indexOf(" " + suivi.motCle + " ") >= 0)
+                    finir()
+                }
+            } else {
+                if (suivi.etape === 2) {
+                    var liste = essais(catalogue(c).liste)
+                    console.log("scenario: catégories d'essai relues " + noms(liste))
+                    bilan("« Essai Outlook » relue d'Outlook", liste.some(function(x) { return x.nom === "Essai Outlook" }))
+                    var porteurs = 0
+                    for (var j = 0; j < modeleMessages.count; ++j) {
+                        var mots = " " + modeleMessages.get(j).motsCles + " "
+                        var a = liste.filter(function(x) { return mots.indexOf(" " + x.motCle + " ") >= 0 })
+                        if (a.length === 0)
+                            continue
+                        porteurs += 1
+                        console.log("scenario: porteur « " + modeleMessages.get(j).sujet + " » : " + mots.trim())
+                        choisir(j, 0)
+                        a.forEach(function(x) { basculerCategorie(x.motCle, false) })
+                    }
+                    bilan(porteurs + " message(s) porteurs, catégories retirées", porteurs >= 2)
+                    suivant()
+                } else if (suivi.etape === 3 && ecoule >= 20) {
+                    essais(catalogue(c).liste).forEach(function(x) {
+                        bilan("« " + x.nom + " » retirée de la liste de MMail", boite.retirerCategorie(c.compte, "INBOX", x.motCle))
+                    })
+                    suivant()
+                } else if (suivi.etape === 4 && ecoule >= 15) {
+                    console.log("scenario: catalogue final " + noms(catalogue(c).liste))
+                    finir()
+                }
+            }
+        })
+        tic.start()
+    }
+
     /// Scénario « categories » (0.6.15, demande de Manu du 22/10) : dans la
     /// boîte de réception (deux messages au moins), une catégorie d'origine
     /// et une catégorie créée posées ; l'état du sous-menu « Catégoriser » ;

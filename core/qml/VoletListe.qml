@@ -22,6 +22,7 @@ ColumnLayout {
     property alias panneauHistorique: panneauHistorique
     property alias porteeRecherche: porteeRecherche
     property alias nonLusRecherche: nonLusRecherche
+    property alias objetSeulRecherche: objetSeulRecherche
     property alias vueMessages: vueMessages
     property alias molette: molette
     property alias menuGroupes: menuGroupes
@@ -247,10 +248,18 @@ ColumnLayout {
     ColumnLayout {
         id: blocRecherche
         objectName: "blocRecherche"
-        // Largeur d'une seule ligne : 150 points au champ, plus la case et
+        // Largeur d'une seule ligne : 150 points au champ, plus les cases et
         // la portée à leur largeur.
-        readonly property real seuil: 150 + nonLusRecherche.implicitWidth + porteeRecherche.implicitWidth + 24
+        readonly property real seuil: 150 + nonLusRecherche.implicitWidth + objetSeulRecherche.implicitWidth
+                                      + porteeRecherche.implicitWidth + 28
         readonly property bool deuxLignes: fenetre.tactile || colonneListe.width < seuil
+        // Sous le champ : les deux cases et la portée côte à côte tant que la
+        // portée garde 120 points ; sinon la portée dessous ; dans une colonne
+        // plus étroite encore, une option par ligne (0.6.38).
+        readonly property real largeurOptions: colonneListe.width - 8
+        readonly property int colonnesOptions: !deuxLignes ? 3
+            : largeurOptions >= nonLusRecherche.implicitWidth + objetSeulRecherche.implicitWidth + 128 ? 3
+            : largeurOptions >= nonLusRecherche.implicitWidth + objetSeulRecherche.implicitWidth + 4 ? 2 : 1
         visible: !fenetre.tactile || colonneListe.rechercheOuverte || champRecherche.text.length > 0
         Layout.fillWidth: true
         Layout.margins: 4
@@ -368,15 +377,17 @@ ColumnLayout {
                 ToolTip.text: qsTr("Effacer la recherche (Échap)")
             }
         }
-        // « Non lus » et la portée : sous le champ, ou au bout de sa ligne
-        // quand elle a la place — la rangée entière change de parent, et
-        // garde son ordre.
-        RowLayout {
+        // « Non lus », « Objet et expéditeur seulement » et la portée : sous
+        // le champ, ou au bout de sa ligne quand elle a la place — la grille
+        // entière change de parent, et garde son ordre.
+        GridLayout {
             id: ligneOptionsRecherche
             objectName: "ligneOptionsRecherche"
             parent: blocRecherche.deuxLignes ? blocRecherche : ligneRecherche
             Layout.fillWidth: blocRecherche.deuxLignes
-            spacing: 4
+            columns: blocRecherche.colonnesOptions
+            columnSpacing: 4
+            rowSpacing: 2
             // Non lus seulement (0.8.2), dans la portée choisie.
             CheckBox {
                 id: nonLusRecherche
@@ -386,6 +397,27 @@ ColumnLayout {
                 ToolTip.visible: hovered
                 ToolTip.delay: 600
                 ToolTip.text: qsTr("Ne garder que les messages non lus")
+            }
+            // Objet et expéditeur seulement (0.6.38) : le serveur ne cherche
+            // plus dans le texte des messages ni dans celui de leurs pièces
+            // jointes — un mot présent dans tous les bons de commande joints
+            // trouvait des centaines de messages. L'index du poste ne porte
+            // déjà que l'objet et l'expéditeur. La case reste cochée d'une
+            // session à l'autre.
+            CheckBox {
+                id: objetSeulRecherche
+                objectName: "objetSeulRecherche"
+                text: qsTr("Objet et expéditeur seulement")
+                checked: reglages.rechercheObjetSeul
+                onToggled: {
+                    reglages.rechercheObjetSeul = checked
+                    if (champRecherche.text.trim().length > 0)
+                        fenetre.lancerRecherche()
+                }
+                ToolTip.visible: hovered
+                ToolTip.delay: 600
+                ToolTip.text: qsTr("Chercher les mots dans l'objet et l'expéditeur des messages, "
+                                   + "pas dans leur texte ni dans leurs pièces jointes")
             }
             ComboBox {
                 id: porteeRecherche
@@ -402,6 +434,8 @@ ColumnLayout {
                 // abréger son libellé.
                 Layout.minimumWidth: blocRecherche.deuxLignes ? 0 : Math.max(implicitWidth, 150)
                 Layout.fillWidth: blocRecherche.deuxLignes
+                // Seule sur sa ligne, sous les deux cases : toute la largeur.
+                Layout.columnSpan: blocRecherche.colonnesOptions === 2 ? 2 : 1
                 onActivated: if (champRecherche.text.trim().length > 0) fenetre.lancerRecherche()
             }
         }

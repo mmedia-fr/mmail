@@ -573,7 +573,18 @@ jobs:
           # distance (même raison que qoffscreen.dll sous Windows).
           export EXTRA_PLATFORM_PLUGINS=libqoffscreen.so
           export OUTPUT="MMail-$version-x86_64.AppImage"
-          ./linuxdeploy.AppImage --appdir AppDir --plugin qt --output appimage
+          # libsecret (coffre des mots de passe, Secret Service) : QtKeychain la
+          # charge à l'exécution (dlopen de libsecret-1.so.0), elle n'est donc
+          # pas une dépendance du binaire et linuxdeploy ne la voit pas. Sans
+          # elle, MMail chargeait la libsecret du poste contre le GLib 2.72
+          # embarqué ici ; celle d'une distribution récente exige un GLib plus
+          # neuf (g_task_set_static_name, GLib 2.76) et refusait de se charger :
+          # plus de coffre, comptes en erreur au démarrage (Zorin OS 18,
+          # 04/11/2026). Embarquée, elle est bâtie contre le même GLib.
+          libsecret="$(pkg-config --variable=libdir libsecret-1)/libsecret-1.so.0"
+          test -f "$libsecret"
+          ./linuxdeploy.AppImage --appdir AppDir --plugin qt --library "$libsecret" --output appimage
+          test -f AppDir/usr/lib/libsecret-1.so.0
           test -f "$OUTPUT"
           mkdir -p dist && mv "$OUTPUT" dist/
       - name: Contrôle du paquet Linux

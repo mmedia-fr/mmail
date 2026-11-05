@@ -130,6 +130,18 @@ impl Flux for Tls {
     }
 }
 
+/// Où une recherche sur le serveur cherche chaque mot (0.6.38).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Champs {
+    /// En-têtes et corps (`TEXT`) : sur Mailcow, l'index plein texte y
+    /// ajoute le texte des pièces jointes.
+    #[default]
+    Texte,
+    /// L'objet ou l'expéditeur (`SUBJECT`, `FROM`) : ni le corps, ni les
+    /// pièces jointes.
+    ObjetExpediteur,
+}
+
 /// Attente d'une commande qui peut durer (0.6.16, recherche sur le
 /// serveur) : la lecture se fait par tranches (`TRANCHE`) jusqu'à `delai`,
 /// au lieu d'abandonner la session au premier silence de 30 s (`DELAI`).
@@ -699,7 +711,7 @@ impl Client {
     /// de `categories` est un critère — l'un de ses mots-clés (`KEYWORD`) —,
     /// et les critères s'ajoutent aux mots. Un critère vide ne trouve rien.
     pub fn chercher(&mut self, texte: &str, categories: &[Vec<String>]) -> Resultat<Vec<u32>> {
-        let Some(commande) = self.commande_recherche(texte, categories)? else {
+        let Some(commande) = self.commande_recherche(texte, categories, Champs::Texte)? else {
             return Ok(Vec::new());
         };
         let (texte, _) = self.commande(&commande)?;
@@ -710,13 +722,15 @@ impl Client {
     /// dossier dont l'index plein texte n'est pas construit fait attendre
     /// Dovecot que son indexeur ait fini, sans rien envoyer. `Erreur::Delai`,
     /// `Erreur::Abandon` : la session est à fermer, le serveur cherche encore.
+    /// `champs` : où chercher chaque mot (0.6.38).
     pub fn chercher_patiemment(
         &mut self,
         texte: &str,
         categories: &[Vec<String>],
+        champs: Champs,
         attente: Attente,
     ) -> Resultat<Vec<u32>> {
-        let Some(commande) = self.commande_recherche(texte, categories)? else {
+        let Some(commande) = self.commande_recherche(texte, categories, champs)? else {
             return Ok(Vec::new());
         };
         let fin = Instant::now() + attente.delai;
@@ -731,7 +745,12 @@ impl Client {
 
     /// `UID SEARCH` d'un texte et de catégories ; `None` : rien à chercher,
     /// ou un critère qui ne peut rien trouver.
-    fn commande_recherche(&self, texte: &str, categories: &[Vec<String>]) -> Resultat<Option<String>> {
+    fn commande_recherche(
+        &self,
+        texte: &str,
+        categories: &[Vec<String>],
+        champs: Champs,
+    ) -> Resultat<Option<String>> {
         let mots: Vec<&str> = texte.split_whitespace().collect();
         if mots.is_empty() && categories.is_empty() {
             return Ok(None);
@@ -751,12 +770,18 @@ impl Client {
             }
         }
         for mot in mots {
-            if litteraux {
-                criteres.push_str(&format!(" TEXT {{{}+}}\r\n{mot}", mot.len()));
+            let valeur = if litteraux {
+                format!("{{{}+}}\r\n{mot}", mot.len())
             } else if mot.is_ascii() {
-                criteres.push_str(&format!(" TEXT {}", citer(mot)));
+                citer(mot)
             } else {
                 return Err(Erreur::Refuse("le serveur ne sait pas chercher ce texte".into()));
+            };
+            match champs {
+                Champs::Texte => criteres.push_str(&format!(" TEXT {valeur}")),
+                // L'objet ou l'expéditeur, nom ou adresse : chaque mot dans
+                // l'un des deux, comme l'index du poste.
+                Champs::ObjetExpediteur => criteres.push_str(&format!(" OR SUBJECT {valeur} FROM {valeur}")),
             }
         }
         Ok(Some(format!("UID SEARCH CHARSET UTF-8{criteres}")))
@@ -1354,6 +1379,28 @@ mod tests {
     }
 
     #[test]
+    fn recherche_dans_l_objet_et_l_expediteur() {
+        // Chaque mot dans l'objet ou l'expéditeur, et tous les mots (0.6.38) :
+        // ni le corps, ni les pièces jointes, que `TEXT` parcourt.
+        let (mut client, journal) = session(
+            &format!("{DOVECOT} LITERAL+"),
+            vec![echange("UID SEARCH CHARSET UTF-8 OR SUBJECT", "* SEARCH 7\r\n", "OK fait")],
+        );
+        let toujours = attente(5_000, false, true);
+        assert_eq!(client.chercher_patiemment("pages  Commande", &[], Champs::ObjetExpediteur, toujours).unwrap(), vec![7]);
+        assert_eq!(
+            journal.lock().unwrap()[0],
+            "UID SEARCH CHARSET UTF-8 OR SUBJECT {5 octets}pages FROM {5 octets}pages \
+             OR SUBJECT {8 octets}Commande FROM {8 octets}Commande"
+        );
+        // Sans LITERAL+ : entre guillemets.
+        let (mut client, journal) =
+            session(DOVECOT, vec![echange("UID SEARCH CHARSET UTF-8 OR SUBJECT", "* SEARCH\r\n", "OK fait")]);
+        assert!(client.chercher_patiemment("devis", &[], Champs::ObjetExpediteur, attente(5_000, false, true)).unwrap().is_empty());
+        assert_eq!(journal.lock().unwrap()[0], "UID SEARCH CHARSET UTF-8 OR SUBJECT \"devis\" FROM \"devis\"");
+    }
+
+    #[test]
     fn idle_signale_puis_se_termine() {
         let (mut client, journal) = session(
             DOVECOT,
@@ -1392,7 +1439,7 @@ mod tests {
                 echange("NOOP", "", "OK"),
             ],
         );
-        assert_eq!(client.chercher_patiemment("devis", &[], attente(5_000, false, true)).unwrap(), vec![3, 8]);
+        assert_eq!(client.chercher_patiemment("devis", &[], Champs::Texte, attente(5_000, false, true)).unwrap(), vec![3, 8]);
         client.noop().unwrap();
         assert_eq!(journal.lock().unwrap().len(), 2);
     }
@@ -1402,10 +1449,10 @@ mod tests {
         use crate::simule::lente;
         let (mut client, _) =
             session(DOVECOT, vec![lente("UID SEARCH", &[(usize::MAX, "* SEARCH 3\r\n")], "OK")]);
-        assert!(matches!(client.chercher_patiemment("devis", &[], attente(30, false, true)), Err(Erreur::Delai)));
+        assert!(matches!(client.chercher_patiemment("devis", &[], Champs::Texte, attente(30, false, true)), Err(Erreur::Delai)));
         let (mut client, _) =
             session(DOVECOT, vec![lente("UID SEARCH", &[(usize::MAX, "* SEARCH 3\r\n")], "OK")]);
-        assert!(matches!(client.chercher_patiemment("devis", &[], attente(5_000, false, false)), Err(Erreur::Abandon)));
+        assert!(matches!(client.chercher_patiemment("devis", &[], Champs::Texte, attente(5_000, false, false)), Err(Erreur::Abandon)));
     }
 
     #[test]
@@ -1424,10 +1471,10 @@ mod tests {
             (40, "* SEARCH 5\r\n"),
         ];
         let (mut client, _) = session(DOVECOT, vec![lente("UID SEARCH", &morceaux, "OK Search completed")]);
-        assert_eq!(client.chercher_patiemment("devis", &[], attente(150, true, true)).unwrap(), vec![5]);
+        assert_eq!(client.chercher_patiemment("devis", &[], Champs::Texte, attente(150, true, true)).unwrap(), vec![5]);
         // Sans prolongation, la même réponse arrive trop tard.
         let (mut client, _) = session(DOVECOT, vec![lente("UID SEARCH", &morceaux, "OK Search completed")]);
-        assert!(matches!(client.chercher_patiemment("devis", &[], attente(150, false, true)), Err(Erreur::Delai)));
+        assert!(matches!(client.chercher_patiemment("devis", &[], Champs::Texte, attente(150, false, true)), Err(Erreur::Delai)));
     }
 
     #[test]

@@ -725,12 +725,14 @@ QtObject {
         plusTard(5000, function() {
             bilanEssai(s, "dossier actif, texte : " + sujetsDeLaListe(), reunion() === 1)
             cliquer()
+            // La barre au moment du clic : le serveur du banc répond assez vite
+            // pour la remplacer avant la prochaine étape.
+            var barre = messageEtat.texte
             plusTard(300, function() {
                 bilanEssai(s, "case cochée à la souris : réglage " + reglages.rechercheObjetSeul + ", recherche « "
                            + fenetre.recherche + " » relancée", cas.checked && reglages.rechercheObjetSeul
                            && fenetre.rechercheObjetSeul && fenetre.recherche === "chantier")
-                bilanEssai(s, "barre d'état : " + messageEtat.texte,
-                           messageEtat.texte.indexOf("dans l'objet et l'expéditeur des messages") >= 0)
+                bilanEssai(s, "barre d'état : " + barre, barre.indexOf("dans l'objet et l'expéditeur des messages") >= 0)
                 plusTard(5000, function() {
                     bilanEssai(s, "dossier actif, objet et expéditeur : " + modeleMessages.count + " résultat(s)",
                                modeleMessages.count === 0)

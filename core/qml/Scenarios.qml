@@ -2260,8 +2260,15 @@ QtObject {
                 suivi.echecs += 1
             console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
         }
+        // Le compte une fois sa session prête (« pret ») : l'arborescence le
+        // montre dès le lancement, depuis l'index local.
         var compte = function() {
-            return comptesConnus.filter(function(x) { return (x.adresse || "").toLowerCase() === adresse })[0]
+            for (var k = 0; k < modeleArborescence.count; ++k) {
+                var l = modeleArborescence.get(k)
+                if (l.genre === "compte" && (l.adresse || "").toLowerCase() === adresse && l.etat === "pret")
+                    return { compte: l.compte, adresse: l.adresse }
+            }
+            return null
         }
         var catalogue = function(c) {
             return JSON.parse(boite.categories(c.compte, "INBOX"))

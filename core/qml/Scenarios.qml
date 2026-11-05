@@ -691,6 +691,76 @@ QtObject {
         }
     }
 
+    /// Scénario « recherche-objet » (0.6.38), banc MARGES=1 : « chantier »
+    /// n'est que dans le corps du compte rendu de la réunion. Sans la case
+    /// « Objet et expéditeur seulement », le serveur le trouve ; avec elle,
+    /// rien — dans le dossier actif comme dans toutes les boîtes —, alors
+    /// qu'un mot de l'objet et le nom de l'expéditeur trouvent le message. La
+    /// case se coche à la souris, relance la recherche et reste dans les
+    /// réglages.
+    function lancerScenarioRechercheObjet(essais) {
+        var n = essais || 0
+        // Messages de la réunion dans la liste.
+        var reunion = function() {
+            var k = 0
+            for (var i = 0; i < modeleMessages.count; ++i)
+                if (String(modeleMessages.get(i).sujet).indexOf("réunion") >= 0)
+                    ++k
+            return k
+        }
+        var pret = comptesConnus.length >= 2 && reunion() > 0
+        if (!pret && n < 40) {
+            plusTard(1000, function() { lancerScenarioRechercheObjet(n + 1) })
+            return
+        }
+        var s = { echecs: 0 }
+        var cas = colonneListe.objetSeulRecherche
+        var cliquer = function() { gestesEssai.clic(cas, 12, cas.height / 2, Qt.LeftButton) }
+        reglages.rechercheObjetSeul = false
+        colonneListe.porteeRecherche.currentIndex = 0
+        colonneListe.nonLusRecherche.checked = false
+        bilanEssai(s, "case décochée au départ, réglage faux", !cas.checked && !reglages.rechercheObjetSeul)
+        fenetre.lancerRecherche("chantier")
+        bilanEssai(s, "barre d'état : " + messageEtat.texte, messageEtat.texte.indexOf("dans le texte des messages") >= 0)
+        plusTard(5000, function() {
+            bilanEssai(s, "dossier actif, texte : " + sujetsDeLaListe(), reunion() === 1)
+            cliquer()
+            // La barre au moment du clic : le serveur du banc répond assez vite
+            // pour la remplacer avant la prochaine étape.
+            var barre = messageEtat.texte
+            plusTard(300, function() {
+                bilanEssai(s, "case cochée à la souris : réglage " + reglages.rechercheObjetSeul + ", recherche « "
+                           + fenetre.recherche + " » relancée", cas.checked && reglages.rechercheObjetSeul
+                           && fenetre.rechercheObjetSeul && fenetre.recherche === "chantier")
+                bilanEssai(s, "barre d'état : " + barre, barre.indexOf("dans l'objet et l'expéditeur des messages") >= 0)
+                plusTard(5000, function() {
+                    bilanEssai(s, "dossier actif, objet et expéditeur : " + modeleMessages.count + " résultat(s)",
+                               modeleMessages.count === 0)
+                    bilanEssai(s, "bandeau : " + fenetre.infoDossier, fenetre.infoDossier.indexOf("objet et expéditeur seulement") >= 0)
+                    fenetre.lancerRecherche("réunion nicolas")
+                    plusTard(5000, function() {
+                        bilanEssai(s, "objet et nom de l'expéditeur : " + sujetsDeLaListe(), reunion() === 1)
+                        colonneListe.porteeRecherche.currentIndex = 2
+                        fenetre.lancerRecherche("chantier")
+                        plusTard(6000, function() {
+                            bilanEssai(s, "toutes les boîtes, objet et expéditeur : " + modeleMessages.count + " résultat(s)",
+                                       modeleMessages.count === 0)
+                            bilanEssai(s, "bandeau : " + fenetre.infoDossier, fenetre.infoDossier.indexOf(", objet et expéditeur") >= 0)
+                            cliquer()
+                            plusTard(6000, function() {
+                                bilanEssai(s, "toutes les boîtes, case décochée : " + sujetsDeLaListe()
+                                           + " ; réglage " + reglages.rechercheObjetSeul,
+                                           !cas.checked && !reglages.rechercheObjetSeul && reunion() === 1)
+                                console.log("scenario: recherche-objet " + (s.echecs === 0 ? "OK" : "ECHEC (" + s.echecs + ")"))
+                                Qt.quit()
+                            })
+                        })
+                    })
+                })
+            })
+        })
+    }
+
     /// Scénario « recherche-entree » (0.6.37) : demande d'un utilisateur du
     /// 04/11/2026 — deux recherches passées contiennent le mot tapé ; Entrée
     /// doit chercher le texte tapé, et non la première suggestion. Les flèches
@@ -4500,62 +4570,98 @@ QtObject {
     }
 
     /// Scénario « recherche-etroite » : dans la colonne de la liste, le champ
-    /// de recherche, ✕, « Non lus » et la portée ne se chevauchent pas — sur
-    /// deux lignes dans une colonne étroite (0.8.2 et 0.8.3 les mettaient sur
-    /// une seule, le champ et la case se recouvraient), sur une ligne dans une
-    /// colonne large. Le champ garde une largeur où taper.
+    /// de recherche, ✕, « Non lus », « Objet et expéditeur seulement » (0.6.38)
+    /// et la portée ne se chevauchent pas — sur une ligne dans une colonne
+    /// large ; sinon les options sous le champ, côte à côte, la portée
+    /// dessous, ou une par ligne (0.8.2 et 0.8.3 les mettaient sur une seule
+    /// ligne, le champ et la case se recouvraient). Le champ garde une
+    /// largeur où taper, la portée au moins 100 points.
     function etapeScenarioRechercheEtroite() {
         var echecs = 0
+        var colonnesVues = {}
         var bilan = function(texte, bon) {
             if (!bon)
                 ++echecs
             console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
         }
+        var libelle = function(e) {
+            return e.text || e.displayText || e.placeholderText || e.objectName || "?"
+        }
+        // Éléments visibles d'un conteneur, rangés en lignes (même hauteur à
+        // 2 points près), chaque ligne de gauche à droite.
+        var lignesDe = function(conteneur) {
+            var elements = []
+            for (var i = 0; i < conteneur.children.length; ++i) {
+                var e = conteneur.children[i]
+                if (e.visible && e.width > 0)
+                    elements.push(e)
+            }
+            elements.sort(function(a, b) { return Math.abs(a.y - b.y) > 2 ? a.y - b.y : a.x - b.x })
+            var lignes = []
+            elements.forEach(function(e) {
+                var derniere = lignes.length > 0 ? lignes[lignes.length - 1] : null
+                if (derniere && Math.abs(derniere[0].y - e.y) <= 2)
+                    derniere.push(e)
+                else
+                    lignes.push([e])
+            })
+            return lignes
+        }
+        var controlerLignes = function(cas, nom, conteneur) {
+            lignesDe(conteneur).forEach(function(ligne, r) {
+                console.log("scenario: " + cas + " | " + nom + ", ligne " + (r + 1) + " : " + ligne.map(function(e) {
+                    return libelle(e) + " (" + Math.round(e.x) + "+" + Math.round(e.width) + ")"
+                }).join(", "))
+                for (var j = 0; j < ligne.length; ++j) {
+                    var el = ligne[j]
+                    bilan(cas + " : " + nom + ", ligne " + (r + 1) + ", « " + libelle(el) + " » dans la largeur",
+                          el.x >= -0.5 && el.x + el.width <= conteneur.width + 0.5)
+                    if (j > 0)
+                        bilan(cas + " : " + nom + ", ligne " + (r + 1) + ", « " + libelle(el) + " » après le précédent",
+                              el.x >= ligne[j - 1].x + ligne[j - 1].width - 0.5)
+                }
+            })
+        }
         var verifier = function(cas) {
             var bloc = objetNomme(colonneListe, "blocRecherche")
             var largeur = Math.round(colonneListe.width)
-            bilan(cas + " : colonne de " + largeur + " (seuil " + Math.round(bloc.seuil) + "), deux lignes " + bloc.deuxLignes,
-                  bloc.deuxLignes === (largeur < bloc.seuil))
+            colonnesVues[bloc.deuxLignes ? bloc.colonnesOptions : 0] = true
+            bilan(cas + " : colonne de " + largeur + " (seuil " + Math.round(bloc.seuil) + "), deux lignes " + bloc.deuxLignes
+                  + ", " + bloc.colonnesOptions + " colonne(s) d'options", bloc.deuxLignes === (largeur < bloc.seuil))
             var options = objetNomme(bloc, "ligneOptionsRecherche")
-            bilan(cas + " : « Non lus » puis la portée",
-                  colonneListe.nonLusRecherche.mapToItem(bloc, 0, 0).x < colonneListe.porteeRecherche.mapToItem(bloc, 0, 0).x)
+            // Ordre de lecture : « Non lus », la case de l'objet, la portée.
+            var place = function(e) { var p = e.mapToItem(bloc, 0, 0); return Math.round(p.y) * 10000 + Math.round(p.x) }
+            bilan(cas + " : « Non lus », « Objet et expéditeur seulement », puis la portée",
+                  place(colonneListe.nonLusRecherche) < place(colonneListe.objetSeulRecherche)
+                  && place(colonneListe.objetSeulRecherche) < place(colonneListe.porteeRecherche))
             bilan(cas + " : options " + (bloc.deuxLignes ? "sous le champ" : "au bout de sa ligne"),
                   bloc.deuxLignes ? options.parent === bloc : options.parent === objetNomme(bloc, "ligneRecherche"))
-            var rangs = [objetNomme(bloc, "ligneRecherche")].concat(bloc.deuxLignes ? [options] : [])
-            for (var r = 0; r < rangs.length; ++r) {
-                var rang = rangs[r]
-                if (!rang.visible)
-                    continue
-                var elements = []
-                for (var i = 0; i < rang.children.length; ++i) {
-                    var e = rang.children[i]
-                    if (e.visible && e.width > 0)
-                        elements.push(e)
-                }
-                elements.sort(function(a, b) { return a.x - b.x })
-                console.log("scenario: " + cas + " | ligne " + (r + 1) + " : " + elements.map(function(e) {
-                    return (e.text || e.displayText || e.placeholderText || "?") + " (" + Math.round(e.x) + "+" + Math.round(e.width) + ")"
-                }).join(", "))
-                for (var j = 0; j < elements.length; ++j) {
-                    var el = elements[j]
-                    bilan(cas + " : ligne " + (r + 1) + ", élément " + (j + 1) + " dans la ligne", el.x >= -0.5 && el.x + el.width <= rang.width + 0.5)
-                    if (j > 0)
-                        bilan(cas + " : ligne " + (r + 1) + ", élément " + (j + 1) + " après le précédent",
-                              el.x >= elements[j - 1].x + elements[j - 1].width - 0.5)
-                }
-            }
+            controlerLignes(cas, "champ", objetNomme(bloc, "ligneRecherche"))
+            if (bloc.deuxLignes)
+                controlerLignes(cas, "options", options)
+            bilan(cas + " : options dans la colonne", options.mapToItem(colonneListe, 0, 0).x + options.width <= colonneListe.width + 0.5)
             bilan(cas + " : champ de " + Math.round(colonneListe.champRecherche.width) + " points", colonneListe.champRecherche.width >= 100)
+            bilan(cas + " : portée de " + Math.round(colonneListe.porteeRecherche.width) + " points", colonneListe.porteeRecherche.width >= 100)
         }
-        reglages.largeurListe = 260
-        plusTard(800, function() {
-            verifier("étroite")
-            reglages.largeurListe = 700
-            plusTard(800, function() {
-                verifier("large")
+        var largeurs = [["étroite", 260], ["moyenne", 420], ["assez large", 560], ["large", 1000]]
+        var suivante = function(k) {
+            if (k >= largeurs.length) {
+                // Une ligne, et les trois dispositions sous le champ, vues au
+                // moins une fois chacune n'est pas exigé : la largeur atteinte
+                // dépend de la fenêtre du banc. Une option par ligne, si.
+                console.log("scenario: dispositions vues : " + Object.keys(colonnesVues).join(", "))
+                bilan("une option par ligne dans la colonne étroite", colonnesVues[1] === true)
                 console.log("scenario: recherche-etroite " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
                 Qt.quit()
+                return
+            }
+            reglages.largeurListe = largeurs[k][1]
+            plusTard(800, function() {
+                verifier(largeurs[k][0])
+                suivante(k + 1)
             })
-        })
+        }
+        suivante(0)
     }
 
     /// Scénario « zoom-lecture » (0.6.29) : le zoom du volet de lecture grossit

@@ -723,7 +723,7 @@ QtObject {
         fenetre.lancerRecherche("chantier")
         bilanEssai(s, "barre d'état : " + messageEtat.texte, messageEtat.texte.indexOf("dans le texte des messages") >= 0)
         plusTard(5000, function() {
-            bilanEssai(s, "dossier actif, texte : " + sujetsDeLaListe().join(" | "), reunion() === 1)
+            bilanEssai(s, "dossier actif, texte : " + sujetsDeLaListe(), reunion() === 1)
             cliquer()
             plusTard(300, function() {
                 bilanEssai(s, "case cochée à la souris : réglage " + reglages.rechercheObjetSeul + ", recherche « "
@@ -737,7 +737,7 @@ QtObject {
                     bilanEssai(s, "bandeau : " + fenetre.infoDossier, fenetre.infoDossier.indexOf("objet et expéditeur seulement") >= 0)
                     fenetre.lancerRecherche("réunion nicolas")
                     plusTard(5000, function() {
-                        bilanEssai(s, "objet et nom de l'expéditeur : " + sujetsDeLaListe().join(" | "), reunion() === 1)
+                        bilanEssai(s, "objet et nom de l'expéditeur : " + sujetsDeLaListe(), reunion() === 1)
                         colonneListe.porteeRecherche.currentIndex = 2
                         fenetre.lancerRecherche("chantier")
                         plusTard(6000, function() {
@@ -746,7 +746,7 @@ QtObject {
                             bilanEssai(s, "bandeau : " + fenetre.infoDossier, fenetre.infoDossier.indexOf(", objet et expéditeur") >= 0)
                             cliquer()
                             plusTard(6000, function() {
-                                bilanEssai(s, "toutes les boîtes, case décochée : " + sujetsDeLaListe().join(" | ")
+                                bilanEssai(s, "toutes les boîtes, case décochée : " + sujetsDeLaListe()
                                            + " ; réglage " + reglages.rechercheObjetSeul,
                                            !cas.checked && !reglages.rechercheObjetSeul && reunion() === 1)
                                 console.log("scenario: recherche-objet " + (s.echecs === 0 ? "OK" : "ECHEC (" + s.echecs + ")"))

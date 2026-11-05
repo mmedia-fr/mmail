@@ -1912,8 +1912,10 @@ mod tests {
         assert!(url.contains("&prompt=select_account") && url.contains(&encoder(PORTEE_AUTORISATION)), "{url}");
     }
 
+    /// Un filtre tel quel, sans le contrôle de `filtres::lire` (qui refuse
+    /// déjà, par exemple, un filtre sans action).
     fn filtre_json(json: &str) -> crate::filtres::Filtre {
-        crate::filtres::lire(&format!("[{json}]")).unwrap().remove(0)
+        serde_json::from_str(json).unwrap()
     }
 
     #[test]
@@ -1998,7 +2000,7 @@ mod tests {
         ];
         let filtres = crate::filtres::lire(r#"[
             {"nom":"Pub","conditions":[{"champ":"objet","operateur":"contient","valeur":"promo"}],"destination":"indesirables","serveur":true},
-            {"nom":"Archives","conditions":[{"champ":"expediteur","operateur":"contient","valeur":"x"}],"destination":"dossier","dossier":"Archives","serveur":true}
+            {"nom":"Archives","compte":"a@exemple.fr","conditions":[{"champ":"expediteur","operateur":"contient","valeur":"x"}],"destination":"dossier","dossier":"Archives","serveur":true}
         ]"#).unwrap();
         let (voulues, _) = regles_voulues(&filtres, "a@exemple.fr");
         let mut journal = Vec::new();

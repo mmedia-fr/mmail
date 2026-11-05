@@ -22,7 +22,7 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::deplacement;
-use crate::imap::{Client, Erreur};
+use crate::imap::{Champs, Client, Erreur};
 use crate::magasin::{Etape, Magasin, Operation};
 use crate::protocole::secondes_date_interne;
 use crate::purge;
@@ -926,11 +926,17 @@ fn recherche_dans_le_texte() {
         prolonger: true,
         continuer: std::sync::Arc::new(|| true),
     };
-    let patiente = client.chercher_patiemment(&mot, &[], attente).expect("SEARCH patient");
+    let patiente = client.chercher_patiemment(&mot, &[], Champs::Texte, attente.clone()).expect("SEARCH patient");
+    // Objet et expéditeur seulement (0.6.38) : le mot du corps n'y est pas ;
+    // un mot de l'objet et le nom de l'expéditeur, si.
+    let objet_corps = client.chercher_patiemment(&mot, &[], Champs::ObjetExpediteur, attente.clone()).expect("SEARCH objet");
+    let objet = client.chercher_patiemment("recherche essai", &[], Champs::ObjetExpediteur, attente).expect("SEARCH objet");
     client.supprimer(&[uid]).expect("purge");
     assert_eq!(trouves, vec![uid]);
     assert_eq!(accent, vec![uid]);
     assert_eq!(patiente, vec![uid]);
+    assert!(objet_corps.is_empty(), "mot du corps trouvé dans l'objet ou l'expéditeur : {objet_corps:?}");
+    assert!(objet.contains(&uid), "objet et expéditeur : {objet:?}");
     assert!(compter(&mut client, "INBOX", &id).is_empty());
 }
 

@@ -284,6 +284,8 @@ ApplicationWindow {
     // compte ; 0 pour toutes les boîtes. Non lus seulement (0.8.2).
     property int rechercheCompte: 0
     property bool rechercheNonLus: false
+    // Recherche en cours sur l'objet et l'expéditeur seulement (0.6.38).
+    property bool rechercheObjetSeul: false
     // Boîte de réception unifiée (« toutes les BàL », demande de Manu du
     // 08/10) : les réceptions de tous les comptes en une liste, sur le même
     // modèle — chaque message avec son compte, le noyau sur le dossier du
@@ -431,6 +433,8 @@ ApplicationWindow {
         id: reglages
         category: "interface"
         property bool afficherMasques: false
+        // Case « Objet et expéditeur seulement » de la recherche (0.6.38).
+        property bool rechercheObjetSeul: false
         property bool memoriser: true
         property real largeurArborescence: 260
         property real largeurListe: 420
@@ -2225,7 +2229,8 @@ ApplicationWindow {
         if (rechercheGlobale) {
             var boiteCherchee = rechercheCompte > 0 ? compteParId(rechercheCompte) : null
             infoDossier = (boiteCherchee ? qsTr("%1, tous dossiers").arg(boiteCherchee.adresse) : qsTr("Toutes les boîtes"))
-                    + (rechercheNonLus ? qsTr(", non lus") : "") + "  —  " + (modeleMessages.count >= 500
+                    + (rechercheNonLus ? qsTr(", non lus") : "")
+                    + (rechercheObjetSeul ? qsTr(", objet et expéditeur") : "") + "  —  " + (modeleMessages.count >= 500
                     ? qsTr("recherche « %1 » : les 500 plus récents, précisez la recherche").arg(recherche)
                     : qsTr("recherche « %1 » : %2").arg(recherche)
                       .arg(accord(modeleMessages.count, qsTr("résultat"), qsTr("résultats"))))
@@ -2253,6 +2258,7 @@ ApplicationWindow {
                     ? qsTr("recherche « %1 » : les 500 plus récents, précisez la recherche").arg(recherche)
                     : qsTr("recherche « %1 » : %2").arg(recherche)
                       .arg(accord(modeleMessages.count, qsTr("résultat"), qsTr("résultats"))))
+                    + (rechercheObjetSeul ? qsTr(", objet et expéditeur seulement") : "")
                     // Rien d'exact dans l'index (0.6.22).
                     + (boite.rechercheApprochee() ? qsTr(", fautes de frappe tolérées") : "")
         } else {
@@ -4692,6 +4698,7 @@ ApplicationWindow {
             viderListe()
         }
         rechercheNonLus = colonneListe.nonLusRecherche.checked
+        rechercheObjetSeul = colonneListe.objetSeulRecherche.checked
         if (colonneListe.porteeRecherche.globale) {
             if (!rechercheGlobale)
                 dossierAvantRecherche = boite.dossierCourant.length > 0
@@ -4711,10 +4718,12 @@ ApplicationWindow {
             viderListe()
             poserResultats()
             // L'index répond tout de suite ; le serveur suit, dossier par
-            // dossier, dans le texte des messages et jusque dans les dossiers
-            // jamais ouverts sur ce poste.
-            dossiersPartout = rechercheCompte > 0 ? boite.chercherDansLeCompteSurLeServeur(texte, rechercheCompte)
-                                                  : boite.chercherPartoutSurLeServeur(texte)
+            // dossier, dans le texte des messages — ou leur objet et leur
+            // expéditeur seulement — et jusque dans les dossiers jamais
+            // ouverts sur ce poste.
+            dossiersPartout = rechercheCompte > 0
+                    ? boite.chercherDansLeCompteSurLeServeur(texte, rechercheCompte, rechercheObjetSeul)
+                    : boite.chercherPartoutSurLeServeur(texte, rechercheObjetSeul)
             messageEtat.texte = (boite.rechercheApprochee() ? qsTr("Rien d'exact sur le poste : fautes de frappe tolérées. ") : "")
                     + etatRecherchePartout()
             return
@@ -4735,17 +4744,20 @@ ApplicationWindow {
         // Rien d'exact dans l'index : les résultats tolèrent des fautes de
         // frappe (0.6.22), et la barre le dit.
         var approchee = boite.rechercheApprochee()
-        if (!boite.chercherSurLeServeur(texte))
+        // Ce que le serveur parcourt, pour la barre d'état.
+        var ouCherche = rechercheObjetSeul ? qsTr("dans l'objet et l'expéditeur des messages")
+                                           : qsTr("dans le texte des messages")
+        if (!boite.chercherSurLeServeur(texte, rechercheObjetSeul))
             messageEtat.texte = approchee
                     ? qsTr("Recherche « %1 » : rien d'exact ; %2 en tolérant des fautes de frappe (index seulement, compte hors ligne).")
                       .arg(texte).arg(accord(modeleMessages.count, qsTr("résultat"), qsTr("résultats")))
                     : qsTr("Recherche dans l'index seulement (compte hors ligne).")
         else if (approchee)
-            messageEtat.texte = qsTr("Recherche « %1 » : rien d'exact ; %2 sur le poste en tolérant des fautes de frappe — le serveur cherche aussi dans le texte des messages…")
-                    .arg(texte).arg(accord(modeleMessages.count, qsTr("résultat"), qsTr("résultats")))
+            messageEtat.texte = qsTr("Recherche « %1 » : rien d'exact ; %2 sur le poste en tolérant des fautes de frappe — le serveur cherche aussi %3…")
+                    .arg(texte).arg(accord(modeleMessages.count, qsTr("résultat"), qsTr("résultats"))).arg(ouCherche)
         else
-            messageEtat.texte = qsTr("Recherche « %1 » : %2 sur le poste — le serveur cherche aussi dans le texte des messages…")
-                    .arg(texte).arg(accord(modeleMessages.count, qsTr("résultat"), qsTr("résultats")))
+            messageEtat.texte = qsTr("Recherche « %1 » : %2 sur le poste — le serveur cherche aussi %3…")
+                    .arg(texte).arg(accord(modeleMessages.count, qsTr("résultat"), qsTr("résultats"))).arg(ouCherche)
     }
 
     /// Résultats de l'index et ceux que le serveur a trouvés dans le texte des
@@ -4837,7 +4849,7 @@ ApplicationWindow {
     /// encore : les dossiers qui restaient ne sont pas interrogés.
     function arreterRecherchePartout() {
         if (dossiersFaits < dossiersPartout)
-            boite.chercherPartoutSurLeServeur("")
+            boite.chercherPartoutSurLeServeur("", false)
         trouvesPartout = ({})
         dossiersPartout = 0
         dossiersFaits = 0
@@ -7003,6 +7015,10 @@ ApplicationWindow {
             // « recherche-entree » : demande d'un utilisateur du 04/11/2026.
             if (essai.scenario === "recherche-entree")
                 scenarios.lancerScenarioRechercheEntree()
+            // « recherche-objet » (0.6.38 ; banc MARGES=1) : demande d'un
+            // utilisateur du 04/11/2026.
+            if (essai.scenario === "recherche-objet")
+                scenarios.lancerScenarioRechercheObjet()
             // « Affichage › Marges du message » (0.6.23).
             if (essai.scenario === "marges")
                 scenarios.lancerScenarioMarges()

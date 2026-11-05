@@ -202,7 +202,10 @@ de projet interne.
   l'on revient au dossier de départ en sortant de la recherche (Échap). Un
   message trouvé par le serveur mais pas encore sur le poste y est rangé (les
   500 plus récents par dossier) ; la liste s'arrête aux 1 000 résultats les
-  plus récents. Les résultats se **trient** — plus
+  plus récents. La case **« Objet et expéditeur seulement »** (0.6.38, gardée
+  d'une session à l'autre) borne aussi le serveur à l'objet et à l'expéditeur :
+  ni le texte des messages, ni celui des pièces jointes, que l'index plein
+  texte d'un serveur Mailcow parcourt. Les résultats se **trient** — plus
   récents, plus anciens, expéditeur, objet (sans ses « RE : »), plus gros,
   dossier dans toutes les boîtes — sur le poste : le tri n'est jamais demandé
   au serveur, pour qui il coûte cher sur un gros dossier ;

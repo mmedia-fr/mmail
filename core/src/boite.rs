@@ -40,7 +40,7 @@ use std::time::{Duration, Instant};
 use crate::cache::Cache;
 use crate::categories::{self, Catalogue, Categorie, Changement};
 use crate::deplacement::{self, Rapport};
-use crate::imap::{Attente, Client, Erreur};
+use crate::imap::{Attente, Champs, Client, Erreur};
 use crate::magasin::{DossierLocal, Magasin, MessageLocal};
 use crate::synchro::{self, assurer_selection, Echec};
 
@@ -289,28 +289,35 @@ pub mod qobject {
         fn chercher_selon(&self, texte: &QString, portee: i32, compte: i32, non_lus: bool) -> QString;
 
         /// Cherche aussi dans le texte entier des messages du dossier ouvert,
-        /// sur le serveur, par une connexion à part (0.6.16). Issue :
+        /// sur le serveur, par une connexion à part (0.6.16) ; dans leur objet
+        /// et leur expéditeur seulement si `objet_seul` (0.6.38). Issue :
         /// `resultatsServeur`, précédé de `rechercheInachevee` si le serveur
         /// n'a pas fini.
         #[qinvokable]
         #[cxx_name = "chercherSurLeServeur"]
-        fn chercher_sur_le_serveur(self: Pin<&mut Boite>, texte: &QString) -> bool;
+        fn chercher_sur_le_serveur(self: Pin<&mut Boite>, texte: &QString, objet_seul: bool) -> bool;
 
         /// Cherche aussi sur le serveur, dans chaque dossier de chaque compte
         /// connecté, par une connexion à part pour chaque compte (0.6.16) : un
         /// dossier lent passe après les autres. Rend le nombre de dossiers à
         /// interroger ; un texte vide arrête la recherche en cours. Issue :
         /// `resultatsPartout`, par dossier, après `rechercheInachevee` si le
-        /// serveur n'a pas fini d'y chercher.
+        /// serveur n'a pas fini d'y chercher. `objet_seul` : comme
+        /// `chercherSurLeServeur`.
         #[qinvokable]
         #[cxx_name = "chercherPartoutSurLeServeur"]
-        fn chercher_partout_sur_le_serveur(self: Pin<&mut Boite>, texte: &QString) -> i32;
+        fn chercher_partout_sur_le_serveur(self: Pin<&mut Boite>, texte: &QString, objet_seul: bool) -> i32;
 
         /// Comme `chercherPartoutSurLeServeur`, dans les seuls dossiers d'un
         /// compte (0.8.3, « cette boîte, tous dossiers »).
         #[qinvokable]
         #[cxx_name = "chercherDansLeCompteSurLeServeur"]
-        fn chercher_dans_le_compte_sur_le_serveur(self: Pin<&mut Boite>, texte: &QString, compte: i32) -> i32;
+        fn chercher_dans_le_compte_sur_le_serveur(
+            self: Pin<&mut Boite>,
+            texte: &QString,
+            compte: i32,
+            objet_seul: bool,
+        ) -> i32;
 
         /// Lignes d'un dossier quelconque pour des UID (« 3,5,7 »), comme
         /// `chercher(texte, true)` : compte, chemin et dossier compris.
@@ -3257,11 +3264,16 @@ impl qobject::Boite {
         QString::from(&json_trouves(&trouves, &partagees_par_compte(magasin)))
     }
 
-    pub fn chercher_dans_le_compte_sur_le_serveur(self: Pin<&mut Self>, texte: &QString, compte: i32) -> i32 {
-        self.chercher_dans_les_comptes(texte, Some(compte as i64))
+    pub fn chercher_dans_le_compte_sur_le_serveur(
+        self: Pin<&mut Self>,
+        texte: &QString,
+        compte: i32,
+        objet_seul: bool,
+    ) -> i32 {
+        self.chercher_dans_les_comptes(texte, Some(compte as i64), champs_recherche(objet_seul))
     }
 
-    pub fn chercher_sur_le_serveur(mut self: Pin<&mut Self>, texte: &QString) -> bool {
+    pub fn chercher_sur_le_serveur(mut self: Pin<&mut Self>, texte: &QString, objet_seul: bool) -> bool {
         // Une nouvelle recherche remplace la précédente, partout comprise.
         let numero = self.recherche.fetch_add(1, Ordering::SeqCst) + 1;
         let Some((compte, chemin, _)) = self.courant.clone() else {
@@ -3271,16 +3283,21 @@ impl qobject::Boite {
         if texte.is_empty() || !self.sessions.contains_key(&compte) {
             return false;
         }
-        self.as_mut().lancer_recherche(compte, texte, vec![chemin], false, numero)
+        self.as_mut().lancer_recherche(compte, texte, champs_recherche(objet_seul), vec![chemin], false, numero)
     }
 
-    pub fn chercher_partout_sur_le_serveur(self: Pin<&mut Self>, texte: &QString) -> i32 {
-        self.chercher_dans_les_comptes(texte, None)
+    pub fn chercher_partout_sur_le_serveur(self: Pin<&mut Self>, texte: &QString, objet_seul: bool) -> i32 {
+        self.chercher_dans_les_comptes(texte, None, champs_recherche(objet_seul))
     }
 
     /// Recherche sur le serveur dans tous les dossiers d'un compte, ou de
     /// tous les comptes connectés (`seul` absent).
-    fn chercher_dans_les_comptes(mut self: Pin<&mut Self>, texte: &QString, seul: Option<i64>) -> i32 {
+    fn chercher_dans_les_comptes(
+        mut self: Pin<&mut Self>,
+        texte: &QString,
+        seul: Option<i64>,
+        champs: Champs,
+    ) -> i32 {
         // Nouvelle recherche ou arrêt : les fils de la précédente s'arrêtent.
         let numero = self.recherche.fetch_add(1, Ordering::SeqCst) + 1;
         let texte = texte.to_string().trim().to_string();
@@ -3303,7 +3320,7 @@ impl qobject::Boite {
                 .map(|d| d.chemin)
                 .collect();
             let nombre = chemins.len();
-            if nombre > 0 && self.as_mut().lancer_recherche(compte, texte.clone(), chemins, true, numero) {
+            if nombre > 0 && self.as_mut().lancer_recherche(compte, texte.clone(), champs, chemins, true, numero) {
                 total += nombre;
             }
         }
@@ -3317,6 +3334,7 @@ impl qobject::Boite {
         self: Pin<&mut Self>,
         compte: i64,
         texte: String,
+        champs: Champs,
         chemins: Vec<String>,
         partout: bool,
         numero: u64,
@@ -3327,6 +3345,7 @@ impl qobject::Boite {
         let recherche = Recherche {
             compte,
             texte,
+            champs,
             chemins,
             partout,
             numero,
@@ -8198,6 +8217,8 @@ const PATIENCE_RECHERCHE: Duration = Duration::from_secs(15);
 struct Recherche {
     compte: i64,
     texte: String,
+    /// Où chercher chaque mot (0.6.38).
+    champs: Champs,
     chemins: Vec<String>,
     /// Recherche dans toutes les boîtes : issues `RecherchePartout`.
     partout: bool,
@@ -8338,7 +8359,7 @@ impl Recherche {
             continuer: Arc::new(move || courante.load(Ordering::SeqCst) == numero),
         };
         let debut = Instant::now();
-        let uids = match c.chercher_patiemment(mots, categories, attente) {
+        let uids = match c.chercher_patiemment(mots, categories, self.champs, attente) {
             Ok(uids) => uids,
             Err(Erreur::Abandon) => {
                 *client = None;
@@ -8374,6 +8395,17 @@ impl Recherche {
             }
         }
         Etape::Trouves(uids)
+    }
+}
+
+/// La case « Objet et expéditeur seulement » de la recherche (0.6.38) : sans
+/// elle, le serveur cherche aussi dans le texte des messages et, sur Mailcow,
+/// dans celui de leurs pièces jointes.
+fn champs_recherche(objet_seul: bool) -> Champs {
+    if objet_seul {
+        Champs::ObjetExpediteur
+    } else {
+        Champs::Texte
     }
 }
 
@@ -9674,6 +9706,7 @@ mod tests {
         Recherche {
             compte: 1,
             texte: "devis".into(),
+            champs: Champs::Texte,
             chemins: chemins.iter().map(|c| c.to_string()).collect(),
             partout,
             numero: 1,
@@ -9738,6 +9771,29 @@ mod tests {
         assert_eq!(ouvertes, 2);
         assert_eq!(j1.lock().unwrap().len(), 2, "pas de LOGOUT au milieu d'une commande");
         assert_eq!(j2.lock().unwrap().last().unwrap(), "LOGOUT");
+    }
+
+    /// « Objet et expéditeur seulement » (0.6.38) : chaque dossier est
+    /// interrogé sur l'objet et l'expéditeur, et non sur le texte.
+    #[test]
+    fn recherche_objet_et_expediteur_seulement() {
+        use crate::simule::{echange, session, DOVECOT};
+        let (s, journal) = session(
+            DOVECOT,
+            vec![
+                examen("INBOX"),
+                echange("UID SEARCH CHARSET UTF-8 OR SUBJECT", "* SEARCH 4\r\n", "OK"),
+                examen("Archives"),
+                echange("UID SEARCH CHARSET UTF-8 OR SUBJECT", "* SEARCH\r\n", "OK"),
+                echange("LOGOUT", "* BYE\r\n", "OK"),
+            ],
+        );
+        let r = Recherche { champs: Champs::ObjetExpediteur, ..recherche(&["INBOX", "Archives"], true, 5_000, 5_000) };
+        let (issues, _) = issues_de(&r, vec![s]);
+        assert_eq!(issues, ["INBOX [4] reste 1 : fini", "Archives [] reste 0 : fini"]);
+        let journal = journal.lock().unwrap();
+        assert_eq!(journal[1], "UID SEARCH CHARSET UTF-8 OR SUBJECT \"devis\" FROM \"devis\"");
+        assert!(!journal.iter().any(|l| l.contains(" TEXT ")), "{journal:?}");
     }
 
     /// Un dossier seul a toute l'attente ; sans réponse, ou si Dovecot a

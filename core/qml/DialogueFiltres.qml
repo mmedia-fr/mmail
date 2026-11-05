@@ -23,6 +23,10 @@ Dialog {
     property int choisi: -1
     property var cibles: []
     property string message: ""
+    // Règles d'Outlook (0.9.0) : les comptes Microsoft 365 du profil, et ceux
+    // dont un filtre attend l'autorisation des réglages de la boîte.
+    property var adressesMicrosoft: []
+    property var aAutoriser: []
     readonly property var filtre: choisi >= 0 && choisi < liste.length ? liste[choisi] : null
     readonly property var adresses: fenetre.comptesConnus.map(function(c) { return c.adresse })
 
@@ -39,6 +43,10 @@ Dialog {
     /// rempli — « Créer un filtre… » sur un message.
     function ouvrir(nouveau) {
         cibles = JSON.parse(boite.dossiersCibles())
+        adressesMicrosoft = fenetre.listeComptes()
+            .filter(function(c) { return c.auth === "microsoft" })
+            .map(function(c) { return c.adresse })
+        aAutoriser = []
         var l = []
         try { l = JSON.parse(boite.filtres() || "[]") } catch (e) { l = [] }
         if (nouveau)
@@ -51,7 +59,39 @@ Dialog {
     function vierge() {
         return { nom: qsTr("Nouveau filtre"), actif: true, compte: "", tout: true,
                  conditions: [{ champ: "expediteur", operateur: "contient", valeur: "" }],
-                 lu: false, suivi: false, destination: "", dossier: "", compte_destination: "", arreter: false }
+                 lu: false, suivi: false, destination: "", dossier: "", compte_destination: "", arreter: false,
+                 serveur: false }
+    }
+    /// Le filtre peut partir dans les règles d'Outlook : il vise un compte
+    /// Microsoft 365, ou tous les comptes quand le profil en a un.
+    function versOutlook(f) {
+        if (!f)
+            return false
+        return f.compte ? adressesMicrosoft.indexOf(f.compte) >= 0 : adressesMicrosoft.length > 0
+    }
+    /// Ce qu'Outlook ne sait pas faire de ce filtre ; vide s'il le peut.
+    function raisonOutlook(f) {
+        return f && f.serveur === true ? boite.regleOutlook(JSON.stringify(f)) : ""
+    }
+    /// Issue de l'accord des règles d'Outlook (ReactionsNoyau.qml).
+    function reglesRecues(compte, texte, autoriser) {
+        if (texte.length > 0)
+            message = texte
+        if (autoriser && aAutoriser.indexOf(compte) < 0)
+            aAutoriser = aAutoriser.concat([compte])
+    }
+    /// La même autorisation que « Relier à Outlook… » (catégories) : lire et
+    /// modifier les réglages de la boîte. Au retour, les règles partent.
+    function autoriserOutlook() {
+        var compte = aAutoriser[0]
+        aAutoriser = aAutoriser.slice(1)
+        var url = boite.autoriserCouleursOutlook(compte)
+        if (url.length === 0) {
+            message = qsTr("Autorisation impossible : %1").arg(boite.erreur)
+            return
+        }
+        Qt.openUrlExternally(url)
+        message = qsTr("Autorisation dans votre navigateur : MMail attend son retour…")
     }
     function modifier(cle, valeur) {
         if (!filtre)
@@ -355,6 +395,24 @@ Dialog {
                     checked: dlgFiltres.filtre ? dlgFiltres.filtre.arreter : false
                     onToggled: dlgFiltres.modifier("arreter", checked)
                 }
+                CheckBox {
+                    id: caseOutlook
+                    visible: dlgFiltres.versOutlook(dlgFiltres.filtre)
+                    text: qsTr("l'envoyer aussi à Outlook (Microsoft 365) : il trie même quand MMail est fermé")
+                    checked: dlgFiltres.filtre ? dlgFiltres.filtre.serveur === true : false
+                    onToggled: dlgFiltres.modifier("serveur", checked)
+                    ToolTip.visible: hovered
+                    ToolTip.delay: 500
+                    ToolTip.text: qsTr("À l'enregistrement, le filtre devient une règle de la boîte de réception d'Outlook, nommée « MMail : » suivi de son nom. MMail ne touche pas aux règles créées dans Outlook. Décocher la case retire la règle d'Outlook.")
+                }
+                Label {
+                    readonly property string raison: dlgFiltres.raisonOutlook(dlgFiltres.filtre)
+                    visible: caseOutlook.visible && raison.length > 0
+                    text: qsTr("Outlook ne sait pas faire ce filtre (%1) : MMail continue de l'appliquer seul.").arg(raison)
+                    wrapMode: Text.Wrap
+                    Layout.fillWidth: true
+                    opacity: 0.75
+                }
             }
         }
 
@@ -368,7 +426,7 @@ Dialog {
         }
         Label {
             Layout.fillWidth: true
-            text: qsTr("Les filtres agissent sur les messages qui arrivent pendant qu'un MMail est ouvert. Pour un tri permanent sur une boîte du serveur de MMEDIA, le webmail a aussi ses filtres.")
+            text: qsTr("Les filtres agissent sur les messages qui arrivent pendant qu'un MMail est ouvert. Pour un tri permanent sur une boîte du serveur de MMEDIA, le webmail a aussi ses filtres ; sur un compte Microsoft 365, un filtre peut aussi partir dans les règles d'Outlook.")
             wrapMode: Text.Wrap
             font.pointSize: dlgFiltres.font.pointSize * 0.9
             opacity: 0.7
@@ -385,6 +443,14 @@ Dialog {
                 text: qsTr("Enregistrer")
                 highlighted: true
                 onClicked: dlgFiltres.enregistrer()
+            }
+            Button {
+                visible: dlgFiltres.aAutoriser.length > 0 && Qt.platform.os !== "android"
+                text: qsTr("Autoriser Outlook…")
+                onClicked: dlgFiltres.autoriserOutlook()
+                ToolTip.visible: hovered
+                ToolTip.delay: 500
+                ToolTip.text: qsTr("Microsoft vous demandera, dans votre navigateur, d'autoriser MMail à lire et modifier les réglages de votre boîte : ses règles, et la liste des catégories d'Outlook, qui est alors reliée à celle de MMail.")
             }
             Button {
                 text: qsTr("Fermer")

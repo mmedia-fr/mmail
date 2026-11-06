@@ -2317,13 +2317,14 @@ QtObject {
     ///     à Outlook, puis recolorée et renommée « Essai MMail renommée » ;
     ///     puis un filtre « aussi dans Outlook » (règle « MMail : Essai
     ///     MMail ») ; enfin la lecture des agendas autorisée, et les agendas
-    ///     de la boîte lus, en lecture seule ;
+    ///     de la boîte lus ;
     ///   - « lire » : reconnexion par le coffre, les catégories posées dans
     ///     Outlook entre-temps relues, puis les catégories d'essai retirées
     ///     des messages et de la liste de MMail (Outlook garde la sienne), le
     ///     filtre d'essai retiré, sa règle avec ; enfin les agendas relus :
     ///     l'événement et la série posés dans Outlook entre-temps (demain et
-    ///     après-demain) paraissent à leur heure.
+    ///     après-demain) paraissent à leur heure ; puis MMail écrit : un
+    ///     événement créé dans trois jours, celui de demain supprimé.
     /// Les adresses d'autorisation sont écrites au journal (« scenario: url »)
     /// pour le navigateur qui mène la connexion.
     function lancerScenarioM365Reel() {
@@ -2331,7 +2332,7 @@ QtObject {
         var adresse = (identifiantsEssai.utilisateur || "").toLowerCase()
         var passage = identifiantsEssai.dossier || "ecrire"
         var suivi = { n: 0, etape: 0, depuis: 0, echecs: 0, motCle: "", premier: 0, sujet: "", demande: false, etat: "",
-                      synchros: 0, agendaDepuis: 0, erreursAgenda: "" }
+                      synchros: 0, agendaDepuis: 0, erreursAgenda: "", ecrits: [], cible: 0 }
         var bilan = function(texte, bon) {
             if (!bon)
                 suivi.echecs += 1
@@ -2381,6 +2382,16 @@ QtObject {
             suivi.erreursAgenda = erreurs
             console.log("scenario: agendas synchronisés | changé " + change + " | erreurs « " + erreurs + " »")
         })
+        // Écritures dans l'agenda terminées : (réussite, motif).
+        boite.evenementEnregistre.connect(function(ok, message) {
+            suivi.ecrits.push([ok, message])
+            console.log("scenario: écriture dans l'agenda | " + ok + " | « " + message + " »")
+        })
+        var jourDans = function(decalage) {
+            var d = new Date()
+            d.setDate(d.getDate() + decalage)
+            return Qt.formatDate(d, "yyyy-MM-dd")
+        }
         // Les fiches d'un jour décalé de `decalage` jours.
         var fichesDu = function(decalage) {
             var d = new Date()
@@ -2508,7 +2519,7 @@ QtObject {
                             return a.nom + " " + a.couleur + (a.ecriture ? " écriture" : " lecture")
                         }).join(", "))
                         bilan(miens.length + " agenda(s) Microsoft 365 lu(s), sans erreur", miens.length > 0 && suivi.erreursAgenda.length === 0)
-                        bilan("agendas Microsoft 365 en lecture seule", miens.every(function(a) { return !a.ecriture }))
+                        bilan("un agenda Microsoft 365 au moins accepte l'écriture", miens.some(function(a) { return a.ecriture }))
                         var etats = JSON.parse(boite.agendasMicrosoft())
                         bilan("lecture des agendas notée autorisée", etats.some(function(x) { return x.compte === c.compte && x.etat === "autorise" }))
                         finir()
@@ -2559,6 +2570,36 @@ QtObject {
                     suivi.agendaDepuis = suivi.synchros
                     boite.synchroniserAgendas(true)
                     suivant()
+                } else if (suivi.etape === 8) {
+                    if (suivi.ecrits.length > 0) {
+                        var e = suivi.ecrits.shift()
+                        bilan("événement créé par MMail dans l'agenda Microsoft 365", e[0])
+                        var trois = fichesDu(3).filter(function(f) { return f.titre === "Essai d'écriture MMail 0.9.0" })
+                        bilan("il paraît dans trois jours, de 15:00 à 15:45, modifiable",
+                              trois.length === 1 && trois[0].quand.indexOf("15:00") >= 0 && trois[0].quand.indexOf("15:45") >= 0
+                              && trois[0].modifiable)
+                        var demain = fichesDu(1).filter(function(f) { return f.titre === "Essai d'agenda MMail 0.9.0" })
+                        if (demain.length !== 1) {
+                            bilan("l'événement de demain à supprimer", false)
+                            finir()
+                            return
+                        }
+                        boite.supprimerEvenement(demain[0].objet, demain[0].occurrence, false)
+                        suivant()
+                    } else if (ecoule > 90) {
+                        bilan("pas de nouvelle de l'écriture", false)
+                        finir()
+                    }
+                } else if (suivi.etape === 9) {
+                    if (suivi.ecrits.length > 0) {
+                        var s = suivi.ecrits.shift()
+                        bilan("événement de demain supprimé par MMail", s[0])
+                        bilan("il ne paraît plus", fichesDu(1).every(function(f) { return f.titre !== "Essai d'agenda MMail 0.9.0" }))
+                        finir()
+                    } else if (ecoule > 90) {
+                        bilan("pas de nouvelle de la suppression", false)
+                        finir()
+                    }
                 } else if (suivi.etape === 7) {
                     if (suivi.synchros > suivi.agendaDepuis) {
                         var f1 = fichesDu(1)
@@ -2573,11 +2614,27 @@ QtObject {
                               un !== null && un.quand.indexOf("10:00") >= 0 && un.quand.indexOf("11:00") >= 0)
                         bilan("son lieu et sa description lus",
                               un !== null && un.lieu === "Salle d'essai" && un.description.indexOf("Ligne 2") >= 0)
-                        bilan("en lecture seule, pour Microsoft 365", un !== null && !un.modifiable && un.motif.indexOf("Microsoft 365") >= 0)
+                        bilan("modifiable dans MMail", un !== null && un.modifiable)
                         var serie = f1.concat(f2).filter(function(f) { return f.titre === "Essai de série MMail 0.9.0" })
                         bilan("série d'Outlook : une occurrence demain, une après-demain, marquées « répète »",
                               serie.length === 2 && serie.every(function(f) { return f.repete }))
-                        finir()
+                        // L'écriture : un événement nouveau dans trois jours,
+                        // dans le premier agenda de la boîte qui l'accepte.
+                        var cibles = JSON.parse(boite.agendas()).filter(function(a) {
+                            return a.microsoft && a.compte === c.compte && a.ecriture
+                        })
+                        bilan("un agenda Microsoft 365 accepte l'écriture", cibles.length > 0)
+                        if (cibles.length === 0) {
+                            finir()
+                            return
+                        }
+                        suivi.cible = cibles[0].id
+                        boite.enregistrerEvenement(JSON.stringify({
+                            agenda: suivi.cible, objet: 0, occurrence: "", titre: "Essai d'écriture MMail 0.9.0", lieu: "",
+                            description: "Posé par MMail", journee: false, debut: jourDans(3) + "T15:00", fin: jourDans(3) + "T15:45",
+                            repetition: "", jusquAu: "", rappel: 5, participants: null, organisateur: "", nomOrganisateur: ""
+                        }))
+                        suivant()
                     } else if (ecoule > 120) {
                         bilan("pas de synchronisation des agendas", false)
                         finir()

@@ -2097,7 +2097,9 @@ impl qobject::Boite {
                     "couleur": crate::agenda::couleur(a),
                     "affiche": a.affiche,
                     "ecriture": a.ecriture,
-                    "invitations": magasin.planification(a.compte).ok().flatten().unwrap_or(false),
+                    // Exchange envoie lui-même les invitations.
+                    "invitations": crate::microsoft::agenda::est_graph(&a.adresse)
+                        || magasin.planification(a.compte).ok().flatten().unwrap_or(false),
                     "microsoft": crate::microsoft::agenda::est_graph(&a.adresse),
                 })
             })
@@ -2406,14 +2408,27 @@ impl qobject::Boite {
     }
 
     pub fn saisie_evenement(&self, objet: i32, occurrence: &QString, serie: bool) -> QString {
+        use crate::microsoft::agenda as graph;
         let Some(o) = self.magasin.as_ref().and_then(|m| m.objet(objet as i64).ok().flatten()) else {
             return QString::from("");
         };
-        let occurrence = if serie { None } else { occurrence.to_string().parse::<i64>().ok() };
-        match crate::saisie::saisie_de(&o.ical, occurrence, crate::saisie::fuseau_du_poste()) {
+        let texte_occurrence = occurrence.to_string();
+        let occurrence = if serie { None } else { texte_occurrence.parse::<i64>().ok() };
+        // Microsoft 365 : chaque occurrence est un objet seul, lu comme un
+        // événement simple ; une série garde sa répétition, que le formulaire
+        // ne décrit pas (« AUTRE »).
+        let par_graph = self.est_agenda_graph(o.agenda);
+        let (ical, occurrence) = if par_graph { (graph::pour_le_formulaire(&o.ical).unwrap_or_default(), None) } else { (o.ical.clone(), occurrence) };
+        match crate::saisie::saisie_de(&ical, occurrence, crate::saisie::fuseau_du_poste()) {
             Some(mut s) => {
                 s.agenda = o.agenda;
                 s.objet = o.id;
+                if par_graph {
+                    s.occurrence = if serie { String::new() } else { texte_occurrence };
+                    if serie && graph::serie_de(&o.ical).is_some() {
+                        s.repetition = "AUTRE".into();
+                    }
+                }
                 QString::from(&serde_json::to_string(&s).unwrap_or_default())
             }
             None => QString::from(""),
@@ -2443,6 +2458,13 @@ impl qobject::Boite {
             return;
         }
         let agenda = objet.as_ref().map(|o| o.agenda).unwrap_or(saisie.agenda);
+        if self.est_agenda_graph(agenda) {
+            match Self::ecriture_graph(self.agenda_local(agenda), objet, saisie) {
+                Ok(ecriture) => self.lancer_ecriture_graph(agenda, ecriture),
+                Err(motif) => self.as_mut().evenement_enregistre(false, &QString::from(&motif)),
+            }
+            return;
+        }
         self.lancer_ecriture(
             agenda,
             Box::new(move |dav, agenda| {
@@ -2470,6 +2492,13 @@ impl qobject::Boite {
         };
         let occurrence = if serie { None } else { occurrence.to_string().parse::<i64>().ok() };
         let agenda = o.agenda;
+        // Microsoft 365 : l'occurrence (ou l'événement) elle-même, ou sa série.
+        if self.est_agenda_graph(agenda) {
+            let serie_graph = crate::microsoft::agenda::serie_de(&o.ical).filter(|_| occurrence.is_none());
+            let id = serie_graph.unwrap_or(o.href);
+            self.lancer_ecriture_graph(agenda, crate::microsoft::agenda::Ecriture::Supprimer { id });
+            return;
+        }
         self.lancer_ecriture(
             agenda,
             Box::new(move |dav, agenda| {
@@ -2497,9 +2526,9 @@ impl qobject::Boite {
             self.as_mut().evenement_enregistre(false, &QString::from("agenda introuvable"));
             return;
         };
-        // L'écriture par Graph viendra dans un second temps.
+        // Un agenda Microsoft 365 s'écrit par Graph (`lancer_ecriture_graph`).
         if crate::microsoft::agenda::est_graph(&local.adresse) {
-            let motif = "MMail n'écrit pas encore dans un agenda Microsoft 365 : passez par Outlook pour l'instant";
+            let motif = "agenda Microsoft 365 : écriture à faire par Graph";
             self.as_mut().evenement_enregistre(false, &QString::from(motif));
             return;
         }
@@ -2635,6 +2664,14 @@ impl qobject::Boite {
             self.as_mut().evenement_enregistre(false, &QString::from("invitation illisible"));
             return;
         };
+        // Microsoft 365 : Exchange a déjà inscrit la réunion dans l'agenda de
+        // la boîte ; la réponse part de là, et Exchange prévient
+        // l'organisateur.
+        if self.compte_microsoft(compte as i64) {
+            let ecriture = crate::microsoft::agenda::Ecriture::RepondreInvitation { uid, reponse: reponse.to_string() };
+            self.lancer_graph(compte as i64, ecriture);
+            return;
+        }
         self.ecrire_reponse(compte as i64, uid, ical, reponse.to_string());
     }
 
@@ -2645,6 +2682,14 @@ impl qobject::Boite {
             return;
         };
         let compte = magasin.agendas().unwrap_or_default().into_iter().find(|a| a.id == o.agenda).map(|a| a.compte).unwrap_or(0);
+        // Microsoft 365 : Exchange prévient l'organisateur ; une série reçoit
+        // la réponse pour toutes ses occurrences.
+        if self.est_agenda_graph(o.agenda) {
+            let id = crate::microsoft::agenda::serie_de(&o.ical).unwrap_or(o.href);
+            let ecriture = crate::microsoft::agenda::Ecriture::Repondre { id, reponse: reponse.to_string() };
+            self.lancer_ecriture_graph(o.agenda, ecriture);
+            return;
+        }
         let uid = crate::invitation::identite(&o.ical).map(|(u, _)| u).unwrap_or_default();
         self.ecrire_reponse(compte, uid, o.ical, reponse.to_string());
     }
@@ -2660,6 +2705,17 @@ impl qobject::Boite {
         let occurrence = crate::agenda::analyser(&ical).and_then(|r| {
             r.enfants.iter().filter(|c| c.nom == "VEVENT").find_map(|c| crate::saisie::origine_de(&r, c))
         });
+        // Microsoft 365 : la réunion entière retirée par Graph ; une occurrence
+        // annulée reste dans l'agenda, marquée annulée par Exchange.
+        if self.compte_microsoft(compte) {
+            if occurrence.is_some() {
+                let motif = "une occurrence annulée se retire dans Outlook ; l'agenda la montre déjà annulée";
+                self.as_mut().evenement_enregistre(false, &QString::from(motif));
+            } else {
+                self.lancer_graph(compte, crate::microsoft::agenda::Ecriture::RetirerAnnulee { uid });
+            }
+            return;
+        }
         self.as_mut().lancer_pour_compte(
             compte,
             Box::new(move |dav, magasin| {
@@ -2675,6 +2731,96 @@ impl qobject::Boite {
                 }
             }),
         );
+    }
+
+    fn agenda_local(&self, agenda: i64) -> Option<crate::magasin::AgendaLocal> {
+        self.magasin.as_ref()?.agendas().ok()?.into_iter().find(|a| a.id == agenda)
+    }
+
+    /// Le compte passe-t-il par Microsoft 365 (jetons de Microsoft) ?
+    fn compte_microsoft(&self, compte: i64) -> bool {
+        self.identites
+            .get(&compte)
+            .and_then(|id| id.oauth.as_ref())
+            .is_some_and(|j| crate::oauth::fournisseur(j) == crate::oauth::Fournisseur::Microsoft)
+    }
+
+    fn est_agenda_graph(&self, agenda: i64) -> bool {
+        self.agenda_local(agenda).is_some_and(|a| crate::microsoft::agenda::est_graph(&a.adresse))
+    }
+
+    /// Ce que le formulaire demande d'écrire dans un agenda Microsoft 365. Une
+    /// série n'y change que son titre, son lieu, sa description, son rappel
+    /// et ses participants : son horaire et sa répétition se changent dans
+    /// Outlook.
+    fn ecriture_graph(
+        agenda: Option<crate::magasin::AgendaLocal>,
+        objet: Option<crate::magasin::ObjetLocal>,
+        saisie: crate::saisie::Saisie,
+    ) -> Result<crate::microsoft::agenda::Ecriture, String> {
+        use crate::microsoft::agenda::{self as graph, Ecriture};
+        let Some(o) = objet else {
+            let agenda = agenda.ok_or("agenda introuvable")?;
+            return Ok(Ecriture::Creer { agenda: graph::identifiant(&agenda.adresse).to_string(), saisie });
+        };
+        match graph::serie_de(&o.ical) {
+            Some(serie) if saisie.occurrence.is_empty() => {
+                let tz = crate::saisie::fuseau_du_poste();
+                let avant = graph::pour_le_formulaire(&o.ical).and_then(|i| crate::saisie::saisie_de(&i, None, tz));
+                let horaire_change =
+                    avant.is_some_and(|a| a.debut != saisie.debut || a.fin != saisie.fin || a.journee != saisie.journee);
+                if horaire_change || saisie.repetition != "AUTRE" {
+                    return Err("l'horaire et la répétition d'une série Microsoft 365 se changent dans Outlook ; \
+                                ici, une occurrence à la fois"
+                        .into());
+                }
+                Ok(Ecriture::ModifierSerie { serie, saisie })
+            }
+            Some(_) if !saisie.repetition.is_empty() => Err("une occurrence d'une série ne se répète pas elle-même".into()),
+            _ => Ok(Ecriture::Modifier { href: o.href, saisie }),
+        }
+    }
+
+    /// Écrit dans un agenda Microsoft 365 depuis un fil à part, par Graph,
+    /// puis relit les agendas de la boîte et rend compte, comme
+    /// `lancer_ecriture`.
+    fn lancer_ecriture_graph(mut self: Pin<&mut Self>, agenda: i64, ecriture: crate::microsoft::agenda::Ecriture) {
+        let Some(local) = self.agenda_local(agenda) else {
+            self.as_mut().evenement_enregistre(false, &QString::from("agenda introuvable"));
+            return;
+        };
+        self.lancer_graph(local.compte, ecriture);
+    }
+
+    /// Le travail de `lancer_ecriture_graph`, pour la boîte `compte`.
+    fn lancer_graph(mut self: Pin<&mut Self>, compte: i64, ecriture: crate::microsoft::agenda::Ecriture) {
+        let adresse = self.magasin.as_ref().and_then(|m| m.compte_par_id(compte).ok().flatten()).map(|c| c.adresse).unwrap_or_default();
+        let Some(jetons) = self.identites.get(&compte).and_then(|id| id.oauth.clone()) else {
+            self.as_mut().evenement_enregistre(false, &QString::from("la boîte de cet agenda n'est pas connectée"));
+            return;
+        };
+        let profil = self.profil.clone();
+        let fil = self.qt_thread();
+        let lance = thread::Builder::new().name("mmail-agenda-ecriture".into()).spawn(move || {
+            let tz = crate::saisie::fuseau_du_poste();
+            let issue = crate::microsoft::jeton_acces(&jetons, crate::microsoft::PORTEE_AGENDA)
+                .map_err(|e| format!("autorisation des agendas : {e}"))
+                .and_then(|jeton| {
+                    let issue = crate::microsoft::agenda::ecrire(&jeton, &ecriture, tz);
+                    if let Ok(magasin) = Magasin::ouvrir(&profil) {
+                        let _ = crate::microsoft::agenda::synchroniser(&magasin, compte, &adresse, &jeton, chrono::Utc::now());
+                    }
+                    issue
+                });
+            let _ = fil.queue(move |mut boite: Pin<&mut qobject::Boite>| {
+                let message = issue.as_ref().err().cloned().unwrap_or_default();
+                boite.as_mut().agendas_synchronises(true, &QString::from(""));
+                boite.as_mut().evenement_enregistre(issue.is_ok(), &QString::from(&message));
+            });
+        });
+        if lance.is_err() {
+            self.as_mut().evenement_enregistre(false, &QString::from("impossible de lancer l'écriture"));
+        }
     }
 
     /// Comme `lancer_ecriture`, pour une écriture dont l'agenda ne se décide

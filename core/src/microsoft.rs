@@ -686,7 +686,7 @@ fn categories_delta_par(
             if m.get("@removed").is_some() {
                 continue;
             }
-            let Some(id) = m.get("internetMessageId").and_then(|v| v.as_str()).filter(|v| !v.is_empty()) else {
+            let Some(id) = m.get("internetMessageId").and_then(|v| v.as_str()).map(sans_chevrons).filter(|v| !v.is_empty()) else {
                 continue;
             };
             let noms = m
@@ -706,6 +706,12 @@ fn categories_delta_par(
     }
     // Dossier très gros : le reste au passage suivant, depuis cette page.
     Ok((vus, url))
+}
+
+/// Un `Message-ID` sans ses chevrons, comme l'index le garde : Graph les
+/// écrit (`internetMessageId` : « <id@domaine> »), l'enveloppe IMAP non.
+pub(crate) fn sans_chevrons(id: &str) -> &str {
+    id.trim().trim_start_matches('<').trim_end_matches('>').trim()
 }
 
 fn lien_perime(r: &http::Reponse) -> bool {
@@ -735,8 +741,9 @@ fn poser_categorie_par(
     nom: &str,
     present: bool,
 ) -> Result<usize, ErreurOAuth> {
-    // OData : une apostrophe se double dans une chaîne.
-    let filtre = format!("internetMessageId eq '{}'", message_id.replace('\'', "''"));
+    // Graph écrit l'identifiant entre chevrons, l'index sans. OData : une
+    // apostrophe se double dans une chaîne.
+    let filtre = format!("internetMessageId eq '<{}>'", sans_chevrons(message_id).replace('\'', "''"));
     let url = format!("{GRAPH}/messages?$filter={}&$select=id,categories,parentFolderId&$top=10", encoder(&filtre));
     let trouves = reponse_json(&appeler(t, jeton, "GET", &url, "", b"", REPONSE_MAX)?)?;
     let mut changes = 0;
@@ -1387,9 +1394,9 @@ mod tests {
         assert_eq!(
             vus,
             vec![
-                ("<a@x>".to_string(), vec!["Devis".to_string()]),
-                ("<b@x>".to_string(), vec![]),
-                ("<c@x>".to_string(), vec!["Urgent".to_string(), "Devis".to_string()]),
+                ("a@x".to_string(), vec!["Devis".to_string()]),
+                ("b@x".to_string(), vec![]),
+                ("c@x".to_string(), vec!["Urgent".to_string(), "Devis".to_string()]),
             ]
         );
         assert_eq!(lien, "https://graph.microsoft.com/v1.0/me/delta?jeton=D1");
@@ -1426,10 +1433,11 @@ mod tests {
              r#"{"value":[{"id":"M/1=","categories":["Urgent"],"parentFolderId":"inbox-id"},{"id":"M2","categories":[],"parentFolderId":"autre"}]}"#),
             ("PATCH", "https://graph.microsoft.com/v1.0/me/messages/", 200, "{}"),
         ];
-        let n = poser_categorie_par(&mut graph_categories(&mut journal, &reponses), "J", "<a'b@x>", Some("inbox-id"), "Devis", true)
+        let n = poser_categorie_par(&mut graph_categories(&mut journal, &reponses), "J", "a'b@x", Some("inbox-id"), "Devis", true)
             .unwrap();
         assert_eq!(n, 1);
-        // Apostrophe doublée, filtre encodé.
+        // Chevrons rendus à l'identifiant de l'index, apostrophe doublée,
+        // filtre encodé.
         assert!(journal[0].url.contains(&encoder("internetMessageId eq '<a''b@x>'")), "{}", journal[0].url);
         assert_eq!(journal[1].methode, "PATCH");
         assert!(journal[1].url.ends_with(&encoder("M/1=")), "{}", journal[1].url);

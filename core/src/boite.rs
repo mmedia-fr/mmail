@@ -1587,7 +1587,7 @@ enum Commande {
     MarquerCategorie { chemin: String, uids: Vec<u32>, mot_cle: String, present: bool },
     /// Changer le catalogue des catégories d'une boîte (chemin de sa boîte de
     /// réception), relu sur le serveur juste avant.
-    Catalogue { boite: String, changement: Changement },
+    Catalogue { boite: String, changement: Changement, avant: Option<Categorie> },
     /// Reprendre les couleurs des catégories d'Outlook (Microsoft 365, 0.9.0),
     /// toutes, après l'autorisation de lire les réglages de la boîte.
     CouleursOutlook,
@@ -3808,6 +3808,13 @@ impl qobject::Boite {
         serveur: bool,
         changement: Changement,
     ) -> bool {
+        // La catégorie telle qu'elle était : le fil du compte relira l'index
+        // déjà changé, et ne verrait plus un renommage.
+        let mot_cle = match &changement {
+            Changement::Poser(c) => c.mot_cle.clone(),
+            Changement::Retirer(m) => m.clone(),
+        };
+        let avant = catalogue.liste().into_iter().find(|c| c.mot_cle.eq_ignore_ascii_case(&mot_cle));
         if let Err(motif) = catalogue.appliquer(&changement) {
             self.as_mut().set_erreur(QString::from(&motif));
             return false;
@@ -3817,7 +3824,7 @@ impl qobject::Boite {
         }
         self.as_mut().verifier_catalogues();
         if self.sessions.contains_key(&compte) || self.identites.contains_key(&compte) {
-            self.as_mut().envoyer(compte, Commande::Catalogue { boite, changement });
+            self.as_mut().envoyer(compte, Commande::Catalogue { boite, changement, avant });
         }
         true
     }
@@ -6889,7 +6896,9 @@ impl Travail {
             // catégorie d'origine qui reprend le sien — change aussi sur les
             // messages qui la portent, comme dans Outlook. Un retrait les
             // laisse, comme Outlook aussi.
-            Commande::Catalogue { boite, changement } if e.graph.is_some() => {
+            // L'état d'avant vient de l'interface (`changer_catalogue`), qui a
+            // déjà rangé le nouveau dans l'index.
+            Commande::Catalogue { boite, changement, avant } if e.graph.is_some() => {
                 let mot_cle = match &changement {
                     Changement::Poser(c) => c.mot_cle.clone(),
                     Changement::Retirer(m) => m.clone(),
@@ -6898,11 +6907,10 @@ impl Travail {
                     let (valeur, _) = magasin.catalogue(compte, &boite).ok().flatten().unwrap_or_default();
                     Catalogue::lire(&valeur).liste().into_iter().find(|c| c.mot_cle.eq_ignore_ascii_case(&mot_cle)).map(|c| c.nom)
                 };
-                let avant = nom(&e.magasin);
                 if let Err(err) = synchro::changer_catalogue(&mut e.client, &e.magasin, compte, &boite, &changement) {
                     return Some(echec("tri", format!("catégories : {err}"), &err));
                 }
-                match (avant, nom(&e.magasin)) {
+                match (avant.map(|c| c.nom), nom(&e.magasin)) {
                     (Some(ancien), Some(nouveau)) if ancien != nouveau => Some(match self.renommer_categorie_graph(e, &ancien, &nouveau) {
                         Ok(()) => Issue::Marque { discret: true },
                         Err(message) => Issue::Echec {
@@ -6914,7 +6922,7 @@ impl Travail {
                     _ => Some(Issue::Marque { discret: true }),
                 }
             }
-            Commande::Catalogue { boite, changement } => Some(
+            Commande::Catalogue { boite, changement, .. } => Some(
                 match synchro::changer_catalogue(&mut e.client, &e.magasin, compte, &boite, &changement) {
                     // Le catalogue rangé a pu changer : l'interface le relit.
                     Ok(()) => Issue::Marque { discret: true },

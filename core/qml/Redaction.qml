@@ -553,7 +553,7 @@ Page {
         var programme = Qt.platform.os === "android" ? "" : fenetre.logicielPour(p.nom)
         if (programme.length > 0 && lanceur.lancer(programme, p.chemin))
             signaler(qsTr("Ouverture de %1 avec %2…").arg(p.nom).arg(lanceur.nom(programme)), false)
-        else if (Qt.openUrlExternally(lanceur.adresse(p.chemin)))
+        else if (lanceur.ouvrir(p.chemin))
             signaler(qsTr("Ouverture de %1…").arg(p.nom), false)
         else
             signaler(qsTr("Aucun logiciel n'a pu ouvrir %1.").arg(p.nom), true)

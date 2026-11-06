@@ -224,6 +224,20 @@ pub struct CompteSauve {
     pub dossiers: Vec<DossierSauve>,
     #[serde(default)]
     pub agendas: Vec<AgendaSauve>,
+    /// Clés S/MIME du compte (0.8.0) : le `.p12`, toujours protégé par son
+    /// propre mot de passe, et ce mot de passe dans la copie du compte
+    /// seulement — comme celui du compte. Sans elles, ses anciens messages
+    /// chiffrés deviendraient illisibles sur un poste neuf.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub smime: Vec<CleSauvee>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct CleSauvee {
+    /// Le fichier `.p12`, en base64.
+    pub p12: String,
+    #[serde(default, rename = "motDePasse", skip_serializing_if = "Option::is_none")]
+    pub mot_de_passe: Option<String>,
 }
 
 /// Un dossier dont l'état local diffère de celui d'un dossier neuf : masqué,
@@ -315,6 +329,7 @@ pub fn composer(
             replie: c.replie,
             dossiers,
             agendas,
+            smime: Vec::new(),
         });
     }
     // Les images que les signatures désignent, et elles seules : une image
@@ -432,6 +447,9 @@ pub fn pour_compte(document: &Document, adresse: &str) -> Document {
     for c in &mut copie.comptes {
         if c.adresse.trim().to_lowercase() != adresse {
             c.mot_de_passe = None;
+            for k in &mut c.smime {
+                k.mot_de_passe = None;
+            }
         }
     }
     copie
@@ -582,6 +600,7 @@ mod tests {
             replie: false,
             dossiers: Vec::new(),
             agendas: Vec::new(),
+            smime: vec![CleSauvee { p12: "UDEy".into(), mot_de_passe: mot.map(|m| format!("p12-{m}")) }],
         };
         let document = Document {
             mmail: "sauvegarde".into(),
@@ -601,6 +620,11 @@ mod tests {
         let b = pour_compte(&document, "partagee@exemple.fr");
         assert_eq!(b.comptes[0].mot_de_passe, None);
         assert_eq!(b.comptes[1].mot_de_passe.as_deref(), Some("commun"));
+        // Clés S/MIME : le .p12 de chacun reste, son mot de passe ne part
+        // qu'avec celui de son compte.
+        assert_eq!(a.comptes[0].smime[0].mot_de_passe.as_deref(), Some("p12-secret"));
+        assert_eq!(a.comptes[1].smime[0].mot_de_passe, None);
+        assert_eq!(a.comptes[1].smime[0].p12, "UDEy");
         let texte = String::from_utf8(serde_json::to_vec(&b).unwrap()).unwrap();
         assert!(!texte.contains("secret"));
         assert_eq!(a.comptes[0].hote, document.comptes[0].hote, "le reste du document est inchangé");

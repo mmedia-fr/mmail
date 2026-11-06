@@ -1,0 +1,23 @@
+To: dan@exemple.fr
+From: alice@exemple.fr
+Subject: Devis
+MIME-Version: 1.0
+Content-Disposition: attachment; filename="smime.p7m"
+Content-Type: application/pkcs7-mime; smime-type=enveloped-data; name="smime.p7m"
+Content-Transfer-Encoding: base64
+
+MIICgQYJKoZIhvcNAQcDoIICcjCCAm4CAQIxgeahgeMCAQOgUaFPMAkGByqGSM49
+AgEDQgAEEvBogag+M7jm1M8NiTvDzyp5LYZW4mGZLgodDouVDrfAErkFzNOvsuez
+6wblQ2sQf5l4iahJGOySV6TNycdm2zAYBgkrgQUQhkg/AAIwCwYJYIZIAWUDBAEt
+MHEwbzBDMCsxFTATBgNVBAoMDE1NYWlsIGVzc2FpczESMBAGA1UEAwwJRGFuIEVz
+c2FpAhQ6ewnXtrGBJ2Z7B6VoK5pW/vocNQQok3SsgFuvwlwV2EfdURgQOZ8w83ru
+BARbZY0oDQhI6Psofd7kVsWqaDCCAX4GCSqGSIb3DQEHATAdBglghkgBZQMEASoE
+EEyFonRaVlh+5E+R7JzF8xGAggFQiAi0k8RtHW6HW2I2q+Pg3iXN99aImJzHpYL5
+NrNUKW/mKlzJIjWaw55qRURrCysSoLqoMcWUf+5J78YEui7Zqd+aDOWy3fq6KQGP
+Uv0XxjVas2VQmLK5OV4d3al5ZGrmzS0DPMK1BMqU6NxedU88He6ET4XDxrNGYpmt
+fRdZz4jLgZ+q8zNkLao2CJRUWdRK4Z864i/HmuI4AgyR3lETFjzt2szUZaaCJOdf
+vBfKwFCcny+LQnegtDw/nVx1iA25YrjFZtV8OVcw801O4+oyqwtNPnyCBXq0bh5B
+UtX2Dejwhzq3nli/p9u8CfoELYdsqKjCRlps2rxYg328KySytnTC82hrgNmOATTo
+b58k4sMbEQAfUXphLz2FLIEYLxNxgGel7XKgniM6of6dii5fzI/7CqKp7+8QSRet
+TjoaaATPcKy/QZyhtmFeYfw01jFz
+

@@ -237,8 +237,13 @@ ApplicationWindow {
     // `Boite.invitationRecue`) ; et la réponse en cours d'envoi.
     property var invitation: ({})
     property string reponseInvitation: ""
+    // Signature et chiffrement S/MIME du message affiché (0.8.0, cf.
+    // `Boite.securiteRecue`) : vide pour un message ordinaire.
+    property var securite: ({})
+    property bool securiteAttendue: false
     onUidCourantChanged: {
         invitation = ({})
+        securite = ({})
         majCategoriesAffichees()
     }
     property bool sourceVisible: false
@@ -432,6 +437,12 @@ ApplicationWindow {
     Settings {
         id: reglages
         category: "interface"
+        // Comptes qui signent par défaut leurs messages (S/MIME, 0.8.0) :
+        // adresses, en JSON.
+        property string signatureSmime: "[]"
+        // Comptes qui chiffrent d'office quand chaque destinataire a un
+        // certificat (S/MIME, choix de Manu du 04/11) : adresses, en JSON.
+        property string chiffrementSmime: "[]"
         property bool afficherMasques: false
         // Case « Objet et expéditeur seulement » de la recherche (0.6.38).
         property bool rechercheObjetSeul: false
@@ -2645,6 +2656,7 @@ ApplicationWindow {
     DialogueLogiciels { id: dlgLogiciels }
 
     DialogueExpediteursConfiance { id: dlgExpediteursConfiance }
+    DialogueCertificats { id: dlgCertificats }
     DialogueMessagerie { id: dlgMessagerie }
 
     FileDialog {
@@ -3073,6 +3085,15 @@ ApplicationWindow {
         id: coffre
 
         onLu: function(cle, secret, trouve, erreur) {
+            // Mot de passe d'une clé S/MIME (0.8.0) : la clé s'ouvre, ses
+            // messages se lisent.
+            if (cle.indexOf("smime:") === 0) {
+                if (trouve && boite.deverrouillerCle(cle.substring(6), secret))
+                    fenetre.clesSmimeChangees()
+                else if (!trouve)
+                    console.warn("clé S/MIME " + cle.substring(6, 14) + " : mot de passe absent du coffre")
+                return
+            }
             var compte = fenetre.compteParCle(cle)
             if (!compte)
                 return
@@ -4142,6 +4163,12 @@ ApplicationWindow {
         reglagesSauvegarde.aChercher = false
         var presents = JSON.parse(boite.comptes())
         var connectes = 0
+        // Clés S/MIME restaurées : leur mot de passe au coffre, puis elles
+        // s'ouvrent (cf. `deverrouillerClesSmime`).
+        for (var k = 0; k < (r.comptes || []).length; ++k)
+            for (var m = 0; m < (r.comptes[k].smime || []).length; ++m)
+                coffre.ecrire("smime:" + r.comptes[k].smime[m].empreinte, r.comptes[k].smime[m].motDePasse)
+        Qt.callLater(deverrouillerClesSmime)
         for (var i = 0; i < (r.comptes || []).length; ++i) {
             var c = r.comptes[i]
             var p = presents.filter(function(x) { return x.adresse === c.adresse })[0]
@@ -4166,6 +4193,7 @@ ApplicationWindow {
         }
         rafraichirArborescence()
         messageEtat.texte = qsTr("Configuration du %1 restaurée.").arg(dateLongue(s.date * 1000))
+                + (r.clesAReimporter > 0 ? " " + qsTr("%n certificat(s) S/MIME sans mot de passe sauvegardé : à réimporter.", "", r.clesAReimporter) : "")
         if (fenetre.essai && fenetre.essai.scenario === "restauration") {
             console.log("scenario: restaurée,", (r.comptes || []).length, "compte(s),", r.images, "image(s),", connectes, "connexion(s)")
             var bilan = Qt.createQmlObject('import QtQuick; Timer { interval: 3000 }', fenetre)
@@ -7002,6 +7030,11 @@ ApplicationWindow {
             // Scénario « desabonnement » (0.6.30, banc DESABO=1).
             if (essai.scenario === "desabonnement")
                 scenarios.lancerScenarioDesabonnement()
+            // Scénario « smime » (0.8.0) : message signé et chiffré.
+            if (essai.scenario === "smime")
+                scenarios.lancerScenarioSmime()
+            if (essai.scenario === "smime-envoi")
+                scenarios.lancerScenarioSmimeEnvoi()
             // Scénario « marquer-lu » (0.8.1).
             if (essai.scenario === "marquer-lu")
                 scenarios.lancerScenarioMarquerLu()
@@ -7182,6 +7215,47 @@ ApplicationWindow {
         }
         for (var i = 0; i < comptes.length; ++i)
             connecterCompte(comptes[i])
+        deverrouillerClesSmime()
+    }
+
+    // Clés S/MIME (0.8.0) : chacune s'ouvre par son mot de passe, au coffre
+    // sous `smime:<empreinte>` (cf. `coffre.onLu`).
+    property int versionClesSmime: 0
+    function signeParDefaut(adresse) {
+        try { return JSON.parse(reglages.signatureSmime).indexOf(adresse) >= 0 } catch (e) { return false }
+    }
+    function poserSigneParDefaut(adresse, oui) {
+        var l = []
+        try { l = JSON.parse(reglages.signatureSmime) } catch (e) {}
+        l = l.filter(function(a) { return a !== adresse })
+        if (oui)
+            l.push(adresse)
+        reglages.signatureSmime = JSON.stringify(l)
+    }
+    function chiffreParDefaut(adresse) {
+        try { return JSON.parse(reglages.chiffrementSmime).indexOf(adresse) >= 0 } catch (e) { return false }
+    }
+    function poserChiffreParDefaut(adresse, oui) {
+        var l = []
+        try { l = JSON.parse(reglages.chiffrementSmime) } catch (e) {}
+        l = l.filter(function(a) { return a !== adresse })
+        if (oui)
+            l.push(adresse)
+        reglages.chiffrementSmime = JSON.stringify(l)
+    }
+    function deverrouillerClesSmime() {
+        var cles = []
+        try { cles = JSON.parse(boite.clesSmime()) } catch (e) {}
+        for (var i = 0; i < cles.length; ++i)
+            if (!cles[i].deverrouillee && cles[i].compte > 0)
+                coffre.lire("smime:" + cles[i].empreinte)
+    }
+    /// Une clé vient de s'ouvrir ou de partir : le message affiché se relit,
+    /// les fenêtres de compte se mettent à jour.
+    function clesSmimeChangees() {
+        versionClesSmime++
+        if (uidCourant > 0 && (securite.chiffre || securite.signature))
+            boite.demanderCorps(uidCourant)
     }
 
     Scenarios { id: scenarios }

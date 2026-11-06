@@ -1618,12 +1618,13 @@ impl Magasin {
                 let lignes = lire.query_map(params![dossier], |l| Ok((l.get::<_, u32>(0)?, l.get::<_, String>(1)?, l.get::<_, String>(2)?)))?;
                 for ligne in lignes {
                     let (uid, message_id, mots) = ligne?;
-                    par_id.entry(message_id).or_default().push((uid, mots));
+                    // Sans chevrons de part et d'autre (cf. `sans_chevrons`).
+                    par_id.entry(crate::microsoft::sans_chevrons(&message_id).to_string()).or_default().push((uid, mots));
                 }
             }
             let mut ecrire = transaction.prepare_cached("UPDATE messages SET mots_cles = ?3 WHERE folder_id = ?1 AND uid = ?2")?;
             for (message_id, mots) in trouvees {
-                for (uid, actuels) in par_id.get(message_id).cloned().unwrap_or_default() {
+                for (uid, actuels) in par_id.get(crate::microsoft::sans_chevrons(message_id)).cloned().unwrap_or_default() {
                     let mut liste: Vec<String> = crate::categories::decouper(&actuels)
                         .into_iter()
                         .filter(|m| !categories.iter().any(|c| c.eq_ignore_ascii_case(m)))
@@ -3746,12 +3747,14 @@ mod tests {
             mots_cles: mots.into(),
             ..Default::default()
         };
-        m.poser_messages(inbox, &[recu(1, "<a@x>", "urgent"), recu(2, "<b@x>", "devis perso"), recu(3, "<c@x>", "")]).unwrap();
+        // L'index garde le Message-ID sans chevrons ; ceux de Graph, avec ou
+        // sans, se rapportent au même message.
+        m.poser_messages(inbox, &[recu(1, "a@x", "urgent"), recu(2, "b@x", "devis perso"), recu(3, "c@x", "")]).unwrap();
         let connues = vec!["urgent".to_string(), "devis".to_string()];
         let change = m
             .poser_categories_trouvees(
                 inbox,
-                &[("<a@x>".into(), vec!["devis".into()]), ("<b@x>".into(), vec![]), ("<z@x>".into(), vec!["urgent".into()])],
+                &[("a@x".into(), vec!["devis".into()]), ("<b@x>".into(), vec![]), ("z@x".into(), vec!["urgent".into()])],
                 &connues,
             )
             .unwrap();

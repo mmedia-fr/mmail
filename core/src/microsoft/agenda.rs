@@ -62,8 +62,12 @@ const DESCRIPTION_MAX: usize = 32 * 1024;
 
 /// Ce qui est demandé d'une occurrence.
 const CHAMPS: &str = "id,iCalUId,changeKey,lastModifiedDateTime,subject,location,body,start,end,isAllDay,\
-                      isCancelled,showAs,type,originalStart,isOrganizer,responseStatus,organizer,attendees,\
-                      isReminderOn,reminderMinutesBeforeStart";
+                      isCancelled,showAs,type,originalStart,seriesMasterId,isOrganizer,responseStatus,organizer,\
+                      attendees,isReminderOn,reminderMinutesBeforeStart";
+
+/// Propriété qui garde l'identifiant Graph de la série d'une occurrence :
+/// l'écriture en aura besoin pour modifier ou supprimer toute la série.
+pub const PROPRIETE_SERIE: &str = "X-MMAIL-GRAPH-SERIE";
 
 /// Un agenda de la boîte, tel que Graph le décrit.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -361,8 +365,13 @@ pub fn vevent(o: &Value, moi: &str) -> Option<String> {
         poser("DTSTART", &[], &heure_ical(d));
         poser("DTEND", &[], &heure_ical(f));
     }
-    // Une occurrence de série, déplacée ou non : son début d'origine.
+    // Une occurrence de série, déplacée ou non : son début d'origine, et sa
+    // série.
     if matches!(texte("type").as_str(), "occurrence" | "exception") {
+        let serie = texte("seriesMasterId");
+        if !serie.is_empty() {
+            poser(PROPRIETE_SERIE, &[], &echapper(&serie));
+        }
         if let Some(origine) = o.get("originalStart").and_then(Value::as_str).and_then(|t| DateTime::parse_from_rfc3339(t).ok()) {
             let origine = origine.with_timezone(&Utc);
             if journee {
@@ -519,11 +528,13 @@ mod tests {
         // Occurrence déplacée d'une série : son début d'origine la désigne.
         let o = serde_json::json!({
             "id": "S2", "iCalUId": "SERIE-2", "subject": "Point hebdo", "type": "exception", "isCancelled": true,
-            "originalStart": "2026-11-17T09:00:00Z",
+            "originalStart": "2026-11-17T09:00:00Z", "seriesMasterId": "MAITRE/1",
             "start": {"dateTime": "2026-11-17T10:00:00.0000000", "timeZone": "UTC"},
             "end": {"dateTime": "2026-11-17T10:30:00.0000000", "timeZone": "UTC"}
         });
-        let liste = occurrences(&vevent(&o, "").unwrap());
+        let ical = vevent(&o, "").unwrap();
+        assert!(ical.contains("X-MMAIL-GRAPH-SERIE:MAITRE/1\r\n"), "{ical}");
+        let liste = occurrences(&ical);
         assert_eq!(liste.len(), 1);
         assert!(liste[0].repete && liste[0].annule);
         assert_eq!(liste[0].origine, utc("2026-11-17T09:00:00Z"));

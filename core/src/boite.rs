@@ -138,6 +138,15 @@ pub mod qobject {
         #[cxx_name = "connecterMicrosoft"]
         fn connecter_microsoft(self: Pin<&mut Boite>, indice: &QString) -> QString;
 
+        /// Couleurs des catégories d'Outlook (0.9.0) : l'adresse de la page de
+        /// Microsoft qui demande d'autoriser MMail à lire les réglages de la
+        /// boîte du compte Microsoft 365 `compte`, à ouvrir dans le navigateur ;
+        /// vide si rien n'a pu se préparer (cf. `erreur`). Issue :
+        /// `couleursOutlook`. Pas encore sous Android.
+        #[qinvokable]
+        #[cxx_name = "autoriserCouleursOutlook"]
+        fn autoriser_couleurs_outlook(self: Pin<&mut Boite>, compte: i32) -> QString;
+
         /// Sous Android : l'adresse de retour que la page de connexion intégrée
         /// a interceptée après la connexion Microsoft. Rend faux si elle n'est
         /// pas celle attendue. Issue : `microsoftConnecte`, ou `microsoftRefuse`.
@@ -1118,6 +1127,13 @@ pub mod qobject {
         #[cxx_name = "microsoftRefuse"]
         fn microsoft_refuse(self: Pin<&mut Boite>, message: &QString, consentement: bool);
 
+        /// Issue de `autoriserCouleursOutlook` : `message` vide, l'autorisation
+        /// est donnée et les couleurs sont en cours de reprise ; sinon, ce qui
+        /// l'a empêchée.
+        #[qsignal]
+        #[cxx_name = "couleursOutlook"]
+        fn couleurs_outlook(self: Pin<&mut Boite>, compte: i32, message: &QString);
+
         /// Compte Google autorisé, enregistré et en cours de connexion : comme
         /// `microsoftConnecte`.
         #[qsignal]
@@ -1579,6 +1595,9 @@ enum Commande {
     /// Changer le catalogue des catégories d'une boîte (chemin de sa boîte de
     /// réception), relu sur le serveur juste avant.
     Catalogue { boite: String, changement: Changement, avant: Option<Categorie> },
+    /// Reprendre les couleurs des catégories d'Outlook (Microsoft 365, 0.9.0),
+    /// toutes, après l'autorisation de lire les réglages de la boîte.
+    CouleursOutlook,
     /// Envoyer une confirmation de lecture (identifiants présents) ou
     /// l'ignorer (absents) ; le message reçoit `$MDNSent` dans les deux cas.
     Confirmer { chemin: String, uid: u32, identifiants: Option<Identifiants> },
@@ -2721,6 +2740,62 @@ impl qobject::Boite {
         QString::from(&url)
     }
 
+    pub fn autoriser_couleurs_outlook(mut self: Pin<&mut Self>, compte: i32) -> QString {
+        use crate::microsoft as ms;
+        let compte = compte as i64;
+        let refus = |mut boite: Pin<&mut Self>, message: &str| {
+            boite.as_mut().set_erreur(QString::from(message));
+            QString::default()
+        };
+        let Some(id) = self.identites.get(&compte).cloned() else {
+            return refus(self, "ce compte n'est pas connecté");
+        };
+        let Some(jetons) = id.oauth.clone().filter(|j| crate::oauth::fournisseur(j) == crate::oauth::Fournisseur::Microsoft) else {
+            return refus(self, "les couleurs d'Outlook ne valent que pour un compte Microsoft 365");
+        };
+        // L'autorisation vaut pour la personne, pas pour le poste : donnée
+        // depuis un ordinateur, elle sert aussi à MMail sous Android.
+        if cfg!(target_os = "android") {
+            return refus(self, "autorisez depuis MMail sur un ordinateur : les couleurs viendront ensuite ici d'elles-mêmes");
+        }
+        let client = ms::client_du_compte(&jetons.lock().map(|j| j.client.clone()).unwrap_or_default());
+        let adresse = id.utilisateur.clone();
+        let (pkce, etat) = match crate::oauth::pkce_et_etat() {
+            Ok(v) => v,
+            Err(x) => return refus(self, &x.to_string()),
+        };
+        let ecoute = match ms::ecouter() {
+            Ok(e) => e,
+            Err(e) => return refus(self, &format!("écoute locale : {e}")),
+        };
+        let url = ms::url_autorisation_reglages(&client, &ecoute.redirection, &pkce.defi, &etat, &adresse);
+        let fil = self.qt_thread();
+        let lance = thread::Builder::new().name("mmail-microsoft".into()).spawn(move || {
+            let issue = ms::attendre_code(&ecoute, &etat, ms::DELAI_CONNEXION)
+                .and_then(|code| ms::echanger_code_reglages(&client, &code, &pkce.verificateur, &ecoute.redirection, &adresse))
+                .map(|r| crate::oauth::retenir(&jetons, ms::PORTEE_REGLAGES, &r.acces, r.duree))
+                .map_err(|x| x.to_string());
+            let _ = fil.queue(move |boite: Pin<&mut qobject::Boite>| boite.accueillir_couleurs(compte, issue));
+        });
+        if let Err(e) = lance {
+            return refus(self, &format!("autorisation Microsoft : {e}"));
+        }
+        self.as_mut().set_erreur(QString::from(""));
+        QString::from(&url)
+    }
+
+    /// Issue de l'autorisation de lire les réglages de la boîte, sur le fil
+    /// Qt : le fil du compte reprend les couleurs.
+    fn accueillir_couleurs(mut self: Pin<&mut Self>, compte: i64, issue: Result<(), String>) {
+        match issue {
+            Ok(()) => {
+                self.as_mut().envoyer(compte, Commande::CouleursOutlook);
+                self.as_mut().couleurs_outlook(compte as i32, &QString::default());
+            }
+            Err(message) => self.as_mut().couleurs_outlook(compte as i32, &QString::from(&message)),
+        }
+    }
+
     pub fn terminer_microsoft(mut self: Pin<&mut Self>, url: &QString) -> bool {
         let url = url.to_string();
         let Some((client, etat, verificateur, adresse)) = self.attente_microsoft.clone() else {
@@ -3642,6 +3717,7 @@ impl qobject::Boite {
             "boite": boite,
             "serveur": serveur,
             "refusees": refusees,
+            "microsoft": compte_microsoft(magasin, compte),
             "creees": catalogue.creees(),
             "max": categories::MAX_CREEES,
             "liste": liste,
@@ -6081,6 +6157,27 @@ fn criteres_recherche(magasin: &Magasin, texte: &str) -> (String, Vec<Vec<String
 /// boîte partagée qui le contient — chemin de sa boîte de réception, comme
 /// « Shared/contact@exemple.fr/INBOX » —, à défaut la boîte de réception du
 /// compte.
+/// Validité des couleurs d'Outlook lues (cf. `lire_couleurs_outlook`).
+const COULEURS_OUTLOOK: Duration = Duration::from_secs(30 * 60);
+
+/// Donne aux catégories du catalogue la couleur de la catégorie d'Outlook du
+/// même nom : toutes (`toutes`, à la demande), ou celles restées grises — une
+/// couleur choisie dans MMail reste alors. Rend vrai si une a changé.
+fn colorer(catalogue: &mut Catalogue, couleurs: &[(String, String)], toutes: bool) -> bool {
+    let mut change = false;
+    for c in catalogue.liste() {
+        let Some((_, couleur)) = couleurs.iter().find(|(nom, _)| nom.trim().eq_ignore_ascii_case(c.nom.trim())) else {
+            continue;
+        };
+        if c.couleur.eq_ignore_ascii_case(couleur) || !(toutes || c.couleur.eq_ignore_ascii_case(categories::COULEUR_INCONNUE)) {
+            continue;
+        }
+        let nouvelle = Categorie { couleur: couleur.clone(), ..c };
+        change |= catalogue.appliquer(&Changement::Poser(nouvelle)).is_ok();
+    }
+    change
+}
+
 /// Compte Microsoft 365 : ses catégories passent par Graph (0.9.0).
 fn compte_microsoft(magasin: &Magasin, compte: i64) -> bool {
     magasin
@@ -6360,6 +6457,11 @@ struct Etabli {
     graph: Option<crate::oauth::Partage>,
     /// Identifiants Graph des dossiers déjà trouvés, par chemin IMAP.
     dossiers_graph: HashMap<String, String>,
+    /// Couleurs des catégories d'Outlook, et quand elles ont été lues ;
+    /// `couleurs_refusees` : pas d'autorisation, on ne redemande pas avant
+    /// la prochaine session.
+    couleurs: Option<(Instant, Vec<(String, String)>)>,
+    couleurs_refusees: bool,
 }
 
 /// À qui le fil d'un compte remet ses issues : l'objet Qt — ou, dans les
@@ -6702,6 +6804,8 @@ impl Travail {
                 .filter(|j| crate::oauth::fournisseur(j) == crate::oauth::Fournisseur::Microsoft)
                 .cloned(),
             dossiers_graph: HashMap::new(),
+            couleurs: None,
+            couleurs_refusees: false,
         })
     }
 
@@ -6789,6 +6893,10 @@ impl Travail {
                     Err(err) => echec("tri", format!("drapeau de suivi : {err}"), &err),
                 })
             }
+            Commande::CouleursOutlook => Some(match self.reprendre_couleurs(e) {
+                Ok(()) => Issue::Marque { discret: true },
+                Err(message) => Issue::Echec { etape: "tri", message: format!("couleurs d'Outlook : {message}"), session_perdue: false },
+            }),
             // Microsoft 365 (0.9.0) : la catégorie se pose par Graph ; l'index
             // l'a déjà.
             Commande::MarquerCategorie { chemin, uids, mot_cle, present } if e.graph.is_some() => {
@@ -7194,6 +7302,11 @@ impl Travail {
             .iter()
             .map(|(mid, noms)| (mid.clone(), noms.iter().filter_map(|n| mot_cle_de(n, &mut catalogue)).collect()))
             .collect();
+        // Couleurs d'Outlook, si la lecture des réglages est autorisée :
+        // elles colorent les catégories restées grises.
+        if let Ok(Some(couleurs)) = self.lire_couleurs_outlook(e, false) {
+            ajoute |= colorer(&mut catalogue, &couleurs, false);
+        }
         if ajoute {
             let _ = e.magasin.poser_catalogue(compte, &boite, &catalogue.ecrire(), serveur);
         }
@@ -7204,6 +7317,58 @@ impl Travail {
             let _ = e.magasin.poser_lien_delta(compte, chemin, &nouveau);
         }
         Ok(change)
+    }
+
+    /// Couleurs des catégories d'Outlook (0.9.0), relues au plus toutes les
+    /// trente minutes. Sans autorisation de lire les réglages de la boîte, la
+    /// session n'en redemande pas. `forcer` : relues quoi qu'il en soit, et un
+    /// refus rendu en erreur.
+    fn lire_couleurs_outlook(&self, e: &mut Etabli, forcer: bool) -> Result<Option<Vec<(String, String)>>, String> {
+        let Some(jetons) = e.graph.clone() else {
+            return Ok(None);
+        };
+        if !forcer {
+            if e.couleurs_refusees {
+                return Ok(None);
+            }
+            if let Some((quand, couleurs)) = &e.couleurs {
+                if quand.elapsed() < COULEURS_OUTLOOK {
+                    return Ok(Some(couleurs.clone()));
+                }
+            }
+        }
+        let lues = crate::microsoft::jeton_acces(&jetons, crate::microsoft::PORTEE_REGLAGES)
+            .and_then(|jeton| crate::microsoft::couleurs_categories(&jeton));
+        match lues {
+            Ok(couleurs) => {
+                e.couleurs = Some((Instant::now(), couleurs.clone()));
+                e.couleurs_refusees = false;
+                Ok(Some(couleurs))
+            }
+            Err(x) if forcer => Err(x.to_string()),
+            // Le réseau : on réessaiera au passage suivant.
+            Err(crate::microsoft::ErreurOAuth::Reseau(_)) => Ok(None),
+            Err(_) => {
+                e.couleurs_refusees = true;
+                Ok(None)
+            }
+        }
+    }
+
+    /// Reprend toutes les couleurs d'Outlook dans le catalogue de la boîte,
+    /// après l'autorisation (« Couleurs d'Outlook… »).
+    fn reprendre_couleurs(&self, e: &mut Etabli) -> Result<(), String> {
+        let Some(couleurs) = self.lire_couleurs_outlook(e, true)? else {
+            return Err("ce compte ne passe pas par Microsoft 365".into());
+        };
+        let compte = self.compte;
+        let boite = boite_categories(&e.magasin, compte, "INBOX");
+        let (valeur, serveur) = e.magasin.catalogue(compte, &boite).ok().flatten().unwrap_or_default();
+        let mut catalogue = Catalogue::lire(&valeur);
+        if colorer(&mut catalogue, &couleurs, true) {
+            e.magasin.poser_catalogue(compte, &boite, &catalogue.ecrire(), serveur).map_err(|x| x.to_string())?;
+        }
+        Ok(())
     }
 
     /// Renomme une catégorie sur les messages de la boîte Microsoft 365 qui
@@ -8970,6 +9135,24 @@ mod tests {
         assert!(sous_dossier_de("INBOX.Trash.Projets", "INBOX.Trash", "."));
     }
 
+    /// Couleurs d'Outlook (0.9.0) : d'office sur les catégories grises
+    /// seulement ; toutes à la demande.
+    #[test]
+    fn couleurs_d_outlook_sur_le_catalogue() {
+        let mut catalogue = Catalogue::lire("");
+        let grise = Categorie { mot_cle: "devis".into(), nom: "Devis".into(), couleur: categories::COULEUR_INCONNUE.into() };
+        catalogue.appliquer(&Changement::Poser(grise)).unwrap();
+        let couleurs = vec![("devis".to_string(), "#0078D4".to_string()), (" Important".to_string(), "#13A10E".to_string())];
+        let couleur = |c: &Catalogue, mot: &str| c.liste().into_iter().find(|x| x.mot_cle == mot).unwrap().couleur;
+        assert!(colorer(&mut catalogue, &couleurs, false));
+        assert_eq!(couleur(&catalogue, "devis"), "#0078D4");
+        // Une couleur choisie dans MMail reste.
+        assert_eq!(couleur(&catalogue, "$label1"), "#FF0000");
+        assert!(colorer(&mut catalogue, &couleurs, true));
+        assert_eq!(couleur(&catalogue, "$label1"), "#13A10E");
+        assert!(!colorer(&mut catalogue, &couleurs, true));
+    }
+
     fn dossier(chemin: &str) -> Commande {
         Commande::OuvrirDossier(chemin.into())
     }
@@ -8987,6 +9170,7 @@ mod tests {
                 Commande::MarquerSuivi { .. } => "suivi".into(),
                 Commande::MarquerCategorie { .. } => "categorie".into(),
                 Commande::Catalogue { .. } => "catalogue".into(),
+                Commande::CouleursOutlook => "couleurs".into(),
                 Commande::Confirmer { .. } => "confirmer".into(),
                 Commande::EnvoyerDifferes { .. } => "differes".into(),
                 Commande::Deplacer { .. } => "deplacer".into(),
@@ -9818,6 +10002,8 @@ mod tests {
             differes_reserves: HashMap::new(),
             graph: None,
             dossiers_graph: HashMap::new(),
+            couleurs: None,
+            couleurs_refusees: false,
         };
         (travail, etabli, issues)
     }

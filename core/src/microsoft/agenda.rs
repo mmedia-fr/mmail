@@ -603,6 +603,28 @@ pub enum Ecriture {
     Supprimer { id: String },
     /// Répondre à une réunion : `ACCEPTED`, `TENTATIVE` ou `DECLINED`.
     Repondre { id: String, reponse: String },
+    /// Répondre à une invitation reçue par courriel : la réunion, retrouvée
+    /// dans l'agenda par son UID (`iCalUId`, celui de l'événement ou de la
+    /// série, qu'Exchange y a déjà inscrite).
+    RepondreInvitation { uid: String, reponse: String },
+    /// Retirer de l'agenda une réunion que l'organisateur a annulée,
+    /// retrouvée de même.
+    RetirerAnnulee { uid: String },
+}
+
+/// L'identifiant Graph de la réunion d'UID `uid` dans l'agenda de la boîte.
+fn par_uid(t: &mut Transport, jeton: &str, uid: &str) -> Result<String, String> {
+    let filtre = format!("iCalUId eq '{}'", uid.replace('\'', "''"));
+    let url = format!("{GRAPH}/events?$filter={}&$select=id&$top=1", encoder(&filtre));
+    let r = appeler_avec(t, jeton, "GET", &url, "", b"", PAGE_LEGERE, &[]).map_err(|e| e.to_string())?;
+    let page = reponse_json(&r).map_err(|e| e.to_string())?;
+    page.get("value")
+        .and_then(Value::as_array)
+        .and_then(|l| l.first())
+        .and_then(|e| e.get("id"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| "cette réunion n'est pas dans l'agenda Microsoft 365 : l'organisateur l'a peut-être retirée".to_string())
 }
 
 /// Écrit dans un agenda Microsoft 365. `tz` : le fuseau du poste.
@@ -622,6 +644,14 @@ fn ecrire_par(t: &mut Transport, jeton: &str, ecriture: &Ecriture, tz: chrono_tz
             ("PATCH", format!("{GRAPH}/events/{}", encoder(serie)), Some(evenement_de(saisie, tz, false)?))
         }
         Ecriture::Supprimer { id } => ("DELETE", format!("{GRAPH}/events/{}", encoder(id)), None),
+        Ecriture::RepondreInvitation { uid, reponse } => {
+            let id = par_uid(t, jeton, uid)?;
+            return ecrire_par(t, jeton, &Ecriture::Repondre { id, reponse: reponse.clone() }, tz);
+        }
+        Ecriture::RetirerAnnulee { uid } => {
+            let id = par_uid(t, jeton, uid)?;
+            return ecrire_par(t, jeton, &Ecriture::Supprimer { id }, tz);
+        }
         Ecriture::Repondre { id, reponse } => {
             let action = match reponse.as_str() {
                 "ACCEPTED" => "accept",
@@ -986,6 +1016,40 @@ mod tests {
         assert_eq!((j[3].0.as_str(), j[3].1.clone(), j[3].2.as_str()), ("DELETE", format!("{g}/events/absent"), ""));
         assert_eq!((j[4].0.as_str(), j[4].1.clone(), j[4].2.as_str()), ("POST", format!("{g}/events/S1/tentativelyAccept"), r#"{"sendResponse":true}"#));
         assert_eq!(j.len(), 6, "la réponse inconnue ne part pas");
+    }
+
+    #[test]
+    fn invitation_retrouvee_par_son_uid() {
+        let journal: RefCell<Vec<(String, String)>> = RefCell::new(Vec::new());
+        let mut faux = |d: &Demande| -> crate::imap::Resultat<http::Reponse> {
+            journal.borrow_mut().push((d.methode.to_string(), d.url.to_string()));
+            let corps = if d.url.contains("$filter=") {
+                if d.url.contains("INCONNU") { r#"{"value":[]}"# } else { r#"{"value":[{"id":"EV/1="}]}"# }
+            } else {
+                "{}"
+            };
+            let statut = match d.methode { "DELETE" => 204, "POST" => 202, _ => 200 };
+            Ok(http::Reponse {
+                statut,
+                type_contenu: "application/json".into(),
+                redirection: None,
+                corps: corps.as_bytes().to_vec(),
+                adresse: String::new(),
+                entetes: Vec::new(),
+            })
+        };
+        let tz = chrono_tz::UTC;
+        let g = "https://graph.microsoft.com/v1.0/me";
+        ecrire_par(&mut faux, "J", &Ecriture::RepondreInvitation { uid: "0400'AB".into(), reponse: "ACCEPTED".into() }, tz).unwrap();
+        ecrire_par(&mut faux, "J", &Ecriture::RetirerAnnulee { uid: "0400AB".into() }, tz).unwrap();
+        let refus = ecrire_par(&mut faux, "J", &Ecriture::RepondreInvitation { uid: "INCONNU".into(), reponse: "DECLINED".into() }, tz);
+        assert!(refus.unwrap_err().contains("n'est pas dans l'agenda"));
+        let j = journal.borrow();
+        // Apostrophe doublée, filtre encodé.
+        assert_eq!(j[0], ("GET".to_string(), format!("{g}/events?$filter={}&$select=id&$top=1", encoder("iCalUId eq '0400''AB'"))));
+        assert_eq!(j[1], ("POST".to_string(), format!("{g}/events/EV%2F1%3D/accept")));
+        assert_eq!(j[3], ("DELETE".to_string(), format!("{g}/events/EV%2F1%3D")));
+        assert_eq!(j.len(), 5);
     }
 
     #[test]

@@ -2657,6 +2657,14 @@ impl qobject::Boite {
             self.as_mut().evenement_enregistre(false, &QString::from("invitation illisible"));
             return;
         };
+        // Microsoft 365 : Exchange a déjà inscrit la réunion dans l'agenda de
+        // la boîte ; la réponse part de là, et Exchange prévient
+        // l'organisateur.
+        if self.compte_microsoft(compte as i64) {
+            let ecriture = crate::microsoft::agenda::Ecriture::RepondreInvitation { uid, reponse: reponse.to_string() };
+            self.lancer_graph(compte as i64, ecriture);
+            return;
+        }
         self.ecrire_reponse(compte as i64, uid, ical, reponse.to_string());
     }
 
@@ -2690,6 +2698,17 @@ impl qobject::Boite {
         let occurrence = crate::agenda::analyser(&ical).and_then(|r| {
             r.enfants.iter().filter(|c| c.nom == "VEVENT").find_map(|c| crate::saisie::origine_de(&r, c))
         });
+        // Microsoft 365 : la réunion entière retirée par Graph ; une occurrence
+        // annulée reste dans l'agenda, marquée annulée par Exchange.
+        if self.compte_microsoft(compte) {
+            if occurrence.is_some() {
+                let motif = "une occurrence annulée se retire dans Outlook ; l'agenda la montre déjà annulée";
+                self.as_mut().evenement_enregistre(false, &QString::from(motif));
+            } else {
+                self.lancer_graph(compte, crate::microsoft::agenda::Ecriture::RetirerAnnulee { uid });
+            }
+            return;
+        }
         self.as_mut().lancer_pour_compte(
             compte,
             Box::new(move |dav, magasin| {
@@ -2709,6 +2728,14 @@ impl qobject::Boite {
 
     fn agenda_local(&self, agenda: i64) -> Option<crate::magasin::AgendaLocal> {
         self.magasin.as_ref()?.agendas().ok()?.into_iter().find(|a| a.id == agenda)
+    }
+
+    /// Le compte passe-t-il par Microsoft 365 (jetons de Microsoft) ?
+    fn compte_microsoft(&self, compte: i64) -> bool {
+        self.identites
+            .get(&compte)
+            .and_then(|id| id.oauth.as_ref())
+            .is_some_and(|j| crate::oauth::fournisseur(j) == crate::oauth::Fournisseur::Microsoft)
     }
 
     fn est_agenda_graph(&self, agenda: i64) -> bool {
@@ -2755,8 +2782,13 @@ impl qobject::Boite {
             self.as_mut().evenement_enregistre(false, &QString::from("agenda introuvable"));
             return;
         };
-        let adresse = self.magasin.as_ref().and_then(|m| m.compte_par_id(local.compte).ok().flatten()).map(|c| c.adresse).unwrap_or_default();
-        let Some(jetons) = self.identites.get(&local.compte).and_then(|id| id.oauth.clone()) else {
+        self.lancer_graph(local.compte, ecriture);
+    }
+
+    /// Le travail de `lancer_ecriture_graph`, pour la boîte `compte`.
+    fn lancer_graph(mut self: Pin<&mut Self>, compte: i64, ecriture: crate::microsoft::agenda::Ecriture) {
+        let adresse = self.magasin.as_ref().and_then(|m| m.compte_par_id(compte).ok().flatten()).map(|c| c.adresse).unwrap_or_default();
+        let Some(jetons) = self.identites.get(&compte).and_then(|id| id.oauth.clone()) else {
             self.as_mut().evenement_enregistre(false, &QString::from("la boîte de cet agenda n'est pas connectée"));
             return;
         };
@@ -2769,7 +2801,7 @@ impl qobject::Boite {
                 .and_then(|jeton| {
                     let issue = crate::microsoft::agenda::ecrire(&jeton, &ecriture, tz);
                     if let Ok(magasin) = Magasin::ouvrir(&profil) {
-                        let _ = crate::microsoft::agenda::synchroniser(&magasin, local.compte, &adresse, &jeton, chrono::Utc::now());
+                        let _ = crate::microsoft::agenda::synchroniser(&magasin, compte, &adresse, &jeton, chrono::Utc::now());
                     }
                     issue
                 });

@@ -7168,6 +7168,16 @@ ApplicationWindow {
                 attenteSuggestion.start()
                 return
             }
+            // Scénario « m365-reel » (0.9.0) : une vraie boîte Microsoft 365 ;
+            // les comptes du profil se reconnectent par le coffre, comme
+            // d'ordinaire, sans les comptes d'essai de l'environnement.
+            if (essai.scenario === "m365-reel") {
+                scenarios.lancerScenarioM365Reel()
+                var connus = listeComptes()
+                for (var cm = 0; cm < connus.length; ++cm)
+                    connecterCompte(connus[cm])
+                return
+            }
             if (identifiantsEssai.utilisateur2)
                 essai.connecter2 = { hote: identifiantsEssai.hote,
                                      adresse: identifiantsEssai.utilisateur2,

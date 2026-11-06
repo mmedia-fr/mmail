@@ -43,13 +43,13 @@ Dialog {
         }
     }
 
-    // Couleurs d'Outlook (Microsoft 365, 0.9.0) : l'autorisation de lire les
-    // réglages de la boîte se donne dans le navigateur ; la suite revient par
-    // `couleursOutlook` (ReactionsNoyau.qml).
+    // Catégories reliées à Outlook (Microsoft 365, 0.9.0) : l'autorisation
+    // des réglages de la boîte se donne dans le navigateur ; la suite revient
+    // par `couleursOutlook` (ReactionsNoyau.qml).
     function reprendreCouleurs() {
         var url = boite.autoriserCouleursOutlook(compte)
         if (url.length === 0) {
-            messageEtat.texte = qsTr("Couleurs d'Outlook : %1").arg(boite.erreur)
+            messageEtat.texte = qsTr("Catégories d'Outlook : %1").arg(boite.erreur)
             return
         }
         Qt.openUrlExternally(url)
@@ -97,7 +97,7 @@ Dialog {
             wrapMode: Text.Wrap
             opacity: 0.85
             text: dlgCategories.etat.microsoft === true
-                  ? qsTr("Compte Microsoft 365 : la liste des catégories reste sur ce poste. Celles posées sur les messages sont dans Outlook, et s'y voient.")
+                  ? qsTr("Compte Microsoft 365 : les catégories posées sur les messages sont dans Outlook, et s'y voient. La liste elle-même reste sur ce poste, sauf si elle est reliée à Outlook.")
                   : dlgCategories.etat.serveur
                   ? (dlgCategories.etat.boite === "INBOX"
                      ? qsTr("Catégories de cette boîte, gardées sur le serveur : tous les postes où elle est ouverte dans MMail les voient.")
@@ -112,14 +112,14 @@ Dialog {
                 Layout.fillWidth: true
                 wrapMode: Text.Wrap
                 opacity: 0.85
-                text: qsTr("Les couleurs viennent d'Outlook une fois MMail autorisé à lire les réglages de la boîte.")
+                text: qsTr("Reliée à Outlook, la liste prend les couleurs d'Outlook, et une catégorie créée, recolorée ou renommée ici l'est aussi dans Outlook.")
             }
             Button {
-                text: qsTr("Couleurs d'Outlook…")
+                text: qsTr("Relier à Outlook…")
                 onClicked: dlgCategories.reprendreCouleurs()
                 ToolTip.visible: hovered
                 ToolTip.delay: 500
-                ToolTip.text: qsTr("Microsoft vous demandera, dans votre navigateur, d'autoriser MMail à lire les réglages de votre boîte, dont la liste des catégories d'Outlook. Sans cette autorisation, les catégories venues d'Outlook restent grises.")
+                ToolTip.text: qsTr("Microsoft vous demandera, dans votre navigateur, d'autoriser MMail à lire et modifier les réglages de votre boîte, dont la liste des catégories d'Outlook. Sans cette autorisation, les catégories venues d'Outlook restent grises, et celles créées ici ne s'ajoutent pas à la liste d'Outlook. Retirer une catégorie ici ne la retire pas d'Outlook.")
             }
         }
         ListView {

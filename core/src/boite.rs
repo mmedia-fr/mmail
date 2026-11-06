@@ -7816,7 +7816,7 @@ impl Travail {
         let Some(jetons) = e.graph.clone() else {
             return Ok(());
         };
-        if apres.is_none() || e.couleurs_refusees {
+        if (avant.is_none() && apres.is_none()) || e.couleurs_refusees {
             return Ok(());
         }
         let jeton = match crate::microsoft::jeton_acces(&jetons, crate::microsoft::PORTEE_REGLAGES) {

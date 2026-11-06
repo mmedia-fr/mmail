@@ -2260,7 +2260,11 @@ QtObject {
     function lancerScenarioM365Reel() {
         var tic = Qt.createQmlObject('import QtQuick; Timer { interval: 1000; repeat: true }', fenetre)
         var adresse = (identifiantsEssai.utilisateur || "").toLowerCase()
-        var passage = identifiantsEssai.dossier || "ecrire"
+        // « ecrire+contacts », « lire+contacts » : les contacts aussi, quand
+        // l'administrateur du tenant les a autorisés.
+        var dossierEssai = identifiantsEssai.dossier || "ecrire"
+        var passage = dossierEssai.split("+")[0]
+        var avecContacts = dossierEssai.indexOf("+contacts") >= 0
         var suivi = { n: 0, etape: 0, depuis: 0, echecs: 0, motCle: "", premier: 0, sujet: "", demande: false, etat: "",
                       synchros: 0, agendaDepuis: 0, erreursAgenda: "", ecrits: [], cible: 0 }
         var bilan = function(texte, bon) {
@@ -2442,6 +2446,31 @@ QtObject {
                         bilan("autorisation des agendas : « " + suivi.etat + " »", false)
                         finir()
                     }
+                } else if (suivi.etape === 12) {
+                    // Les contacts : leur lecture autorisée à part.
+                    suivi.agendaDepuis = suivi.synchros
+                    if (!autoriser(boite.autoriserContactsMicrosoft(c.compte), "contacts"))
+                        finir()
+                    suivant()
+                } else if (suivi.etape === 13) {
+                    if (suivi.etat.indexOf(qsTr("Autorisation reçue : MMail lit les contacts")) === 0) {
+                        bilan("autorisation des contacts reçue", true)
+                        suivant()
+                    } else if (suivi.etat.indexOf(qsTr("Contacts Microsoft 365 :")) === 0 || ecoule > 420) {
+                        bilan("autorisation des contacts : « " + suivi.etat + " »", false)
+                        finir()
+                    }
+                } else if (suivi.etape === 14) {
+                    if (suivi.synchros > suivi.agendaDepuis) {
+                        var etatsContacts = JSON.parse(boite.contactsMicrosoft())
+                        bilan("lecture des contacts notée autorisée",
+                              etatsContacts.some(function(x) { return x.compte === c.compte && x.etat === "autorise" }))
+                        bilan("synchronisation des contacts sans erreur", suivi.erreursAgenda.length === 0)
+                        finir()
+                    } else if (ecoule > 120) {
+                        bilan("pas de synchronisation des contacts", false)
+                        finir()
+                    }
                 } else if (suivi.etape === 11) {
                     if (suivi.synchros > suivi.agendaDepuis) {
                         var miens = JSON.parse(boite.agendas()).filter(function(a) { return a.microsoft && a.compte === c.compte })
@@ -2452,7 +2481,10 @@ QtObject {
                         bilan("un agenda Microsoft 365 au moins accepte l'écriture", miens.some(function(a) { return a.ecriture }))
                         var etats = JSON.parse(boite.agendasMicrosoft())
                         bilan("lecture des agendas notée autorisée", etats.some(function(x) { return x.compte === c.compte && x.etat === "autorise" }))
-                        finir()
+                        if (avecContacts)
+                            suivant()
+                        else
+                            finir()
                     } else if (ecoule > 120) {
                         bilan("pas de synchronisation des agendas", false)
                         finir()
@@ -2525,6 +2557,18 @@ QtObject {
                         var s = suivi.ecrits.shift()
                         bilan("événement de demain supprimé par MMail", s[0])
                         bilan("il ne paraît plus", fichesDu(1).every(function(f) { return f.titre !== "Essai d'agenda MMail 0.9.0" }))
+                        if (!avecContacts) {
+                            finir()
+                            return
+                        }
+                        // Le contact posé dans Outlook entre-temps, relu.
+                        var trouves = JSON.parse(boite.carnet("Essai Contact MMail"))
+                        console.log("scenario: contacts trouvés " + JSON.stringify(trouves))
+                        var fiche = trouves.length > 0 ? trouves[0] : null
+                        bilan("contact d'Outlook lu dans le carnet d'adresses", fiche !== null)
+                        bilan("son adresse et son organisation lues", fiche !== null
+                              && JSON.stringify(fiche).indexOf("essai-contact@exemple.fr") >= 0
+                              && JSON.stringify(fiche).indexOf("Essai SARL") >= 0)
                         finir()
                     } else if (ecoule > 90) {
                         bilan("pas de nouvelle de la suppression", false)

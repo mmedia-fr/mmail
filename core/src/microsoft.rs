@@ -119,6 +119,13 @@ const PORTEE_CODE: &str = "offline_access openid email https://outlook.office.co
 pub const PORTEE_REGLAGES: &str = "offline_access https://graph.microsoft.com/MailboxSettings.ReadWrite";
 const PORTEE_AUTORISATION_REGLAGES: &str = "offline_access openid https://graph.microsoft.com/MailboxSettings.ReadWrite";
 
+/// Agendas (0.9.0) : lus par Graph (`agenda`), Exchange Online n'offrant pas
+/// CalDAV. Demandé à part, comme les réglages, depuis l'agenda : sans lui, un
+/// compte Microsoft 365 n'a pas d'agenda dans MMail, rien d'autre ne change.
+/// `ReadWrite` dès la lecture : l'écriture suivra sans nouvelle demande.
+pub const PORTEE_AGENDA: &str = "offline_access https://graph.microsoft.com/Calendars.ReadWrite";
+const PORTEE_AUTORISATION_AGENDA: &str = "offline_access openid https://graph.microsoft.com/Calendars.ReadWrite";
+
 /// Identifiant de l'application « MMail » dans l'annuaire Entra où elle est
 /// inscrite (éditeur `mmedia.fr`). Public par nature : application sans
 /// secret, que toute page de connexion affiche. Depuis la 0.6.19, celle du
@@ -133,6 +140,8 @@ const MICROSOFT_CLIENT_ID_AVANT: &str = "7b6c8863-79ca-42b3-8149-313df37a3993";
 
 /// Graph, pour le compte de la personne connectée.
 const GRAPH: &str = "https://graph.microsoft.com/v1.0/me";
+
+pub mod agenda;
 
 /// Corps d'une requête Graph, message en base64 compris : 4 Mo annoncés, sans
 /// dire s'il s'agit de millions d'octets ou de Mio — d'où la marge.
@@ -218,6 +227,12 @@ pub fn url_autorisation_reglages(client: &str, redirection: &str, defi: &str, et
     url_autorisation_de(client, redirection, defi, etat, adresse, PORTEE_AUTORISATION_REGLAGES, "")
 }
 
+/// Page de Microsoft qui demande l'autorisation de lire les agendas de la
+/// boîte d'un compte déjà connecté (`PORTEE_AGENDA`).
+pub fn url_autorisation_agenda(client: &str, redirection: &str, defi: &str, etat: &str, adresse: &str) -> String {
+    url_autorisation_de(client, redirection, defi, etat, adresse, PORTEE_AUTORISATION_AGENDA, "")
+}
+
 fn url_autorisation_de(client: &str, redirection: &str, defi: &str, etat: &str, indice: &str, portee: &str, invite: &str) -> String {
     let mut url = format!(
         "{}/authorize?client_id={}&response_type=code&redirect_uri={}&response_mode=query\
@@ -245,6 +260,11 @@ pub fn echanger_code(client: &str, code: &str, verificateur: &str, redirection: 
 /// (`PORTEE_REGLAGES`), après l'autorisation demandée à part.
 pub fn echanger_code_reglages(client: &str, code: &str, verificateur: &str, redirection: &str, adresse: &str) -> Result<ReponseJeton, ErreurOAuth> {
     echanger_code_pour(client, code, verificateur, redirection, adresse, PORTEE_REGLAGES)
+}
+
+/// Comme `echanger_code`, pour le jeton des agendas (`PORTEE_AGENDA`).
+pub fn echanger_code_agenda(client: &str, code: &str, verificateur: &str, redirection: &str, adresse: &str) -> Result<ReponseJeton, ErreurOAuth> {
+    echanger_code_pour(client, code, verificateur, redirection, adresse, PORTEE_AGENDA)
 }
 
 fn echanger_code_pour(
@@ -1918,6 +1938,10 @@ mod tests {
         // La connexion d'un compte, elle, ne change pas.
         let url = url_autorisation("C", "http://localhost:1", "D", "E", "");
         assert!(url.contains("&prompt=select_account") && url.contains(&encoder(PORTEE_AUTORISATION)), "{url}");
+        // Les agendas : leur portée seule, demandée à part.
+        let url = url_autorisation_agenda("C", "http://localhost:1", "D", "E", "a@exemple.fr");
+        assert!(url.contains(&format!("scope={}", encoder(PORTEE_AUTORISATION_AGENDA))), "{url}");
+        assert!(url.contains("Calendars.ReadWrite") && !url.contains("MailboxSettings") && !url.contains("prompt="), "{url}");
     }
 
     /// Un filtre tel quel, sans le contrôle de `filtres::lire` (qui refuse

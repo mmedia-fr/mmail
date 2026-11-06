@@ -7106,6 +7106,10 @@ ApplicationWindow {
             // laisse les boutons à leur taille (banc PIECE=1).
             if (essai.scenario === "zoom-lecture")
                 scenarios.lancerScenarioZoomLecture()
+            // Scénario « reponse-tableau » (0.8.7 ; banc EML=…) : répondre dans
+            // un tableau cité collé d'Excel.
+            if (essai.scenario === "reponse-tableau")
+                scenarios.lancerScenarioReponseTableau()
             // Scénario « recherche-portee » (0.8.2, 0.8.3 ; banc LOT1=1).
             if (essai.scenario === "recherche-portee")
                 scenarios.lancerScenarioRecherchePortee()
@@ -7259,6 +7263,16 @@ ApplicationWindow {
                 var attenteSuggestion = Qt.createQmlObject('import QtQuick; Timer { interval: 1500 }', fenetre)
                 attenteSuggestion.triggered.connect(scenarios.etapeScenarioSuggestion)
                 attenteSuggestion.start()
+                return
+            }
+            // Scénario « m365-reel » (0.9.0) : une vraie boîte Microsoft 365 ;
+            // les comptes du profil se reconnectent par le coffre, comme
+            // d'ordinaire, sans les comptes d'essai de l'environnement.
+            if (essai.scenario === "m365-reel") {
+                scenarios.lancerScenarioM365Reel()
+                var connus = listeComptes()
+                for (var cm = 0; cm < connus.length; ++cm)
+                    connecterCompte(connus[cm])
                 return
             }
             if (identifiantsEssai.utilisateur2)

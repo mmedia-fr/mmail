@@ -310,6 +310,15 @@ const FUSEAUX_WINDOWS: &[(&str, &str)] = &[
     ("Z", "UTC"),
 ];
 
+/// Nom Windows d'un fuseau, celui qu'Exchange préfère : le premier de la
+/// table qui le désigne.
+pub(crate) fn nom_windows(tz: chrono_tz::Tz) -> Option<&'static str> {
+    if tz == chrono_tz::UTC {
+        return Some("UTC");
+    }
+    FUSEAUX_WINDOWS.iter().find(|(w, iana)| *iana == tz.name() && w.ends_with("Time")).map(|(w, _)| *w)
+}
+
 /// Villes reconnues dans les libellés qu'Outlook écrit parfois en guise de
 /// nom (« (UTC+01:00) Bruxelles, Copenhague, Madrid, Paris »).
 const VILLES: &[(&str, &str)] = &[
@@ -1203,7 +1212,11 @@ pub fn vue_dans<T: TimeZone>(magasin: &Magasin, genre: &str, date: NaiveDate, au
                 }
                 if !a.ecriture && f.modifiable {
                     f.modifiable = false;
-                    f.motif = "agenda en lecture seule".into();
+                    f.motif = if crate::microsoft::agenda::est_graph(&a.adresse) {
+                        "agenda Microsoft 365 en lecture seule".into()
+                    } else {
+                        "agenda en lecture seule".into()
+                    };
                 }
             }
         }

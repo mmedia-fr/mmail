@@ -138,6 +138,15 @@ pub mod qobject {
         #[cxx_name = "connecterMicrosoft"]
         fn connecter_microsoft(self: Pin<&mut Boite>, indice: &QString) -> QString;
 
+        /// Couleurs des catégories d'Outlook (0.9.0) : l'adresse de la page de
+        /// Microsoft qui demande d'autoriser MMail à lire les réglages de la
+        /// boîte du compte Microsoft 365 `compte`, à ouvrir dans le navigateur ;
+        /// vide si rien n'a pu se préparer (cf. `erreur`). Issue :
+        /// `couleursOutlook`. Pas encore sous Android.
+        #[qinvokable]
+        #[cxx_name = "autoriserCouleursOutlook"]
+        fn autoriser_couleurs_outlook(self: Pin<&mut Boite>, compte: i32) -> QString;
+
         /// Sous Android : l'adresse de retour que la page de connexion intégrée
         /// a interceptée après la connexion Microsoft. Rend faux si elle n'est
         /// pas celle attendue. Issue : `microsoftConnecte`, ou `microsoftRefuse`.
@@ -669,10 +678,18 @@ pub mod qobject {
         fn nettoyer_carnets(self: Pin<&mut Boite>, plan: &QString);
 
         /// Enregistre la liste des filtres. Rend faux, `erreur` posée, si un
-        /// filtre est incomplet : rien n'est alors changé.
+        /// filtre est incomplet : rien n'est alors changé. Les comptes
+        /// Microsoft 365 connectés accordent ensuite les règles d'Outlook aux
+        /// filtres « aussi dans Outlook » (issue : `reglesOutlook`).
         #[qinvokable]
         #[cxx_name = "poserFiltres"]
         fn poser_filtres(self: Pin<&mut Boite>, json: &QString) -> bool;
+
+        /// Ce qui empêche un filtre (JSON d'un seul filtre) de partir dans les
+        /// règles d'Outlook (0.9.0) ; vide s'il le peut.
+        #[qinvokable]
+        #[cxx_name = "regleOutlook"]
+        fn regle_outlook(self: &Boite, json: &QString) -> QString;
 
         /// Passe aux filtres toute la boîte de réception du compte, et non
         /// les seules arrivées. Rend le nombre de messages touchés ; issue :
@@ -915,6 +932,23 @@ pub mod qobject {
         #[cxx_name = "synchroniserAgendas"]
         fn synchroniser_agendas(self: Pin<&mut Boite>, insister: bool);
 
+        /// Comptes Microsoft 365 connectés, pour l'agenda (0.9.0), en JSON :
+        /// `[{compte, adresse, etat}]`, `etat` valant `autorise`,
+        /// `a_autoriser` (la lecture des agendas n'est pas autorisée) ou
+        /// `inconnu` (pas encore essayée).
+        #[qinvokable]
+        #[cxx_name = "agendasMicrosoft"]
+        fn agendas_microsoft(&self) -> QString;
+
+        /// Agendas Microsoft 365 (0.9.0) : l'adresse de la page de Microsoft
+        /// qui demande d'autoriser MMail à lire les agendas du compte
+        /// `compte`, à ouvrir dans le navigateur ; vide si rien n'a pu se
+        /// préparer (cf. `erreur`). Issue : `agendasMicrosoftAutorises`. Pas
+        /// encore sous Android.
+        #[qinvokable]
+        #[cxx_name = "autoriserAgendasMicrosoft"]
+        fn autoriser_agendas_microsoft(self: Pin<&mut Boite>, compte: i32) -> QString;
+
         /// Formulaire prérempli d'un événement de l'index (cf.
         /// `saisie::Saisie`, en JSON) : toute la série si `serie`, sinon
         /// l'occurrence dont `occurrence` est le début d'origine. Vide si
@@ -1118,6 +1152,20 @@ pub mod qobject {
         #[cxx_name = "microsoftRefuse"]
         fn microsoft_refuse(self: Pin<&mut Boite>, message: &QString, consentement: bool);
 
+        /// Issue de `autoriserCouleursOutlook` : `message` vide, l'autorisation
+        /// est donnée et les couleurs sont en cours de reprise ; sinon, ce qui
+        /// l'a empêchée.
+        #[qsignal]
+        #[cxx_name = "couleursOutlook"]
+        fn couleurs_outlook(self: Pin<&mut Boite>, compte: i32, message: &QString);
+
+        /// Règles d'Outlook accordées aux filtres (0.9.0) : `message` vide,
+        /// rien à dire ; `aAutoriser` : un filtre attend que MMail soit
+        /// autorisé à modifier les réglages de la boîte.
+        #[qsignal]
+        #[cxx_name = "reglesOutlook"]
+        fn regles_outlook(self: Pin<&mut Boite>, compte: i32, message: &QString, a_autoriser: bool);
+
         /// Compte Google autorisé, enregistré et en cours de connexion : comme
         /// `microsoftConnecte`.
         #[qsignal]
@@ -1217,6 +1265,13 @@ pub mod qobject {
         #[qsignal]
         #[cxx_name = "agendasSynchronises"]
         fn agendas_synchronises(self: Pin<&mut Boite>, change: bool, erreurs: &QString);
+
+        /// Issue de `autoriserAgendasMicrosoft` : `message` vide, l'autorisation
+        /// est donnée et les agendas du compte sont en cours de lecture ;
+        /// sinon, ce qui l'a empêchée.
+        #[qsignal]
+        #[cxx_name = "agendasMicrosoftAutorises"]
+        fn agendas_microsoft_autorises(self: Pin<&mut Boite>, compte: i32, message: &QString);
 
         /// Écriture dans l'agenda terminée : `message` dit pourquoi elle a
         /// échoué.
@@ -1578,7 +1633,13 @@ enum Commande {
     MarquerCategorie { chemin: String, uids: Vec<u32>, mot_cle: String, present: bool },
     /// Changer le catalogue des catégories d'une boîte (chemin de sa boîte de
     /// réception), relu sur le serveur juste avant.
-    Catalogue { boite: String, changement: Changement },
+    Catalogue { boite: String, changement: Changement, avant: Option<Categorie> },
+    /// Reprendre les couleurs des catégories d'Outlook (Microsoft 365, 0.9.0),
+    /// toutes, après l'autorisation de lire les réglages de la boîte.
+    CouleursOutlook,
+    /// Accorder les règles de la boîte de réception d'Outlook aux filtres
+    /// « aussi dans Outlook » (Microsoft 365, 0.9.0).
+    Regles,
     /// Envoyer une confirmation de lecture (identifiants présents) ou
     /// l'ignorer (absents) ; le message reçoit `$MDNSent` dans les deux cas.
     Confirmer { chemin: String, uid: u32, identifiants: Option<Identifiants> },
@@ -1659,6 +1720,7 @@ impl Commande {
                 | (EnvoyerDifferes { .. }, EnvoyerDifferes { .. })
                 | (Signale, Signale)
                 | (RelevePartagees, RelevePartagees)
+                | (Regles, Regles)
         ) || (matches!(anterieure, Veille) && (self.comptee() || matches!(self, Veille)))
     }
 
@@ -1762,6 +1824,9 @@ enum Issue {
     EchecRedaction { jeton: String, message: String },
     /// Envoi impossible faute de réseau, le message n'est pas parti (0.6.34).
     EnvoiEnAttente { jeton: String, message: String },
+    /// Règles d'Outlook accordées (`Commande::Regles`) : filtres partis,
+    /// écritures faites, filtres qu'Outlook ne sait pas faire (nom, raison).
+    Regles { envoyes: usize, ecritures: usize, refus: Vec<(String, String)>, erreur: Option<String>, a_autoriser: bool },
 }
 
 /// Session d'un compte, vue de l'interface.
@@ -1823,6 +1888,12 @@ pub struct BoiteRust {
     /// demandé avant ne marque plus le message « lu » (0.6.7).
     marquages: HashMap<(i64, u32), u64>,
     agenda_occupe: bool,
+    /// Lecture des agendas Microsoft 365 (0.9.0), par compte : autorisée, ou
+    /// refusée — elle n'est alors redemandée qu'à la demande de l'utilisateur.
+    agendas_microsoft: HashMap<i64, bool>,
+    /// Une synchronisation des agendas demandée pendant qu'une autre tournait
+    /// (après une autorisation) : relancée à la fin de celle-ci.
+    agendas_a_relire: bool,
     contacts_occupe: bool,
     delai_lu: i32,
     revision_categories: i32,
@@ -1939,6 +2010,8 @@ impl Default for BoiteRust {
             liste: None,
             marquages: HashMap::new(),
             agenda_occupe: false,
+            agendas_microsoft: HashMap::new(),
+            agendas_a_relire: false,
             contacts_occupe: false,
             delai_lu: 0,
             revision_categories: 0,
@@ -2024,7 +2097,10 @@ impl qobject::Boite {
                     "couleur": crate::agenda::couleur(a),
                     "affiche": a.affiche,
                     "ecriture": a.ecriture,
-                    "invitations": magasin.planification(a.compte).ok().flatten().unwrap_or(false),
+                    // Exchange envoie lui-même les invitations.
+                    "invitations": crate::microsoft::agenda::est_graph(&a.adresse)
+                        || magasin.planification(a.compte).ok().flatten().unwrap_or(false),
+                    "microsoft": crate::microsoft::agenda::est_graph(&a.adresse),
                 })
             })
             .collect();
@@ -2052,15 +2128,24 @@ impl qobject::Boite {
         }
         let Some(magasin) = self.magasin.as_ref() else { return };
         // Les comptes dont on a le mot de passe : ceux qui sont connectés. Un
-        // compte Microsoft ou Google n'a pas d'agenda CalDAV.
-        let comptes: Vec<(i64, String, Identifiants)> = magasin
-            .comptes()
-            .unwrap_or_default()
-            .into_iter()
-            .filter_map(|c| self.identites.get(&c.id).map(|id| (c.id, c.adresse, id.clone())))
-            .filter(|(_, _, id)| id.oauth.is_none())
-            .collect();
-        if comptes.is_empty() {
+        // compte Google n'a pas d'agenda CalDAV ; un compte Microsoft 365 a
+        // les siens par Graph (0.9.0), une fois leur lecture autorisée — un
+        // refus de la session n'est redemandé qu'à la demande.
+        let mut comptes: Vec<(i64, String, Identifiants)> = Vec::new();
+        let mut microsoft: Vec<(i64, String, crate::oauth::Partage)> = Vec::new();
+        for c in magasin.comptes().unwrap_or_default() {
+            let Some(id) = self.identites.get(&c.id) else { continue };
+            match &id.oauth {
+                None => comptes.push((c.id, c.adresse, id.clone())),
+                Some(j) if crate::oauth::fournisseur(j) == crate::oauth::Fournisseur::Microsoft => {
+                    if insister || self.agendas_microsoft.get(&c.id) != Some(&false) {
+                        microsoft.push((c.id, c.adresse, j.clone()));
+                    }
+                }
+                Some(_) => {}
+            }
+        }
+        if comptes.is_empty() && microsoft.is_empty() {
             return;
         }
         let profil = self.profil.clone();
@@ -2069,8 +2154,26 @@ impl qobject::Boite {
         let lance = thread::Builder::new().name("mmail-agenda".into()).spawn(move || {
             let mut change = false;
             let mut erreurs = Vec::new();
+            let (mut autorises, mut refuses) = (Vec::new(), Vec::new());
             match Magasin::ouvrir(&profil) {
                 Ok(magasin) => {
+                    for (compte, adresse, jetons) in &microsoft {
+                        match crate::microsoft::jeton_acces(jetons, crate::microsoft::PORTEE_AGENDA) {
+                            Ok(jeton) => {
+                                autorises.push(*compte);
+                                match crate::microsoft::agenda::synchroniser(&magasin, *compte, adresse, &jeton, chrono::Utc::now()) {
+                                    Ok(bilan) => {
+                                        change |= bilan.change;
+                                        erreurs.extend(bilan.erreurs.into_iter().map(|e| format!("{adresse} : {e}")));
+                                    }
+                                    Err(e) => erreurs.push(format!("{adresse} : {e}")),
+                                }
+                            }
+                            // Le réseau : au passage suivant.
+                            Err(crate::microsoft::ErreurOAuth::Reseau(m)) => erreurs.push(format!("{adresse} : {m}")),
+                            Err(_) => refuses.push(*compte),
+                        }
+                    }
                     for (compte, adresse, id) in &comptes {
                         let acces = crate::caldav::Acces { utilisateur: &id.utilisateur, mot_de_passe: &id.mot_de_passe };
                         match crate::caldav::synchroniser(&magasin, *compte, &id.hote, &acces, maintenant(), insister) {
@@ -2087,13 +2190,48 @@ impl qobject::Boite {
                 Err(e) => erreurs.push(format!("index local : {e}")),
             }
             let _ = fil.queue(move |mut boite: Pin<&mut qobject::Boite>| {
+                for compte in autorises {
+                    boite.as_mut().rust_mut().agendas_microsoft.insert(compte, true);
+                }
+                for compte in refuses {
+                    boite.as_mut().rust_mut().agendas_microsoft.insert(compte, false);
+                }
                 boite.as_mut().set_agenda_occupe(false);
                 boite.as_mut().agendas_synchronises(change, &QString::from(&erreurs.join("\n")));
+                if std::mem::take(&mut boite.as_mut().rust_mut().agendas_a_relire) {
+                    boite.as_mut().synchroniser_agendas(true);
+                }
             });
         });
         if lance.is_err() {
             self.as_mut().set_agenda_occupe(false);
         }
+    }
+
+    pub fn agendas_microsoft(&self) -> QString {
+        let Some(magasin) = self.magasin.as_ref() else {
+            return QString::from("[]");
+        };
+        let liste: Vec<serde_json::Value> = magasin
+            .comptes()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|c| {
+                self.identites
+                    .get(&c.id)
+                    .and_then(|id| id.oauth.as_ref())
+                    .is_some_and(|j| crate::oauth::fournisseur(j) == crate::oauth::Fournisseur::Microsoft)
+            })
+            .map(|c| {
+                let etat = match self.agendas_microsoft.get(&c.id) {
+                    Some(true) => "autorise",
+                    Some(false) => "a_autoriser",
+                    None => "inconnu",
+                };
+                serde_json::json!({ "compte": c.id, "adresse": c.adresse, "etat": etat })
+            })
+            .collect();
+        QString::from(&serde_json::Value::from(liste).to_string())
     }
 
     pub fn sauvegarder_configuration(
@@ -2270,14 +2408,27 @@ impl qobject::Boite {
     }
 
     pub fn saisie_evenement(&self, objet: i32, occurrence: &QString, serie: bool) -> QString {
+        use crate::microsoft::agenda as graph;
         let Some(o) = self.magasin.as_ref().and_then(|m| m.objet(objet as i64).ok().flatten()) else {
             return QString::from("");
         };
-        let occurrence = if serie { None } else { occurrence.to_string().parse::<i64>().ok() };
-        match crate::saisie::saisie_de(&o.ical, occurrence, crate::saisie::fuseau_du_poste()) {
+        let texte_occurrence = occurrence.to_string();
+        let occurrence = if serie { None } else { texte_occurrence.parse::<i64>().ok() };
+        // Microsoft 365 : chaque occurrence est un objet seul, lu comme un
+        // événement simple ; une série garde sa répétition, que le formulaire
+        // ne décrit pas (« AUTRE »).
+        let par_graph = self.est_agenda_graph(o.agenda);
+        let (ical, occurrence) = if par_graph { (graph::pour_le_formulaire(&o.ical).unwrap_or_default(), None) } else { (o.ical.clone(), occurrence) };
+        match crate::saisie::saisie_de(&ical, occurrence, crate::saisie::fuseau_du_poste()) {
             Some(mut s) => {
                 s.agenda = o.agenda;
                 s.objet = o.id;
+                if par_graph {
+                    s.occurrence = if serie { String::new() } else { texte_occurrence };
+                    if serie && graph::serie_de(&o.ical).is_some() {
+                        s.repetition = "AUTRE".into();
+                    }
+                }
                 QString::from(&serde_json::to_string(&s).unwrap_or_default())
             }
             None => QString::from(""),
@@ -2307,6 +2458,13 @@ impl qobject::Boite {
             return;
         }
         let agenda = objet.as_ref().map(|o| o.agenda).unwrap_or(saisie.agenda);
+        if self.est_agenda_graph(agenda) {
+            match Self::ecriture_graph(self.agenda_local(agenda), objet, saisie) {
+                Ok(ecriture) => self.lancer_ecriture_graph(agenda, ecriture),
+                Err(motif) => self.as_mut().evenement_enregistre(false, &QString::from(&motif)),
+            }
+            return;
+        }
         self.lancer_ecriture(
             agenda,
             Box::new(move |dav, agenda| {
@@ -2334,6 +2492,13 @@ impl qobject::Boite {
         };
         let occurrence = if serie { None } else { occurrence.to_string().parse::<i64>().ok() };
         let agenda = o.agenda;
+        // Microsoft 365 : l'occurrence (ou l'événement) elle-même, ou sa série.
+        if self.est_agenda_graph(agenda) {
+            let serie_graph = crate::microsoft::agenda::serie_de(&o.ical).filter(|_| occurrence.is_none());
+            let id = serie_graph.unwrap_or(o.href);
+            self.lancer_ecriture_graph(agenda, crate::microsoft::agenda::Ecriture::Supprimer { id });
+            return;
+        }
         self.lancer_ecriture(
             agenda,
             Box::new(move |dav, agenda| {
@@ -2361,6 +2526,12 @@ impl qobject::Boite {
             self.as_mut().evenement_enregistre(false, &QString::from("agenda introuvable"));
             return;
         };
+        // Un agenda Microsoft 365 s'écrit par Graph (`lancer_ecriture_graph`).
+        if crate::microsoft::agenda::est_graph(&local.adresse) {
+            let motif = "agenda Microsoft 365 : écriture à faire par Graph";
+            self.as_mut().evenement_enregistre(false, &QString::from(motif));
+            return;
+        }
         let Some(id) = self.identites.get(&local.compte).cloned() else {
             self.as_mut().evenement_enregistre(false, &QString::from("la boîte de cet agenda n'est pas connectée"));
             return;
@@ -2395,6 +2566,10 @@ impl qobject::Boite {
         let tz = crate::saisie::fuseau_du_poste();
         let Some(description) = crate::invitation::decrire(extrait, &tz) else { return String::new() };
         let objet = magasin.objet_par_uid(compte, &description.uid).ok().flatten();
+        // Un agenda Microsoft 365 : Exchange inscrit lui-même les réponses.
+        let par_graph = objet.as_ref().is_some_and(|o| {
+            magasin.agendas().unwrap_or_default().iter().any(|a| a.id == o.agenda && crate::microsoft::agenda::est_graph(&a.adresse))
+        });
         // `null` : pas encore demandé au serveur (première synchronisation de
         // l'agenda à venir) — les boutons restent actifs.
         let planification = magasin.planification(compte).ok().flatten();
@@ -2406,7 +2581,7 @@ impl qobject::Boite {
         if extrait.methode == "REPLY" {
             // Seule la copie de l'organisateur — la boîte — reçoit les réponses.
             let organisateur = description.organisateur.as_ref().is_some_and(|p| p.adresse == moi);
-            if let Some(o) = objet.as_ref().filter(|_| organisateur) {
+            if let Some(o) = objet.as_ref().filter(|_| organisateur && !par_graph) {
                 if let Ok(Some(ical)) = crate::invitation::inscrire_reponse(&o.ical, &extrait.ical) {
                     inscrite = true;
                     let (agenda, href, etag) = (o.agenda, o.href.clone(), o.etag.clone());
@@ -2489,6 +2664,14 @@ impl qobject::Boite {
             self.as_mut().evenement_enregistre(false, &QString::from("invitation illisible"));
             return;
         };
+        // Microsoft 365 : Exchange a déjà inscrit la réunion dans l'agenda de
+        // la boîte ; la réponse part de là, et Exchange prévient
+        // l'organisateur.
+        if self.compte_microsoft(compte as i64) {
+            let ecriture = crate::microsoft::agenda::Ecriture::RepondreInvitation { uid, reponse: reponse.to_string() };
+            self.lancer_graph(compte as i64, ecriture);
+            return;
+        }
         self.ecrire_reponse(compte as i64, uid, ical, reponse.to_string());
     }
 
@@ -2499,6 +2682,14 @@ impl qobject::Boite {
             return;
         };
         let compte = magasin.agendas().unwrap_or_default().into_iter().find(|a| a.id == o.agenda).map(|a| a.compte).unwrap_or(0);
+        // Microsoft 365 : Exchange prévient l'organisateur ; une série reçoit
+        // la réponse pour toutes ses occurrences.
+        if self.est_agenda_graph(o.agenda) {
+            let id = crate::microsoft::agenda::serie_de(&o.ical).unwrap_or(o.href);
+            let ecriture = crate::microsoft::agenda::Ecriture::Repondre { id, reponse: reponse.to_string() };
+            self.lancer_ecriture_graph(o.agenda, ecriture);
+            return;
+        }
         let uid = crate::invitation::identite(&o.ical).map(|(u, _)| u).unwrap_or_default();
         self.ecrire_reponse(compte, uid, o.ical, reponse.to_string());
     }
@@ -2514,6 +2705,17 @@ impl qobject::Boite {
         let occurrence = crate::agenda::analyser(&ical).and_then(|r| {
             r.enfants.iter().filter(|c| c.nom == "VEVENT").find_map(|c| crate::saisie::origine_de(&r, c))
         });
+        // Microsoft 365 : la réunion entière retirée par Graph ; une occurrence
+        // annulée reste dans l'agenda, marquée annulée par Exchange.
+        if self.compte_microsoft(compte) {
+            if occurrence.is_some() {
+                let motif = "une occurrence annulée se retire dans Outlook ; l'agenda la montre déjà annulée";
+                self.as_mut().evenement_enregistre(false, &QString::from(motif));
+            } else {
+                self.lancer_graph(compte, crate::microsoft::agenda::Ecriture::RetirerAnnulee { uid });
+            }
+            return;
+        }
         self.as_mut().lancer_pour_compte(
             compte,
             Box::new(move |dav, magasin| {
@@ -2529,6 +2731,96 @@ impl qobject::Boite {
                 }
             }),
         );
+    }
+
+    fn agenda_local(&self, agenda: i64) -> Option<crate::magasin::AgendaLocal> {
+        self.magasin.as_ref()?.agendas().ok()?.into_iter().find(|a| a.id == agenda)
+    }
+
+    /// Le compte passe-t-il par Microsoft 365 (jetons de Microsoft) ?
+    fn compte_microsoft(&self, compte: i64) -> bool {
+        self.identites
+            .get(&compte)
+            .and_then(|id| id.oauth.as_ref())
+            .is_some_and(|j| crate::oauth::fournisseur(j) == crate::oauth::Fournisseur::Microsoft)
+    }
+
+    fn est_agenda_graph(&self, agenda: i64) -> bool {
+        self.agenda_local(agenda).is_some_and(|a| crate::microsoft::agenda::est_graph(&a.adresse))
+    }
+
+    /// Ce que le formulaire demande d'écrire dans un agenda Microsoft 365. Une
+    /// série n'y change que son titre, son lieu, sa description, son rappel
+    /// et ses participants : son horaire et sa répétition se changent dans
+    /// Outlook.
+    fn ecriture_graph(
+        agenda: Option<crate::magasin::AgendaLocal>,
+        objet: Option<crate::magasin::ObjetLocal>,
+        saisie: crate::saisie::Saisie,
+    ) -> Result<crate::microsoft::agenda::Ecriture, String> {
+        use crate::microsoft::agenda::{self as graph, Ecriture};
+        let Some(o) = objet else {
+            let agenda = agenda.ok_or("agenda introuvable")?;
+            return Ok(Ecriture::Creer { agenda: graph::identifiant(&agenda.adresse).to_string(), saisie });
+        };
+        match graph::serie_de(&o.ical) {
+            Some(serie) if saisie.occurrence.is_empty() => {
+                let tz = crate::saisie::fuseau_du_poste();
+                let avant = graph::pour_le_formulaire(&o.ical).and_then(|i| crate::saisie::saisie_de(&i, None, tz));
+                let horaire_change =
+                    avant.is_some_and(|a| a.debut != saisie.debut || a.fin != saisie.fin || a.journee != saisie.journee);
+                if horaire_change || saisie.repetition != "AUTRE" {
+                    return Err("l'horaire et la répétition d'une série Microsoft 365 se changent dans Outlook ; \
+                                ici, une occurrence à la fois"
+                        .into());
+                }
+                Ok(Ecriture::ModifierSerie { serie, saisie })
+            }
+            Some(_) if !saisie.repetition.is_empty() => Err("une occurrence d'une série ne se répète pas elle-même".into()),
+            _ => Ok(Ecriture::Modifier { href: o.href, saisie }),
+        }
+    }
+
+    /// Écrit dans un agenda Microsoft 365 depuis un fil à part, par Graph,
+    /// puis relit les agendas de la boîte et rend compte, comme
+    /// `lancer_ecriture`.
+    fn lancer_ecriture_graph(mut self: Pin<&mut Self>, agenda: i64, ecriture: crate::microsoft::agenda::Ecriture) {
+        let Some(local) = self.agenda_local(agenda) else {
+            self.as_mut().evenement_enregistre(false, &QString::from("agenda introuvable"));
+            return;
+        };
+        self.lancer_graph(local.compte, ecriture);
+    }
+
+    /// Le travail de `lancer_ecriture_graph`, pour la boîte `compte`.
+    fn lancer_graph(mut self: Pin<&mut Self>, compte: i64, ecriture: crate::microsoft::agenda::Ecriture) {
+        let adresse = self.magasin.as_ref().and_then(|m| m.compte_par_id(compte).ok().flatten()).map(|c| c.adresse).unwrap_or_default();
+        let Some(jetons) = self.identites.get(&compte).and_then(|id| id.oauth.clone()) else {
+            self.as_mut().evenement_enregistre(false, &QString::from("la boîte de cet agenda n'est pas connectée"));
+            return;
+        };
+        let profil = self.profil.clone();
+        let fil = self.qt_thread();
+        let lance = thread::Builder::new().name("mmail-agenda-ecriture".into()).spawn(move || {
+            let tz = crate::saisie::fuseau_du_poste();
+            let issue = crate::microsoft::jeton_acces(&jetons, crate::microsoft::PORTEE_AGENDA)
+                .map_err(|e| format!("autorisation des agendas : {e}"))
+                .and_then(|jeton| {
+                    let issue = crate::microsoft::agenda::ecrire(&jeton, &ecriture, tz);
+                    if let Ok(magasin) = Magasin::ouvrir(&profil) {
+                        let _ = crate::microsoft::agenda::synchroniser(&magasin, compte, &adresse, &jeton, chrono::Utc::now());
+                    }
+                    issue
+                });
+            let _ = fil.queue(move |mut boite: Pin<&mut qobject::Boite>| {
+                let message = issue.as_ref().err().cloned().unwrap_or_default();
+                boite.as_mut().agendas_synchronises(true, &QString::from(""));
+                boite.as_mut().evenement_enregistre(issue.is_ok(), &QString::from(&message));
+            });
+        });
+        if lance.is_err() {
+            self.as_mut().evenement_enregistre(false, &QString::from("impossible de lancer l'écriture"));
+        }
     }
 
     /// Comme `lancer_ecriture`, pour une écriture dont l'agenda ne se décide
@@ -2719,6 +3011,125 @@ impl qobject::Boite {
         }
         self.as_mut().set_erreur(QString::from(""));
         QString::from(&url)
+    }
+
+    pub fn autoriser_couleurs_outlook(mut self: Pin<&mut Self>, compte: i32) -> QString {
+        use crate::microsoft as ms;
+        let compte = compte as i64;
+        let refus = |mut boite: Pin<&mut Self>, message: &str| {
+            boite.as_mut().set_erreur(QString::from(message));
+            QString::default()
+        };
+        let Some(id) = self.identites.get(&compte).cloned() else {
+            return refus(self, "ce compte n'est pas connecté");
+        };
+        let Some(jetons) = id.oauth.clone().filter(|j| crate::oauth::fournisseur(j) == crate::oauth::Fournisseur::Microsoft) else {
+            return refus(self, "les couleurs d'Outlook ne valent que pour un compte Microsoft 365");
+        };
+        // L'autorisation vaut pour la personne, pas pour le poste : donnée
+        // depuis un ordinateur, elle sert aussi à MMail sous Android.
+        if cfg!(target_os = "android") {
+            return refus(self, "autorisez depuis MMail sur un ordinateur : les couleurs viendront ensuite ici d'elles-mêmes");
+        }
+        let client = ms::client_du_compte(&jetons.lock().map(|j| j.client.clone()).unwrap_or_default());
+        let adresse = id.utilisateur.clone();
+        let (pkce, etat) = match crate::oauth::pkce_et_etat() {
+            Ok(v) => v,
+            Err(x) => return refus(self, &x.to_string()),
+        };
+        let ecoute = match ms::ecouter() {
+            Ok(e) => e,
+            Err(e) => return refus(self, &format!("écoute locale : {e}")),
+        };
+        let url = ms::url_autorisation_reglages(&client, &ecoute.redirection, &pkce.defi, &etat, &adresse);
+        let fil = self.qt_thread();
+        let lance = thread::Builder::new().name("mmail-microsoft".into()).spawn(move || {
+            let issue = ms::attendre_code(&ecoute, &etat, ms::DELAI_CONNEXION)
+                .and_then(|code| ms::echanger_code_reglages(&client, &code, &pkce.verificateur, &ecoute.redirection, &adresse))
+                .map(|r| crate::oauth::retenir(&jetons, ms::PORTEE_REGLAGES, &r.acces, r.duree))
+                .map_err(|x| x.to_string());
+            let _ = fil.queue(move |boite: Pin<&mut qobject::Boite>| boite.accueillir_couleurs(compte, issue));
+        });
+        if let Err(e) = lance {
+            return refus(self, &format!("autorisation Microsoft : {e}"));
+        }
+        self.as_mut().set_erreur(QString::from(""));
+        QString::from(&url)
+    }
+
+    /// Issue de l'autorisation de lire les réglages de la boîte, sur le fil
+    /// Qt : le fil du compte reprend les couleurs.
+    fn accueillir_couleurs(mut self: Pin<&mut Self>, compte: i64, issue: Result<(), String>) {
+        match issue {
+            Ok(()) => {
+                self.as_mut().envoyer(compte, Commande::CouleursOutlook);
+                self.as_mut().envoyer(compte, Commande::Regles);
+                self.as_mut().couleurs_outlook(compte as i32, &QString::default());
+            }
+            Err(message) => self.as_mut().couleurs_outlook(compte as i32, &QString::from(&message)),
+        }
+    }
+
+    pub fn autoriser_agendas_microsoft(mut self: Pin<&mut Self>, compte: i32) -> QString {
+        use crate::microsoft as ms;
+        let compte = compte as i64;
+        let refus = |mut boite: Pin<&mut Self>, message: &str| {
+            boite.as_mut().set_erreur(QString::from(message));
+            QString::default()
+        };
+        let Some(id) = self.identites.get(&compte).cloned() else {
+            return refus(self, "ce compte n'est pas connecté");
+        };
+        let Some(jetons) = id.oauth.clone().filter(|j| crate::oauth::fournisseur(j) == crate::oauth::Fournisseur::Microsoft) else {
+            return refus(self, "cette autorisation ne vaut que pour un compte Microsoft 365");
+        };
+        // Comme pour les couleurs d'Outlook : l'autorisation vaut pour la
+        // personne, donnée depuis un ordinateur elle sert aussi sous Android.
+        if cfg!(target_os = "android") {
+            return refus(self, "autorisez depuis MMail sur un ordinateur : les agendas viendront ensuite ici d'eux-mêmes");
+        }
+        let client = ms::client_du_compte(&jetons.lock().map(|j| j.client.clone()).unwrap_or_default());
+        let adresse = id.utilisateur.clone();
+        let (pkce, etat) = match crate::oauth::pkce_et_etat() {
+            Ok(v) => v,
+            Err(x) => return refus(self, &x.to_string()),
+        };
+        let ecoute = match ms::ecouter() {
+            Ok(e) => e,
+            Err(e) => return refus(self, &format!("écoute locale : {e}")),
+        };
+        let url = ms::url_autorisation_agenda(&client, &ecoute.redirection, &pkce.defi, &etat, &adresse);
+        let fil = self.qt_thread();
+        let lance = thread::Builder::new().name("mmail-microsoft".into()).spawn(move || {
+            let issue = ms::attendre_code(&ecoute, &etat, ms::DELAI_CONNEXION)
+                .and_then(|code| ms::echanger_code_agenda(&client, &code, &pkce.verificateur, &ecoute.redirection, &adresse))
+                .map(|r| crate::oauth::retenir(&jetons, ms::PORTEE_AGENDA, &r.acces, r.duree))
+                .map_err(|x| x.to_string());
+            let _ = fil.queue(move |boite: Pin<&mut qobject::Boite>| boite.accueillir_agendas_microsoft(compte, issue));
+        });
+        if let Err(e) = lance {
+            return refus(self, &format!("autorisation Microsoft : {e}"));
+        }
+        self.as_mut().set_erreur(QString::from(""));
+        QString::from(&url)
+    }
+
+    /// Issue de l'autorisation de lire les agendas, sur le fil Qt : les
+    /// agendas du compte sont lus aussitôt — ou dès la fin de la
+    /// synchronisation en cours.
+    fn accueillir_agendas_microsoft(mut self: Pin<&mut Self>, compte: i64, issue: Result<(), String>) {
+        match issue {
+            Ok(()) => {
+                self.as_mut().rust_mut().agendas_microsoft.insert(compte, true);
+                self.as_mut().agendas_microsoft_autorises(compte as i32, &QString::default());
+                if self.agenda_occupe {
+                    self.as_mut().rust_mut().agendas_a_relire = true;
+                } else {
+                    self.as_mut().synchroniser_agendas(true);
+                }
+            }
+            Err(message) => self.as_mut().agendas_microsoft_autorises(compte as i32, &QString::from(&message)),
+        }
     }
 
     pub fn terminer_microsoft(mut self: Pin<&mut Self>, url: &QString) -> bool {
@@ -3621,10 +4032,10 @@ impl qobject::Boite {
         let boite = boite_categories(magasin, compte, &chemin);
         let (valeur, serveur) = magasin.catalogue(compte, &boite).ok().flatten().unwrap_or_default();
         let catalogue = Catalogue::lire(&valeur);
-        let refusees = magasin
-            .dossier_id(compte, &chemin)
-            .and_then(|id| magasin.sans_mots_cles(id))
-            .unwrap_or(false);
+        // Microsoft 365 (0.9.0) : le serveur IMAP ne garde pas les mots-clés,
+        // mais les catégories passent par Graph.
+        let refusees = !compte_microsoft(magasin, compte)
+            && magasin.dossier_id(compte, &chemin).and_then(|id| magasin.sans_mots_cles(id)).unwrap_or(false);
         let liste: Vec<serde_json::Value> = catalogue
             .liste()
             .into_iter()
@@ -3642,6 +4053,7 @@ impl qobject::Boite {
             "boite": boite,
             "serveur": serveur,
             "refusees": refusees,
+            "microsoft": compte_microsoft(magasin, compte),
             "creees": catalogue.creees(),
             "max": categories::MAX_CREEES,
             "liste": liste,
@@ -3680,7 +4092,7 @@ impl qobject::Boite {
         }
         if let Some(magasin) = self.magasin.as_ref() {
             if let Ok(id) = magasin.dossier_id(compte, &chemin) {
-                if magasin.sans_mots_cles(id).unwrap_or(false) {
+                if !compte_microsoft(magasin, compte) && magasin.sans_mots_cles(id).unwrap_or(false) {
                     self.as_mut().set_erreur(QString::from("ce serveur ne garde pas les catégories"));
                     return false;
                 }
@@ -3751,6 +4163,13 @@ impl qobject::Boite {
         serveur: bool,
         changement: Changement,
     ) -> bool {
+        // La catégorie telle qu'elle était : le fil du compte relira l'index
+        // déjà changé, et ne verrait plus un renommage.
+        let mot_cle = match &changement {
+            Changement::Poser(c) => c.mot_cle.clone(),
+            Changement::Retirer(m) => m.clone(),
+        };
+        let avant = catalogue.liste().into_iter().find(|c| c.mot_cle.eq_ignore_ascii_case(&mot_cle));
         if let Err(motif) = catalogue.appliquer(&changement) {
             self.as_mut().set_erreur(QString::from(&motif));
             return false;
@@ -3760,7 +4179,7 @@ impl qobject::Boite {
         }
         self.as_mut().verifier_catalogues();
         if self.sessions.contains_key(&compte) || self.identites.contains_key(&compte) {
-            self.as_mut().envoyer(compte, Commande::Catalogue { boite, changement });
+            self.as_mut().envoyer(compte, Commande::Catalogue { boite, changement, avant });
         }
         true
     }
@@ -4576,12 +4995,30 @@ impl qobject::Boite {
             return false;
         }
         match self.magasin.as_ref().map(|m| m.poser_filtres(&json)) {
-            Some(Ok(())) => true,
+            Some(Ok(())) => {
+                let microsoft: Vec<i64> = match self.magasin.as_ref() {
+                    Some(m) => self.sessions.keys().copied().filter(|c| compte_microsoft(m, *c)).collect(),
+                    None => Vec::new(),
+                };
+                for compte in microsoft {
+                    self.as_mut().envoyer(compte, Commande::Regles);
+                }
+                true
+            }
             _ => {
                 self.as_mut().set_erreur(QString::from("index local indisponible : filtres non enregistrés"));
                 false
             }
         }
+    }
+
+    pub fn regle_outlook(&self, json: &QString) -> QString {
+        let filtre = match serde_json::from_str::<crate::filtres::Filtre>(&json.to_string()) {
+            Ok(f) => f,
+            Err(e) => return QString::from(&format!("filtre illisible : {e}")),
+        };
+        let compte = filtre.compte.clone();
+        QString::from(&crate::microsoft::regle_de(&filtre, &compte).err().unwrap_or_default())
     }
 
     pub fn appliquer_filtres(self: Pin<&mut Self>, compte: i32) -> i32 {
@@ -5686,6 +6123,24 @@ impl qobject::Boite {
                     self.as_mut().drapeaux_modifies();
                 }
             }
+            Issue::Regles { envoyes, ecritures, refus, erreur, a_autoriser } => {
+                let mut parties = Vec::new();
+                if let Some(erreur) = erreur {
+                    parties.push(format!("règles d'Outlook non mises à jour : {erreur}"));
+                } else if a_autoriser {
+                    parties.push("pour envoyer des filtres à Outlook, autorisez MMail à modifier les réglages de la boîte".to_string());
+                } else if ecritures > 0 {
+                    parties.push(if envoyes == 0 {
+                        "règles de MMail retirées d'Outlook".to_string()
+                    } else {
+                        format!("{envoyes} filtre(s) dans les règles d'Outlook")
+                    });
+                }
+                for (nom, raison) in refus {
+                    parties.push(format!("« {nom} » reste appliqué par MMail seul : {raison}"));
+                }
+                self.as_mut().regles_outlook(compte_qt, &QString::from(&parties.join(" ; ")), a_autoriser);
+            }
             Issue::Deplace { cible, chemin_cible, rapport, annulation } => {
                 self.as_mut().apres_deplacement(compte, cible, &chemin_cible);
                 let erreurs = rapport.erreurs.join("\n");
@@ -6074,6 +6529,36 @@ fn criteres_recherche(magasin: &Magasin, texte: &str) -> (String, Vec<Vec<String
 /// boîte partagée qui le contient — chemin de sa boîte de réception, comme
 /// « Shared/contact@exemple.fr/INBOX » —, à défaut la boîte de réception du
 /// compte.
+/// Validité des couleurs d'Outlook lues (cf. `lire_couleurs_outlook`).
+const COULEURS_OUTLOOK: Duration = Duration::from_secs(30 * 60);
+
+/// Donne aux catégories du catalogue la couleur de la catégorie d'Outlook du
+/// même nom : toutes (`toutes`, à la demande), ou celles restées grises — une
+/// couleur choisie dans MMail reste alors. Rend vrai si une a changé.
+fn colorer(catalogue: &mut Catalogue, couleurs: &[(String, String)], toutes: bool) -> bool {
+    let mut change = false;
+    for c in catalogue.liste() {
+        let Some((_, couleur)) = couleurs.iter().find(|(nom, _)| nom.trim().eq_ignore_ascii_case(c.nom.trim())) else {
+            continue;
+        };
+        if c.couleur.eq_ignore_ascii_case(couleur) || !(toutes || c.couleur.eq_ignore_ascii_case(categories::COULEUR_INCONNUE)) {
+            continue;
+        }
+        let nouvelle = Categorie { couleur: couleur.clone(), ..c };
+        change |= catalogue.appliquer(&Changement::Poser(nouvelle)).is_ok();
+    }
+    change
+}
+
+/// Compte Microsoft 365 : ses catégories passent par Graph (0.9.0).
+fn compte_microsoft(magasin: &Magasin, compte: i64) -> bool {
+    magasin
+        .compte_par_id(compte)
+        .ok()
+        .flatten()
+        .is_some_and(|c| c.fournisseur() == Some(crate::oauth::Fournisseur::Microsoft))
+}
+
 fn boite_categories(magasin: &Magasin, compte: i64, chemin: &str) -> String {
     let partagees = magasin.compte_par_id(compte).ok().flatten().map(|c| c.partagees).unwrap_or_default();
     if partagees.is_empty() {
@@ -6339,6 +6824,16 @@ struct Etabli {
     dernier: Option<(String, u32, u32, Vec<u8>)>,
     /// Envois différés vus réservés, et depuis quand (cf. `differes_interrompus`).
     differes_reserves: HashMap<u32, i64>,
+    /// Compte Microsoft 365 : ses jetons, pour les catégories par Graph
+    /// (0.9.0) ; `None` pour tout autre compte.
+    graph: Option<crate::oauth::Partage>,
+    /// Identifiants Graph des dossiers déjà trouvés, par chemin IMAP.
+    dossiers_graph: HashMap<String, String>,
+    /// Couleurs des catégories d'Outlook, et quand elles ont été lues ;
+    /// `couleurs_refusees` : pas d'autorisation, on ne redemande pas avant
+    /// la prochaine session.
+    couleurs: Option<(Instant, Vec<(String, String)>)>,
+    couleurs_refusees: bool,
 }
 
 /// À qui le fil d'un compte remet ses issues : l'objet Qt — ou, dans les
@@ -6675,6 +7170,14 @@ impl Travail {
             menage: None,
             dernier: None,
             differes_reserves: HashMap::new(),
+            graph: p
+                .oauth
+                .as_ref()
+                .filter(|j| crate::oauth::fournisseur(j) == crate::oauth::Fournisseur::Microsoft)
+                .cloned(),
+            dossiers_graph: HashMap::new(),
+            couleurs: None,
+            couleurs_refusees: false,
         })
     }
 
@@ -6688,7 +7191,19 @@ impl Travail {
             Commande::OuvrirDossier(chemin) => {
                 e.ouvert = Some(chemin.clone());
                 Some(match synchro::synchroniser(&mut e.client, &e.magasin, compte, &chemin) {
-                    Ok(_) => Issue::Dossier { chemin, veille: false },
+                    Ok(_) if e.graph.is_none() => Issue::Dossier { chemin, veille: false },
+                    // Microsoft 365 : la liste s'affiche d'abord ; les
+                    // catégories lues dans Graph — au premier passage, des
+                    // milliers de messages — la font relire si l'une a changé.
+                    // Un refus de Graph n'empêche pas le dossier de s'ouvrir.
+                    Ok(_) => {
+                        self.remettre(Issue::Dossier { chemin: chemin.clone(), veille: false });
+                        if self.categories_graph(e, &chemin).unwrap_or(false) {
+                            Issue::Dossier { chemin, veille: true }
+                        } else {
+                            Issue::Arborescence
+                        }
+                    }
                     Err(err) => echec("dossier", format!("ouverture de {chemin} : {err}"), &err),
                 })
             }
@@ -6750,13 +7265,63 @@ impl Travail {
                     Err(err) => echec("tri", format!("drapeau de suivi : {err}"), &err),
                 })
             }
+            Commande::Regles => Some(self.accorder_regles(e)),
+            Commande::CouleursOutlook => Some(match self.reprendre_couleurs(e) {
+                Ok(()) => Issue::Marque { discret: true },
+                Err(message) => Issue::Echec { etape: "tri", message: format!("couleurs d'Outlook : {message}"), session_perdue: false },
+            }),
+            // Microsoft 365 (0.9.0) : la catégorie se pose par Graph ; l'index
+            // l'a déjà.
+            Commande::MarquerCategorie { chemin, uids, mot_cle, present } if e.graph.is_some() => {
+                Some(match self.marquer_categorie_graph(e, &chemin, &uids, &mot_cle, present) {
+                    Ok(()) => Issue::Marque { discret: false },
+                    Err(message) => Issue::Echec { etape: "tri", message: format!("catégorie : {message}"), session_perdue: false },
+                })
+            }
             Commande::MarquerCategorie { chemin, uids, mot_cle, present } => Some(
                 match synchro::marquer_categorie(&mut e.client, &e.magasin, compte, &chemin, &uids, &mot_cle, present) {
                     Ok(()) => Issue::Marque { discret: false },
                     Err(err) => echec("tri", format!("catégorie : {err}"), &err),
                 },
             ),
-            Commande::Catalogue { boite, changement } => Some(
+            // Microsoft 365 (0.9.0) : un nom qui change — renommage, ou
+            // catégorie d'origine qui reprend le sien — change aussi sur les
+            // messages qui la portent, comme dans Outlook. Un retrait les
+            // laisse, comme Outlook aussi. Avec l'autorisation des réglages de
+            // la boîte, la liste d'Outlook suit (`reporter_vers_outlook`).
+            // L'état d'avant vient de l'interface (`changer_catalogue`), qui a
+            // déjà rangé le nouveau dans l'index.
+            Commande::Catalogue { boite, changement, avant } if e.graph.is_some() => {
+                let mot_cle = match &changement {
+                    Changement::Poser(c) => c.mot_cle.clone(),
+                    Changement::Retirer(m) => m.clone(),
+                };
+                let categorie = |magasin: &Magasin| {
+                    let (valeur, _) = magasin.catalogue(compte, &boite).ok().flatten().unwrap_or_default();
+                    Catalogue::lire(&valeur).liste().into_iter().find(|c| c.mot_cle.eq_ignore_ascii_case(&mot_cle))
+                };
+                if let Err(err) = synchro::changer_catalogue(&mut e.client, &e.magasin, compte, &boite, &changement) {
+                    return Some(echec("tri", format!("catégories : {err}"), &err));
+                }
+                let apres = categorie(&e.magasin);
+                let mut problemes = Vec::new();
+                if let (Some(ancien), Some(nouveau)) = (&avant, &apres) {
+                    if ancien.nom != nouveau.nom {
+                        if let Err(message) = self.renommer_categorie_graph(e, &ancien.nom, &nouveau.nom) {
+                            problemes.push(format!("catégorie renommée dans MMail, mais pas sur les messages dans Outlook : {message}"));
+                        }
+                    }
+                }
+                if let Err(message) = self.reporter_vers_outlook(e, avant.as_ref(), apres.as_ref()) {
+                    problemes.push(format!("catégorie changée dans MMail, pas encore dans la liste d'Outlook : {message}"));
+                }
+                Some(if problemes.is_empty() {
+                    Issue::Marque { discret: true }
+                } else {
+                    Issue::Echec { etape: "tri", message: problemes.join(" ; "), session_perdue: false }
+                })
+            }
+            Commande::Catalogue { boite, changement, .. } => Some(
                 match synchro::changer_catalogue(&mut e.client, &e.magasin, compte, &boite, &changement) {
                     // Le catalogue rangé a pu changer : l'interface le relit.
                     Ok(()) => Issue::Marque { discret: true },
@@ -7038,14 +7603,287 @@ impl Travail {
                 }
                 match e.ouvert.clone() {
                     Some(chemin) => Some(match synchro::synchroniser(&mut e.client, &e.magasin, compte, &chemin) {
-                        Ok(bilan) if bilan.change_la_liste() => Issue::Dossier { chemin, veille: true },
-                        Ok(_) => Issue::Arborescence,
+                        Ok(bilan) => {
+                            // Catégories posées depuis Outlook (Microsoft 365) :
+                            // la liste se relit si l'une a changé.
+                            let categories = self.categories_graph(e, &chemin).unwrap_or(false);
+                            if bilan.change_la_liste() || categories {
+                                Issue::Dossier { chemin, veille: true }
+                            } else {
+                                Issue::Arborescence
+                            }
+                        }
                         Err(err) => echec("reseau", format!("veille : {err}"), &err),
                     }),
                     None => Some(Issue::Arborescence),
                 }
             }
         }
+    }
+
+    /// Jeton Graph et identifiant Graph d'un dossier d'un compte Microsoft
+    /// 365 ; `None` pour un autre compte.
+    fn graph_du_dossier(&self, e: &mut Etabli, chemin: &str) -> Result<Option<(String, String)>, String> {
+        let Some(jetons) = e.graph.clone() else {
+            return Ok(None);
+        };
+        let jeton = crate::microsoft::jeton_acces(&jetons, crate::microsoft::PORTEE_ENVOI).map_err(|x| x.to_string())?;
+        let id = match e.dossiers_graph.get(chemin) {
+            Some(id) => id.clone(),
+            None => {
+                let separateur = e
+                    .magasin
+                    .dossiers(self.compte)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .find(|d| d.chemin == chemin)
+                    .map(|d| d.separateur)
+                    .unwrap_or_default();
+                let id = crate::microsoft::dossier_graph(&jeton, chemin, &separateur).map_err(|x| x.to_string())?;
+                e.dossiers_graph.insert(chemin.to_string(), id.clone());
+                id
+            }
+        };
+        Ok(Some((jeton, id)))
+    }
+
+    /// Catégories d'Outlook d'un dossier d'un compte Microsoft 365 (0.9.0) :
+    /// lues dans Graph depuis le dernier passage, posées dans l'index d'après
+    /// le `Message-ID`. Un nom que le catalogue ne connaît pas y entre, en
+    /// gris. Rend vrai si un message a changé ; rien pour un autre compte.
+    fn categories_graph(&self, e: &mut Etabli, chemin: &str) -> Result<bool, String> {
+        let Some((jeton, id_graph)) = self.graph_du_dossier(e, chemin)? else {
+            return Ok(false);
+        };
+        let compte = self.compte;
+        let lien = e.magasin.lien_delta(compte, chemin).map_err(|x| x.to_string())?;
+        let (vus, nouveau) = crate::microsoft::categories_delta(&jeton, &id_graph, &lien).map_err(|x| x.to_string())?;
+        let boite = boite_categories(&e.magasin, compte, chemin);
+        let (valeur, serveur) = e.magasin.catalogue(compte, &boite).ok().flatten().unwrap_or_default();
+        let mut catalogue = Catalogue::lire(&valeur);
+        let mut ajoute = false;
+        let mut mot_cle_de = |nom: &str, catalogue: &mut Catalogue| -> Option<String> {
+            let liste = catalogue.liste();
+            if let Some(c) = liste.iter().find(|c| c.nom.eq_ignore_ascii_case(nom) || c.mot_cle.eq_ignore_ascii_case(nom)) {
+                return Some(c.mot_cle.clone());
+            }
+            let pris: Vec<String> = liste.iter().map(|c| c.mot_cle.clone()).collect();
+            let mot_cle = categories::mot_cle_pour(nom, &pris);
+            let nouvelle = categories::Categorie {
+                mot_cle: mot_cle.clone(),
+                nom: nom.to_string(),
+                couleur: categories::COULEUR_INCONNUE.to_string(),
+            };
+            catalogue.appliquer(&categories::Changement::Poser(nouvelle)).ok()?;
+            ajoute = true;
+            Some(mot_cle)
+        };
+        let trouvees: Vec<(String, Vec<String>)> = vus
+            .iter()
+            .map(|(mid, noms)| (mid.clone(), noms.iter().filter_map(|n| mot_cle_de(n, &mut catalogue)).collect()))
+            .collect();
+        // Couleurs d'Outlook, si la lecture des réglages est autorisée :
+        // elles colorent les catégories restées grises.
+        if let Ok(Some(couleurs)) = self.lire_couleurs_outlook(e, false) {
+            ajoute |= colorer(&mut catalogue, &couleurs, false);
+        }
+        if ajoute {
+            let _ = e.magasin.poser_catalogue(compte, &boite, &catalogue.ecrire(), serveur);
+        }
+        let connues: Vec<String> = catalogue.liste().into_iter().map(|c| c.mot_cle).collect();
+        let dossier = e.magasin.dossier_id(compte, chemin).map_err(|x| x.to_string())?;
+        let change = e.magasin.poser_categories_trouvees(dossier, &trouvees, &connues).map_err(|x| x.to_string())?;
+        if !nouveau.is_empty() {
+            let _ = e.magasin.poser_lien_delta(compte, chemin, &nouveau);
+        }
+        Ok(change)
+    }
+
+    /// Couleurs des catégories d'Outlook (0.9.0), relues au plus toutes les
+    /// trente minutes. Sans autorisation de lire les réglages de la boîte, la
+    /// session n'en redemande pas. `forcer` : relues quoi qu'il en soit, et un
+    /// refus rendu en erreur.
+    fn lire_couleurs_outlook(&self, e: &mut Etabli, forcer: bool) -> Result<Option<Vec<(String, String)>>, String> {
+        let Some(jetons) = e.graph.clone() else {
+            return Ok(None);
+        };
+        if !forcer {
+            if e.couleurs_refusees {
+                return Ok(None);
+            }
+            if let Some((quand, couleurs)) = &e.couleurs {
+                if quand.elapsed() < COULEURS_OUTLOOK {
+                    return Ok(Some(couleurs.clone()));
+                }
+            }
+        }
+        let lues = crate::microsoft::jeton_acces(&jetons, crate::microsoft::PORTEE_REGLAGES)
+            .and_then(|jeton| crate::microsoft::couleurs_categories(&jeton));
+        match lues {
+            Ok(couleurs) => {
+                e.couleurs = Some((Instant::now(), couleurs.clone()));
+                e.couleurs_refusees = false;
+                Ok(Some(couleurs))
+            }
+            Err(x) if forcer => Err(x.to_string()),
+            // Le réseau : on réessaiera au passage suivant.
+            Err(crate::microsoft::ErreurOAuth::Reseau(_)) => Ok(None),
+            Err(_) => {
+                e.couleurs_refusees = true;
+                Ok(None)
+            }
+        }
+    }
+
+    /// Reprend toutes les couleurs d'Outlook dans le catalogue de la boîte,
+    /// après l'autorisation (« Relier à Outlook… »), et complète la liste
+    /// d'Outlook des catégories créées dans MMail.
+    fn reprendre_couleurs(&self, e: &mut Etabli) -> Result<(), String> {
+        let Some(couleurs) = self.lire_couleurs_outlook(e, true)? else {
+            return Err("ce compte ne passe pas par Microsoft 365".into());
+        };
+        let compte = self.compte;
+        let boite = boite_categories(&e.magasin, compte, "INBOX");
+        let (valeur, serveur) = e.magasin.catalogue(compte, &boite).ok().flatten().unwrap_or_default();
+        let mut catalogue = Catalogue::lire(&valeur);
+        if colorer(&mut catalogue, &couleurs, true) {
+            e.magasin.poser_catalogue(compte, &boite, &catalogue.ecrire(), serveur).map_err(|x| x.to_string())?;
+        }
+        // Les catégories créées dans MMail entrent dans la liste d'Outlook ;
+        // celles d'origine (les cinq de MMail et de Thunderbird) non : la
+        // liste d'Outlook sert aussi aux autres postes.
+        let voulues: Vec<(String, Option<String>)> = catalogue
+            .liste()
+            .into_iter()
+            .filter(|c| !categories::est_d_origine(&c.mot_cle))
+            .map(|c| {
+                let connue = !c.couleur.eq_ignore_ascii_case(categories::COULEUR_INCONNUE);
+                (c.nom, connue.then_some(c.couleur))
+            })
+            .collect();
+        if let Some(jetons) = e.graph.clone() {
+            let jeton = crate::microsoft::jeton_acces(&jetons, crate::microsoft::PORTEE_REGLAGES).map_err(|x| x.to_string())?;
+            if crate::microsoft::completer_liste(&jeton, &voulues).map_err(|x| x.to_string())? > 0 {
+                e.couleurs = None;
+            }
+        }
+        Ok(())
+    }
+
+    /// Règles de la boîte de réception d'Outlook (0.9.0) : celles des filtres
+    /// « aussi dans Outlook » du compte, créées, mises à jour ou retirées.
+    /// Sans l'autorisation de modifier les réglages de la boîte, rien ne part ;
+    /// l'interface le dit si un filtre le voulait.
+    fn accorder_regles(&self, e: &mut Etabli) -> Issue {
+        let adresse = e.magasin.compte_par_id(self.compte).ok().flatten().map(|c| c.adresse).unwrap_or_default();
+        let filtres = crate::filtres::lire(&e.magasin.filtres().unwrap_or_default()).unwrap_or_default();
+        let (voulues, refus) = crate::microsoft::regles_voulues(&filtres, &adresse);
+        let issue = |ecritures: usize, erreur: Option<String>, a_autoriser: bool| Issue::Regles {
+            envoyes: if erreur.is_none() && !a_autoriser { voulues.len() } else { 0 },
+            ecritures,
+            refus: refus.clone(),
+            erreur,
+            a_autoriser,
+        };
+        let Some(jetons) = e.graph.clone() else {
+            return issue(0, None, false);
+        };
+        let jeton = match crate::microsoft::jeton_acces(&jetons, crate::microsoft::PORTEE_REGLAGES) {
+            Ok(jeton) => jeton,
+            Err(crate::microsoft::ErreurOAuth::Reseau(message)) => return issue(0, Some(message), false),
+            // Pas d'autorisation : à dire seulement si un filtre attend.
+            Err(_) => return issue(0, None, !voulues.is_empty()),
+        };
+        let separateur = e
+            .magasin
+            .dossiers(self.compte)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|d| d.separateur)
+            .find(|s| !s.is_empty())
+            .unwrap_or_default();
+        match crate::microsoft::accorder_regles(&jeton, &voulues, &separateur) {
+            Ok(ecritures) => issue(ecritures, None, false),
+            Err(x) => issue(0, Some(x.to_string()), false),
+        }
+    }
+
+    /// Reporte un changement du catalogue dans la liste des catégories
+    /// d'Outlook (0.9.0), si les réglages de la boîte sont autorisés ; sans
+    /// cette autorisation, rien, et la session ne la redemande pas. Le gris
+    /// d'attente de MMail n'est pas une couleur : il ne recolore rien.
+    fn reporter_vers_outlook(&self, e: &mut Etabli, avant: Option<&Categorie>, apres: Option<&Categorie>) -> Result<(), String> {
+        let Some(jetons) = e.graph.clone() else {
+            return Ok(());
+        };
+        if apres.is_none() || e.couleurs_refusees {
+            return Ok(());
+        }
+        let jeton = match crate::microsoft::jeton_acces(&jetons, crate::microsoft::PORTEE_REGLAGES) {
+            Ok(jeton) => jeton,
+            Err(crate::microsoft::ErreurOAuth::Reseau(message)) => return Err(message),
+            Err(_) => {
+                e.couleurs_refusees = true;
+                return Ok(());
+            }
+        };
+        let decrire = |c: &Categorie| {
+            let couleur = c.couleur.clone();
+            (c.nom.clone(), (!couleur.eq_ignore_ascii_case(categories::COULEUR_INCONNUE)).then_some(couleur))
+        };
+        let (avant, apres) = (avant.map(decrire), apres.map(decrire));
+        crate::microsoft::reporter_categorie(
+            &jeton,
+            avant.as_ref().map(|(n, k)| (n.as_str(), k.as_deref())),
+            apres.as_ref().map(|(n, k)| (n.as_str(), k.as_deref())),
+        )
+        .map_err(|x| x.to_string())?;
+        // La liste d'Outlook a pu changer : relue au prochain passage.
+        e.couleurs = None;
+        Ok(())
+    }
+
+    /// Renomme une catégorie sur les messages de la boîte Microsoft 365 qui
+    /// la portent (0.9.0).
+    fn renommer_categorie_graph(&self, e: &mut Etabli, ancien: &str, nouveau: &str) -> Result<(), String> {
+        let Some(jetons) = e.graph.clone() else {
+            return Ok(());
+        };
+        let jeton = crate::microsoft::jeton_acces(&jetons, crate::microsoft::PORTEE_ENVOI).map_err(|x| x.to_string())?;
+        crate::microsoft::renommer_categorie(&jeton, ancien, nouveau).map_err(|x| x.to_string())?;
+        Ok(())
+    }
+
+    /// Pose ou retire une catégorie par Graph (Microsoft 365, 0.9.0) : sur
+    /// chaque message, retrouvé par son `Message-ID` dans le dossier, sous le
+    /// nom que le catalogue donne au mot-clé.
+    fn marquer_categorie_graph(&self, e: &mut Etabli, chemin: &str, uids: &[u32], mot_cle: &str, present: bool) -> Result<(), String> {
+        let Some((jeton, id_graph)) = self.graph_du_dossier(e, chemin)? else {
+            return Err("compte sans Graph".into());
+        };
+        let compte = self.compte;
+        let boite = boite_categories(&e.magasin, compte, chemin);
+        let (valeur, _) = e.magasin.catalogue(compte, &boite).ok().flatten().unwrap_or_default();
+        let nom = Catalogue::lire(&valeur)
+            .liste()
+            .into_iter()
+            .find(|c| c.mot_cle.eq_ignore_ascii_case(mot_cle))
+            .map(|c| c.nom)
+            .unwrap_or_else(|| mot_cle.to_string());
+        let dossier = e.magasin.dossier_id(compte, chemin).map_err(|x| x.to_string())?;
+        let mut sans_id = 0;
+        for uid in uids {
+            let message_id = e.magasin.message(dossier, *uid).ok().flatten().map(|m| m.message_id).unwrap_or_default();
+            if message_id.is_empty() {
+                sans_id += 1;
+                continue;
+            }
+            crate::microsoft::poser_categorie(&jeton, &message_id, Some(&id_graph), &nom, present).map_err(|x| x.to_string())?;
+        }
+        if sans_id > 0 {
+            return Err(format!("{sans_id} message(s) sans Message-ID : Graph ne sait pas les retrouver"));
+        }
+        Ok(())
     }
 
     /// Défait un déplacement (Ctrl+Z) : les messages de `annulation`,
@@ -8769,6 +9607,24 @@ mod tests {
         assert!(sous_dossier_de("INBOX.Trash.Projets", "INBOX.Trash", "."));
     }
 
+    /// Couleurs d'Outlook (0.9.0) : d'office sur les catégories grises
+    /// seulement ; toutes à la demande.
+    #[test]
+    fn couleurs_d_outlook_sur_le_catalogue() {
+        let mut catalogue = Catalogue::lire("");
+        let grise = Categorie { mot_cle: "devis".into(), nom: "Devis".into(), couleur: categories::COULEUR_INCONNUE.into() };
+        catalogue.appliquer(&Changement::Poser(grise)).unwrap();
+        let couleurs = vec![("devis".to_string(), "#0078D4".to_string()), (" Important".to_string(), "#13A10E".to_string())];
+        let couleur = |c: &Catalogue, mot: &str| c.liste().into_iter().find(|x| x.mot_cle == mot).unwrap().couleur;
+        assert!(colorer(&mut catalogue, &couleurs, false));
+        assert_eq!(couleur(&catalogue, "devis"), "#0078D4");
+        // Une couleur choisie dans MMail reste.
+        assert_eq!(couleur(&catalogue, "$label1"), "#FF0000");
+        assert!(colorer(&mut catalogue, &couleurs, true));
+        assert_eq!(couleur(&catalogue, "$label1"), "#13A10E");
+        assert!(!colorer(&mut catalogue, &couleurs, true));
+    }
+
     fn dossier(chemin: &str) -> Commande {
         Commande::OuvrirDossier(chemin.into())
     }
@@ -8786,6 +9642,8 @@ mod tests {
                 Commande::MarquerSuivi { .. } => "suivi".into(),
                 Commande::MarquerCategorie { .. } => "categorie".into(),
                 Commande::Catalogue { .. } => "catalogue".into(),
+                Commande::CouleursOutlook => "couleurs".into(),
+                Commande::Regles => "regles".into(),
                 Commande::Confirmer { .. } => "confirmer".into(),
                 Commande::EnvoyerDifferes { .. } => "differes".into(),
                 Commande::Deplacer { .. } => "deplacer".into(),
@@ -9615,6 +10473,10 @@ mod tests {
             menage: None,
             dernier: None,
             differes_reserves: HashMap::new(),
+            graph: None,
+            dossiers_graph: HashMap::new(),
+            couleurs: None,
+            couleurs_refusees: false,
         };
         (travail, etabli, issues)
     }

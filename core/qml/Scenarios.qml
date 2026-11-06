@@ -4218,6 +4218,95 @@ QtObject {
         })
     }
 
+    /// Scénario « reponse-tableau » (0.8.7 ; banc EML=…/tableau-excel.eml) :
+    /// répondre à un message dont le corps porte un tableau collé d'Excel —
+    /// bordure en style sur chaque case, largeurs fixes, `nowrap` —, comme le
+    /// fait l'utilisateur qui écrit ses réponses à la suite des lignes du
+    /// tableau cité. Dans la rédaction, le tableau cité a une bordure de
+    /// tableau (0.6.37) ; « + Colonne » au bout d'une ligne, Tab jusqu'à la
+    /// case ajoutée de la ligne suivante ; ce qui s'y écrit part dans le HTML,
+    /// dans les cases ajoutées, à la police du tableau. MMAIL_DOSSIER
+    /// « garder » : la rédaction reste ouverte, pour une capture.
+    function lancerScenarioReponseTableau() {
+        var echecs = 0
+        var bilan = function(texte, bon) {
+            if (!bon)
+                ++echecs
+            console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
+        }
+        var fin = function() {
+            console.log("scenario: reponse-tableau " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
+            if (identifiantsEssai.dossier !== "garder")
+                Qt.quit()
+        }
+        plusTard(8000, function() {
+            var compte = comptesConnus[0].compte
+            ouvrirDossier(compte, "INBOX")
+            plusTard(4000, function() {
+                var i = -1
+                for (var k = 0; k < modeleMessages.count; ++k)
+                    if (modeleMessages.get(k).sujet === "Ramasses de la semaine")
+                        i = k
+                if (i < 0) {
+                    bilan("« Ramasses de la semaine » absent (banc EML=…/tableau-excel.eml ?)", false)
+                    fin()
+                    return
+                }
+                choisir(i, 0)
+                plusTard(3000, function() {
+                    // Comme le bouton « Répondre » (rediger), la fenêtre gardée.
+                    var r = ouvrirRedaction(compte)
+                    r.attendre(qsTr("Préparation…"))
+                    bilan("réponse préparée", boite.preparer(uidCourant, "repondre", r.jeton,
+                                                             JSON.stringify(autresAdresses(compte))))
+                    plusTard(4000, function() {
+                        var mef = r.mefCorps
+                        var corps = r.corps
+                        var compter = function(texte, motif) { return (texte.match(motif) || []).length }
+                        var racineQt = function(h) { return compter(h, /-qt-table-type: root/g) }
+                        var cases = function(h) { return compter(h, /<td/g) - racineQt(h) }
+                        var texte = function() { return corps.getText(0, corps.length) }
+                        var h = mef.html()
+                        bilan("tableau cité, 3 lignes de 3 cases : " + cases(h), cases(h) === 9)
+                        bilan("le tableau cité a une bordure", /<table[^>]*border="1"/.test(h))
+                        var t = texte()
+                        var date = t.indexOf("04.11")
+                        var quai = t.indexOf("3", date + 5)
+                        bilan("ligne « Transports Alpha » trouvée", date > 0 && quai > date)
+                        corps.forceActiveFocus()
+                        corps.cursorPosition = quai + 1
+                        bilan("dans le tableau cité", mef.dansTableau)
+                        bilan("« + Colonne »", r.ajouterAuTableau("colonne"))
+                        mef.inserer(corps.cursorPosition, "OK pour moi")
+                        var clavier = typeof gestesEssai !== "undefined" && typeof gestesEssai.touche === "function"
+                        for (var n = 0; n < 4; ++n) {
+                            if (clavier)
+                                gestesEssai.touche(corps, Qt.Key_Tab, "\t")
+                            else
+                                r.tabulerTableau(false)
+                        }
+                        mef.inserer(corps.cursorPosition, "Reporté")
+                        h = mef.html()
+                        var brut = mef.texte()
+                        bilan("4 colonnes, 12 cases : " + cases(h), cases(h) === 12)
+                        bilan("Tab " + (clavier ? "au clavier" : "par la fonction") + " : la réponse suit la ligne d'après — "
+                              + JSON.stringify(brut.substring(brut.indexOf("Transports Alpha"), brut.indexOf("Merci"))),
+                              brut.indexOf("3\nOK pour moi\nTransports Beta") >= 0 && brut.indexOf("5\nReporté") >= 0
+                              && brut.indexOf("\t") < 0)
+                        var ok = /<td[^>]*>(?:(?!<\/td>)[\s\S])*OK pour moi(?:(?!<\/td>)[\s\S])*<\/td>/.exec(h)
+                        console.log("scenario: case ajoutée :", ok ? ok[0] : "")
+                        bilan("ce qui s'écrit dans la colonne ajoutée prend la police du tableau",
+                              !!ok && ok[0].indexOf("Calibri") > 0)
+                        var envoi = r.contenu().html
+                        bilan("le HTML envoyé porte les deux réponses dans le tableau",
+                              /<table[^>]*border="1"[\s\S]*OK pour moi[\s\S]*Reporté[\s\S]*<\/table>/.test(envoi))
+                        fin()
+                    })
+                })
+            })
+        })
+    }
+
     /// Scénario « carnet » (0.6.20) : le carnet d'adresses modifiable, contre
     /// le Radicale du banc (CARNET=1) — carnets et droits, création,
     /// modification, conflit avec une écriture faite ailleurs entre-temps

@@ -7009,6 +7009,10 @@ ApplicationWindow {
             // laisse les boutons à leur taille (banc PIECE=1).
             if (essai.scenario === "zoom-lecture")
                 scenarios.lancerScenarioZoomLecture()
+            // Scénario « reponse-tableau » (0.8.7 ; banc EML=…) : répondre dans
+            // un tableau cité collé d'Excel.
+            if (essai.scenario === "reponse-tableau")
+                scenarios.lancerScenarioReponseTableau()
             // Scénario « recherche-portee » (0.8.2, 0.8.3 ; banc LOT1=1).
             if (essai.scenario === "recherche-portee")
                 scenarios.lancerScenarioRecherchePortee()

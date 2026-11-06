@@ -28,6 +28,9 @@ Pane {
     property date jour: new Date()
     property var donnees: ({})
     property var agendas: []
+    // Comptes Microsoft 365 dont la lecture des agendas reste à autoriser
+    // (0.9.0).
+    property var agendasMicrosoft: []
     property string erreurs: ""
     // Mois montré par le petit calendrier : il se feuillette sans déplacer la
     // vue.
@@ -69,7 +72,24 @@ Pane {
 
     function relire() {
         agendas = JSON.parse(boite.agendas())
+        relireMicrosoft()
         donnees = JSON.parse(boite.vueAgenda(genre, iso(jour)))
+    }
+
+    function relireMicrosoft() {
+        agendasMicrosoft = JSON.parse(boite.agendasMicrosoft()).filter(function(c) { return c.etat === "a_autoriser" })
+    }
+
+    // Agendas Microsoft 365 (0.9.0) : l'autorisation se donne dans le
+    // navigateur ; la suite revient par `agendasMicrosoftAutorises`.
+    function autoriserMicrosoft(compte) {
+        var url = boite.autoriserAgendasMicrosoft(compte)
+        if (url.length === 0) {
+            annoncer(qsTr("Agendas Microsoft 365 : %1").arg(boite.erreur), true)
+            return
+        }
+        Qt.openUrlExternally(url)
+        annoncer(qsTr("Autorisation dans votre navigateur : MMail attend son retour…"), false)
     }
 
     function decaler(sens) {
@@ -251,6 +271,11 @@ Pane {
             agenda.erreurs = erreurs
             if (change)
                 agenda.relire()
+            else
+                agenda.relireMicrosoft()
+        }
+        function onAgendasMicrosoftAutorises(compte, message) {
+            agenda.relire()
         }
         function onEvenementEnregistre(ok, message) {
             var enCours = agenda.ecritureEnCours
@@ -485,10 +510,35 @@ Pane {
     Component {
         id: listeAgendas
         ListView {
+            id: vueAgendas
             clip: true
             model: agenda.agendas
             spacing: 0
             boundsBehavior: Flickable.StopAtBounds
+            // Comptes Microsoft 365 dont les agendas restent à autoriser.
+            footer: Column {
+                width: vueAgendas.width
+                topPadding: agenda.agendasMicrosoft.length > 0 ? 8 : 0
+                spacing: 4
+                Repeater {
+                    model: agenda.agendasMicrosoft
+                    delegate: Button {
+                        id: boutonMicrosoft
+                        required property var modelData
+                        width: vueAgendas.width
+                        text: qsTr("Agendas Microsoft 365 de %1…").arg(modelData.adresse)
+                        contentItem: Label {
+                            text: boutonMicrosoft.text
+                            elide: Text.ElideMiddle
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                        ToolTip.visible: hovered
+                        ToolTip.text: qsTr("Autoriser MMail à lire les agendas de cette boîte Microsoft 365")
+                        onClicked: agenda.autoriserMicrosoft(modelData.compte)
+                    }
+                }
+            }
             // Le nom de la boîte au-dessus de son premier agenda.
             delegate: Column {
                 id: ligneAgenda

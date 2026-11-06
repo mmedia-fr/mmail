@@ -50,6 +50,13 @@ Connections {
             : qsTr("Autorisation reçue : MMail reprend les couleurs d'Outlook, et la liste d'Outlook suivra vos changements.")
     }
 
+    // Agendas Microsoft 365 (0.9.0) : la lecture suit d'elle-même.
+    function onAgendasMicrosoftAutorises(compte, message) {
+        messageEtat.texte = message.length > 0
+            ? qsTr("Agendas Microsoft 365 : %1").arg(message)
+            : qsTr("Autorisation reçue : MMail lit les agendas Microsoft 365 de ce compte.")
+    }
+
     function onGoogleConnecte(adresse, hote, jeton) {
         // Comme un compte Microsoft : le jeton va au coffre une fois la
         // connexion acceptée.

@@ -1203,7 +1203,11 @@ pub fn vue_dans<T: TimeZone>(magasin: &Magasin, genre: &str, date: NaiveDate, au
                 }
                 if !a.ecriture && f.modifiable {
                     f.modifiable = false;
-                    f.motif = "agenda en lecture seule".into();
+                    f.motif = if crate::microsoft::agenda::est_graph(&a.adresse) {
+                        "agenda Microsoft 365, à modifier dans Outlook pour l'instant".into()
+                    } else {
+                        "agenda en lecture seule".into()
+                    };
                 }
             }
         }

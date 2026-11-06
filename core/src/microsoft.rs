@@ -126,6 +126,12 @@ const PORTEE_AUTORISATION_REGLAGES: &str = "offline_access openid https://graph.
 pub const PORTEE_AGENDA: &str = "offline_access https://graph.microsoft.com/Calendars.ReadWrite";
 const PORTEE_AUTORISATION_AGENDA: &str = "offline_access openid https://graph.microsoft.com/Calendars.ReadWrite";
 
+/// Contacts (0.9.0) : lus par Graph (`contacts`), Exchange Online n'offrant
+/// pas CardDAV. Demandé à part, comme les agendas, depuis le carnet
+/// d'adresses ; `ReadWrite` dès la lecture, pour l'écriture qui suivra.
+pub const PORTEE_CONTACTS: &str = "offline_access https://graph.microsoft.com/Contacts.ReadWrite";
+const PORTEE_AUTORISATION_CONTACTS: &str = "offline_access openid https://graph.microsoft.com/Contacts.ReadWrite";
+
 /// Identifiant de l'application « MMail » dans l'annuaire Entra où elle est
 /// inscrite (éditeur `mmedia.fr`). Public par nature : application sans
 /// secret, que toute page de connexion affiche. Depuis la 0.6.19, celle du
@@ -142,6 +148,7 @@ const MICROSOFT_CLIENT_ID_AVANT: &str = "7b6c8863-79ca-42b3-8149-313df37a3993";
 const GRAPH: &str = "https://graph.microsoft.com/v1.0/me";
 
 pub mod agenda;
+pub mod contacts;
 
 /// Corps d'une requête Graph, message en base64 compris : 4 Mo annoncés, sans
 /// dire s'il s'agit de millions d'octets ou de Mio — d'où la marge.
@@ -233,6 +240,12 @@ pub fn url_autorisation_agenda(client: &str, redirection: &str, defi: &str, etat
     url_autorisation_de(client, redirection, defi, etat, adresse, PORTEE_AUTORISATION_AGENDA, "")
 }
 
+/// Page de Microsoft qui demande l'autorisation de lire les contacts de la
+/// boîte d'un compte déjà connecté (`PORTEE_CONTACTS`).
+pub fn url_autorisation_contacts(client: &str, redirection: &str, defi: &str, etat: &str, adresse: &str) -> String {
+    url_autorisation_de(client, redirection, defi, etat, adresse, PORTEE_AUTORISATION_CONTACTS, "")
+}
+
 fn url_autorisation_de(client: &str, redirection: &str, defi: &str, etat: &str, indice: &str, portee: &str, invite: &str) -> String {
     let mut url = format!(
         "{}/authorize?client_id={}&response_type=code&redirect_uri={}&response_mode=query\
@@ -265,6 +278,11 @@ pub fn echanger_code_reglages(client: &str, code: &str, verificateur: &str, redi
 /// Comme `echanger_code`, pour le jeton des agendas (`PORTEE_AGENDA`).
 pub fn echanger_code_agenda(client: &str, code: &str, verificateur: &str, redirection: &str, adresse: &str) -> Result<ReponseJeton, ErreurOAuth> {
     echanger_code_pour(client, code, verificateur, redirection, adresse, PORTEE_AGENDA)
+}
+
+/// Comme `echanger_code`, pour le jeton des contacts (`PORTEE_CONTACTS`).
+pub fn echanger_code_contacts(client: &str, code: &str, verificateur: &str, redirection: &str, adresse: &str) -> Result<ReponseJeton, ErreurOAuth> {
+    echanger_code_pour(client, code, verificateur, redirection, adresse, PORTEE_CONTACTS)
 }
 
 fn echanger_code_pour(
@@ -1942,6 +1960,9 @@ mod tests {
         let url = url_autorisation_agenda("C", "http://localhost:1", "D", "E", "a@exemple.fr");
         assert!(url.contains(&format!("scope={}", encoder(PORTEE_AUTORISATION_AGENDA))), "{url}");
         assert!(url.contains("Calendars.ReadWrite") && !url.contains("MailboxSettings") && !url.contains("prompt="), "{url}");
+        let url = url_autorisation_contacts("C", "http://localhost:1", "D", "E", "a@exemple.fr");
+        assert!(url.contains(&format!("scope={}", encoder(PORTEE_AUTORISATION_CONTACTS))), "{url}");
+        assert!(url.contains("Contacts.ReadWrite") && !url.contains("Calendars") && !url.contains("prompt="), "{url}");
     }
 
     /// Un filtre tel quel, sans le contrôle de `filtres::lire` (qui refuse

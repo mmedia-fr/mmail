@@ -46,6 +46,11 @@ Menu {
         text: qsTr("Oublier le mot de passe")
         onTriggered: coffre.effacer(fenetre.cle(menuCompte.adresse, menuCompte.hote))
     }
+    // S/MIME (0.8.0) : clés personnelles et autorités de confiance.
+    MenuItem {
+        text: qsTr("Certificats S/MIME…")
+        onTriggered: dlgCertificats.ouvrir(menuCompte.compte, menuCompte.adresse)
+    }
     MenuSeparator {}
     // L'ordre des comptes se règle aussi en glissant leur en-tête.
     MenuItem {

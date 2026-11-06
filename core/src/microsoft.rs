@@ -394,7 +394,23 @@ fn appeler(
     corps: &[u8],
     taille_max: usize,
 ) -> Result<http::Reponse, ErreurOAuth> {
+    appeler_avec(t, jeton, methode, url, type_contenu, corps, taille_max, &[])
+}
+
+/// Comme `appeler`, avec des en-têtes en plus (`Prefer`).
+#[allow(clippy::too_many_arguments)]
+fn appeler_avec(
+    t: &mut Transport,
+    jeton: &str,
+    methode: &str,
+    url: &str,
+    type_contenu: &str,
+    corps: &[u8],
+    taille_max: usize,
+    autres: &[(&'static str, String)],
+) -> Result<http::Reponse, ErreurOAuth> {
     let mut entetes = vec![("Authorization", format!("Bearer {jeton}"))];
+    entetes.extend(autres.iter().cloned());
     if !type_contenu.is_empty() {
         entetes.push(("Content-Type", type_contenu.to_string()));
     }
@@ -540,6 +556,241 @@ fn erreur_graph(statut: u16, corps: &[u8]) -> ErreurOAuth {
         code: if code.is_empty() { format!("HTTP {statut}") } else { code },
         description: texte("message"),
     }
+}
+
+// ------------------------------------------------------------- catégories
+
+/// Catégories d'Outlook (0.9.0) : sur un compte Microsoft 365, le serveur IMAP
+/// ne garde pas les mots-clés, mais Graph donne et pose les catégories des
+/// messages (`categories`, des noms) avec le droit `Mail.ReadWrite` que
+/// l'envoi demande déjà. Les couleurs du catalogue d'Outlook
+/// (`masterCategories`) demanderaient `MailboxSettings.Read` : pas encore.
+///
+/// Identifiant Graph du dossier IMAP `chemin` : la boîte de réception par son
+/// nom connu, les autres en descendant l'arborescence de Graph segment par
+/// segment, d'après les noms (décodés de l'UTF-7 de l'IMAP).
+pub fn dossier_graph(jeton: &str, chemin: &str, separateur: &str) -> Result<String, ErreurOAuth> {
+    dossier_graph_par(&mut |d: &Demande| http::envoyer(d), jeton, chemin, separateur)
+}
+
+fn dossier_graph_par(t: &mut Transport, jeton: &str, chemin: &str, separateur: &str) -> Result<String, ErreurOAuth> {
+    let segments: Vec<String> = if separateur.is_empty() || separateur.eq_ignore_ascii_case("NIL") {
+        vec![chemin.to_string()]
+    } else {
+        chemin.split(separateur).map(crate::protocole::decoder_utf7).collect()
+    };
+    let mut parent: Option<String> = None;
+    for (i, nom) in segments.iter().enumerate() {
+        // La boîte de réception par son nom connu, mais sous son vrai
+        // identifiant : c'est lui que les messages portent dans
+        // `parentFolderId`, auquel `poser_categorie` les compare.
+        if i == 0 && nom.eq_ignore_ascii_case("INBOX") {
+            let dossier = reponse_json(&appeler(t, jeton, "GET", &format!("{GRAPH}/mailFolders/inbox?$select=id"), "", b"", REPONSE_MAX)?)?;
+            let id = dossier.get("id").and_then(|v| v.as_str()).filter(|v| !v.is_empty());
+            parent = Some(id.ok_or_else(|| ErreurOAuth::refus("DossierInconnu", "boîte de réception sans identifiant dans Graph"))?.to_string());
+            continue;
+        }
+        let url = match &parent {
+            None => format!("{GRAPH}/mailFolders?$select=id,displayName&$top=250&includeHiddenFolders=true"),
+            Some(id) => format!("{GRAPH}/mailFolders/{}/childFolders?$select=id,displayName&$top=250", encoder(id)),
+        };
+        let mut suivante = Some(url);
+        let mut trouve = None;
+        while let (Some(url), None) = (suivante.take(), trouve.as_ref()) {
+            let page = reponse_json(&appeler(t, jeton, "GET", &url, "", b"", REPONSE_MAX)?)?;
+            trouve = page.get("value").and_then(|v| v.as_array()).and_then(|l| {
+                l.iter().find(|f| f.get("displayName").and_then(|n| n.as_str()).is_some_and(|n| n.eq_ignore_ascii_case(nom)))
+                    .and_then(|f| f.get("id").and_then(|v| v.as_str()).map(str::to_string))
+            });
+            suivante = page.get("@odata.nextLink").and_then(|v| v.as_str()).map(str::to_string);
+        }
+        match trouve {
+            Some(id) => parent = Some(id),
+            None => return Err(ErreurOAuth::refus("DossierInconnu", &format!("dossier « {chemin} » introuvable dans Graph"))),
+        }
+    }
+    parent.ok_or_else(|| ErreurOAuth::refus("DossierInconnu", "chemin vide"))
+}
+
+/// Pages lues au plus par passage (4 000 messages, une dizaine de secondes
+/// pendant lesquelles le fil du compte ne fait rien d'autre) : au-delà, la
+/// suite viendra au passage suivant — la veille, toutes les deux minutes —
+/// à partir du lien rendu.
+const PAGES_DELTA: usize = 20;
+
+/// Catégories des messages d'un dossier par la requête « delta » de Graph : la
+/// première fois (`lien` vide), tout le dossier ; ensuite, ce qui a changé
+/// depuis le lien rendu la fois d'avant. Rend les `(Message-ID, catégories)`
+/// vus — un message sans catégorie en rend une liste vide, pour effacer celles
+/// qu'il avait — et le lien du prochain passage. Un lien périmé
+/// (`SyncStateNotFound`, HTTP 410) fait repartir de zéro.
+pub fn categories_delta(jeton: &str, dossier: &str, lien: &str) -> Result<(Vec<(String, Vec<String>)>, String), ErreurOAuth> {
+    categories_delta_par(&mut |d: &Demande| http::envoyer(d), jeton, dossier, lien)
+}
+
+fn categories_delta_par(
+    t: &mut Transport,
+    jeton: &str,
+    dossier: &str,
+    lien: &str,
+) -> Result<(Vec<(String, Vec<String>)>, String), ErreurOAuth> {
+    let depart = format!("{GRAPH}/mailFolders/{}/messages/delta?$select=internetMessageId,categories", encoder(dossier));
+    let mut url = if lien.is_empty() { depart.clone() } else { lien.to_string() };
+    let mut vus = Vec::new();
+    let mut repris = lien.is_empty();
+    for _ in 0..PAGES_DELTA {
+        let r = appeler_avec(t, jeton, "GET", &url, "", b"", REPONSE_MAX, &[("Prefer", "odata.maxpagesize=200".into())])?;
+        if !repris && (r.statut == 410 || lien_perime(&r)) {
+            repris = true;
+            vus.clear();
+            url = depart.clone();
+            continue;
+        }
+        let page = reponse_json(&r)?;
+        for m in page.get("value").and_then(|v| v.as_array()).into_iter().flatten() {
+            if m.get("@removed").is_some() {
+                continue;
+            }
+            let Some(id) = m.get("internetMessageId").and_then(|v| v.as_str()).map(sans_chevrons).filter(|v| !v.is_empty()) else {
+                continue;
+            };
+            let noms = m
+                .get("categories")
+                .and_then(|v| v.as_array())
+                .map(|l| l.iter().filter_map(|c| c.as_str()).map(str::to_string).collect())
+                .unwrap_or_default();
+            vus.push((id.to_string(), noms));
+        }
+        if let Some(fin) = page.get("@odata.deltaLink").and_then(|v| v.as_str()) {
+            return Ok((vus, fin.to_string()));
+        }
+        match page.get("@odata.nextLink").and_then(|v| v.as_str()) {
+            Some(suite) => url = suite.to_string(),
+            None => return Ok((vus, String::new())),
+        }
+    }
+    // Dossier très gros : le reste au passage suivant, depuis cette page.
+    Ok((vus, url))
+}
+
+/// Un `Message-ID` sans ses chevrons, comme l'index le garde : Graph les
+/// écrit (`internetMessageId` : « <id@domaine> »), l'enveloppe IMAP non.
+pub(crate) fn sans_chevrons(id: &str) -> &str {
+    id.trim().trim_start_matches('<').trim_end_matches('>').trim()
+}
+
+fn lien_perime(r: &http::Reponse) -> bool {
+    if (200..300).contains(&r.statut) {
+        return false;
+    }
+    let code = match erreur_graph(r.statut, &r.corps) {
+        ErreurOAuth::Refus { code, .. } => code.to_ascii_lowercase(),
+        _ => String::new(),
+    };
+    code.contains("syncstate") || code.contains("resyncrequired")
+}
+
+/// Pose ou retire la catégorie `nom` sur le message de `Message-ID`
+/// `message_id`, dans le dossier Graph `dossier` s'il est donné (le même
+/// message peut être en deux exemplaires, ailleurs). Rend combien de messages
+/// ont changé.
+pub fn poser_categorie(jeton: &str, message_id: &str, dossier: Option<&str>, nom: &str, present: bool) -> Result<usize, ErreurOAuth> {
+    poser_categorie_par(&mut |d: &Demande| http::envoyer(d), jeton, message_id, dossier, nom, present)
+}
+
+fn poser_categorie_par(
+    t: &mut Transport,
+    jeton: &str,
+    message_id: &str,
+    dossier: Option<&str>,
+    nom: &str,
+    present: bool,
+) -> Result<usize, ErreurOAuth> {
+    // Graph écrit l'identifiant entre chevrons, l'index sans. OData : une
+    // apostrophe se double dans une chaîne.
+    let filtre = format!("internetMessageId eq '<{}>'", sans_chevrons(message_id).replace('\'', "''"));
+    let url = format!("{GRAPH}/messages?$filter={}&$select=id,categories,parentFolderId&$top=10", encoder(&filtre));
+    let trouves = reponse_json(&appeler(t, jeton, "GET", &url, "", b"", REPONSE_MAX)?)?;
+    let mut changes = 0;
+    for m in trouves.get("value").and_then(|v| v.as_array()).into_iter().flatten() {
+        if let Some(d) = dossier {
+            if m.get("parentFolderId").and_then(|v| v.as_str()) != Some(d) {
+                continue;
+            }
+        }
+        let Some(id) = m.get("id").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let actuelles: Vec<String> = m
+            .get("categories")
+            .and_then(|v| v.as_array())
+            .map(|l| l.iter().filter_map(|c| c.as_str()).map(str::to_string).collect())
+            .unwrap_or_default();
+        let deja = actuelles.iter().any(|c| c.eq_ignore_ascii_case(nom));
+        if deja == present {
+            continue;
+        }
+        let mut nouvelles: Vec<String> = actuelles.into_iter().filter(|c| !c.eq_ignore_ascii_case(nom)).collect();
+        if present {
+            nouvelles.push(nom.to_string());
+        }
+        let corps = serde_json::json!({ "categories": nouvelles }).to_string();
+        let r = appeler(t, jeton, "PATCH", &format!("{GRAPH}/messages/{}", encoder(id)), "application/json", corps.as_bytes(), REPONSE_MAX)?;
+        succes(&r)?;
+        changes += 1;
+    }
+    Ok(changes)
+}
+
+/// Renomme une catégorie sur tous les messages de la boîte qui la portent,
+/// tous dossiers confondus (0.9.0) : ce que fait Outlook quand on renomme une
+/// catégorie. Rend le nombre de messages changés.
+pub fn renommer_categorie(jeton: &str, ancien: &str, nouveau: &str) -> Result<usize, ErreurOAuth> {
+    renommer_categorie_par(&mut |d: &Demande| http::envoyer(d), jeton, ancien, nouveau)
+}
+
+/// Pages lues au plus pour un renommage (100 messages chacune).
+const PAGES_RENOMMAGE: usize = 500;
+
+fn renommer_categorie_par(t: &mut Transport, jeton: &str, ancien: &str, nouveau: &str) -> Result<usize, ErreurOAuth> {
+    let filtre = format!("categories/any(c:c eq '{}')", ancien.replace('\'', "''"));
+    let mut url = format!("{GRAPH}/messages?$filter={}&$select=id,categories&$top=100", encoder(&filtre));
+    // Tout relever d'abord : changer les messages pendant la lecture
+    // déplacerait les pages suivantes, qui portent sur le même filtre.
+    let mut a_changer: Vec<(String, Vec<String>)> = Vec::new();
+    for _ in 0..PAGES_RENOMMAGE {
+        let page = reponse_json(&appeler(t, jeton, "GET", &url, "", b"", REPONSE_MAX)?)?;
+        for m in page.get("value").and_then(|v| v.as_array()).into_iter().flatten() {
+            let Some(id) = m.get("id").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            let actuelles: Vec<String> = m
+                .get("categories")
+                .and_then(|v| v.as_array())
+                .map(|l| l.iter().filter_map(|c| c.as_str()).map(str::to_string).collect())
+                .unwrap_or_default();
+            a_changer.push((id.to_string(), actuelles));
+        }
+        match page.get("@odata.nextLink").and_then(|v| v.as_str()) {
+            Some(suivant) => url = suivant.to_string(),
+            None => break,
+        }
+    }
+    let mut changes = 0;
+    for (id, actuelles) in a_changer {
+        let mut nouvelles: Vec<String> = Vec::new();
+        for c in actuelles {
+            let c = if c.eq_ignore_ascii_case(ancien) { nouveau.to_string() } else { c };
+            if !nouvelles.iter().any(|n| n.eq_ignore_ascii_case(&c)) {
+                nouvelles.push(c);
+            }
+        }
+        let corps = serde_json::json!({ "categories": nouvelles }).to_string();
+        let r = appeler(t, jeton, "PATCH", &format!("{GRAPH}/messages/{}", encoder(&id)), "application/json", corps.as_bytes(), REPONSE_MAX)?;
+        succes(&r)?;
+        changes += 1;
+    }
+    Ok(changes)
 }
 
 /// Le message, avec un en-tête `Bcc` pour les destinataires de l'enveloppe
@@ -986,5 +1237,151 @@ mod tests {
         assert_eq!(du_coffre(" M.C5_BAY.0.U.-Cx*y "), (String::new(), "M.C5_BAY.0.U.-Cx*y".to_string()));
         assert_eq!(du_coffre("pas-un-guid jeton"), (String::new(), "pas-un-guid jeton".to_string()));
         assert_eq!(pour_le_coffre("", "RT"), "RT");
+    }
+
+    // ------------------------------------------------------- catégories
+
+    /// Un faux Graph pour les catégories : il note les requêtes et répond
+    /// d'après le début de l'adresse.
+    fn graph_categories<'a>(
+        journal: &'a mut Vec<Requete>,
+        reponses: &'a [(&'a str, &'a str, u16, &'a str)],
+    ) -> impl FnMut(&Demande) -> crate::imap::Resultat<http::Reponse> + 'a {
+        move |d: &Demande| {
+            journal.push(Requete {
+                methode: d.methode.into(),
+                url: d.url.into(),
+                entetes: d.entetes.iter().map(|(n, v)| (n.to_string(), v.clone())).collect(),
+                corps: d.corps.to_vec(),
+            });
+            for (methode, debut, statut, corps) in reponses {
+                if d.methode == *methode && d.url.starts_with(debut) {
+                    return Ok(reponse(*statut, corps));
+                }
+            }
+            Ok(reponse(400, r#"{"error":{"code":"Inattendu","message":"requête inattendue"}}"#))
+        }
+    }
+
+    #[test]
+    fn dossier_graph_par_les_noms() {
+        let mut journal = Vec::new();
+        let reponses = [
+            ("GET", "https://graph.microsoft.com/v1.0/me/mailFolders?", 200,
+             r#"{"value":[{"id":"I","displayName":"Boîte de réception"},{"id":"P1","displayName":"Projets"}]}"#),
+            ("GET", "https://graph.microsoft.com/v1.0/me/mailFolders/P1/childFolders", 200,
+             r#"{"value":[{"id":"C1","displayName":"Clients été"}]}"#),
+            ("GET", "https://graph.microsoft.com/v1.0/me/mailFolders/inbox?", 200, r#"{"id":"I"}"#),
+            ("GET", "https://graph.microsoft.com/v1.0/me/mailFolders/I/childFolders", 200,
+             r#"{"value":[{"id":"S1","displayName":"Suivi"}]}"#),
+        ];
+        let mut t = graph_categories(&mut journal, &reponses);
+        // Le vrai identifiant, celui des `parentFolderId` des messages.
+        assert_eq!(dossier_graph_par(&mut t, "J", "INBOX", "/").unwrap(), "I");
+        // Le nom IMAP est en UTF-7 modifié : « Clients été ».
+        assert_eq!(dossier_graph_par(&mut t, "J", "Projets/Clients &AOk-t&AOk-", "/").unwrap(), "C1");
+        assert_eq!(dossier_graph_par(&mut t, "J", "INBOX/Suivi", "/").unwrap(), "S1");
+        assert!(dossier_graph_par(&mut t, "J", "Absent", "/").is_err());
+        drop(t);
+        assert_eq!(journal[0].entete("Authorization"), Some("Bearer J"));
+    }
+
+    #[test]
+    fn categories_par_delta_page_a_page() {
+        let mut journal = Vec::new();
+        let reponses = [
+            ("GET", "https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages/delta", 200,
+             r#"{"value":[{"id":"m1","internetMessageId":"<a@x>","categories":["Devis"]},{"id":"m2","internetMessageId":"<b@x>","categories":[]}],
+                 "@odata.nextLink":"https://graph.microsoft.com/v1.0/me/suite?page=2"}"#),
+            ("GET", "https://graph.microsoft.com/v1.0/me/suite?page=2", 200,
+             r#"{"value":[{"id":"m3","@removed":{"reason":"deleted"}},{"id":"m4","internetMessageId":"<c@x>","categories":["Urgent","Devis"]}],
+                 "@odata.deltaLink":"https://graph.microsoft.com/v1.0/me/delta?jeton=D1"}"#),
+        ];
+        let (vus, lien) = categories_delta_par(&mut graph_categories(&mut journal, &reponses), "J", "inbox", "").unwrap();
+        assert_eq!(
+            vus,
+            vec![
+                ("a@x".to_string(), vec!["Devis".to_string()]),
+                ("b@x".to_string(), vec![]),
+                ("c@x".to_string(), vec!["Urgent".to_string(), "Devis".to_string()]),
+            ]
+        );
+        assert_eq!(lien, "https://graph.microsoft.com/v1.0/me/delta?jeton=D1");
+        assert!(journal[0].url.contains("$select=internetMessageId,categories"));
+        assert_eq!(journal[0].entete("Prefer"), Some("odata.maxpagesize=200"));
+    }
+
+    #[test]
+    fn delta_perime_repart_de_zero() {
+        let mut journal = Vec::new();
+        let reponses = [
+            ("GET", "https://graph.microsoft.com/v1.0/me/delta?jeton=VIEUX", 410,
+             r#"{"error":{"code":"SyncStateNotFound","message":"périmé"}}"#),
+            ("GET", "https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages/delta", 200,
+             r#"{"value":[{"id":"m1","internetMessageId":"<a@x>","categories":["Devis"]}],"@odata.deltaLink":"https://graph.microsoft.com/v1.0/me/delta?jeton=NEUF"}"#),
+        ];
+        let (vus, lien) = categories_delta_par(
+            &mut graph_categories(&mut journal, &reponses),
+            "J",
+            "inbox",
+            "https://graph.microsoft.com/v1.0/me/delta?jeton=VIEUX",
+        )
+        .unwrap();
+        assert_eq!(vus.len(), 1);
+        assert!(lien.ends_with("NEUF"));
+        assert_eq!(journal.len(), 2);
+    }
+
+    #[test]
+    fn categorie_posee_par_message_id() {
+        let mut journal = Vec::new();
+        let reponses = [
+            ("GET", "https://graph.microsoft.com/v1.0/me/messages?$filter=", 200,
+             r#"{"value":[{"id":"M/1=","categories":["Urgent"],"parentFolderId":"inbox-id"},{"id":"M2","categories":[],"parentFolderId":"autre"}]}"#),
+            ("PATCH", "https://graph.microsoft.com/v1.0/me/messages/", 200, "{}"),
+        ];
+        let n = poser_categorie_par(&mut graph_categories(&mut journal, &reponses), "J", "a'b@x", Some("inbox-id"), "Devis", true)
+            .unwrap();
+        assert_eq!(n, 1);
+        // Chevrons rendus à l'identifiant de l'index, apostrophe doublée,
+        // filtre encodé.
+        assert!(journal[0].url.contains(&encoder("internetMessageId eq '<a''b@x>'")), "{}", journal[0].url);
+        assert_eq!(journal[1].methode, "PATCH");
+        assert!(journal[1].url.ends_with(&encoder("M/1=")), "{}", journal[1].url);
+        let corps: serde_json::Value = serde_json::from_slice(&journal[1].corps).unwrap();
+        assert_eq!(corps, serde_json::json!({"categories": ["Urgent", "Devis"]}));
+        assert_eq!(journal[1].entete("Content-Type"), Some("application/json"));
+        // Déjà posée : rien n'est écrit ; retirée : la liste sans elle.
+        let mut journal = Vec::new();
+        let reponses = [
+            ("GET", "https://graph.microsoft.com/v1.0/me/messages?$filter=", 200,
+             r#"{"value":[{"id":"M1","categories":["Urgent","devis"],"parentFolderId":"inbox-id"}]}"#),
+            ("PATCH", "https://graph.microsoft.com/v1.0/me/messages/", 200, "{}"),
+        ];
+        assert_eq!(poser_categorie_par(&mut graph_categories(&mut journal, &reponses), "J", "<a@x>", None, "Devis", true).unwrap(), 0);
+        assert_eq!(poser_categorie_par(&mut graph_categories(&mut journal, &reponses), "J", "<a@x>", None, "Devis", false).unwrap(), 1);
+        let corps: serde_json::Value = serde_json::from_slice(&journal.last().unwrap().corps).unwrap();
+        assert_eq!(corps, serde_json::json!({"categories": ["Urgent"]}));
+    }
+
+    #[test]
+    fn categorie_renommee_sur_tous_les_messages() {
+        let mut journal = Vec::new();
+        let reponses = [
+            ("GET", "https://graph.microsoft.com/v1.0/me/messages?$filter=", 200,
+             r#"{"value":[{"id":"M1","categories":["Devis","Urgent"]}],"@odata.nextLink":"https://graph.microsoft.com/v1.0/me/messages?$skiptoken=2"}"#),
+            ("GET", "https://graph.microsoft.com/v1.0/me/messages?$skiptoken=2", 200,
+             r#"{"value":[{"id":"M2","categories":["devis","Commande"]}]}"#),
+            ("PATCH", "https://graph.microsoft.com/v1.0/me/messages/", 200, "{}"),
+        ];
+        let n = renommer_categorie_par(&mut graph_categories(&mut journal, &reponses), "J", "Devis", "Commande").unwrap();
+        assert_eq!(n, 2);
+        assert!(journal[0].url.contains(&encoder("categories/any(c:c eq 'Devis')")), "{}", journal[0].url);
+        // Les deux pages sont lues avant le premier changement.
+        assert_eq!(journal.iter().map(|r| r.methode.as_str()).collect::<Vec<_>>(), ["GET", "GET", "PATCH", "PATCH"]);
+        let corps = |i: usize| serde_json::from_slice::<serde_json::Value>(&journal[i].corps).unwrap();
+        assert_eq!(corps(2), serde_json::json!({"categories": ["Commande", "Urgent"]}));
+        // Déjà porteur du nouveau nom : il n'apparaît qu'une fois.
+        assert_eq!(corps(3), serde_json::json!({"categories": ["Commande"]}));
     }
 }

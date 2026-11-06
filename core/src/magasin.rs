@@ -72,7 +72,7 @@ pub const AUTH_MICROSOFT: &str = "microsoft";
 pub const AUTH_GOOGLE: &str = "google";
 
 /// Version du schéma, portée par `PRAGMA user_version`.
-const VERSION_SCHEMA: i32 = 20;
+const VERSION_SCHEMA: i32 = 21;
 
 #[derive(Debug)]
 pub struct Erreur(pub String);
@@ -697,6 +697,18 @@ impl Magasin {
         if version < 20 {
             self.ajouter_colonne("messages", "dest_a", "TEXT NOT NULL DEFAULT ''")?;
             self.ajouter_colonne("messages", "dest_cc", "TEXT NOT NULL DEFAULT ''")?;
+        }
+        // Version 21 : le lien « delta » de Graph de chaque dossier d'un compte
+        // Microsoft 365, d'où relire seulement les catégories changées (0.9.0).
+        if version < 21 {
+            self.base.execute_batch(
+                "CREATE TABLE IF NOT EXISTS graph_delta (
+                     account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+                     chemin     TEXT NOT NULL,
+                     lien       TEXT NOT NULL,
+                     PRIMARY KEY (account_id, chemin)
+                 );",
+            )?;
         }
         self.base.pragma_update(None, "user_version", VERSION_SCHEMA)?;
         Ok(())
@@ -1336,6 +1348,9 @@ impl Magasin {
     /// Range les messages d'un dossier. Un message déjà connu ne voit changer
     /// que ses drapeaux.
     pub fn poser_messages(&self, dossier: i64, messages: &[MessageLocal]) -> Resultat<()> {
+        // Microsoft 365 : ceux de l'index — les catégories lues dans Graph
+        // (0.9.0) — restent.
+        let garder = self.categories_par_graph(dossier)? as i32;
         for lot in messages.chunks(LOT_ECRITURE) {
             let transaction = self.base.unchecked_transaction()?;
             {
@@ -1349,7 +1364,7 @@ impl Magasin {
                 let mut mise_a_jour = transaction.prepare(
                     "UPDATE messages SET lu = ?3, repondu = ?4, suivi = ?6, importance = ?7, transfere = ?8, repondu_tous = ?9,
                         pieces = CASE WHEN pieces_certain = 1 THEN pieces ELSE ?5 END, destinataires = ?10,
-                        mots_cles = ?11, dest_a = ?12, dest_cc = ?13
+                        mots_cles = CASE WHEN ?14 = 1 THEN mots_cles ELSE ?11 END, dest_a = ?12, dest_cc = ?13
                      WHERE folder_id = ?1 AND uid = ?2",
                 )?;
                 // Un expéditeur compte une fois par message nouveau dans l'index.
@@ -1399,7 +1414,8 @@ impl Magasin {
                             m.destinataires,
                             m.mots_cles,
                             m.a,
-                            m.cc
+                            m.cc,
+                            garder
                         ])?;
                     }
                 }
@@ -1415,6 +1431,9 @@ impl Magasin {
     /// ligne inchangée n'est pas réécrite (ni sa version, ni le disque).
     pub fn poser_drapeaux(&self, dossier: i64, drapeaux: &[(u32, Vec<String>)]) -> Resultat<usize> {
         let mut changes = 0;
+        // Cf. `poser_messages` : sur Microsoft 365, les mots-clés de l'index
+        // restent.
+        let garder = self.categories_par_graph(dossier)?;
         for lot in drapeaux.chunks(LOT_ECRITURE) {
             let transaction = self.base.unchecked_transaction()?;
             {
@@ -1430,6 +1449,18 @@ impl Magasin {
                     let transfere = protocole::porte(liste, protocole::TRANSFERE);
                     let repondu_tous = protocole::porte(liste, protocole::REPONDU_TOUS);
                     let suivi = liste.iter().any(|d| d.eq_ignore_ascii_case("\\Flagged"));
+                    let mots_cles = if garder {
+                        transaction
+                            .query_row(
+                                "SELECT mots_cles FROM messages WHERE folder_id = ?1 AND uid = ?2",
+                                params![dossier, uid],
+                                |l| l.get::<_, String>(0),
+                            )
+                            .optional()?
+                            .unwrap_or_default()
+                    } else {
+                        protocole::mots_cles(liste)
+                    };
                     changes += requete.execute(params![
                         dossier,
                         uid,
@@ -1438,7 +1469,7 @@ impl Magasin {
                         suivi as i32,
                         transfere as i32,
                         repondu_tous as i32,
-                        protocole::mots_cles(liste)
+                        mots_cles
                     ])?;
                 }
             }
@@ -1540,6 +1571,96 @@ impl Magasin {
         }
         transaction.commit()?;
         Ok(())
+    }
+
+    /// Lien « delta » de Graph d'un dossier (0.9.0) ; vide la première fois.
+    pub fn lien_delta(&self, compte: i64, chemin: &str) -> Resultat<String> {
+        Ok(self
+            .base
+            .query_row(
+                "SELECT lien FROM graph_delta WHERE account_id = ?1 AND chemin = ?2",
+                params![compte, chemin],
+                |l| l.get(0),
+            )
+            .optional()?
+            .unwrap_or_default())
+    }
+
+    pub fn poser_lien_delta(&self, compte: i64, chemin: &str, lien: &str) -> Resultat<()> {
+        self.base.execute(
+            "INSERT INTO graph_delta (account_id, chemin, lien) VALUES (?1, ?2, ?3)
+             ON CONFLICT(account_id, chemin) DO UPDATE SET lien = excluded.lien",
+            params![compte, chemin, lien],
+        )?;
+        Ok(())
+    }
+
+    /// Catégories lues dans Graph (0.9.0) : pour chaque `(Message-ID,
+    /// mots-clés)`, les messages du dossier qui portent ce `Message-ID`
+    /// reçoivent ces mots-clés à la place de ceux de `categories` qu'ils
+    /// avaient ; leurs autres mots-clés restent. Rend vrai si une ligne a
+    /// changé.
+    pub fn poser_categories_trouvees(
+        &self,
+        dossier: i64,
+        trouvees: &[(String, Vec<String>)],
+        categories: &[String],
+    ) -> Resultat<bool> {
+        let transaction = self.base.unchecked_transaction()?;
+        let mut change = false;
+        {
+            // Le dossier lu une fois : aucun index ne porte sur `message_id`,
+            // et le premier passage en apporte des milliers.
+            let mut par_id: std::collections::HashMap<String, Vec<(u32, String)>> = std::collections::HashMap::new();
+            {
+                let mut lire = transaction
+                    .prepare_cached("SELECT uid, message_id, mots_cles FROM messages WHERE folder_id = ?1 AND message_id <> ''")?;
+                let lignes = lire.query_map(params![dossier], |l| Ok((l.get::<_, u32>(0)?, l.get::<_, String>(1)?, l.get::<_, String>(2)?)))?;
+                for ligne in lignes {
+                    let (uid, message_id, mots) = ligne?;
+                    // Sans chevrons de part et d'autre (cf. `sans_chevrons`).
+                    par_id.entry(crate::microsoft::sans_chevrons(&message_id).to_string()).or_default().push((uid, mots));
+                }
+            }
+            let mut ecrire = transaction.prepare_cached("UPDATE messages SET mots_cles = ?3 WHERE folder_id = ?1 AND uid = ?2")?;
+            for (message_id, mots) in trouvees {
+                for (uid, actuels) in par_id.get(crate::microsoft::sans_chevrons(message_id)).cloned().unwrap_or_default() {
+                    let mut liste: Vec<String> = crate::categories::decouper(&actuels)
+                        .into_iter()
+                        .filter(|m| !categories.iter().any(|c| c.eq_ignore_ascii_case(m)))
+                        .collect();
+                    liste.extend(mots.iter().cloned());
+                    let nouveaux = crate::protocole::mots_cles(&liste);
+                    if nouveaux != actuels {
+                        ecrire.execute(params![dossier, uid, nouveaux])?;
+                        change = true;
+                    }
+                }
+            }
+        }
+        transaction.commit()?;
+        Ok(change)
+    }
+
+    /// Vrai si les catégories de ce dossier viennent de Graph (0.9.0) : un
+    /// compte Microsoft 365, dont le serveur IMAP ne garde pas les mots-clés.
+    /// Leur absence dans les drapeaux du serveur ne dit alors rien : l'index
+    /// les garde. Pas pour un autre serveur sans mots-clés — un dossier
+    /// partagé en lecture seule sur Dovecot, notamment, dont les mots-clés
+    /// posés par d'autres doivent continuer de suivre le serveur.
+    pub fn categories_par_graph(&self, dossier: i64) -> Resultat<bool> {
+        if !self.sans_mots_cles(dossier)? {
+            return Ok(false);
+        }
+        let auth: Option<String> = self
+            .base
+            .query_row(
+                "SELECT a.auth FROM folders f JOIN accounts a ON a.id = f.account_id WHERE f.id = ?1",
+                params![dossier],
+                |l| l.get(0),
+            )
+            .optional()?;
+        Ok(auth.and_then(|a| crate::oauth::Fournisseur::de_auth(&a)) == Some(crate::oauth::Fournisseur::Microsoft))
     }
 
     /// Vrai si le serveur refuse les catégories dans ce dossier (cf.
@@ -3259,6 +3380,22 @@ mod tests {
         assert!(!m.sans_mots_cles(id).unwrap());
         m.poser_etat(id, &EtatDossier { uid_validity: 1, sans_mots_cles: true, ..Default::default() }).unwrap();
         assert!(m.sans_mots_cles(id).unwrap());
+        // Un tel dossier ailleurs que sur Microsoft 365 (un partage en
+        // lecture seule sur Dovecot) : l'index suit toujours le serveur.
+        m.poser_messages(id, &[MessageLocal { uid: 7, mots_cles: "devis".into(), ..Default::default() }]).unwrap();
+        assert!(!m.categories_par_graph(id).unwrap());
+        m.poser_drapeaux(id, &[(7, vec!["\\Seen".into()])]).unwrap();
+        assert_eq!(m.message(id, 7).unwrap().unwrap().mots_cles, "");
+        // Microsoft 365 : les drapeaux du serveur ne retirent pas les
+        // catégories de l'index (lues dans Graph, 0.9.0).
+        assert!(m.poser_auth("a@b.fr", AUTH_MICROSOFT).unwrap());
+        assert!(m.categories_par_graph(id).unwrap());
+        m.marquer_categorie(id, &[7], "devis", true).unwrap();
+        m.poser_drapeaux(id, &[(7, vec!["\\Seen".into()])]).unwrap();
+        assert_eq!(m.message(id, 7).unwrap().unwrap().mots_cles, "devis");
+        assert!(m.message(id, 7).unwrap().unwrap().lu);
+        m.poser_messages(id, &[MessageLocal { uid: 7, mots_cles: String::new(), ..Default::default() }]).unwrap();
+        assert_eq!(m.message(id, 7).unwrap().unwrap().mots_cles, "devis");
     }
 
     #[test]
@@ -3593,6 +3730,45 @@ mod tests {
         let ailleurs = m.trouves_par_uid(archives, &[1, 9]).unwrap();
         assert_eq!(sujets(&ailleurs), vec!["Facture de février"]);
         assert_eq!((ailleurs[0].compte, ailleurs[0].chemin.as_str()), (compte, "Archives"));
+    }
+
+    /// Catégories lues dans Graph (0.9.0) : posées d'après le Message-ID,
+    /// à la place des catégories connues, les autres mots-clés gardés ; et le
+    /// lien « delta » de chaque dossier.
+    #[test]
+    fn categories_de_graph_par_message_id() {
+        let m = Magasin::en_memoire().unwrap();
+        let compte = m.compte("a@exemple.fr", "h", 993, "a@exemple.fr").unwrap();
+        m.poser_dossiers(compte, &[dossier("INBOX", &[])]).unwrap();
+        let inbox = m.dossier_id(compte, "INBOX").unwrap();
+        let recu = |uid, mid: &str, mots: &str| MessageLocal {
+            uid,
+            message_id: mid.into(),
+            mots_cles: mots.into(),
+            ..Default::default()
+        };
+        // L'index garde le Message-ID sans chevrons ; ceux de Graph, avec ou
+        // sans, se rapportent au même message.
+        m.poser_messages(inbox, &[recu(1, "a@x", "urgent"), recu(2, "b@x", "devis perso"), recu(3, "c@x", "")]).unwrap();
+        let connues = vec!["urgent".to_string(), "devis".to_string()];
+        let change = m
+            .poser_categories_trouvees(
+                inbox,
+                &[("a@x".into(), vec!["devis".into()]), ("<b@x>".into(), vec![]), ("z@x".into(), vec!["urgent".into()])],
+                &connues,
+            )
+            .unwrap();
+        assert!(change);
+        let mots = |uid| m.message(inbox, uid).unwrap().unwrap().mots_cles;
+        assert_eq!(mots(1), "devis");
+        // « perso » n'est pas une catégorie connue de Graph : elle reste.
+        assert_eq!(mots(2), "perso");
+        assert_eq!(mots(3), "");
+        assert!(!m.poser_categories_trouvees(inbox, &[("<a@x>".into(), vec!["devis".into()])], &connues).unwrap());
+        assert_eq!(m.lien_delta(compte, "INBOX").unwrap(), "");
+        m.poser_lien_delta(compte, "INBOX", "https://graph/delta?1").unwrap();
+        m.poser_lien_delta(compte, "INBOX", "https://graph/delta?2").unwrap();
+        assert_eq!(m.lien_delta(compte, "INBOX").unwrap(), "https://graph/delta?2");
     }
 
     /// Portée « cette boîte, tous dossiers » (0.8.3) et non-lus seulement

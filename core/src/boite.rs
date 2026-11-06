@@ -1578,7 +1578,7 @@ enum Commande {
     MarquerCategorie { chemin: String, uids: Vec<u32>, mot_cle: String, present: bool },
     /// Changer le catalogue des catégories d'une boîte (chemin de sa boîte de
     /// réception), relu sur le serveur juste avant.
-    Catalogue { boite: String, changement: Changement },
+    Catalogue { boite: String, changement: Changement, avant: Option<Categorie> },
     /// Envoyer une confirmation de lecture (identifiants présents) ou
     /// l'ignorer (absents) ; le message reçoit `$MDNSent` dans les deux cas.
     Confirmer { chemin: String, uid: u32, identifiants: Option<Identifiants> },
@@ -3621,10 +3621,10 @@ impl qobject::Boite {
         let boite = boite_categories(magasin, compte, &chemin);
         let (valeur, serveur) = magasin.catalogue(compte, &boite).ok().flatten().unwrap_or_default();
         let catalogue = Catalogue::lire(&valeur);
-        let refusees = magasin
-            .dossier_id(compte, &chemin)
-            .and_then(|id| magasin.sans_mots_cles(id))
-            .unwrap_or(false);
+        // Microsoft 365 (0.9.0) : le serveur IMAP ne garde pas les mots-clés,
+        // mais les catégories passent par Graph.
+        let refusees = !compte_microsoft(magasin, compte)
+            && magasin.dossier_id(compte, &chemin).and_then(|id| magasin.sans_mots_cles(id)).unwrap_or(false);
         let liste: Vec<serde_json::Value> = catalogue
             .liste()
             .into_iter()
@@ -3680,7 +3680,7 @@ impl qobject::Boite {
         }
         if let Some(magasin) = self.magasin.as_ref() {
             if let Ok(id) = magasin.dossier_id(compte, &chemin) {
-                if magasin.sans_mots_cles(id).unwrap_or(false) {
+                if !compte_microsoft(magasin, compte) && magasin.sans_mots_cles(id).unwrap_or(false) {
                     self.as_mut().set_erreur(QString::from("ce serveur ne garde pas les catégories"));
                     return false;
                 }
@@ -3751,6 +3751,13 @@ impl qobject::Boite {
         serveur: bool,
         changement: Changement,
     ) -> bool {
+        // La catégorie telle qu'elle était : le fil du compte relira l'index
+        // déjà changé, et ne verrait plus un renommage.
+        let mot_cle = match &changement {
+            Changement::Poser(c) => c.mot_cle.clone(),
+            Changement::Retirer(m) => m.clone(),
+        };
+        let avant = catalogue.liste().into_iter().find(|c| c.mot_cle.eq_ignore_ascii_case(&mot_cle));
         if let Err(motif) = catalogue.appliquer(&changement) {
             self.as_mut().set_erreur(QString::from(&motif));
             return false;
@@ -3760,7 +3767,7 @@ impl qobject::Boite {
         }
         self.as_mut().verifier_catalogues();
         if self.sessions.contains_key(&compte) || self.identites.contains_key(&compte) {
-            self.as_mut().envoyer(compte, Commande::Catalogue { boite, changement });
+            self.as_mut().envoyer(compte, Commande::Catalogue { boite, changement, avant });
         }
         true
     }
@@ -6074,6 +6081,15 @@ fn criteres_recherche(magasin: &Magasin, texte: &str) -> (String, Vec<Vec<String
 /// boîte partagée qui le contient — chemin de sa boîte de réception, comme
 /// « Shared/contact@exemple.fr/INBOX » —, à défaut la boîte de réception du
 /// compte.
+/// Compte Microsoft 365 : ses catégories passent par Graph (0.9.0).
+fn compte_microsoft(magasin: &Magasin, compte: i64) -> bool {
+    magasin
+        .compte_par_id(compte)
+        .ok()
+        .flatten()
+        .is_some_and(|c| c.fournisseur() == Some(crate::oauth::Fournisseur::Microsoft))
+}
+
 fn boite_categories(magasin: &Magasin, compte: i64, chemin: &str) -> String {
     let partagees = magasin.compte_par_id(compte).ok().flatten().map(|c| c.partagees).unwrap_or_default();
     if partagees.is_empty() {
@@ -6339,6 +6355,11 @@ struct Etabli {
     dernier: Option<(String, u32, u32, Vec<u8>)>,
     /// Envois différés vus réservés, et depuis quand (cf. `differes_interrompus`).
     differes_reserves: HashMap<u32, i64>,
+    /// Compte Microsoft 365 : ses jetons, pour les catégories par Graph
+    /// (0.9.0) ; `None` pour tout autre compte.
+    graph: Option<crate::oauth::Partage>,
+    /// Identifiants Graph des dossiers déjà trouvés, par chemin IMAP.
+    dossiers_graph: HashMap<String, String>,
 }
 
 /// À qui le fil d'un compte remet ses issues : l'objet Qt — ou, dans les
@@ -6675,6 +6696,12 @@ impl Travail {
             menage: None,
             dernier: None,
             differes_reserves: HashMap::new(),
+            graph: p
+                .oauth
+                .as_ref()
+                .filter(|j| crate::oauth::fournisseur(j) == crate::oauth::Fournisseur::Microsoft)
+                .cloned(),
+            dossiers_graph: HashMap::new(),
         })
     }
 
@@ -6688,7 +6715,19 @@ impl Travail {
             Commande::OuvrirDossier(chemin) => {
                 e.ouvert = Some(chemin.clone());
                 Some(match synchro::synchroniser(&mut e.client, &e.magasin, compte, &chemin) {
-                    Ok(_) => Issue::Dossier { chemin, veille: false },
+                    Ok(_) if e.graph.is_none() => Issue::Dossier { chemin, veille: false },
+                    // Microsoft 365 : la liste s'affiche d'abord ; les
+                    // catégories lues dans Graph — au premier passage, des
+                    // milliers de messages — la font relire si l'une a changé.
+                    // Un refus de Graph n'empêche pas le dossier de s'ouvrir.
+                    Ok(_) => {
+                        self.remettre(Issue::Dossier { chemin: chemin.clone(), veille: false });
+                        if self.categories_graph(e, &chemin).unwrap_or(false) {
+                            Issue::Dossier { chemin, veille: true }
+                        } else {
+                            Issue::Arborescence
+                        }
+                    }
                     Err(err) => echec("dossier", format!("ouverture de {chemin} : {err}"), &err),
                 })
             }
@@ -6750,13 +6789,51 @@ impl Travail {
                     Err(err) => echec("tri", format!("drapeau de suivi : {err}"), &err),
                 })
             }
+            // Microsoft 365 (0.9.0) : la catégorie se pose par Graph ; l'index
+            // l'a déjà.
+            Commande::MarquerCategorie { chemin, uids, mot_cle, present } if e.graph.is_some() => {
+                Some(match self.marquer_categorie_graph(e, &chemin, &uids, &mot_cle, present) {
+                    Ok(()) => Issue::Marque { discret: false },
+                    Err(message) => Issue::Echec { etape: "tri", message: format!("catégorie : {message}"), session_perdue: false },
+                })
+            }
             Commande::MarquerCategorie { chemin, uids, mot_cle, present } => Some(
                 match synchro::marquer_categorie(&mut e.client, &e.magasin, compte, &chemin, &uids, &mot_cle, present) {
                     Ok(()) => Issue::Marque { discret: false },
                     Err(err) => echec("tri", format!("catégorie : {err}"), &err),
                 },
             ),
-            Commande::Catalogue { boite, changement } => Some(
+            // Microsoft 365 (0.9.0) : un nom qui change — renommage, ou
+            // catégorie d'origine qui reprend le sien — change aussi sur les
+            // messages qui la portent, comme dans Outlook. Un retrait les
+            // laisse, comme Outlook aussi.
+            // L'état d'avant vient de l'interface (`changer_catalogue`), qui a
+            // déjà rangé le nouveau dans l'index.
+            Commande::Catalogue { boite, changement, avant } if e.graph.is_some() => {
+                let mot_cle = match &changement {
+                    Changement::Poser(c) => c.mot_cle.clone(),
+                    Changement::Retirer(m) => m.clone(),
+                };
+                let nom = |magasin: &Magasin| {
+                    let (valeur, _) = magasin.catalogue(compte, &boite).ok().flatten().unwrap_or_default();
+                    Catalogue::lire(&valeur).liste().into_iter().find(|c| c.mot_cle.eq_ignore_ascii_case(&mot_cle)).map(|c| c.nom)
+                };
+                if let Err(err) = synchro::changer_catalogue(&mut e.client, &e.magasin, compte, &boite, &changement) {
+                    return Some(echec("tri", format!("catégories : {err}"), &err));
+                }
+                match (avant.map(|c| c.nom), nom(&e.magasin)) {
+                    (Some(ancien), Some(nouveau)) if ancien != nouveau => Some(match self.renommer_categorie_graph(e, &ancien, &nouveau) {
+                        Ok(()) => Issue::Marque { discret: true },
+                        Err(message) => Issue::Echec {
+                            etape: "tri",
+                            message: format!("catégorie renommée dans MMail, mais pas sur les messages dans Outlook : {message}"),
+                            session_perdue: false,
+                        },
+                    }),
+                    _ => Some(Issue::Marque { discret: true }),
+                }
+            }
+            Commande::Catalogue { boite, changement, .. } => Some(
                 match synchro::changer_catalogue(&mut e.client, &e.magasin, compte, &boite, &changement) {
                     // Le catalogue rangé a pu changer : l'interface le relit.
                     Ok(()) => Issue::Marque { discret: true },
@@ -7038,14 +7115,138 @@ impl Travail {
                 }
                 match e.ouvert.clone() {
                     Some(chemin) => Some(match synchro::synchroniser(&mut e.client, &e.magasin, compte, &chemin) {
-                        Ok(bilan) if bilan.change_la_liste() => Issue::Dossier { chemin, veille: true },
-                        Ok(_) => Issue::Arborescence,
+                        Ok(bilan) => {
+                            // Catégories posées depuis Outlook (Microsoft 365) :
+                            // la liste se relit si l'une a changé.
+                            let categories = self.categories_graph(e, &chemin).unwrap_or(false);
+                            if bilan.change_la_liste() || categories {
+                                Issue::Dossier { chemin, veille: true }
+                            } else {
+                                Issue::Arborescence
+                            }
+                        }
                         Err(err) => echec("reseau", format!("veille : {err}"), &err),
                     }),
                     None => Some(Issue::Arborescence),
                 }
             }
         }
+    }
+
+    /// Jeton Graph et identifiant Graph d'un dossier d'un compte Microsoft
+    /// 365 ; `None` pour un autre compte.
+    fn graph_du_dossier(&self, e: &mut Etabli, chemin: &str) -> Result<Option<(String, String)>, String> {
+        let Some(jetons) = e.graph.clone() else {
+            return Ok(None);
+        };
+        let jeton = crate::microsoft::jeton_acces(&jetons, crate::microsoft::PORTEE_ENVOI).map_err(|x| x.to_string())?;
+        let id = match e.dossiers_graph.get(chemin) {
+            Some(id) => id.clone(),
+            None => {
+                let separateur = e
+                    .magasin
+                    .dossiers(self.compte)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .find(|d| d.chemin == chemin)
+                    .map(|d| d.separateur)
+                    .unwrap_or_default();
+                let id = crate::microsoft::dossier_graph(&jeton, chemin, &separateur).map_err(|x| x.to_string())?;
+                e.dossiers_graph.insert(chemin.to_string(), id.clone());
+                id
+            }
+        };
+        Ok(Some((jeton, id)))
+    }
+
+    /// Catégories d'Outlook d'un dossier d'un compte Microsoft 365 (0.9.0) :
+    /// lues dans Graph depuis le dernier passage, posées dans l'index d'après
+    /// le `Message-ID`. Un nom que le catalogue ne connaît pas y entre, en
+    /// gris. Rend vrai si un message a changé ; rien pour un autre compte.
+    fn categories_graph(&self, e: &mut Etabli, chemin: &str) -> Result<bool, String> {
+        let Some((jeton, id_graph)) = self.graph_du_dossier(e, chemin)? else {
+            return Ok(false);
+        };
+        let compte = self.compte;
+        let lien = e.magasin.lien_delta(compte, chemin).map_err(|x| x.to_string())?;
+        let (vus, nouveau) = crate::microsoft::categories_delta(&jeton, &id_graph, &lien).map_err(|x| x.to_string())?;
+        let boite = boite_categories(&e.magasin, compte, chemin);
+        let (valeur, serveur) = e.magasin.catalogue(compte, &boite).ok().flatten().unwrap_or_default();
+        let mut catalogue = Catalogue::lire(&valeur);
+        let mut ajoute = false;
+        let mut mot_cle_de = |nom: &str, catalogue: &mut Catalogue| -> Option<String> {
+            let liste = catalogue.liste();
+            if let Some(c) = liste.iter().find(|c| c.nom.eq_ignore_ascii_case(nom) || c.mot_cle.eq_ignore_ascii_case(nom)) {
+                return Some(c.mot_cle.clone());
+            }
+            let pris: Vec<String> = liste.iter().map(|c| c.mot_cle.clone()).collect();
+            let mot_cle = categories::mot_cle_pour(nom, &pris);
+            let nouvelle = categories::Categorie {
+                mot_cle: mot_cle.clone(),
+                nom: nom.to_string(),
+                couleur: categories::COULEUR_INCONNUE.to_string(),
+            };
+            catalogue.appliquer(&categories::Changement::Poser(nouvelle)).ok()?;
+            ajoute = true;
+            Some(mot_cle)
+        };
+        let trouvees: Vec<(String, Vec<String>)> = vus
+            .iter()
+            .map(|(mid, noms)| (mid.clone(), noms.iter().filter_map(|n| mot_cle_de(n, &mut catalogue)).collect()))
+            .collect();
+        if ajoute {
+            let _ = e.magasin.poser_catalogue(compte, &boite, &catalogue.ecrire(), serveur);
+        }
+        let connues: Vec<String> = catalogue.liste().into_iter().map(|c| c.mot_cle).collect();
+        let dossier = e.magasin.dossier_id(compte, chemin).map_err(|x| x.to_string())?;
+        let change = e.magasin.poser_categories_trouvees(dossier, &trouvees, &connues).map_err(|x| x.to_string())?;
+        if !nouveau.is_empty() {
+            let _ = e.magasin.poser_lien_delta(compte, chemin, &nouveau);
+        }
+        Ok(change)
+    }
+
+    /// Renomme une catégorie sur les messages de la boîte Microsoft 365 qui
+    /// la portent (0.9.0).
+    fn renommer_categorie_graph(&self, e: &mut Etabli, ancien: &str, nouveau: &str) -> Result<(), String> {
+        let Some(jetons) = e.graph.clone() else {
+            return Ok(());
+        };
+        let jeton = crate::microsoft::jeton_acces(&jetons, crate::microsoft::PORTEE_ENVOI).map_err(|x| x.to_string())?;
+        crate::microsoft::renommer_categorie(&jeton, ancien, nouveau).map_err(|x| x.to_string())?;
+        Ok(())
+    }
+
+    /// Pose ou retire une catégorie par Graph (Microsoft 365, 0.9.0) : sur
+    /// chaque message, retrouvé par son `Message-ID` dans le dossier, sous le
+    /// nom que le catalogue donne au mot-clé.
+    fn marquer_categorie_graph(&self, e: &mut Etabli, chemin: &str, uids: &[u32], mot_cle: &str, present: bool) -> Result<(), String> {
+        let Some((jeton, id_graph)) = self.graph_du_dossier(e, chemin)? else {
+            return Err("compte sans Graph".into());
+        };
+        let compte = self.compte;
+        let boite = boite_categories(&e.magasin, compte, chemin);
+        let (valeur, _) = e.magasin.catalogue(compte, &boite).ok().flatten().unwrap_or_default();
+        let nom = Catalogue::lire(&valeur)
+            .liste()
+            .into_iter()
+            .find(|c| c.mot_cle.eq_ignore_ascii_case(mot_cle))
+            .map(|c| c.nom)
+            .unwrap_or_else(|| mot_cle.to_string());
+        let dossier = e.magasin.dossier_id(compte, chemin).map_err(|x| x.to_string())?;
+        let mut sans_id = 0;
+        for uid in uids {
+            let message_id = e.magasin.message(dossier, *uid).ok().flatten().map(|m| m.message_id).unwrap_or_default();
+            if message_id.is_empty() {
+                sans_id += 1;
+                continue;
+            }
+            crate::microsoft::poser_categorie(&jeton, &message_id, Some(&id_graph), &nom, present).map_err(|x| x.to_string())?;
+        }
+        if sans_id > 0 {
+            return Err(format!("{sans_id} message(s) sans Message-ID : Graph ne sait pas les retrouver"));
+        }
+        Ok(())
     }
 
     /// Défait un déplacement (Ctrl+Z) : les messages de `annulation`,
@@ -9615,6 +9816,8 @@ mod tests {
             menage: None,
             dernier: None,
             differes_reserves: HashMap::new(),
+            graph: None,
+            dossiers_graph: HashMap::new(),
         };
         (travail, etabli, issues)
     }

@@ -2247,7 +2247,7 @@ QtObject {
     ///     à Outlook, puis recolorée et renommée « Essai MMail renommée » ;
     ///     puis un filtre « aussi dans Outlook » (règle « MMail : Essai
     ///     MMail ») ; enfin la lecture des agendas autorisée, et les agendas
-    ///     de la boîte lus, en lecture seule ;
+    ///     de la boîte lus ;
     ///   - « lire » : reconnexion par le coffre, les catégories posées dans
     ///     Outlook entre-temps relues, puis les catégories d'essai retirées
     ///     des messages et de la liste de MMail (Outlook garde la sienne), le
@@ -2449,7 +2449,7 @@ QtObject {
                             return a.nom + " " + a.couleur + (a.ecriture ? " écriture" : " lecture")
                         }).join(", "))
                         bilan(miens.length + " agenda(s) Microsoft 365 lu(s), sans erreur", miens.length > 0 && suivi.erreursAgenda.length === 0)
-                        bilan("agendas Microsoft 365 en lecture seule", miens.every(function(a) { return !a.ecriture }))
+                        bilan("un agenda Microsoft 365 au moins accepte l'écriture", miens.some(function(a) { return a.ecriture }))
                         var etats = JSON.parse(boite.agendasMicrosoft())
                         bilan("lecture des agendas notée autorisée", etats.some(function(x) { return x.compte === c.compte && x.etat === "autorise" }))
                         finir()
@@ -2544,7 +2544,7 @@ QtObject {
                               un !== null && un.quand.indexOf("10:00") >= 0 && un.quand.indexOf("11:00") >= 0)
                         bilan("son lieu et sa description lus",
                               un !== null && un.lieu === "Salle d'essai" && un.description.indexOf("Ligne 2") >= 0)
-                        bilan("en lecture seule, pour Microsoft 365", un !== null && !un.modifiable && un.motif.indexOf("Microsoft 365") >= 0)
+                        bilan("modifiable dans MMail", un !== null && un.modifiable)
                         var serie = f1.concat(f2).filter(function(f) { return f.titre === "Essai de série MMail 0.9.0" })
                         bilan("série d'Outlook : une occurrence demain, une après-demain, marquées « répète »",
                               serie.length === 2 && serie.every(function(f) { return f.repete }))

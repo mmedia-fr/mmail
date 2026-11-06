@@ -2308,6 +2308,343 @@ QtObject {
         tic.start()
     }
 
+    /// Scénario « m365-reel » (0.9.0) : essai sur une vraie boîte Microsoft
+    /// 365, sans écran (scratchpad m365-reel/essai.sh). MMAIL_UTILISATEUR
+    /// porte l'adresse ; le profil et le coffre sont gardés d'un passage à
+    /// l'autre. MMAIL_DOSSIER choisit le passage :
+    ///   - « ecrire » : connexion si le profil n'a pas le compte, catégorie
+    ///     « Essai MMail » créée et posée sur le premier message, liste reliée
+    ///     à Outlook, puis recolorée et renommée « Essai MMail renommée » ;
+    ///     puis un filtre « aussi dans Outlook » (règle « MMail : Essai
+    ///     MMail ») ; enfin la lecture des agendas autorisée, et les agendas
+    ///     de la boîte lus ;
+    ///   - « lire » : reconnexion par le coffre, les catégories posées dans
+    ///     Outlook entre-temps relues, puis les catégories d'essai retirées
+    ///     des messages et de la liste de MMail (Outlook garde la sienne), le
+    ///     filtre d'essai retiré, sa règle avec ; enfin les agendas relus :
+    ///     l'événement et la série posés dans Outlook entre-temps (demain et
+    ///     après-demain) paraissent à leur heure ; puis MMail écrit : un
+    ///     événement créé dans trois jours, celui de demain supprimé.
+    /// Les adresses d'autorisation sont écrites au journal (« scenario: url »)
+    /// pour le navigateur qui mène la connexion.
+    function lancerScenarioM365Reel() {
+        var tic = Qt.createQmlObject('import QtQuick; Timer { interval: 1000; repeat: true }', fenetre)
+        var adresse = (identifiantsEssai.utilisateur || "").toLowerCase()
+        var passage = identifiantsEssai.dossier || "ecrire"
+        var suivi = { n: 0, etape: 0, depuis: 0, echecs: 0, motCle: "", premier: 0, sujet: "", demande: false, etat: "",
+                      synchros: 0, agendaDepuis: 0, erreursAgenda: "", ecrits: [], cible: 0 }
+        var bilan = function(texte, bon) {
+            if (!bon)
+                suivi.echecs += 1
+            console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
+        }
+        // Le compte une fois sa session prête (« pret ») : l'arborescence le
+        // montre dès le lancement, depuis l'index local.
+        var compte = function() {
+            for (var k = 0; k < modeleArborescence.count; ++k) {
+                var l = modeleArborescence.get(k)
+                if (l.genre === "compte" && (l.adresse || "").toLowerCase() === adresse && l.etat === "pret")
+                    return { compte: l.compte, adresse: l.adresse }
+            }
+            return null
+        }
+        var catalogue = function(c) {
+            return JSON.parse(boite.categories(c.compte, "INBOX"))
+        }
+        var noms = function(liste) {
+            return liste.map(function(x) { return x.nom + " " + x.couleur }).join(", ")
+        }
+        var essais = function(liste) {
+            return liste.filter(function(x) { return x.nom.indexOf("Essai ") === 0 })
+        }
+        var suivant = function() {
+            suivi.etape += 1
+            suivi.depuis = suivi.n
+        }
+        var finir = function() {
+            tic.stop()
+            console.log("scenario: m365-reel " + passage + " " + (suivi.echecs === 0 ? "OK" : "ECHEC (" + suivi.echecs + ")"))
+            Qt.quit()
+        }
+        var autoriser = function(url, quoi) {
+            bilan(quoi + " : adresse d'autorisation", url.length > 0)
+            if (url.length === 0) {
+                console.log("scenario: erreur " + boite.erreur)
+                return false
+            }
+            console.log("scenario: url " + url)
+            Qt.openUrlExternally(url)
+            return true
+        }
+        // Agendas (0.9.0) : chaque synchronisation terminée.
+        boite.agendasSynchronises.connect(function(change, erreurs) {
+            suivi.synchros += 1
+            suivi.erreursAgenda = erreurs
+            console.log("scenario: agendas synchronisés | changé " + change + " | erreurs « " + erreurs + " »")
+        })
+        // Écritures dans l'agenda terminées : (réussite, motif).
+        boite.evenementEnregistre.connect(function(ok, message) {
+            suivi.ecrits.push([ok, message])
+            console.log("scenario: écriture dans l'agenda | " + ok + " | « " + message + " »")
+        })
+        var jourDans = function(decalage) {
+            var d = new Date()
+            d.setDate(d.getDate() + decalage)
+            return Qt.formatDate(d, "yyyy-MM-dd")
+        }
+        // Les fiches d'un jour décalé de `decalage` jours.
+        var fichesDu = function(decalage) {
+            var d = new Date()
+            d.setDate(d.getDate() + decalage)
+            return JSON.parse(boite.vueAgenda("jour", Qt.formatDate(d, "yyyy-MM-dd"))).fiches || []
+        }
+        tic.triggered.connect(function() {
+            suivi.n += 1
+            var ecoule = suivi.n - suivi.depuis
+            if (messageEtat.texte !== suivi.etat) {
+                suivi.etat = messageEtat.texte
+                console.log("scenario: barre d'état « " + suivi.etat + " »")
+            }
+            var c = compte()
+            if (suivi.etape === 0) {
+                // Le compte : connu du profil (le coffre répond), sinon connexion.
+                if (c) {
+                    bilan("compte ouvert après " + suivi.n + " s", true)
+                    ouvrirDossier(c.compte, "INBOX")
+                    suivant()
+                } else if (suivi.n === 8 && !suivi.demande) {
+                    suivi.demande = true
+                    var connus = listeComptes().filter(function(x) { return (x.adresse || "").toLowerCase() === adresse })
+                    if (connus.length > 0) {
+                        bilan("compte du profil sans session après 8 s", passage === "ecrire")
+                    }
+                    if (passage !== "ecrire") {
+                        finir()
+                        return
+                    }
+                    fenetre.marquerGeste(adresse)
+                    if (!autoriser(boite.connecterMicrosoft(adresse), "connexion"))
+                        finir()
+                } else if (suivi.n > 420) {
+                    bilan("compte jamais ouvert", false)
+                    finir()
+                }
+            } else if (suivi.etape === 1) {
+                // La boîte de réception, puis le temps de la relève par Graph.
+                if (modeleMessages.count > 0 && ecoule >= 25) {
+                    var cat = catalogue(c)
+                    bilan("catalogue Microsoft 365 : " + noms(cat.liste) + " | microsoft " + cat.microsoft
+                          + " | refusées " + cat.refusees, cat.microsoft === true && !cat.refusees)
+                    for (var i = 0; i < Math.min(8, modeleMessages.count); ++i) {
+                        var m = modeleMessages.get(i)
+                        console.log("scenario: message " + i + " | " + m.uid + " | " + m.date + " | " + m.sujet + " | « " + m.motsCles + " »")
+                    }
+                    suivant()
+                } else if (ecoule > 120) {
+                    bilan("boîte de réception vide ou jamais chargée (" + modeleMessages.count + ")", false)
+                    finir()
+                }
+            } else if (passage === "ecrire") {
+                if (suivi.etape === 2) {
+                    choisir(0, 0)
+                    suivi.premier = modeleMessages.get(0).uid
+                    suivi.sujet = modeleMessages.get(0).sujet
+                    suivi.motCle = boite.poserCategorie(c.compte, "INBOX", "", "Essai MMail", "#0B8043")
+                    bilan("créée : " + suivi.motCle, suivi.motCle.length > 0)
+                    basculerCategorie(suivi.motCle, true)
+                    console.log("scenario: posée sur « " + suivi.sujet + " » (" + suivi.premier + ")")
+                    suivant()
+                } else if (suivi.etape === 3 && ecoule >= 20) {
+                    // Relier la liste à Outlook : l'autorisation à part.
+                    if (!autoriser(boite.autoriserCouleursOutlook(c.compte), "liste d'Outlook"))
+                        finir()
+                    suivant()
+                } else if (suivi.etape === 4) {
+                    if (suivi.etat.indexOf(qsTr("Autorisation reçue")) === 0) {
+                        bilan("autorisation des réglages reçue", true)
+                        suivant()
+                    } else if (suivi.etat.indexOf(qsTr("Catégories d'Outlook :")) === 0 || ecoule > 420) {
+                        bilan("autorisation des réglages : « " + suivi.etat + " »", false)
+                        finir()
+                    }
+                } else if (suivi.etape === 5 && ecoule >= 20) {
+                    console.log("scenario: catalogue relié " + noms(catalogue(c).liste))
+                    bilan("recolorée en rouge",
+                          boite.poserCategorie(c.compte, "INBOX", suivi.motCle, "Essai MMail", "#D50000") === suivi.motCle)
+                    suivant()
+                } else if (suivi.etape === 6 && ecoule >= 20) {
+                    bilan("renommée", boite.poserCategorie(c.compte, "INBOX", suivi.motCle, "Essai MMail renommée", "#D50000")
+                          === suivi.motCle)
+                    suivant()
+                } else if (suivi.etape === 7 && ecoule >= 30) {
+                    var i2 = indexDe(suivi.premier)
+                    console.log("scenario: catalogue final " + noms(catalogue(c).liste))
+                    bilan("le message garde la catégorie : « " + (i2 >= 0 ? modeleMessages.get(i2).motsCles : "?") + " »",
+                          i2 >= 0 && (" " + modeleMessages.get(i2).motsCles + " ").indexOf(" " + suivi.motCle + " ") >= 0)
+                    // Un filtre « aussi dans Outlook » sans effet sur le
+                    // courrier : il marque lu un objet qu'aucun message n'a.
+                    var filtre = { nom: "Essai MMail", actif: true, compte: c.adresse, tout: true,
+                                   conditions: [{ champ: "objet", operateur: "contient", valeur: "Essai de règle MMail 0.9.0" }],
+                                   lu: true, suivi: false, destination: "", dossier: "", compte_destination: "",
+                                   arreter: false, serveur: true }
+                    console.log("scenario: raison Outlook « " + boite.regleOutlook(JSON.stringify(filtre)) + " »")
+                    bilan("filtre « aussi dans Outlook » enregistré", boite.poserFiltres(JSON.stringify([filtre])))
+                    suivant()
+                } else if (suivi.etape === 8) {
+                    if (suivi.etat.indexOf(qsTr("Filtres :")) === 0) {
+                        bilan("règle envoyée à Outlook", suivi.etat.indexOf("1 filtre(s) dans les règles d'Outlook") >= 0)
+                        suivant()
+                    } else if (ecoule > 60) {
+                        bilan("pas de nouvelle des règles d'Outlook", false)
+                        finir()
+                    }
+                } else if (suivi.etape === 9) {
+                    // Les agendas : leur lecture autorisée à part.
+                    suivi.agendaDepuis = suivi.synchros
+                    if (!autoriser(boite.autoriserAgendasMicrosoft(c.compte), "agendas"))
+                        finir()
+                    suivant()
+                } else if (suivi.etape === 10) {
+                    if (suivi.etat.indexOf(qsTr("Autorisation reçue : MMail lit les agendas")) === 0) {
+                        bilan("autorisation des agendas reçue", true)
+                        suivant()
+                    } else if (suivi.etat.indexOf(qsTr("Agendas Microsoft 365 :")) === 0 || ecoule > 420) {
+                        bilan("autorisation des agendas : « " + suivi.etat + " »", false)
+                        finir()
+                    }
+                } else if (suivi.etape === 11) {
+                    if (suivi.synchros > suivi.agendaDepuis) {
+                        var miens = JSON.parse(boite.agendas()).filter(function(a) { return a.microsoft && a.compte === c.compte })
+                        console.log("scenario: agendas Microsoft 365 : " + miens.map(function(a) {
+                            return a.nom + " " + a.couleur + (a.ecriture ? " écriture" : " lecture")
+                        }).join(", "))
+                        bilan(miens.length + " agenda(s) Microsoft 365 lu(s), sans erreur", miens.length > 0 && suivi.erreursAgenda.length === 0)
+                        bilan("un agenda Microsoft 365 au moins accepte l'écriture", miens.some(function(a) { return a.ecriture }))
+                        var etats = JSON.parse(boite.agendasMicrosoft())
+                        bilan("lecture des agendas notée autorisée", etats.some(function(x) { return x.compte === c.compte && x.etat === "autorise" }))
+                        finir()
+                    } else if (ecoule > 120) {
+                        bilan("pas de synchronisation des agendas", false)
+                        finir()
+                    }
+                }
+            } else {
+                if (suivi.etape === 2) {
+                    var liste = essais(catalogue(c).liste)
+                    console.log("scenario: catégories d'essai relues " + noms(liste))
+                    bilan("« Essai Outlook » relue d'Outlook", liste.some(function(x) { return x.nom === "Essai Outlook" }))
+                    var porteurs = 0
+                    for (var j = 0; j < modeleMessages.count; ++j) {
+                        var mots = " " + modeleMessages.get(j).motsCles + " "
+                        var a = liste.filter(function(x) { return mots.indexOf(" " + x.motCle + " ") >= 0 })
+                        if (a.length === 0)
+                            continue
+                        porteurs += 1
+                        console.log("scenario: porteur « " + modeleMessages.get(j).sujet + " » : " + mots.trim())
+                        choisir(j, 0)
+                        a.forEach(function(x) { basculerCategorie(x.motCle, false) })
+                    }
+                    bilan(porteurs + " message(s) porteurs, catégories retirées", porteurs >= 2)
+                    suivant()
+                } else if (suivi.etape === 3 && ecoule >= 20) {
+                    essais(catalogue(c).liste).forEach(function(x) {
+                        bilan("« " + x.nom + " » retirée de la liste de MMail", boite.retirerCategorie(c.compte, "INBOX", x.motCle))
+                    })
+                    suivant()
+                } else if (suivi.etape === 4 && ecoule >= 15) {
+                    console.log("scenario: catalogue final " + noms(catalogue(c).liste))
+                    // Le filtre d'essai retiré : sa règle part d'Outlook.
+                    bilan("filtres vidés", boite.poserFiltres("[]"))
+                    suivant()
+                } else if (suivi.etape === 5) {
+                    if (suivi.etat.indexOf(qsTr("Filtres :")) === 0) {
+                        bilan("règle retirée d'Outlook", suivi.etat.indexOf("règles de MMail retirées d'Outlook") >= 0)
+                        suivant()
+                    } else if (ecoule > 60) {
+                        bilan("pas de nouvelle des règles d'Outlook", false)
+                        finir()
+                    }
+                } else if (suivi.etape === 6) {
+                    // Les agendas relus : l'autorisation du passage « ecrire »
+                    // tient, sans nouvelle page de Microsoft.
+                    suivi.agendaDepuis = suivi.synchros
+                    boite.synchroniserAgendas(true)
+                    suivant()
+                } else if (suivi.etape === 8) {
+                    if (suivi.ecrits.length > 0) {
+                        var e = suivi.ecrits.shift()
+                        bilan("événement créé par MMail dans l'agenda Microsoft 365", e[0])
+                        var trois = fichesDu(3).filter(function(f) { return f.titre === "Essai d'écriture MMail 0.9.0" })
+                        bilan("il paraît dans trois jours, de 15:00 à 15:45, modifiable",
+                              trois.length === 1 && trois[0].quand.indexOf("15:00") >= 0 && trois[0].quand.indexOf("15:45") >= 0
+                              && trois[0].modifiable)
+                        var demain = fichesDu(1).filter(function(f) { return f.titre === "Essai d'agenda MMail 0.9.0" })
+                        if (demain.length !== 1) {
+                            bilan("l'événement de demain à supprimer", false)
+                            finir()
+                            return
+                        }
+                        boite.supprimerEvenement(demain[0].objet, demain[0].occurrence, false)
+                        suivant()
+                    } else if (ecoule > 90) {
+                        bilan("pas de nouvelle de l'écriture", false)
+                        finir()
+                    }
+                } else if (suivi.etape === 9) {
+                    if (suivi.ecrits.length > 0) {
+                        var s = suivi.ecrits.shift()
+                        bilan("événement de demain supprimé par MMail", s[0])
+                        bilan("il ne paraît plus", fichesDu(1).every(function(f) { return f.titre !== "Essai d'agenda MMail 0.9.0" }))
+                        finir()
+                    } else if (ecoule > 90) {
+                        bilan("pas de nouvelle de la suppression", false)
+                        finir()
+                    }
+                } else if (suivi.etape === 7) {
+                    if (suivi.synchros > suivi.agendaDepuis) {
+                        var f1 = fichesDu(1)
+                        var f2 = fichesDu(2)
+                        f1.concat(f2).forEach(function(f) {
+                            console.log("scenario: fiche « " + f.titre + " » | " + f.quand + " | " + f.nomAgenda + " | répète "
+                                        + f.repete + " | " + (f.modifiable ? "modifiable" : f.motif))
+                        })
+                        var simple = f1.filter(function(f) { return f.titre === "Essai d'agenda MMail 0.9.0" })
+                        var un = simple.length === 1 ? simple[0] : null
+                        bilan("événement d'Outlook lu demain, de 10:00 à 11:00",
+                              un !== null && un.quand.indexOf("10:00") >= 0 && un.quand.indexOf("11:00") >= 0)
+                        bilan("son lieu et sa description lus",
+                              un !== null && un.lieu === "Salle d'essai" && un.description.indexOf("Ligne 2") >= 0)
+                        bilan("modifiable dans MMail", un !== null && un.modifiable)
+                        var serie = f1.concat(f2).filter(function(f) { return f.titre === "Essai de série MMail 0.9.0" })
+                        bilan("série d'Outlook : une occurrence demain, une après-demain, marquées « répète »",
+                              serie.length === 2 && serie.every(function(f) { return f.repete }))
+                        // L'écriture : un événement nouveau dans trois jours,
+                        // dans le premier agenda de la boîte qui l'accepte.
+                        var cibles = JSON.parse(boite.agendas()).filter(function(a) {
+                            return a.microsoft && a.compte === c.compte && a.ecriture
+                        })
+                        bilan("un agenda Microsoft 365 accepte l'écriture", cibles.length > 0)
+                        if (cibles.length === 0) {
+                            finir()
+                            return
+                        }
+                        suivi.cible = cibles[0].id
+                        boite.enregistrerEvenement(JSON.stringify({
+                            agenda: suivi.cible, objet: 0, occurrence: "", titre: "Essai d'écriture MMail 0.9.0", lieu: "",
+                            description: "Posé par MMail", journee: false, debut: jourDans(3) + "T15:00", fin: jourDans(3) + "T15:45",
+                            repetition: "", jusquAu: "", rappel: 5, participants: null, organisateur: "", nomOrganisateur: ""
+                        }))
+                        suivant()
+                    } else if (ecoule > 120) {
+                        bilan("pas de synchronisation des agendas", false)
+                        finir()
+                    }
+                }
+            }
+        })
+        tic.start()
+    }
+
     /// Scénario « categories » (0.6.15, demande de Manu du 22/10) : dans la
     /// boîte de réception (deux messages au moins), une catégorie d'origine
     /// et une catégorie créée posées ; l'état du sous-menu « Catégoriser » ;
@@ -4213,6 +4550,95 @@ QtObject {
                     console.log("scenario: editeur-tableau-outils " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
                     if (identifiantsEssai.dossier !== "garder")
                         Qt.quit()
+                })
+            })
+        })
+    }
+
+    /// Scénario « reponse-tableau » (0.8.7 ; banc EML=…/tableau-excel.eml) :
+    /// répondre à un message dont le corps porte un tableau collé d'Excel —
+    /// bordure en style sur chaque case, largeurs fixes, `nowrap` —, comme le
+    /// fait l'utilisateur qui écrit ses réponses à la suite des lignes du
+    /// tableau cité. Dans la rédaction, le tableau cité a une bordure de
+    /// tableau (0.6.37) ; « + Colonne » au bout d'une ligne, Tab jusqu'à la
+    /// case ajoutée de la ligne suivante ; ce qui s'y écrit part dans le HTML,
+    /// dans les cases ajoutées, à la police du tableau. MMAIL_DOSSIER
+    /// « garder » : la rédaction reste ouverte, pour une capture.
+    function lancerScenarioReponseTableau() {
+        var echecs = 0
+        var bilan = function(texte, bon) {
+            if (!bon)
+                ++echecs
+            console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
+        }
+        var fin = function() {
+            console.log("scenario: reponse-tableau " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
+            if (identifiantsEssai.dossier !== "garder")
+                Qt.quit()
+        }
+        plusTard(8000, function() {
+            var compte = comptesConnus[0].compte
+            ouvrirDossier(compte, "INBOX")
+            plusTard(4000, function() {
+                var i = -1
+                for (var k = 0; k < modeleMessages.count; ++k)
+                    if (modeleMessages.get(k).sujet === "Ramasses de la semaine")
+                        i = k
+                if (i < 0) {
+                    bilan("« Ramasses de la semaine » absent (banc EML=…/tableau-excel.eml ?)", false)
+                    fin()
+                    return
+                }
+                choisir(i, 0)
+                plusTard(3000, function() {
+                    // Comme le bouton « Répondre » (rediger), la fenêtre gardée.
+                    var r = ouvrirRedaction(compte)
+                    r.attendre(qsTr("Préparation…"))
+                    bilan("réponse préparée", boite.preparer(uidCourant, "repondre", r.jeton,
+                                                             JSON.stringify(autresAdresses(compte))))
+                    plusTard(4000, function() {
+                        var mef = r.mefCorps
+                        var corps = r.corps
+                        var compter = function(texte, motif) { return (texte.match(motif) || []).length }
+                        var racineQt = function(h) { return compter(h, /-qt-table-type: root/g) }
+                        var cases = function(h) { return compter(h, /<td/g) - racineQt(h) }
+                        var texte = function() { return corps.getText(0, corps.length) }
+                        var h = mef.html()
+                        bilan("tableau cité, 3 lignes de 3 cases : " + cases(h), cases(h) === 9)
+                        bilan("le tableau cité a une bordure", /<table[^>]*border="1"/.test(h))
+                        var t = texte()
+                        var date = t.indexOf("04.11")
+                        var quai = t.indexOf("3", date + 5)
+                        bilan("ligne « Transports Alpha » trouvée", date > 0 && quai > date)
+                        corps.forceActiveFocus()
+                        corps.cursorPosition = quai + 1
+                        bilan("dans le tableau cité", mef.dansTableau)
+                        bilan("« + Colonne »", r.ajouterAuTableau("colonne"))
+                        mef.inserer(corps.cursorPosition, "OK pour moi")
+                        var clavier = typeof gestesEssai !== "undefined" && typeof gestesEssai.touche === "function"
+                        for (var n = 0; n < 4; ++n) {
+                            if (clavier)
+                                gestesEssai.touche(corps, Qt.Key_Tab, "\t")
+                            else
+                                r.tabulerTableau(false)
+                        }
+                        mef.inserer(corps.cursorPosition, "Reporté")
+                        h = mef.html()
+                        var brut = mef.texte()
+                        bilan("4 colonnes, 12 cases : " + cases(h), cases(h) === 12)
+                        bilan("Tab " + (clavier ? "au clavier" : "par la fonction") + " : la réponse suit la ligne d'après — "
+                              + JSON.stringify(brut.substring(brut.indexOf("Transports Alpha"), brut.indexOf("Merci"))),
+                              brut.indexOf("3\nOK pour moi\nTransports Beta") >= 0 && brut.indexOf("5\nReporté") >= 0
+                              && brut.indexOf("\t") < 0)
+                        var ok = /<td[^>]*>(?:(?!<\/td>)[\s\S])*OK pour moi(?:(?!<\/td>)[\s\S])*<\/td>/.exec(h)
+                        console.log("scenario: case ajoutée :", ok ? ok[0] : "")
+                        bilan("ce qui s'écrit dans la colonne ajoutée prend la police du tableau",
+                              !!ok && ok[0].indexOf("Calibri") > 0)
+                        var envoi = r.contenu().html
+                        bilan("le HTML envoyé porte les deux réponses dans le tableau",
+                              /<table[^>]*border="1"[\s\S]*OK pour moi[\s\S]*Reporté[\s\S]*<\/table>/.test(envoi))
+                        fin()
+                    })
                 })
             })
         })

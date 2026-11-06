@@ -34,6 +34,29 @@ Connections {
             messageEtat.texte = qsTr("Connexion à Microsoft : %1").arg(message)
     }
 
+    // Autorisation des réglages de la boîte (catégories reliées à Outlook,
+    // DialogueCategories.qml).
+    // Règles d'Outlook accordées aux filtres (DialogueFiltres.qml).
+    function onReglesOutlook(compte, message, aAutoriser) {
+        if (message.length > 0)
+            messageEtat.texte = qsTr("Filtres : %1").arg(message)
+        if (dlgFiltres.visible)
+            dlgFiltres.reglesRecues(compte, message, aAutoriser)
+    }
+
+    function onCouleursOutlook(compte, message) {
+        messageEtat.texte = message.length > 0
+            ? qsTr("Catégories d'Outlook : %1").arg(message)
+            : qsTr("Autorisation reçue : MMail reprend les couleurs d'Outlook, et la liste d'Outlook suivra vos changements.")
+    }
+
+    // Agendas Microsoft 365 (0.9.0) : la lecture suit d'elle-même.
+    function onAgendasMicrosoftAutorises(compte, message) {
+        messageEtat.texte = message.length > 0
+            ? qsTr("Agendas Microsoft 365 : %1").arg(message)
+            : qsTr("Autorisation reçue : MMail lit les agendas Microsoft 365 de ce compte.")
+    }
+
     function onGoogleConnecte(adresse, hote, jeton) {
         // Comme un compte Microsoft : le jeton va au coffre une fois la
         // connexion acceptée.
@@ -600,7 +623,7 @@ Connections {
                           : Qt.platform.os === "android" ? "" : fenetre.logicielPour(nom)
             if (programme.length > 0 && lanceur.lancer(programme, chemin)) {
                 messageEtat.texte = qsTr("Ouverture de %1 avec %2…").arg(chemin).arg(lanceur.nom(programme))
-            } else if (!Qt.openUrlExternally(url)) {
+            } else if (!lanceur.ouvrir(chemin)) {
                 messageEtat.texte = qsTr("Aucun logiciel n'a pu ouvrir %1.").arg(chemin)
             } else {
                 messageEtat.texte = programme.length > 0

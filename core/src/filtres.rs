@@ -51,6 +51,11 @@ pub struct Filtre {
     pub compte_destination: String,
     #[serde(default)]
     pub arreter: bool,
+    /// Aussi dans les règles de la boîte de réception d'Outlook (Microsoft
+    /// 365, 0.9.0) : elles trient même quand aucun MMail n'est ouvert. Cf.
+    /// `microsoft::regle_de` pour ce qu'Outlook sait faire.
+    #[serde(default)]
+    pub serveur: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]

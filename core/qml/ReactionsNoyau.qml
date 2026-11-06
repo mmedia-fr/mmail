@@ -600,7 +600,7 @@ Connections {
                           : Qt.platform.os === "android" ? "" : fenetre.logicielPour(nom)
             if (programme.length > 0 && lanceur.lancer(programme, chemin)) {
                 messageEtat.texte = qsTr("Ouverture de %1 avec %2…").arg(chemin).arg(lanceur.nom(programme))
-            } else if (!Qt.openUrlExternally(url)) {
+            } else if (!lanceur.ouvrir(chemin)) {
                 messageEtat.texte = qsTr("Aucun logiciel n'a pu ouvrir %1.").arg(chemin)
             } else {
                 messageEtat.texte = programme.length > 0

@@ -10,11 +10,19 @@
 #pragma once
 
 #include <QtCore/QFileInfo>
+#include <QtCore/QMimeDatabase>
 #include <QtCore/QObject>
 #include <QtCore/QProcess>
 #include <QtCore/QString>
 #include <QtCore/QStringList>
 #include <QtCore/QUrl>
+
+#include <QtGui/QDesktopServices>
+
+#ifdef Q_OS_ANDROID
+#include <QtCore/QJniObject>
+#include <QtCore/qcoreapplication_platform.h>
+#endif
 
 #ifdef Q_OS_WIN
 #include <windows.h>
@@ -42,6 +50,32 @@ public:
     if (exe.isEmpty() || !info.isFile() || !info.isExecutable())
       return false;
     return QProcess::startDetached(exe, QStringList{ chemin_(fichier) });
+  }
+
+  /// Ouvre un fichier local (chemin ou adresse `file:`) avec le logiciel du
+  /// système. Sous Android, par une adresse `content:` du FileProvider de
+  /// MMail (packaging/android/src/fr/mmedia/mmail/Ouvrir.java) : Android
+  /// refuse une adresse `file:` passée à une autre application, et
+  /// Qt.openUrlExternally n'ouvrait rien. Faux si rien ne l'a ouvert.
+  Q_INVOKABLE bool ouvrir(const QString& fichier) const
+  {
+    const QString local = chemin_(fichier);
+#ifdef Q_OS_ANDROID
+    // Déjà une adresse d'un fournisseur (fichier choisi dans le sélecteur
+    // d'Android) : Qt sait la transmettre.
+    if (fichier.startsWith(QLatin1String("content:")))
+      return QDesktopServices::openUrl(QUrl(fichier));
+    const QJniObject contexte = QNativeInterface::QAndroidApplication::context();
+    if (!contexte.isValid())
+      return false;
+    const QString type = QMimeDatabase().mimeTypeForFile(local).name();
+    return QJniObject::callStaticMethod<jboolean>("fr/mmedia/mmail/Ouvrir", "fichier",
+                                                  "(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;)Z",
+                                                  contexte.object(), QJniObject::fromString(local).object<jstring>(),
+                                                  QJniObject::fromString(type).object<jstring>());
+#else
+    return QDesktopServices::openUrl(QUrl::fromLocalFile(local));
+#endif
   }
 
   /// Nom lisible d'un programme : « C:/…/Acrobat.exe » → « Acrobat ».

@@ -57,6 +57,13 @@ Connections {
             : qsTr("Autorisation reçue : MMail lit les agendas Microsoft 365 de ce compte.")
     }
 
+    // Contacts Microsoft 365 (0.9.0) : la lecture suit d'elle-même.
+    function onContactsMicrosoftAutorises(compte, message) {
+        messageEtat.texte = message.length > 0
+            ? qsTr("Contacts Microsoft 365 : %1").arg(message)
+            : qsTr("Autorisation reçue : MMail lit les contacts Microsoft 365 de ce compte.")
+    }
+
     function onGoogleConnecte(adresse, hote, jeton) {
         // Comme un compte Microsoft : le jeton va au coffre une fois la
         // connexion acceptée.

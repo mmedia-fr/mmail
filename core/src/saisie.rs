@@ -405,7 +405,7 @@ fn rappel_valarm(titre: &str, minutes: i64) -> Composant {
 }
 
 /// « Nom <adresse> » ou « adresse » : le nom et l'adresse en minuscules.
-fn lire_adresse(texte: &str) -> Option<(String, String)> {
+pub(crate) fn lire_adresse(texte: &str) -> Option<(String, String)> {
     let t = texte.trim();
     let (nom, adresse) = match (t.rfind('<'), t.rfind('>')) {
         (Some(i), Some(j)) if i < j => (t[..i].trim().trim_matches('"').trim(), t[i + 1..j].trim()),

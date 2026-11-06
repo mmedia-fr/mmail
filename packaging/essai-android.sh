@@ -212,14 +212,15 @@ controler veille-profonde "$profonde"
 [ "$echec" = 0 ] || exit 1
 echo "Réveil après veille : MMail toujours affiché"
 
-# Connexion Microsoft intégrée (0.6.11) : sa page n'est plus chargée qu'au
-# moment d'une connexion. Pas de vue web avant ; elle s'ouvre depuis la fenêtre
-# d'ajout de compte ; Retour l'abandonne et la décharge sans fermer MMail ; et
-# l'essai de la touche Retour qui suit vérifie que MMail se ferme ensuite. Les
-# boutons se trouvent par l'arbre d'accessibilité d'Android (s'il ne les montre
-# pas, l'étape est signalée et sautée) ; cet arbre n'étant pas rafraîchi après
-# l'ouverture de la page, c'est la hiérarchie des vues de l'activité qui dit si
-# la vue web est là.
+# Connexion Microsoft par MSAL (0.7.0). MSAL vérifie que l'adresse de retour
+# de sa configuration porte le hachage de la signature de l'APK : signé ici
+# d'une clé d'essai jetable, il refuse avant d'ouvrir quoi que ce soit, et ce
+# refus doit revenir jusqu'à l'interface (Jetons.java, pont natif,
+# Boite.terminerAndroid) sans arrêter MMail. Signé de la clé de production,
+# c'est la page de Microsoft qui s'ouvrirait : Retour l'abandonne. Pas de vue
+# web dans MMail, avant comme après. Les boutons se trouvent par l'arbre
+# d'accessibilité d'Android (s'il ne les montre pas, l'étape est signalée et
+# sautée).
 # trouver <début du texte> (ou =<texte exact>) : centre du premier élément
 # affiché qui porte ce texte, vide s'il n'y en a pas.
 trouver() {
@@ -270,31 +271,55 @@ if [ -n "$(trouver "Toutes les BàL")" ]; then
   adb shell input swipe 250 330 10 330 300
   sleep 3
 fi
+adb logcat -c
 if ! toucher "Compte Microsoft" 1-compte; then
   echo "::warning::Connexion Microsoft non essayée : bouton introuvable dans l'arbre d'accessibilité"
 else
-  # Adresse demandée, puis Entrée : la page de Microsoft s'ouvre.
+  # Adresse demandée, puis Entrée : MSAL prend la main.
   sleep 3
   adb shell input text "essai.mmail@outlook.com"
   sleep 1
   adb shell input keyevent KEYCODE_ENTER
-  sleep 10
-  adb exec-out screencap -p > connexion-1-ouverte.png
-  if [ "$(vue_web 1-ouverte)" = 0 ]; then
-    echo "Connexion Microsoft : la page intégrée ne s'est pas ouverte" >&2
+  # L'issue s'inscrit au journal (Jetons.java, puis Main.qml) ; le message de
+  # la barre d'état, lui, ne reste que quelques secondes.
+  focus=""
+  for i in $(seq 1 15); do
+    sleep 2
+    adb logcat -d > logcat-connexion.txt 2>/dev/null || true
+    grep -q "connexion Android : issue" logcat-connexion.txt && break
+    focus=$(adb shell dumpsys window | grep -m 1 'mCurrentFocus' | tr -d '\r' || true)
+    echo "$focus" | grep -q "$PAQUET/org.qtproject" || break
+  done
+  adb exec-out screencap -p > connexion-1-msal.png
+  grep -E "MMail *: connexion|connexion Android|MSAL|Msal" logcat-connexion.txt | cut -c1-300 || true
+  if grep -E "UnsatisfiedLinkError|NoClassDefFoundError" logcat-connexion.txt \
+     || grep -A2 "FATAL EXCEPTION" logcat-connexion.txt | grep -q "$PAQUET"; then
+    echo "Connexion Microsoft : erreur Java au lancement de MSAL" >&2
     exit 1
   fi
-  adb shell input keyevent KEYCODE_BACK
-  sleep 5
-  adb exec-out screencap -p > connexion-2-retour.png
-  if [ "$(vue_web 2-retour)" != 0 ]; then
-    echo "Connexion Microsoft : vue web toujours là après Retour" >&2
+  if [ -z "$(adb shell pidof "$PAQUET" || true)" ]; then
+    echo "Connexion Microsoft : MMail arrêté au lancement de MSAL" >&2
+    exit 1
+  fi
+  focus=$(adb shell dumpsys window | grep -m 1 'mCurrentFocus' | tr -d '\r' || true)
+  if grep -q "connexion Android : issue lue par le noyau" logcat-connexion.txt; then
+    echo "Connexion Microsoft : issue de MSAL revenue jusqu'au noyau ($(grep -m 1 -o 'connexion : issue.*' logcat-connexion.txt | cut -c1-160))"
+  elif echo "$focus" | grep -qiE 'chrome|browser|customtab|AuthorizationActivity|BrowserTabActivity|identity'; then
+    echo "Connexion Microsoft : page de Microsoft ouverte par MSAL ($focus)"
+    adb shell input keyevent KEYCODE_BACK
+    sleep 5
+  else
+    cp ui.xml ui-1-msal.xml 2>/dev/null || true
+    echo "Connexion Microsoft : ni refus ni page de Microsoft ($focus)" >&2
+    exit 1
+  fi
+  if [ "$(vue_web 2-apres)" != 0 ]; then
+    echo "Connexion Microsoft : vue web dans MMail" >&2
     exit 1
   elif [ -z "$(adb shell pidof "$PAQUET" || true)" ]; then
-    echo "Connexion Microsoft : Retour a fermé MMail au lieu d'abandonner la connexion" >&2
+    echo "Connexion Microsoft : MMail arrêté après la connexion" >&2
     exit 1
   fi
-  echo "Connexion Microsoft : page ouverte, puis abandonnée par Retour"
 fi
 
 # Touche Retour (0.6.11). Le 21/10, Manu retrouve MMail sur un écran blanc après

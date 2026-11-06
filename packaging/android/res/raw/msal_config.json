@@ -1,0 +1,17 @@
+{
+  "client_id": "6f263490-3351-4167-908b-10d701fc2f1c",
+  "authorization_user_agent": "DEFAULT",
+  "redirect_uri": "msauth://fr.mmedia.mmail/tl5nygZ5xvjjG29XWZS9fkDd1Jc%3D",
+  "broker_redirect_uri_registered": true,
+  "account_mode": "MULTIPLE",
+  "authorities": [
+    {
+      "type": "AAD",
+      "audience": {
+        "type": "AzureADandPersonalMicrosoftAccount",
+        "tenant_id": "common"
+      },
+      "default": true
+    }
+  ]
+}

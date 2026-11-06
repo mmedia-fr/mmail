@@ -116,6 +116,19 @@ ApplicationWindow {
     Releve {
         id: releve
     }
+    // Sous Android (0.7.0) : connexion Microsoft et Google par le système
+    // (MSAL, services Google), cf. cpp/connexion_android.h. L'issue revient ici
+    // en JSON, et le noyau enregistre le compte comme au retour du navigateur.
+    ConnexionAndroid {
+        id: connexionAndroid
+        onTermine: function(issue) {
+            var lue = boite.terminerAndroid(issue)
+            // Au journal d'Android (essai de la CI) : le genre de l'issue, pas son contenu.
+            console.info("connexion Android : issue " + (lue ? "lue par le noyau" : "illisible"))
+            if (!lue)
+                messageEtat.texte = qsTr("Retour de connexion illisible : recommencez l'ajout du compte.")
+        }
+    }
 
     Notifieur {
         id: notifieur
@@ -4251,9 +4264,15 @@ ApplicationWindow {
         onAccepted: fenetre.ouvrirGoogle(indice)
     }
 
-    /// La page de Google, dans le navigateur.
+    /// La page de Google, dans le navigateur ; sous Android, l'accord des
+    /// services Google (0.7.0).
     function ouvrirGoogle(indice) {
         marquerGeste(indice)
+        if (connexionAndroid.disponible) {
+            connexionAndroid.connecter("google", indice || "")
+            messageEtat.texte = qsTr("Connexion à Google…")
+            return
+        }
         var url = boite.connecterGoogle(indice)
         if (url.length === 0) {
             messageEtat.texte = qsTr("Connexion à Google impossible : %1").arg(boite.erreur)
@@ -4316,6 +4335,13 @@ ApplicationWindow {
             return
         }
         marquerGeste(indice)
+        // Sous Android : MSAL, avec le courtier Microsoft Authenticator s'il
+        // est là (accès conditionnel, appareil géré) — 0.7.0.
+        if (connexionAndroid.disponible) {
+            connexionAndroid.connecter("microsoft", indice || "")
+            messageEtat.texte = qsTr("Connexion à Microsoft…")
+            return
+        }
         var url = boite.connecterMicrosoft(indice)
         if (url.length === 0) {
             messageEtat.texte = qsTr("Connexion à Microsoft impossible : %1").arg(boite.erreur)

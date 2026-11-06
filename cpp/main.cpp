@@ -58,6 +58,7 @@ extern const std::size_t nombreTraductionsQt;
 #include "presse_papier.h"
 #include "correcteur.h"
 #include "releve.h"
+#include "connexion_android.h"
 #include "personnalisation.h"
 #include "mise_en_forme.h"
 #include "rendu_complet.h"
@@ -574,6 +575,8 @@ int main(int argc, char* argv[])
   qmlRegisterType<Correcteur>("fr.mmedia.mmail.natif", 1, 0, "Correcteur");
   // Relève en arrière-plan sous Android (0.7.0, cf. releve.h).
   qmlRegisterType<Releve>("fr.mmedia.mmail.natif", 1, 0, "Releve");
+  // Connexion Microsoft et Google par Android (0.7.0, cf. connexion_android.h).
+  qmlRegisterType<ConnexionAndroid>("fr.mmedia.mmail.natif", 1, 0, "ConnexionAndroid");
   // Long texte riche dessiné en entier (cf. cpp/rendu_complet.h).
   qmlRegisterType<RenduComplet>("fr.mmedia.mmail.natif", 1, 0, "RenduComplet");
   // Importation d'une personnalisation dans le profil (0.8.6, Android).

@@ -278,6 +278,9 @@ public class Releve extends JobService {
         if (!reglage.optBoolean("actif", true) || index.isEmpty() || !new File(index).isFile())
             return;
         charger();
+        // Comptes connectés par Android (0.7.0) : le noyau demandera leurs
+        // jetons à Jetons.java, depuis ce processus.
+        Jetons.preparer(this);
         String liste = texte(comptes(octets(index)));
         if (liste.startsWith("{")) {
             Log.w(JOURNAL, "relève : " + new JSONObject(liste).optString("erreur"));

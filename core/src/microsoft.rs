@@ -1039,6 +1039,194 @@ pub fn avec_cci(octets: &[u8], destinataires: &[String]) -> Vec<u8> {
     sortie
 }
 
+// ---------------------------------------- règles de la boîte de réception
+
+/// Début du nom des règles d'Outlook que MMail tient (0.9.0, lot 3) : il ne
+/// touche jamais aux autres, celles qu'on a créées dans Outlook.
+pub const PREFIXE_REGLE: &str = "MMail : ";
+
+/// Numéro d'ordre de la première règle de MMail : après celles d'Outlook, qui
+/// commencent à 1.
+const SEQUENCE_REGLES: usize = 100;
+
+/// Une règle d'Outlook tirée d'un filtre de MMail : son nom, son corps pour
+/// Graph et, s'il déplace, le dossier (chemin IMAP, ou `indesirables`) dont
+/// Graph veut l'identifiant.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Regle {
+    pub nom: String,
+    pub corps: serde_json::Value,
+    pub dossier: Option<String>,
+}
+
+/// Une condition de MMail en condition de règle d'Outlook (`messageRulePredicates`),
+/// ou la raison pour laquelle Outlook ne sait pas la faire.
+fn predicat(c: &crate::filtres::Condition) -> Result<(&'static str, serde_json::Value), String> {
+    let valeur = c.valeur.trim();
+    match (c.champ.as_str(), c.operateur.as_str()) {
+        (_, "commence") => Err("Outlook ne sait pas « commence par »".into()),
+        (_, "finit") => Err("Outlook ne sait pas « se termine par »".into()),
+        ("a" | "cc", _) => Err("Outlook ne distingue pas « À » de « Cc » : choisissez « À ou Cc »".into()),
+        ("expediteur", "contient") => Ok(("senderContains", valeur.into())),
+        ("expediteur", "est") if valeur.contains('@') => {
+            Ok(("fromAddresses", serde_json::json!({ "emailAddress": { "address": valeur } })))
+        }
+        ("expediteur", "est") => Err("Outlook ne compare exactement qu'une adresse d'expéditeur, pas un nom".into()),
+        ("objet", "contient") => Ok(("subjectContains", valeur.into())),
+        ("destinataires", "contient") => Ok(("recipientContains", valeur.into())),
+        (_, "est") => Err("Outlook ne sait pas « est » sur ce champ : prenez « contient »".into()),
+        (champ, operateur) => Err(format!("condition inconnue : {champ} {operateur}")),
+    }
+}
+
+/// Traduit un filtre de MMail en règle d'Outlook pour la boîte `adresse`, ou
+/// dit pourquoi Outlook ne sait pas faire la même chose — le filtre reste
+/// alors appliqué par MMail seul. `adresse` vide : la seule traduction, sans
+/// le contrôle de la boîte de destination.
+pub fn regle_de(f: &crate::filtres::Filtre, adresse: &str) -> Result<Regle, String> {
+    if f.conditions.is_empty() {
+        return Err("un filtre sans condition ne part pas dans Outlook".into());
+    }
+    // Plusieurs valeurs d'une même condition d'Outlook : l'une ou l'autre ;
+    // des conditions différentes : toutes.
+    let mut conditions = serde_json::Map::new();
+    for c in &f.conditions {
+        let (cle, valeur) = predicat(c)?;
+        let liste = conditions.entry(cle).or_insert_with(|| serde_json::Value::Array(Vec::new()));
+        if let Some(l) = liste.as_array_mut() {
+            l.push(valeur);
+        }
+    }
+    let repetee = conditions.values().any(|v| v.as_array().is_some_and(|l| l.len() > 1));
+    if f.tout && repetee {
+        return Err("Outlook ne sait pas exiger deux conditions sur le même champ".into());
+    }
+    if !f.tout && conditions.len() > 1 {
+        return Err("Outlook ne sait pas « une au moins » entre des champs différents".into());
+    }
+    if f.suivi {
+        return Err("les règles d'Outlook ne savent pas mettre un drapeau de suivi".into());
+    }
+    let ailleurs = !f.compte_destination.trim().is_empty()
+        && (adresse.is_empty() || !f.compte_destination.trim().eq_ignore_ascii_case(adresse.trim()));
+    if f.destination == "dossier" && ailleurs {
+        return Err("une règle d'Outlook ne déplace que vers un dossier de sa boîte".into());
+    }
+    let mut actions = serde_json::Map::new();
+    if f.lu {
+        actions.insert("markAsRead".into(), true.into());
+    }
+    let dossier = match f.destination.as_str() {
+        "dossier" if f.dossier.trim().is_empty() => return Err("dossier de destination à choisir".into()),
+        "dossier" => Some(f.dossier.clone()),
+        "indesirables" => Some("indesirables".to_string()),
+        "corbeille" => {
+            actions.insert("delete".into(), true.into());
+            None
+        }
+        _ => None,
+    };
+    if f.arreter {
+        actions.insert("stopProcessingRules".into(), true.into());
+    }
+    if actions.is_empty() && dossier.is_none() {
+        return Err("un filtre sans action ne part pas dans Outlook".into());
+    }
+    let nom = f.nom.trim();
+    Ok(Regle {
+        nom: format!("{PREFIXE_REGLE}{}", if nom.is_empty() { "filtre" } else { nom }),
+        corps: serde_json::json!({ "isEnabled": f.actif, "conditions": conditions, "actions": actions }),
+        dossier,
+    })
+}
+
+/// Les règles d'Outlook voulues pour la boîte `adresse` : ses filtres marqués
+/// « aussi dans Outlook », dans l'ordre (le numéro d'ordre suit), avec un nom
+/// distinct pour chacun ; et, à part, les filtres qu'Outlook ne sait pas
+/// faire, avec la raison.
+pub fn regles_voulues(filtres: &[crate::filtres::Filtre], adresse: &str) -> (Vec<Regle>, Vec<(String, String)>) {
+    let mut regles: Vec<Regle> = Vec::new();
+    let mut refus = Vec::new();
+    for f in filtres {
+        let visee = f.compte.trim().is_empty() || f.compte.trim().eq_ignore_ascii_case(adresse.trim());
+        if !f.serveur || !visee {
+            continue;
+        }
+        match regle_de(f, adresse) {
+            Ok(mut r) => {
+                let base = r.nom.clone();
+                let mut n = 2;
+                while regles.iter().any(|x| x.nom.eq_ignore_ascii_case(&r.nom)) {
+                    r.nom = format!("{base} ({n})");
+                    n += 1;
+                }
+                r.corps["displayName"] = r.nom.clone().into();
+                r.corps["sequence"] = (SEQUENCE_REGLES + regles.len()).into();
+                regles.push(r);
+            }
+            Err(raison) => refus.push((f.nom.clone(), raison)),
+        }
+    }
+    (regles, refus)
+}
+
+/// Accorde les règles de la boîte de réception d'Outlook aux règles voulues
+/// (`regles_voulues`) : créées, mises à jour, et retirées quand le filtre ne
+/// part plus dans Outlook — seulement celles que MMail tient (`PREFIXE_REGLE`).
+/// `separateur` : celui des chemins IMAP de la boîte. Rend le nombre
+/// d'écritures faites.
+pub fn accorder_regles(jeton: &str, voulues: &[Regle], separateur: &str) -> Result<usize, ErreurOAuth> {
+    accorder_regles_par(&mut |d: &Demande| http::envoyer(d), jeton, voulues, separateur)
+}
+
+fn accorder_regles_par(t: &mut Transport, jeton: &str, voulues: &[Regle], separateur: &str) -> Result<usize, ErreurOAuth> {
+    let base = format!("{GRAPH}/mailFolders/inbox/messageRules");
+    let mut tenues: Vec<(String, String)> = Vec::new();
+    let mut suivante = Some(format!("{base}?$select=id,displayName"));
+    while let Some(url) = suivante.take() {
+        let page = reponse_json(&appeler(t, jeton, "GET", &url, "", b"", REPONSE_MAX)?)?;
+        for r in page.get("value").and_then(|v| v.as_array()).into_iter().flatten() {
+            let texte = |cle: &str| r.get(cle).and_then(|v| v.as_str()).unwrap_or_default().to_string();
+            let nom = texte("displayName");
+            if nom.starts_with(PREFIXE_REGLE) {
+                tenues.push((texte("id"), nom));
+            }
+        }
+        suivante = page.get("@odata.nextLink").and_then(|v| v.as_str()).map(str::to_string);
+    }
+    // Tous les dossiers d'abord : un dossier introuvable n'a encore rien
+    // changé dans Outlook.
+    let mut corps = Vec::new();
+    for r in voulues {
+        let mut c = r.corps.clone();
+        if let Some(chemin) = &r.dossier {
+            let id = if chemin == "indesirables" {
+                let d = reponse_json(&appeler(t, jeton, "GET", &format!("{GRAPH}/mailFolders/junkemail?$select=id"), "", b"", REPONSE_MAX)?)?;
+                d.get("id").and_then(|v| v.as_str()).unwrap_or_default().to_string()
+            } else {
+                dossier_graph_par(t, jeton, chemin, separateur)?
+            };
+            c["actions"]["moveToFolder"] = id.into();
+        }
+        corps.push((r.nom.clone(), c.to_string()));
+    }
+    let mut ecritures = 0;
+    for (nom, c) in &corps {
+        match tenues.iter().find(|(_, n)| n.eq_ignore_ascii_case(nom)) {
+            Some((id, _)) => succes(&appeler(t, jeton, "PATCH", &format!("{base}/{}", encoder(id)), "application/json", c.as_bytes(), REPONSE_MAX)?)?,
+            None => succes(&appeler(t, jeton, "POST", &base, "application/json", c.as_bytes(), REPONSE_MAX)?)?,
+        }
+        ecritures += 1;
+    }
+    for (id, nom) in &tenues {
+        if !corps.iter().any(|(n, _)| n.eq_ignore_ascii_case(nom)) {
+            succes(&appeler(t, jeton, "DELETE", &format!("{base}/{}", encoder(id)), "", b"", REPONSE_MAX)?)?;
+            ecritures += 1;
+        }
+    }
+    Ok(ecritures)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1730,5 +1918,116 @@ mod tests {
         // La connexion d'un compte, elle, ne change pas.
         let url = url_autorisation("C", "http://localhost:1", "D", "E", "");
         assert!(url.contains("&prompt=select_account") && url.contains(&encoder(PORTEE_AUTORISATION)), "{url}");
+    }
+
+    /// Un filtre tel quel, sans le contrôle de `filtres::lire` (qui refuse
+    /// déjà, par exemple, un filtre sans action).
+    fn filtre_json(json: &str) -> crate::filtres::Filtre {
+        serde_json::from_str(json).unwrap()
+    }
+
+    #[test]
+    fn filtre_traduit_en_regle_d_outlook() {
+        let f = filtre_json(r#"{"nom":"Factures","compte":"a@exemple.fr","conditions":[
+            {"champ":"expediteur","operateur":"contient","valeur":" compta "},
+            {"champ":"objet","operateur":"contient","valeur":"Facture"}],
+            "lu":true,"destination":"dossier","dossier":"INBOX/Factures","arreter":true,"serveur":true}"#);
+        let r = regle_de(&f, "a@exemple.fr").unwrap();
+        assert_eq!(r.nom, "MMail : Factures");
+        assert_eq!(r.dossier.as_deref(), Some("INBOX/Factures"));
+        assert_eq!(r.corps, serde_json::json!({
+            "isEnabled": true,
+            "conditions": { "senderContains": ["compta"], "subjectContains": ["Facture"] },
+            "actions": { "markAsRead": true, "stopProcessingRules": true },
+        }));
+        // « Une au moins » sur un même champ : l'une ou l'autre valeur.
+        let f = filtre_json(r#"{"nom":"","tout":false,"conditions":[
+            {"champ":"destinataires","operateur":"contient","valeur":"ventes"},
+            {"champ":"destinataires","operateur":"contient","valeur":"devis"}],"destination":"corbeille","actif":false}"#);
+        let r = regle_de(&f, "").unwrap();
+        assert_eq!(r.nom, "MMail : filtre");
+        assert_eq!(r.corps["conditions"], serde_json::json!({ "recipientContains": ["ventes", "devis"] }));
+        assert_eq!(r.corps["actions"], serde_json::json!({ "delete": true }));
+        assert_eq!(r.corps["isEnabled"], false);
+        // Une adresse exacte ; les indésirables.
+        let f = filtre_json(r#"{"conditions":[{"champ":"expediteur","operateur":"est","valeur":"pub@exemple.com"}],
+            "destination":"indesirables"}"#);
+        let r = regle_de(&f, "a@exemple.fr").unwrap();
+        assert_eq!(r.corps["conditions"]["fromAddresses"][0]["emailAddress"]["address"], "pub@exemple.com");
+        assert_eq!(r.dossier.as_deref(), Some("indesirables"));
+        // Ce qu'Outlook ne sait pas faire.
+        let refus = |json: &str| regle_de(&filtre_json(json), "a@exemple.fr").unwrap_err();
+        assert!(refus(r#"{"conditions":[{"champ":"objet","operateur":"commence","valeur":"RE"}],"lu":true}"#).contains("commence"));
+        assert!(refus(r#"{"conditions":[{"champ":"a","operateur":"contient","valeur":"x"}],"lu":true}"#).contains("À ou Cc"));
+        assert!(refus(r#"{"conditions":[{"champ":"expediteur","operateur":"est","valeur":"Jean"}],"lu":true}"#).contains("adresse"));
+        assert!(refus(r#"{"conditions":[{"champ":"objet","operateur":"contient","valeur":"a"},
+            {"champ":"objet","operateur":"contient","valeur":"b"}],"lu":true}"#).contains("même champ"));
+        assert!(refus(r#"{"tout":false,"conditions":[{"champ":"objet","operateur":"contient","valeur":"a"},
+            {"champ":"expediteur","operateur":"contient","valeur":"b"}],"lu":true}"#).contains("une au moins"));
+        assert!(refus(r#"{"conditions":[{"champ":"objet","operateur":"contient","valeur":"a"}],"suivi":true}"#).contains("drapeau"));
+        assert!(refus(r#"{"conditions":[{"champ":"objet","operateur":"contient","valeur":"a"}],"destination":"dossier",
+            "dossier":"Archives","compte_destination":"b@exemple.fr"}"#).contains("sa boîte"));
+        assert!(refus(r#"{"conditions":[{"champ":"objet","operateur":"contient","valeur":"a"}]}"#).contains("sans action"));
+        // La boîte de destination nommée, mais c'est la sienne : accepté.
+        assert!(regle_de(&filtre_json(r#"{"conditions":[{"champ":"objet","operateur":"contient","valeur":"a"}],
+            "destination":"dossier","dossier":"Archives","compte_destination":"A@exemple.fr"}"#), "a@exemple.fr").is_ok());
+    }
+
+    #[test]
+    fn regles_voulues_pour_une_boite() {
+        let filtres = crate::filtres::lire(r#"[
+            {"nom":"Pub","conditions":[{"champ":"objet","operateur":"contient","valeur":"promo"}],"destination":"corbeille","serveur":true},
+            {"nom":"Local","conditions":[{"champ":"objet","operateur":"contient","valeur":"x"}],"lu":true},
+            {"nom":"Pub","compte":"a@exemple.fr","conditions":[{"champ":"objet","operateur":"contient","valeur":"soldes"}],"lu":true,"serveur":true},
+            {"nom":"Autre boîte","compte":"b@exemple.fr","conditions":[{"champ":"objet","operateur":"contient","valeur":"x"}],"lu":true,"serveur":true},
+            {"nom":"Suivi","conditions":[{"champ":"objet","operateur":"contient","valeur":"x"}],"suivi":true,"serveur":true}
+        ]"#).unwrap();
+        let (regles, refus) = regles_voulues(&filtres, "A@exemple.fr");
+        let noms: Vec<&str> = regles.iter().map(|r| r.nom.as_str()).collect();
+        assert_eq!(noms, ["MMail : Pub", "MMail : Pub (2)"]);
+        assert_eq!(regles[0].corps["sequence"], 100);
+        assert_eq!(regles[1].corps["sequence"], 101);
+        assert_eq!(regles[1].corps["displayName"], "MMail : Pub (2)");
+        assert_eq!(refus.len(), 1);
+        assert_eq!(refus[0].0, "Suivi");
+    }
+
+    #[test]
+    fn regles_accordees_dans_outlook() {
+        const BASE: &str = "https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messageRules";
+        let existantes = r#"{"value":[{"id":"R-out","displayName":"Ma règle d'Outlook"},
+                                      {"id":"R-pub","displayName":"MMail : Pub"},
+                                      {"id":"R-vieux","displayName":"MMail : Ancien"}]}"#;
+        let reponses = [
+            ("GET", BASE, 200, existantes),
+            ("GET", "https://graph.microsoft.com/v1.0/me/mailFolders/junkemail", 200, r#"{"id":"JUNK"}"#),
+            ("GET", "https://graph.microsoft.com/v1.0/me/mailFolders?", 200, r#"{"value":[{"id":"A1","displayName":"Archives"}]}"#),
+            ("PATCH", BASE, 200, "{}"),
+            ("POST", BASE, 201, "{}"),
+            ("DELETE", BASE, 204, ""),
+        ];
+        let filtres = crate::filtres::lire(r#"[
+            {"nom":"Pub","conditions":[{"champ":"objet","operateur":"contient","valeur":"promo"}],"destination":"indesirables","serveur":true},
+            {"nom":"Archives","compte":"a@exemple.fr","conditions":[{"champ":"expediteur","operateur":"contient","valeur":"x"}],"destination":"dossier","dossier":"Archives","serveur":true}
+        ]"#).unwrap();
+        let (voulues, _) = regles_voulues(&filtres, "a@exemple.fr");
+        let mut journal = Vec::new();
+        let n = accorder_regles_par(&mut graph_categories(&mut journal, &reponses), "J", &voulues, "/").unwrap();
+        assert_eq!(n, 3);
+        let vu: Vec<(String, String)> =
+            journal.iter().map(|r| (r.methode.clone(), r.url.trim_start_matches(BASE).to_string())).collect();
+        let ecrites: Vec<(&str, &str)> = vu.iter().filter(|(m, _)| m != "GET").map(|(m, u)| (m.as_str(), u.as_str())).collect();
+        // Mise à jour de la sienne, création de la nouvelle, retrait de celle
+        // qui ne part plus ; la règle d'Outlook n'est pas touchée.
+        assert_eq!(ecrites, [("PATCH", "/R-pub"), ("POST", ""), ("DELETE", "/R-vieux")]);
+        let corps = |i: usize| serde_json::from_slice::<serde_json::Value>(&journal.iter().filter(|r| r.methode != "GET").nth(i).unwrap().corps).unwrap();
+        assert_eq!(corps(0)["actions"]["moveToFolder"], "JUNK");
+        assert_eq!(corps(1)["actions"]["moveToFolder"], "A1");
+        assert_eq!(corps(1)["displayName"], "MMail : Archives");
+        // Un dossier introuvable : rien d'écrit.
+        let mut journal = Vec::new();
+        let sans = [("GET", BASE, 200, existantes), ("GET", "https://graph.microsoft.com/v1.0/me/mailFolders?", 200, r#"{"value":[]}"#)];
+        assert!(accorder_regles_par(&mut graph_categories(&mut journal, &sans), "J", &voulues[1..], "/").is_err());
+        assert!(journal.iter().all(|r| r.methode == "GET"));
     }
 }

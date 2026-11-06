@@ -2315,9 +2315,12 @@ QtObject {
     ///   - « ecrire » : connexion si le profil n'a pas le compte, catégorie
     ///     « Essai MMail » créée et posée sur le premier message, liste reliée
     ///     à Outlook, puis recolorée et renommée « Essai MMail renommée » ;
+    ///     enfin un filtre « aussi dans Outlook » (règle « MMail : Essai
+    ///     MMail ») ;
     ///   - « lire » : reconnexion par le coffre, les catégories posées dans
     ///     Outlook entre-temps relues, puis les catégories d'essai retirées
-    ///     des messages et de la liste de MMail (Outlook garde la sienne).
+    ///     des messages et de la liste de MMail (Outlook garde la sienne), et
+    ///     le filtre d'essai retiré, sa règle avec.
     /// Les adresses d'autorisation sont écrites au journal (« scenario: url »)
     /// pour le navigateur qui mène la connexion.
     function lancerScenarioM365Reel() {
@@ -2451,7 +2454,23 @@ QtObject {
                     console.log("scenario: catalogue final " + noms(catalogue(c).liste))
                     bilan("le message garde la catégorie : « " + (i2 >= 0 ? modeleMessages.get(i2).motsCles : "?") + " »",
                           i2 >= 0 && (" " + modeleMessages.get(i2).motsCles + " ").indexOf(" " + suivi.motCle + " ") >= 0)
-                    finir()
+                    // Un filtre « aussi dans Outlook » sans effet sur le
+                    // courrier : il marque lu un objet qu'aucun message n'a.
+                    var filtre = { nom: "Essai MMail", actif: true, compte: c.adresse, tout: true,
+                                   conditions: [{ champ: "objet", operateur: "contient", valeur: "Essai de règle MMail 0.9.0" }],
+                                   lu: true, suivi: false, destination: "", dossier: "", compte_destination: "",
+                                   arreter: false, serveur: true }
+                    console.log("scenario: raison Outlook « " + boite.regleOutlook(JSON.stringify(filtre)) + " »")
+                    bilan("filtre « aussi dans Outlook » enregistré", boite.poserFiltres(JSON.stringify([filtre])))
+                    suivant()
+                } else if (suivi.etape === 8) {
+                    if (suivi.etat.indexOf(qsTr("Filtres :")) === 0) {
+                        bilan("règle envoyée à Outlook", suivi.etat.indexOf("1 filtre(s) dans les règles d'Outlook") >= 0)
+                        finir()
+                    } else if (ecoule > 60) {
+                        bilan("pas de nouvelle des règles d'Outlook", false)
+                        finir()
+                    }
                 }
             } else {
                 if (suivi.etape === 2) {
@@ -2478,7 +2497,17 @@ QtObject {
                     suivant()
                 } else if (suivi.etape === 4 && ecoule >= 15) {
                     console.log("scenario: catalogue final " + noms(catalogue(c).liste))
-                    finir()
+                    // Le filtre d'essai retiré : sa règle part d'Outlook.
+                    bilan("filtres vidés", boite.poserFiltres("[]"))
+                    suivant()
+                } else if (suivi.etape === 5) {
+                    if (suivi.etat.indexOf(qsTr("Filtres :")) === 0) {
+                        bilan("règle retirée d'Outlook", suivi.etat.indexOf("règles de MMail retirées d'Outlook") >= 0)
+                        finir()
+                    } else if (ecoule > 60) {
+                        bilan("pas de nouvelle des règles d'Outlook", false)
+                        finir()
+                    }
                 }
             }
         })

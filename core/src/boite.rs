@@ -678,10 +678,18 @@ pub mod qobject {
         fn nettoyer_carnets(self: Pin<&mut Boite>, plan: &QString);
 
         /// Enregistre la liste des filtres. Rend faux, `erreur` posée, si un
-        /// filtre est incomplet : rien n'est alors changé.
+        /// filtre est incomplet : rien n'est alors changé. Les comptes
+        /// Microsoft 365 connectés accordent ensuite les règles d'Outlook aux
+        /// filtres « aussi dans Outlook » (issue : `reglesOutlook`).
         #[qinvokable]
         #[cxx_name = "poserFiltres"]
         fn poser_filtres(self: Pin<&mut Boite>, json: &QString) -> bool;
+
+        /// Ce qui empêche un filtre (JSON d'un seul filtre) de partir dans les
+        /// règles d'Outlook (0.9.0) ; vide s'il le peut.
+        #[qinvokable]
+        #[cxx_name = "regleOutlook"]
+        fn regle_outlook(self: &Boite, json: &QString) -> QString;
 
         /// Passe aux filtres toute la boîte de réception du compte, et non
         /// les seules arrivées. Rend le nombre de messages touchés ; issue :
@@ -1133,6 +1141,13 @@ pub mod qobject {
         #[qsignal]
         #[cxx_name = "couleursOutlook"]
         fn couleurs_outlook(self: Pin<&mut Boite>, compte: i32, message: &QString);
+
+        /// Règles d'Outlook accordées aux filtres (0.9.0) : `message` vide,
+        /// rien à dire ; `aAutoriser` : un filtre attend que MMail soit
+        /// autorisé à modifier les réglages de la boîte.
+        #[qsignal]
+        #[cxx_name = "reglesOutlook"]
+        fn regles_outlook(self: Pin<&mut Boite>, compte: i32, message: &QString, a_autoriser: bool);
 
         /// Compte Google autorisé, enregistré et en cours de connexion : comme
         /// `microsoftConnecte`.
@@ -1598,6 +1613,9 @@ enum Commande {
     /// Reprendre les couleurs des catégories d'Outlook (Microsoft 365, 0.9.0),
     /// toutes, après l'autorisation de lire les réglages de la boîte.
     CouleursOutlook,
+    /// Accorder les règles de la boîte de réception d'Outlook aux filtres
+    /// « aussi dans Outlook » (Microsoft 365, 0.9.0).
+    Regles,
     /// Envoyer une confirmation de lecture (identifiants présents) ou
     /// l'ignorer (absents) ; le message reçoit `$MDNSent` dans les deux cas.
     Confirmer { chemin: String, uid: u32, identifiants: Option<Identifiants> },
@@ -1678,6 +1696,7 @@ impl Commande {
                 | (EnvoyerDifferes { .. }, EnvoyerDifferes { .. })
                 | (Signale, Signale)
                 | (RelevePartagees, RelevePartagees)
+                | (Regles, Regles)
         ) || (matches!(anterieure, Veille) && (self.comptee() || matches!(self, Veille)))
     }
 
@@ -1781,6 +1800,9 @@ enum Issue {
     EchecRedaction { jeton: String, message: String },
     /// Envoi impossible faute de réseau, le message n'est pas parti (0.6.34).
     EnvoiEnAttente { jeton: String, message: String },
+    /// Règles d'Outlook accordées (`Commande::Regles`) : filtres partis,
+    /// écritures faites, filtres qu'Outlook ne sait pas faire (nom, raison).
+    Regles { envoyes: usize, ecritures: usize, refus: Vec<(String, String)>, erreur: Option<String>, a_autoriser: bool },
 }
 
 /// Session d'un compte, vue de l'interface.
@@ -2790,6 +2812,7 @@ impl qobject::Boite {
         match issue {
             Ok(()) => {
                 self.as_mut().envoyer(compte, Commande::CouleursOutlook);
+                self.as_mut().envoyer(compte, Commande::Regles);
                 self.as_mut().couleurs_outlook(compte as i32, &QString::default());
             }
             Err(message) => self.as_mut().couleurs_outlook(compte as i32, &QString::from(&message)),
@@ -4659,12 +4682,30 @@ impl qobject::Boite {
             return false;
         }
         match self.magasin.as_ref().map(|m| m.poser_filtres(&json)) {
-            Some(Ok(())) => true,
+            Some(Ok(())) => {
+                let microsoft: Vec<i64> = match self.magasin.as_ref() {
+                    Some(m) => self.sessions.keys().copied().filter(|c| compte_microsoft(m, *c)).collect(),
+                    None => Vec::new(),
+                };
+                for compte in microsoft {
+                    self.as_mut().envoyer(compte, Commande::Regles);
+                }
+                true
+            }
             _ => {
                 self.as_mut().set_erreur(QString::from("index local indisponible : filtres non enregistrés"));
                 false
             }
         }
+    }
+
+    pub fn regle_outlook(&self, json: &QString) -> QString {
+        let filtre = match serde_json::from_str::<crate::filtres::Filtre>(&json.to_string()) {
+            Ok(f) => f,
+            Err(e) => return QString::from(&format!("filtre illisible : {e}")),
+        };
+        let compte = filtre.compte.clone();
+        QString::from(&crate::microsoft::regle_de(&filtre, &compte).err().unwrap_or_default())
     }
 
     pub fn appliquer_filtres(self: Pin<&mut Self>, compte: i32) -> i32 {
@@ -5768,6 +5809,24 @@ impl qobject::Boite {
                 if !discret {
                     self.as_mut().drapeaux_modifies();
                 }
+            }
+            Issue::Regles { envoyes, ecritures, refus, erreur, a_autoriser } => {
+                let mut parties = Vec::new();
+                if let Some(erreur) = erreur {
+                    parties.push(format!("règles d'Outlook non mises à jour : {erreur}"));
+                } else if a_autoriser {
+                    parties.push("pour envoyer des filtres à Outlook, autorisez MMail à modifier les réglages de la boîte".to_string());
+                } else if ecritures > 0 {
+                    parties.push(if envoyes == 0 {
+                        "règles de MMail retirées d'Outlook".to_string()
+                    } else {
+                        format!("{envoyes} filtre(s) dans les règles d'Outlook")
+                    });
+                }
+                for (nom, raison) in refus {
+                    parties.push(format!("« {nom} » reste appliqué par MMail seul : {raison}"));
+                }
+                self.as_mut().regles_outlook(compte_qt, &QString::from(&parties.join(" ; ")), a_autoriser);
             }
             Issue::Deplace { cible, chemin_cible, rapport, annulation } => {
                 self.as_mut().apres_deplacement(compte, cible, &chemin_cible);
@@ -6893,6 +6952,7 @@ impl Travail {
                     Err(err) => echec("tri", format!("drapeau de suivi : {err}"), &err),
                 })
             }
+            Commande::Regles => Some(self.accorder_regles(e)),
             Commande::CouleursOutlook => Some(match self.reprendre_couleurs(e) {
                 Ok(()) => Issue::Marque { discret: true },
                 Err(message) => Issue::Echec { etape: "tri", message: format!("couleurs d'Outlook : {message}"), session_perdue: false },
@@ -7395,6 +7455,44 @@ impl Travail {
             }
         }
         Ok(())
+    }
+
+    /// Règles de la boîte de réception d'Outlook (0.9.0) : celles des filtres
+    /// « aussi dans Outlook » du compte, créées, mises à jour ou retirées.
+    /// Sans l'autorisation de modifier les réglages de la boîte, rien ne part ;
+    /// l'interface le dit si un filtre le voulait.
+    fn accorder_regles(&self, e: &mut Etabli) -> Issue {
+        let adresse = e.magasin.compte_par_id(self.compte).ok().flatten().map(|c| c.adresse).unwrap_or_default();
+        let filtres = crate::filtres::lire(&e.magasin.filtres().unwrap_or_default()).unwrap_or_default();
+        let (voulues, refus) = crate::microsoft::regles_voulues(&filtres, &adresse);
+        let issue = |ecritures: usize, erreur: Option<String>, a_autoriser: bool| Issue::Regles {
+            envoyes: if erreur.is_none() && !a_autoriser { voulues.len() } else { 0 },
+            ecritures,
+            refus: refus.clone(),
+            erreur,
+            a_autoriser,
+        };
+        let Some(jetons) = e.graph.clone() else {
+            return issue(0, None, false);
+        };
+        let jeton = match crate::microsoft::jeton_acces(&jetons, crate::microsoft::PORTEE_REGLAGES) {
+            Ok(jeton) => jeton,
+            Err(crate::microsoft::ErreurOAuth::Reseau(message)) => return issue(0, Some(message), false),
+            // Pas d'autorisation : à dire seulement si un filtre attend.
+            Err(_) => return issue(0, None, !voulues.is_empty()),
+        };
+        let separateur = e
+            .magasin
+            .dossiers(self.compte)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|d| d.separateur)
+            .find(|s| !s.is_empty())
+            .unwrap_or_default();
+        match crate::microsoft::accorder_regles(&jeton, &voulues, &separateur) {
+            Ok(ecritures) => issue(ecritures, None, false),
+            Err(x) => issue(0, Some(x.to_string()), false),
+        }
     }
 
     /// Reporte un changement du catalogue dans la liste des catégories
@@ -9232,6 +9330,7 @@ mod tests {
                 Commande::MarquerCategorie { .. } => "categorie".into(),
                 Commande::Catalogue { .. } => "catalogue".into(),
                 Commande::CouleursOutlook => "couleurs".into(),
+                Commande::Regles => "regles".into(),
                 Commande::Confirmer { .. } => "confirmer".into(),
                 Commande::EnvoyerDifferes { .. } => "differes".into(),
                 Commande::Deplacer { .. } => "deplacer".into(),

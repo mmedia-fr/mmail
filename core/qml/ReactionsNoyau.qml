@@ -36,6 +36,14 @@ Connections {
 
     // Autorisation des réglages de la boîte (catégories reliées à Outlook,
     // DialogueCategories.qml).
+    // Règles d'Outlook accordées aux filtres (DialogueFiltres.qml).
+    function onReglesOutlook(compte, message, aAutoriser) {
+        if (message.length > 0)
+            messageEtat.texte = qsTr("Filtres : %1").arg(message)
+        if (dlgFiltres.visible)
+            dlgFiltres.reglesRecues(compte, message, aAutoriser)
+    }
+
     function onCouleursOutlook(compte, message) {
         messageEtat.texte = message.length > 0
             ? qsTr("Catégories d'Outlook : %1").arg(message)

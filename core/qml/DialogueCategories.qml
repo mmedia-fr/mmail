@@ -112,14 +112,14 @@ Dialog {
                 Layout.fillWidth: true
                 wrapMode: Text.Wrap
                 opacity: 0.85
-                text: qsTr("Reliée à Outlook, la liste prend les couleurs d'Outlook, et une catégorie créée, recolorée ou renommée ici l'est aussi dans Outlook.")
+                text: qsTr("Reliée à Outlook, la liste prend les couleurs d'Outlook, et une catégorie créée, recolorée, renommée ou retirée ici l'est aussi dans Outlook.")
             }
             Button {
                 text: qsTr("Relier à Outlook…")
                 onClicked: dlgCategories.reprendreCouleurs()
                 ToolTip.visible: hovered
                 ToolTip.delay: 500
-                ToolTip.text: qsTr("Microsoft vous demandera, dans votre navigateur, d'autoriser MMail à lire et modifier les réglages de votre boîte, dont la liste des catégories d'Outlook. Sans cette autorisation, les catégories venues d'Outlook restent grises, et celles créées ici ne s'ajoutent pas à la liste d'Outlook. Retirer une catégorie ici ne la retire pas d'Outlook.")
+                ToolTip.text: qsTr("Microsoft vous demandera, dans votre navigateur, d'autoriser MMail à lire et modifier les réglages de votre boîte, dont la liste des catégories d'Outlook. Sans cette autorisation, les catégories venues d'Outlook restent grises, et celles créées ici ne s'ajoutent pas à la liste d'Outlook. Reliée, une catégorie retirée ici l'est aussi de la liste d'Outlook ; les messages gardent son nom.")
             }
         }
         ListView {

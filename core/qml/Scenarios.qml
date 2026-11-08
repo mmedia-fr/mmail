@@ -2232,6 +2232,51 @@ QtObject {
         return null
     }
 
+    /// Scénario « fenetres » (demande d'un utilisateur, 06/11) : la place et la
+    /// taille de la fenêtre principale gardées puis rendues ; une place hors
+    /// des écrans refusée, la taille rendue ; une taille nouvelle notée ;
+    /// l'agrandissement noté sans perdre la taille d'avant. Les réglages
+    /// d'avant sont remis à la fin.
+    function lancerScenarioFenetres() {
+        var echecs = 0
+        var bilan = function(texte, bon) {
+            if (!bon)
+                echecs += 1
+            console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
+        }
+        var avant = reglagesFenetres.principale
+        fenetre.geometriesGardees = true
+        var e = Qt.application.screens[0]
+        console.log("scenario: écran " + e.virtualX + "," + e.virtualY + " " + e.width + "x" + e.height
+                    + " | visibilité " + fenetre.visibility)
+        reglagesFenetres.principale = JSON.stringify({ x: e.virtualX + 40, y: e.virtualY + 30, l: 900, h: 650, max: false })
+        fenetre.poserGeometrie(fenetre, "principale")
+        bilan("taille rendue : " + fenetre.width + "x" + fenetre.height, fenetre.width === 900 && fenetre.height === 650)
+        bilan("place rendue : " + fenetre.x + "," + fenetre.y, fenetre.x === e.virtualX + 40 && fenetre.y === e.virtualY + 30)
+        reglagesFenetres.principale = JSON.stringify({ x: -20000, y: -20000, l: 800, h: 600, max: false })
+        fenetre.poserGeometrie(fenetre, "principale")
+        bilan("place hors des écrans refusée, taille rendue : " + fenetre.x + "," + fenetre.y + " " + fenetre.width + "x" + fenetre.height,
+              fenetre.x > -20000 && fenetre.y > -20000 && fenetre.width === 800 && fenetre.height === 600)
+        fenetre.width = 1010
+        fenetre.height = 700
+        fenetre.noterGeometrie(fenetre, "principale")
+        var g = fenetre.geometrieConnue("principale")
+        bilan("taille nouvelle notée : " + JSON.stringify(g), g.l === 1010 && g.h === 700 && g.max === false)
+        fenetre.visibility = Window.Maximized
+        if (fenetre.visibility === Window.Maximized) {
+            fenetre.noterGeometrie(fenetre, "principale")
+            g = fenetre.geometrieConnue("principale")
+            bilan("agrandissement noté, taille d'avant gardée : " + JSON.stringify(g), g.max === true && g.l === 1010)
+            fenetre.visibility = Window.Windowed
+        } else {
+            console.log("scenario: agrandissement sans effet sur cette plateforme (" + fenetre.visibility + ")")
+        }
+        fenetre.geometriesGardees = false
+        reglagesFenetres.principale = avant
+        console.log("scenario: fenetres " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
+        Qt.quit()
+    }
+
     /// Scénario « menu-champ » (0.6.14, demande de Manu du 22/10) : le menu
     /// du clic droit du champ de recherche — Coller ce qu'un autre champ a
     /// copié, puis Tout sélectionner, Couper, Annuler ; Couper et Copier

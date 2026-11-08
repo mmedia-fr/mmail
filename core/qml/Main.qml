@@ -82,6 +82,96 @@ ApplicationWindow {
         property string version: ""
         property string choix: ""
     }
+
+    // Position et taille des fenêtres, d'une ouverture à l'autre (demande
+    // d'un utilisateur, 06/11) : la principale, celles de rédaction et celles
+    // de message, chacune en JSON {x, y, l, h, max}.
+    Settings {
+        id: reglagesFenetres
+        category: "fenetres"
+        property string principale: ""
+        property string redaction: ""
+        property string message: ""
+    }
+
+    // Sous Android, et dans les scénarios d'essai (tailles imposées), rien
+    // n'est gardé — sauf par le scénario « fenetres », qui l'éprouve.
+    property bool geometriesGardees: Qt.platform.os !== "android" && !tactile
+        && (identifiantsEssai.scenario || "").length === 0 && (identifiantsEssai.hote || "").length === 0
+
+    function geometrieConnue(genre) {
+        try {
+            return JSON.parse(reglagesFenetres[genre] || "{}")
+        } catch (e) {
+            return {}
+        }
+    }
+
+    // La barre de titre d'une fenêtre à cette place serait-elle visible, au
+    // moins en partie, sur l'un des écrans ? Un écran débranché depuis ne doit
+    // pas emporter la fenêtre hors de vue.
+    function placeVisible(g) {
+        var ecrans = Qt.application.screens
+        for (var i = 0; i < ecrans.length; ++i) {
+            var e = ecrans[i]
+            var gauche = Math.max(g.x, e.virtualX)
+            var droite = Math.min(g.x + g.l, e.virtualX + e.width)
+            var haut = Math.max(g.y, e.virtualY)
+            var bas = Math.min(g.y + 40, e.virtualY + e.height)
+            if (droite - gauche >= 120 && bas - haut >= 20)
+                return true
+        }
+        return false
+    }
+
+    // Rend à la fenêtre `fen` la place et la taille gardées pour son genre ;
+    // sa taille seule si la place n'est plus visible.
+    function poserGeometrie(fen, genre) {
+        if (!geometriesGardees)
+            return
+        var g = geometrieConnue(genre)
+        if (!(g.l > 0 && g.h > 0))
+            return
+        fen.width = Math.max(fen.minimumWidth, g.l)
+        fen.height = Math.max(fen.minimumHeight, g.h)
+        if (typeof g.x === "number" && typeof g.y === "number" && placeVisible(g)) {
+            fen.x = g.x
+            fen.y = g.y
+        }
+        if (g.max)
+            fen.visibility = Window.Maximized
+    }
+
+    // Garde la place et la taille de `fen` : agrandie, la taille d'avant
+    // l'agrandissement reste celle qu'on retrouvera en la rétablissant.
+    function noterGeometrie(fen, genre) {
+        if (!geometriesGardees)
+            return
+        var g = geometrieConnue(genre)
+        if (fen.visibility === Window.Maximized) {
+            g.max = true
+        } else if (fen.visibility === Window.Windowed) {
+            g = { x: fen.x, y: fen.y, l: fen.width, h: fen.height, max: false }
+        } else {
+            return
+        }
+        reglagesFenetres[genre] = JSON.stringify(g)
+    }
+
+    // La fenêtre principale se note au fil des changements, un instant après
+    // le dernier : elle n'a pas toujours l'occasion de se fermer proprement
+    // (arrêt du poste).
+    property bool geometriePosee: false
+    Timer {
+        id: minuteurGeometrie
+        interval: 800
+        onTriggered: fenetre.noterGeometrie(fenetre, "principale")
+    }
+    onXChanged: if (geometriePosee) minuteurGeometrie.restart()
+    onYChanged: if (geometriePosee) minuteurGeometrie.restart()
+    onWidthChanged: if (geometriePosee) minuteurGeometrie.restart()
+    onHeightChanged: if (geometriePosee) minuteurGeometrie.restart()
+    onVisibilityChanged: if (geometriePosee) minuteurGeometrie.restart()
     // Avis de nouvelle version : un quart de minute après le démarrage, puis une
     // fois par jour. Coupé pour la machine par « AvisVersion » à 0.
     Timer {
@@ -2396,7 +2486,9 @@ ApplicationWindow {
                 sourceComponent: composantRedaction
                 onLoaded: item.conteneur = fenetreRedaction
             }
+            Component.onCompleted: fenetre.poserGeometrie(fenetreRedaction, "redaction")
             onClosing: function(fermeture) {
+                fenetre.noterGeometrie(fenetreRedaction, "redaction")
                 if (redaction && redaction.modifie && !redaction.fermetureConfirmee) {
                     fermeture.accepted = false
                     // Fermeture demandée par le système (mise à jour, arrêt du
@@ -6376,6 +6468,7 @@ ApplicationWindow {
     }
 
     onClosing: function(fermeture) {
+        noterGeometrie(fenetre, "principale")
         // Retour pendant la connexion Microsoft intégrée : connexion abandonnée.
         if (chargeurConnexion.item && chargeurConnexion.item.opened) {
             fermeture.accepted = false
@@ -6414,6 +6507,8 @@ ApplicationWindow {
     }
 
     Component.onCompleted: {
+        poserGeometrie(fenetre, "principale")
+        geometriePosee = true
         if (identifiantsEssai.taille) {
             var taille = identifiantsEssai.taille.split("x")
             width = parseInt(taille[0])
@@ -6970,6 +7065,8 @@ ApplicationWindow {
                 scenarios.lancerScenarioInverserSelection()
             if (essai.scenario === "menu-champ")
                 scenarios.lancerScenarioMenuChamp()
+            if (essai.scenario === "fenetres")
+                scenarios.lancerScenarioFenetres()
             if (essai.scenario === "menu-affichage" || essai.scenario === "menu-message"
                     || essai.scenario === "menu-saisie" || essai.scenario === "menu-comptes"
                     || essai.scenario === "menu-reglages")

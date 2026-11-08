@@ -93,8 +93,12 @@ ApplicationWindow {
         }
     }
 
-    Component.onCompleted: boite.demanderDans(compte, chemin, uid, false)
+    Component.onCompleted: {
+        fenetre.poserGeometrie(fenetreMessage, "message")
+        boite.demanderDans(compte, chemin, uid, false)
+    }
     onClosing: {
+        fenetre.noterGeometrie(fenetreMessage, "message")
         fenetre.oublierFenetreMessage(fenetreMessage)
         Qt.callLater(function() { fenetreMessage.destroy() })
     }

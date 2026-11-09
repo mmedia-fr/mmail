@@ -519,6 +519,45 @@ QtObject {
         r.enregistrer(false)
     }
 
+    // Scénario « collage-signature » (banc : images distantes servies sur
+    // https://localhost/, dossier de sortie avec signature-distante.htm et
+    // anime.gif) : l'image distante d'une signature importée ou collée est
+    // téléchargée, en GIF ; un GIF du presse-papier reste un GIF, dans
+    // l'éditeur de signature aussi.
+    function lancerScenarioSignatureCollee(essais) {
+        var n = essais || 0
+        if (comptesConnus.length === 0 && n < 40) {
+            plusTard(1000, function() { lancerScenarioSignatureCollee(n + 1) })
+            return
+        }
+        var echecs = 0
+        var bilan = function(texte, bon) {
+            if (!bon)
+                echecs += 1
+            console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
+        }
+        var images = function(h) { return (h.match(/<img[^>]*>/g) || []).join(" ") }
+        var gifLocal = /src="file:[^"]*\.gif"/
+        var a = comptesConnus[0]
+        var importee = boite.importerSignature(a.adresse, identifiantsEssai.sortie + "/signature-distante.htm")
+        bilan("import : " + images(importee), gifLocal.test(importee) && importee.indexOf("https://localhost") < 0)
+        var collee = boite.rapatrierImagesSignature(a.adresse, '<p>Nom</p><img src="https://localhost/anime.gif" width="80" />')
+        bilan("collée : " + images(collee), gifLocal.test(collee))
+        pressePapier.deposerGif(identifiantsEssai.sortie + "/anime.gif")
+        var gif = pressePapier.enregistrerImage(boite.dossierImagesCollees())
+        bilan("GIF du presse-papier : " + gif, /\.gif$/.test(gif))
+        dlgIdentite.ouvrir(a.compte)
+        plusTard(1500, function() {
+            pressePapier.deposerGif(identifiantsEssai.sortie + "/anime.gif")
+            var fait = dlgIdentite.collerDansSignature()
+            dlgIdentite.garderSignature()
+            var sig = dlgIdentite.biblio[dlgIdentite.choisie] || {}
+            bilan("éditeur, GIF collé : " + fait + " " + images(sig.html || ""), fait && gifLocal.test(sig.html || ""))
+            console.log("scenario: collage-signature " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
+            Qt.quit()
+        })
+    }
+
     /// Scénario « coller-piece » (0.8.4), MMAIL_DOSSIER=<image PNG> : l'image
     /// du presse-papier devient pièce jointe par « Coller en pièce jointe »,
     /// sans entrer dans le corps ; rien à coller, le motif s'affiche.
@@ -5204,45 +5243,6 @@ QtObject {
                     })
                 })
             })
-        })
-    }
-
-    // Scénario « collage-signature » (banc : images distantes servies sur
-    // https://localhost/, dossier de sortie avec signature-distante.htm et
-    // anime.gif) : l'image distante d'une signature importée ou collée est
-    // téléchargée, en GIF ; un GIF du presse-papier reste un GIF, dans
-    // l'éditeur de signature aussi.
-    function lancerScenarioSignatureCollee(essais) {
-        var n = essais || 0
-        if (comptesConnus.length === 0 && n < 40) {
-            plusTard(1000, function() { lancerScenarioSignatureCollee(n + 1) })
-            return
-        }
-        var echecs = 0
-        var bilan = function(texte, bon) {
-            if (!bon)
-                echecs += 1
-            console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
-        }
-        var images = function(h) { return (h.match(/<img[^>]*>/g) || []).join(" ") }
-        var gifLocal = /src="file:[^"]*\.gif"/
-        var a = comptesConnus[0]
-        var importee = boite.importerSignature(a.adresse, identifiantsEssai.sortie + "/signature-distante.htm")
-        bilan("import : " + images(importee), gifLocal.test(importee) && importee.indexOf("https://localhost") < 0)
-        var collee = boite.rapatrierImagesSignature(a.adresse, '<p>Nom</p><img src="https://localhost/anime.gif" width="80" />')
-        bilan("collée : " + images(collee), gifLocal.test(collee))
-        pressePapier.deposerGif(identifiantsEssai.sortie + "/anime.gif")
-        var gif = pressePapier.enregistrerImage(boite.dossierImagesCollees())
-        bilan("GIF du presse-papier : " + gif, /\.gif$/.test(gif))
-        dlgIdentite.ouvrir(a.compte)
-        plusTard(1500, function() {
-            pressePapier.deposerGif(identifiantsEssai.sortie + "/anime.gif")
-            var fait = dlgIdentite.collerDansSignature()
-            dlgIdentite.garderSignature()
-            var sig = dlgIdentite.biblio[dlgIdentite.choisie] || {}
-            bilan("éditeur, GIF collé : " + fait + " " + images(sig.html || ""), fait && gifLocal.test(sig.html || ""))
-            console.log("scenario: collage-signature " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
-            Qt.quit()
         })
     }
 

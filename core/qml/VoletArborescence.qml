@@ -15,7 +15,7 @@ import fr.mmedia.mmail.natif
 
 // --- arborescence -------------------------------------------------
 // Deux listes : la rubrique Favoris, fixée en haut — elle reste à
-// l'écran quand les comptes défilent (demande de Manu du 01/10) —,
+// l'écran quand les comptes défilent (demande du mainteneur du 01/10) —,
 // puis les comptes, seuls à défiler.
 ColumnLayout {
     id: colonneArborescence
@@ -68,7 +68,7 @@ ColumnLayout {
         Layout.fillWidth: true
         Layout.fillHeight: true
         // Ascenseurs toujours visibles dès qu'il y a de quoi défiler, et non
-        // seulement pendant le défilement (demande Manu du 2026-09-29). Leur
+        // seulement pendant le défilement (demande du mainteneur du 2026-09-29). Leur
         // place est réservée : posés par-dessus, ils masquaient les compteurs
         // de non-lus. La réserve suit `size`, pas `visible` : un ascenseur
         // qui n'a rien à faire défiler reste `visible`, seulement transparent.
@@ -96,7 +96,7 @@ ColumnLayout {
             // pour rien.
             cacheBuffer: fenetre.glisse !== null ? 100000 : 400
 
-            // Défilement au bord pendant un glisser-déposer (retour de Manu,
+            // Défilement au bord pendant un glisser-déposer (retour du mainteneur,
             // 01/10 : les Favoris, en haut, étaient hors d'atteinte).
             Timer {
                 interval: 30

@@ -1502,7 +1502,7 @@ QtObject {
             console.log(revenue >= 0 && modeleMessages.count === avant && !bandeauGlissement.opened
                         ? "scenario: OK annulée, ligne revenue au rang " + revenue
                         : "scenario: ECHEC annulation " + modeleMessages.count + " / " + avant)
-            // Retour de Manu du 18/10 : après un glisser, d'autres lignes
+            // Retour du mainteneur du 18/10 : après un glisser, d'autres lignes
             // restaient décalées. Une fois la liste redessinée, aucune ligne
             // affichée ne doit l'être.
             essai.etape = 5  // en attente du contrôle : les autres étapes se taisent
@@ -1881,7 +1881,7 @@ QtObject {
     }
 
 
-    /// Scénario « non-lu » (0.6.7, demande de Gwenaëlle du 19/10) : un
+    /// Scénario « non-lu » (0.6.7, demande d'une utilisatrice du 19/10) : un
     /// « Marquer comme non lu » doit tenir, sur la ligne, dans l'index et sur le
     /// serveur. A : message affiché puis marqué lu à l'affichage, puis non lu
     /// avant toute veille — la 0.6.6 laissait la ligne en « lu ». B : non lu
@@ -2020,7 +2020,7 @@ QtObject {
         tic.start()
     }
 
-    /// Scénario « recherche-effacee » (0.6.12, demande de Fabienne) : le mot
+    /// Scénario « recherche-effacee » (0.6.12, demande d'une utilisatrice) : le mot
     /// effacé au clavier (champ vidé, textEdited) met fin à la recherche et
     /// rend la liste de départ — dans le dossier, puis dans toutes les boîtes.
     function lancerScenarioRechercheEffacee() {
@@ -2080,7 +2080,7 @@ QtObject {
         tic.start()
     }
 
-    /// Scénario « majuscule » (0.6.12, demande de Fabienne) : frappe simulée
+    /// Scénario « majuscule » (0.6.12, demande d'une utilisatrice) : frappe simulée
     /// dans le corps d'une rédaction, par Redaction.majuscule comme le fait
     /// Keys.onPressed — capitale en début de paragraphe et après « . », « ! »,
     /// « ? » ; rien au fil de la phrase, après « etc. », une initiale, des
@@ -2165,7 +2165,7 @@ QtObject {
         tic.start()
     }
 
-    /// Scénario « inverser-selection » (0.6.14, demande de Manu du 22/10) :
+    /// Scénario « inverser-selection » (0.6.14, demande du mainteneur du 22/10) :
     /// dans la boîte de réception (trois messages au moins), un message
     /// choisi, la sélection inversée, puis rétablie ; tout, puis rien ; le
     /// menu d'un message en dix lignes, « Marquer comme lu » s'il y a un non
@@ -2316,7 +2316,7 @@ QtObject {
         Qt.quit()
     }
 
-    /// Scénario « menu-champ » (0.6.14, demande de Manu du 22/10) : le menu
+    /// Scénario « menu-champ » (0.6.14, demande du mainteneur du 22/10) : le menu
     /// du clic droit du champ de recherche — Coller ce qu'un autre champ a
     /// copié, puis Tout sélectionner, Couper, Annuler ; Couper et Copier
     /// grisés sans sélection.
@@ -2729,7 +2729,7 @@ QtObject {
         tic.start()
     }
 
-    /// Scénario « categories » (0.6.15, demande de Manu du 22/10) : dans la
+    /// Scénario « categories » (0.6.15, demande du mainteneur du 22/10) : dans la
     /// boîte de réception (deux messages au moins), une catégorie d'origine
     /// et une catégorie créée posées ; l'état du sous-menu « Catégoriser » ;
     /// la recherche « catégorie: » dans l'index et sur le serveur (KEYWORD :
@@ -2929,7 +2929,7 @@ QtObject {
         t.start()
     }
 
-    /// Scénario « lu-differe » (0.6.9, demande de Gwenaëlle du 20/10) : le
+    /// Scénario « lu-differe » (0.6.9, demande d'une utilisatrice du 20/10) : le
     /// marquage « lu » attend le délai réglé, ne vise pas un message quitté
     /// avant, et n'a jamais lieu sur « Jamais ». La boîte de réception doit
     /// compter deux messages.
@@ -5372,7 +5372,7 @@ QtObject {
         })
     }
 
-    /// Scénario « barre-redaction » (retour de Manu du 03/11 sous Android :
+    /// Scénario « barre-redaction » (retour du mainteneur du 03/11 sous Android :
     /// boutons de la rédaction chevauchés, plus moyen d'envoyer ni de fermer) :
     /// les boutons visibles de la barre du haut ne se chevauchent pas, gardent
     /// leur largeur et restent dans la barre ; resserrée, elle montre Envoyer,

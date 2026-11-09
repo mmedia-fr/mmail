@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Sous-menu « Catégoriser » du menu d'un message (0.6.15, demande de Manu du
+// Sous-menu « Catégoriser » du menu d'un message (0.6.15, demande du mainteneur du
 // 22/10, comme « Catégoriser » d'Outlook) : les catégories de la boîte des
 // messages choisis, cochées quand ils la portent tous ; en créer une, gérer la
 // liste, tout effacer.

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Effacement définitif dans la corbeille et les indésirables (0.6.24,
-//! demande de Manu du 27/10/2026) : un message qui s'y trouve n'a plus de
+//! demande du mainteneur du 27/10/2026) : un message qui s'y trouve n'a plus de
 //! corbeille où aller, « Supprimer » l'efface pour de bon ; et ces dossiers se
 //! vident en partie, selon une date de réception et les conditions des
 //! filtres (cf. `filtres`).

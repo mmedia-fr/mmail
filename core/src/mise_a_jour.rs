@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Mise à jour assistée (demande de Manu du 10/10/2026) : MMail signale une
+//! Mise à jour assistée (demande du mainteneur du 10/10/2026) : MMail signale une
 //! version plus récente et, si on le lui demande, télécharge le paquet de sa
 //! plateforme, en contrôle l'empreinte et le tient prêt. L'installation — un
 //! installeur silencieux lancé à la fermeture, ou l'AppImage remplacée — revient

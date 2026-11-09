@@ -72,7 +72,7 @@ pub mod qobject {
         #[qproperty(bool, contacts_occupe, cxx_name = "contactsOccupe")]
         /// Marquage « lu » d'un message affiché : 0 à l'affichage, N secondes
         /// après (`marquageLuDiffere`), -1 jamais — à la main seulement
-        /// (0.6.9, demande de Gwenaëlle).
+        /// (0.6.9, demande d'une utilisatrice).
         #[qproperty(i32, delai_lu, cxx_name = "delaiLu")]
         /// Augmente à chaque changement d'un catalogue de catégories (0.6.15) :
         /// l'interface relit alors `categories()`.
@@ -2983,7 +2983,7 @@ impl qobject::Boite {
         }
         let indice = indice.to_string();
         // Sous Android, MMail est gelé en arrière-plan pendant que le navigateur
-        // montre la connexion : l'écoute locale ne répond pas (retour de Manu
+        // montre la connexion : l'écoute locale ne répond pas (retour du mainteneur
         // du 18/10). La connexion se fait dans une page intégrée à MMail, qui
         // intercepte le retour et le remet à terminer_microsoft.
         let (pkce, etat) = match crate::oauth::pkce_et_etat() {
@@ -3950,7 +3950,7 @@ impl qobject::Boite {
     /// cours de l'un d'eux, demandé avant, ne le marquera plus « lu ». Sans
     /// cela, « Marquer comme non lu » fait pendant le chargement du message
     /// était défait par le marquage automatique, parti après lui (demande de
-    /// Gwenaëlle, 19/10).
+    /// une utilisatrice, 19/10).
     fn noter_marquages(mut self: Pin<&mut Self>, dossier: i64, uids: &[u32]) {
         let numero = AFFICHAGE.load(Ordering::SeqCst);
         let mut r = self.as_mut().rust_mut();
@@ -9042,7 +9042,7 @@ fn marquer_provenance(fichier: &Path) {
 /// dossier dont l'index plein texte n'est pas construit fait attendre le
 /// serveur que son indexeur ait fini, sans rien envoyer : Mailcow l'attend
 /// 300 s (`fts_index_timeout`) avant de répondre `NO [INUSE]`. MMail coupait
-/// au bout de 30 s, et le compte passait « erreur » (22/10, LALANNE).
+/// au bout de 30 s, et le compte passait « erreur » (22/10, chez un client).
 fn delai_recherche() -> Duration {
     static DELAI: OnceLock<Duration> = OnceLock::new();
     *DELAI.get_or_init(|| {
@@ -9357,7 +9357,7 @@ fn est_sous(parent: &DossierLocal, d: &DossierLocal) -> bool {
 
 /// Dossiers montrés quand les dossiers masqués sont cachés : ni un dossier
 /// masqué, ni rien de ce qu'il contient — ses sous-dossiers réapparaissaient
-/// seuls, à la racine (retour de Manu, 01/10).
+/// seuls, à la racine (retour du mainteneur, 01/10).
 fn sans_masques(dossiers: Vec<DossierLocal>) -> Vec<DossierLocal> {
     let masques: Vec<DossierLocal> = dossiers.iter().filter(|d| d.masque).cloned().collect();
     dossiers

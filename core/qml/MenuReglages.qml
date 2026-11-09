@@ -2,7 +2,7 @@
 // Menu « Réglages » de la barre de menus (0.6.20) : ce qui était dans
 // « Comptes » sans être la gestion des comptes — nom et signature, filtres,
 // carnet d'adresses, vidage des corbeilles, sauvegarde et restauration de la
-// configuration. Demande de Manu du 26/10 : « Comptes » ne garde qu'ajouter,
+// configuration. Demande du mainteneur du 26/10 : « Comptes » ne garde qu'ajouter,
 // modifier, retirer.
 //
 // Les noms employés sans être déclarés ici (fenetre, boite, reglages…) sont

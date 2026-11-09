@@ -689,7 +689,7 @@ public:
   /// fermants admis entre les deux —, sauf après des points de suspension,
   /// une initiale, une abréviation courante (« etc. », « cf. »…) ou un
   /// numéro en tête de ligne (« 1. »). Majuscule automatique de la frappe
-  /// (0.6.12, demande de Fabienne).
+  /// (0.6.12, demande d'une utilisatrice).
   Q_INVOKABLE bool debutDePhrase(int position) const
   {
     QTextDocument* doc = texte_();

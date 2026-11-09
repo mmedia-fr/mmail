@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Notification du nouveau courrier (0.6.2, accord de Manu du 18/10/2026 :
+// Notification du nouveau courrier (0.6.2, accord du mainteneur du 18/10/2026 :
 // Windows et Linux d'abord ; Android demande une relève en arrière-plan, à
 // part). Le noyau signale les messages arrivés dans une boîte de réception,
 // une fois les filtres passés (Boite.nouveauCourrier) ; l'interface appelle

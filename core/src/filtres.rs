@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Filtres du courrier, appliqués par MMail lui-même (0.6.0 ; décision 11,
-//! tranchée par Manu le 18/10/2026) : sur tous les comptes — Mailcow,
+//! tranchée par le mainteneur le 18/10/2026) : sur tous les comptes — Mailcow,
 //! Microsoft, Gmail, OVH —, à l'arrivée des messages dans la boîte de
 //! réception d'un MMail ouvert. Les filtres du serveur (Sieve, ceux du
 //! webmail SOGo) restent possibles à côté, pour un tri quand aucun MMail

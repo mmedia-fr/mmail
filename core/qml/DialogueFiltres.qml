@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Dialogue « Filtres du courrier » (0.6.0 ; décision 11, tranchée par Manu le
+// Dialogue « Filtres du courrier » (0.6.0 ; décision 11, tranchée par le mainteneur le
 // 18/10/2026) : des règles appliquées par MMail lui-même aux messages qui
 // arrivent dans la boîte de réception — sur tous les comptes —, ou à toute la
 // boîte sur demande. La liste part avec la sauvegarde de la configuration.

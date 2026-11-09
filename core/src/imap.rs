@@ -140,6 +140,13 @@ pub enum Champs {
     /// L'objet ou l'expéditeur (`SUBJECT`, `FROM`) : ni le corps, ni les
     /// pièces jointes.
     ObjetExpediteur,
+    /// Comme `Texte`, et aussi dans le nom des pièces jointes, mot pour mot
+    /// où qu'il y soit (`MIMEPART FILENAME CONTAINS`, Dovecot). L'index plein
+    /// texte prend « BonCommande12345678.pdf » pour un seul mot : « 12345678 »
+    /// ne l'y retrouve pas. Le serveur lit alors la structure de chaque
+    /// message, ce qui peut prendre une minute sur un grand dossier la
+    /// première fois : seconde passe, après `Texte`.
+    TexteEtNomsDePieces,
 }
 
 /// Attente d'une commande qui peut durer (0.6.16, recherche sur le
@@ -782,6 +789,9 @@ impl Client {
                 // L'objet ou l'expéditeur, nom ou adresse : chaque mot dans
                 // l'un des deux, comme l'index du poste.
                 Champs::ObjetExpediteur => criteres.push_str(&format!(" OR SUBJECT {valeur} FROM {valeur}")),
+                Champs::TexteEtNomsDePieces => {
+                    criteres.push_str(&format!(" OR TEXT {valeur} MIMEPART FILENAME CONTAINS {valeur}"))
+                }
             }
         }
         Ok(Some(format!("UID SEARCH CHARSET UTF-8{criteres}")))

@@ -940,6 +940,42 @@ fn recherche_dans_le_texte() {
     assert!(compter(&mut client, "INBOX", &id).is_empty());
 }
 
+#[test]
+#[ignore = "exige un serveur IMAP et un compte"]
+fn recherche_dans_le_nom_des_pieces() {
+    // Un numéro qui n'est que dans le nom de la pièce jointe, collé à des
+    // lettres : l'index plein texte le prend pour un seul mot, la seconde
+    // passe (`MIMEPART FILENAME CONTAINS`) le trouve.
+    let mut client = session();
+    let unique = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let id = format!("mmail-pieces-{unique}@exemple.fr");
+    let numero = format!("{}", 41_000_000 + unique % 1_000_000);
+    let brut = format!(
+        "From: Essai <mmail@exemple.fr>\r\nTo: test@exemple.fr\r\nSubject: Bon d'enlevement\r\n\
+         Message-ID: <{id}>\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=\"xx\"\r\n\r\n\
+         --xx\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nVeuillez trouver ci-joint le bon.\r\n\
+         --xx\r\nContent-Type: application/octet-stream; name=\"BonCommandeFournisseur{numero}.pdf\"\r\n\
+         Content-Disposition: attachment; filename=\"BonCommandeFournisseur{numero}.pdf\"\r\n\
+         Content-Transfer-Encoding: base64\r\n\r\nJVBERi0xLjQK\r\n--xx--\r\n"
+    );
+    let uid = client.deposer("INBOX", &[], DATE_ESSAI, brut.as_bytes()).expect("APPEND").expect("APPENDUID");
+    client.selectionner("INBOX", None).expect("SELECT");
+    let attente = crate::imap::Attente {
+        delai: std::time::Duration::from_secs(20),
+        prolonger: true,
+        continuer: std::sync::Arc::new(|| true),
+    };
+    let texte = client.chercher_patiemment(&numero, &[], Champs::Texte, attente.clone()).expect("SEARCH texte");
+    let pieces = client.chercher_patiemment(&numero, &[], Champs::TexteEtNomsDePieces, attente.clone()).expect("SEARCH pièces");
+    // Le texte du corps se trouve toujours par la seconde passe.
+    let corps = client.chercher_patiemment("ci-joint", &[], Champs::TexteEtNomsDePieces, attente).expect("SEARCH corps");
+    client.supprimer(&[uid]).expect("purge");
+    println!("texte seul : {texte:?} ; avec le nom des pièces : {pieces:?}");
+    assert_eq!(pieces, vec![uid]);
+    assert!(corps.contains(&uid), "corps : {corps:?}");
+    assert!(compter(&mut client, "INBOX", &id).is_empty());
+}
+
 // ------------------------------------------------------------- agenda
 
 /// Requête directe sur le serveur d'agenda, pour déposer et retirer

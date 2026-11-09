@@ -9111,7 +9111,17 @@ impl Recherche {
                 Etape::Abandon => return,
                 etape => {
                     restants -= 1;
+                    let premiers = match &etape {
+                        Etape::Trouves(uids) if seul => Some(uids.clone()),
+                        _ => None,
+                    };
                     remettre(self.issue(chemin, etape, restants));
+                    if let Some(premiers) = premiers {
+                        let criteres = (mots.as_str(), categories.as_slice());
+                        if let Some(issue) = self.noms_de_pieces(&mut client, magasin, chemin, criteres, premiers) {
+                            remettre(issue);
+                        }
+                    }
                 }
             }
         }
@@ -9130,6 +9140,59 @@ impl Recherche {
         if let Some(mut client) = client {
             client.fermer();
         }
+    }
+
+    /// Seconde passe du dossier ouvert : le texte, et aussi le nom des pièces
+    /// jointes, que l'index plein texte du serveur ne découpe pas — un numéro
+    /// de commande qui n'est que dans « BonCommande12345678.pdf » n'y était pas
+    /// trouvé. Le serveur peut y passer une minute sur un grand dossier la
+    /// première fois : les résultats de la première passe sont déjà rendus, et
+    /// celle-ci ne rend que s'il trouve davantage. Muette sinon : délai,
+    /// recherche remplacée, serveur qui ne connaît pas `MIMEPART`.
+    fn noms_de_pieces(
+        &self,
+        client: &mut Option<Client>,
+        magasin: &Magasin,
+        chemin: &str,
+        (mots, categories): (&str, &[Vec<String>]),
+        premiers: Vec<u32>,
+    ) -> Option<Issue> {
+        if self.partout || self.champs != Champs::Texte || mots.trim().is_empty() || !self.actuelle() {
+            return None;
+        }
+        // La session de la première passe, sur le dossier qu'elle a examiné.
+        let c = client.as_mut()?;
+        let courante = self.courante.clone();
+        let numero = self.numero;
+        let attente = Attente {
+            delai: self.delai,
+            prolonger: false,
+            continuer: Arc::new(move || courante.load(Ordering::SeqCst) == numero),
+        };
+        let uids = match c.chercher_patiemment(mots, categories, Champs::TexteEtNomsDePieces, attente) {
+            Ok(uids) => uids,
+            Err(Erreur::Refuse(_)) => return None,
+            // Au milieu d'une commande, ou coupée : la session ne sert plus.
+            Err(_) => {
+                *client = None;
+                return None;
+            }
+        };
+        let nouveaux: Vec<u32> = uids.into_iter().filter(|u| !premiers.contains(u)).collect();
+        if nouveaux.is_empty() || !self.actuelle() {
+            return None;
+        }
+        if let Ok(id) = magasin.dossier_id(self.compte, chemin) {
+            if let Err(e) = synchro::completer(magasin, c, id, &nouveaux, RECHERCHE_MAX) {
+                if e.reseau() {
+                    *client = None;
+                }
+            }
+        }
+        let mut tous = premiers;
+        tous.extend(nouveaux);
+        tous.sort_unstable();
+        Some(self.issue(chemin, Etape::Trouves(tous), 0))
     }
 
     /// L'index du poste ne s'ouvre pas : chaque dossier rend son motif.
@@ -10680,6 +10743,68 @@ mod tests {
         let (issues, ouvertes) = issues_de(&recherche(&["INBOX"], false, 30, 5_000), vec![]);
         assert_eq!(issues, ["INBOX [] : connexion impossible (réseau : serveur injoignable)"]);
         assert_eq!(ouvertes, 1);
+    }
+
+    /// Dossier ouvert : une seconde passe cherche aussi le nom des pièces
+    /// jointes, et ne rend que si elle trouve davantage ; un serveur qui ne
+    /// connaît pas `MIMEPART` la refuse sans rien changer. Pas de seconde passe
+    /// dans plusieurs dossiers, ni sur l'objet et l'expéditeur.
+    #[test]
+    fn seconde_passe_dans_le_nom_des_pieces() {
+        use crate::simule::{echange, session, DOVECOT};
+        let (s, journal) = session(
+            DOVECOT,
+            vec![
+                examen("INBOX"),
+                echange("UID SEARCH CHARSET UTF-8 TEXT", "* SEARCH 4\r\n", "OK"),
+                echange("UID SEARCH CHARSET UTF-8 OR TEXT", "* SEARCH 4 9\r\n", "OK"),
+                echange("LOGOUT", "* BYE\r\n", "OK"),
+            ],
+        );
+        let (issues, _) = issues_de(&recherche(&["INBOX"], false, 30, 5_000), vec![s]);
+        assert_eq!(issues, ["INBOX [4] : fini", "INBOX [4, 9] : fini"]);
+        assert_eq!(
+            journal.lock().unwrap()[2],
+            "UID SEARCH CHARSET UTF-8 OR TEXT \"devis\" MIMEPART FILENAME CONTAINS \"devis\""
+        );
+        // Rien de plus : une seule issue.
+        let (s, _) = session(
+            DOVECOT,
+            vec![
+                examen("INBOX"),
+                echange("UID SEARCH CHARSET UTF-8 TEXT", "* SEARCH 4\r\n", "OK"),
+                echange("UID SEARCH CHARSET UTF-8 OR TEXT", "* SEARCH 4\r\n", "OK"),
+                echange("LOGOUT", "* BYE\r\n", "OK"),
+            ],
+        );
+        let (issues, _) = issues_de(&recherche(&["INBOX"], false, 30, 5_000), vec![s]);
+        assert_eq!(issues, ["INBOX [4] : fini"]);
+        // Refusée : la session reste bonne, et se ferme proprement.
+        let (s, journal) = session(
+            DOVECOT,
+            vec![
+                examen("INBOX"),
+                echange("UID SEARCH CHARSET UTF-8 TEXT", "* SEARCH 4\r\n", "OK"),
+                echange("UID SEARCH CHARSET UTF-8 OR TEXT", "", "BAD Unknown argument MIMEPART"),
+                echange("LOGOUT", "* BYE\r\n", "OK"),
+            ],
+        );
+        let (issues, _) = issues_de(&recherche(&["INBOX"], false, 30, 5_000), vec![s]);
+        assert_eq!(issues, ["INBOX [4] : fini"]);
+        assert_eq!(journal.lock().unwrap().last().unwrap(), "LOGOUT");
+        // Objet et expéditeur seulement : une seule passe.
+        let (s, journal) = session(
+            DOVECOT,
+            vec![
+                examen("INBOX"),
+                echange("UID SEARCH CHARSET UTF-8 OR SUBJECT", "* SEARCH 4\r\n", "OK"),
+                echange("LOGOUT", "* BYE\r\n", "OK"),
+            ],
+        );
+        let r = Recherche { champs: Champs::ObjetExpediteur, ..recherche(&["INBOX"], false, 30, 5_000) };
+        let (issues, _) = issues_de(&r, vec![s]);
+        assert_eq!(issues, ["INBOX [4] : fini"]);
+        assert!(!journal.lock().unwrap().iter().any(|l| l.contains("MIMEPART")));
     }
 
     /// Une recherche remplacée ne rend plus rien, et n'ouvre rien.

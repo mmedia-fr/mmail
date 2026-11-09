@@ -374,6 +374,16 @@ ApplicationWindow {
     // compte ; 0 pour toutes les boîtes. Non lus seulement (0.8.2).
     property int rechercheCompte: 0
     property bool rechercheNonLus: false
+    // « Non lus » coché, champ vide : la liste ne garde que les non-lus de la
+    // portée choisie, sans texte à chercher. Cocher la case sans rien taper ne
+    // faisait rien.
+    property bool rechercheNonLusSeuls: false
+    // En recherche : un texte cherché, ou les non-lus seuls.
+    readonly property bool enRecherche: recherche.length > 0 || rechercheNonLusSeuls
+    // Non-lus déjà montrés par la recherche en cours : celui que l'on vient
+    // d'ouvrir y reste, lu, tant qu'on n'en choisit pas un autre — la liste
+    // ne se dérobe pas sous la lecture.
+    property var nonLusMontres: ({})
     // Recherche en cours sur l'objet et l'expéditeur seulement (0.6.38).
     property bool rechercheObjetSeul: false
     // Boîte de réception unifiée (« toutes les BàL », demande de Manu du
@@ -1412,7 +1422,7 @@ ApplicationWindow {
         function onRevisionChanged() {
             fenetre.rafraichirArborescence()
             fenetre.nonLusReceptions = boite.nonLusReceptions()
-            if (fenetre.vueUnifiee && fenetre.recherche.length === 0)
+            if (fenetre.vueUnifiee && !fenetre.enRecherche)
                 fenetre.poserBoitesUnifiees()
             if (!boite.occupe)
                 fenetre.derniereSynchro = new Date()
@@ -2320,7 +2330,10 @@ ApplicationWindow {
             var boiteCherchee = rechercheCompte > 0 ? compteParId(rechercheCompte) : null
             infoDossier = (boiteCherchee ? qsTr("%1, tous dossiers").arg(boiteCherchee.adresse) : qsTr("Toutes les boîtes"))
                     + (rechercheNonLus ? qsTr(", non lus") : "")
-                    + (rechercheObjetSeul ? qsTr(", objet et expéditeur") : "") + "  —  " + (modeleMessages.count >= 500
+                    + (rechercheObjetSeul ? qsTr(", objet et expéditeur") : "") + "  —  "
+                    + (rechercheNonLusSeuls ? accord(modeleMessages.count, qsTr("message"), qsTr("messages"))
+                       + (modeleMessages.count >= 500 ? qsTr(" (les plus récents)") : "")
+                    : modeleMessages.count >= 500
                     ? qsTr("recherche « %1 » : les 500 plus récents, précisez la recherche").arg(recherche)
                     : qsTr("recherche « %1 » : %2").arg(recherche)
                       .arg(accord(modeleMessages.count, qsTr("résultat"), qsTr("résultats"))))
@@ -2343,7 +2356,11 @@ ApplicationWindow {
         }
         // Un dossier d'une boîte partagée se dit de cette boîte (0.6.25).
         var texte = ligne ? (ligne.proprietaire || ligne.adresse) + " › " + libelleLigne(ligne) : boite.dossierCourant
-        if (recherche.length > 0) {
+        if (rechercheNonLusSeuls) {
+            texte += "  —  " + qsTr("non lus seulement : %1")
+                    .arg(accord(modeleMessages.count, qsTr("message"), qsTr("messages")))
+                    + (modeleMessages.count >= 500 ? qsTr(" (les plus récents)") : "")
+        } else if (recherche.length > 0) {
             texte += "  —  " + (modeleMessages.count >= 500
                     ? qsTr("recherche « %1 » : les 500 plus récents, précisez la recherche").arg(recherche)
                     : qsTr("recherche « %1 » : %2").arg(recherche)
@@ -4548,6 +4565,7 @@ ApplicationWindow {
         // Un dossier choisi dans l'arborescence met fin à une recherche dans
         // toutes les boîtes, même s'il est celui du dernier résultat lu.
         var sortieGlobale = rechercheGlobale || vueUnifiee
+        var nonLusSeuls = rechercheNonLusSeuls
         if (sortieGlobale) {
             sortirRechercheGlobale()
             vueUnifiee = false
@@ -4555,6 +4573,11 @@ ApplicationWindow {
             colonneListe.champRecherche.text = ""
         }
         if (sortieGlobale || compte !== boite.compteCourant || chemin !== boite.dossierCourant) {
+            // « Non lus » sans texte ne suit pas d'un dossier à l'autre : le
+            // dossier choisi s'ouvre entier, la case décochée.
+            if (nonLusSeuls)
+                colonneListe.nonLusRecherche.checked = false
+            rechercheNonLusSeuls = false
             recherche = ""
             uidsServeur = []
             if (!colonneListe.porteeRecherche.globale)
@@ -4596,7 +4619,7 @@ ApplicationWindow {
     function rafraichirListe(complet) {
         // En recherche, la liste est celle des résultats : on la recherche à
         // nouveau, et l'index tient compte des changements.
-        if (recherche.length > 0) {
+        if (enRecherche) {
             poserResultats()
             return
         }
@@ -4777,12 +4800,16 @@ ApplicationWindow {
     function lancerRecherche(texteImpose) {
         var texte = (texteImpose !== undefined ? texteImpose : colonneListe.champRecherche.text).trim()
         colonneListe.panneauHistorique.close()
-        if (texte.length === 0) {
+        // Champ vide : les non-lus seuls si « Non lus » est cochée, sinon la
+        // liste entière revient.
+        var nonLusSeuls = texte.length === 0
+        if (nonLusSeuls && !colonneListe.nonLusRecherche.checked) {
             quitterRecherche()
             return
         }
         colonneListe.champRecherche.text = texte
-        noterRecherche(texte)
+        if (!nonLusSeuls)
+            noterRecherche(texte)
         if (vueUnifiee) {
             vueUnifiee = false
             unifieeAvantRecherche = true
@@ -4790,7 +4817,8 @@ ApplicationWindow {
             viderListe()
         }
         rechercheNonLus = colonneListe.nonLusRecherche.checked
-        rechercheObjetSeul = colonneListe.objetSeulRecherche.checked
+        rechercheObjetSeul = colonneListe.objetSeulRecherche.checked && !nonLusSeuls
+        nonLusMontres = ({})
         if (colonneListe.porteeRecherche.globale) {
             if (!rechercheGlobale)
                 dossierAvantRecherche = boite.dossierCourant.length > 0
@@ -4803,6 +4831,7 @@ ApplicationWindow {
                 return
             }
             rechercheGlobale = true
+            rechercheNonLusSeuls = nonLusSeuls
             recherche = texte
             uidsServeur = []
             cleChoisie = ""
@@ -4812,8 +4841,8 @@ ApplicationWindow {
             // L'index répond tout de suite ; le serveur suit, dossier par
             // dossier, dans le texte des messages — ou leur objet et leur
             // expéditeur seulement — et jusque dans les dossiers jamais
-            // ouverts sur ce poste.
-            dossiersPartout = rechercheCompte > 0
+            // ouverts sur ce poste. Les non-lus seuls : l'index seulement.
+            dossiersPartout = nonLusSeuls ? 0 : rechercheCompte > 0
                     ? boite.chercherDansLeCompteSurLeServeur(texte, rechercheCompte, rechercheObjetSeul)
                     : boite.chercherPartoutSurLeServeur(texte, rechercheObjetSeul)
             messageEtat.texte = (boite.rechercheApprochee() ? qsTr("Rien d'exact sur le poste : fautes de frappe tolérées. ") : "")
@@ -4830,9 +4859,17 @@ ApplicationWindow {
         }
         if (boite.dossierCourant.length === 0)
             return
+        rechercheNonLusSeuls = nonLusSeuls
         recherche = texte
         uidsServeur = []
         poserResultats()
+        // Les non-lus du dossier : son index suffit, tenu à jour par la
+        // synchronisation.
+        if (nonLusSeuls) {
+            messageEtat.texte = qsTr("Non lus seulement : %1.")
+                    .arg(accord(modeleMessages.count, qsTr("message"), qsTr("messages")))
+            return
+        }
         // Rien d'exact dans l'index : les résultats tolèrent des fautes de
         // frappe (0.6.22), et la barre le dit.
         var approchee = boite.rechercheApprochee()
@@ -4871,9 +4908,18 @@ ApplicationWindow {
                                                                          cle.slice(coupure + 1),
                                                                          absents.join(","))))
             }
-            // Trouvés par le serveur : non lus seulement, comme l'index.
-            if (rechercheNonLus)
-                trouves = trouves.filter(function(r) { return !r.lu })
+            // Trouvés par le serveur : non lus seulement, comme l'index — le
+            // message que l'on lit reste, lu, tant qu'on n'en choisit pas un
+            // autre.
+            if (rechercheNonLus) {
+                var garde = nonLusMontres[cleChoisie] ? cleChoisie : ""
+                if (garde.length > 0 && !trouves.some(function(r) { return cleResultat(r.compte, r.chemin, r.uid) === garde })) {
+                    var parties = garde.split("\u0001")
+                    trouves = trouves.concat(JSON.parse(boite.trouvesParUid(Number(parties[0]), parties[1], parties[2])))
+                }
+                trouves = trouves.filter(function(r) { return !r.lu || cleResultat(r.compte, r.chemin, r.uid) === garde })
+                trouves.forEach(function(r) { if (!r.lu) nonLusMontres[cleResultat(r.compte, r.chemin, r.uid)] = true })
+            }
             // Les plus récents d'abord pour la coupure, puis le tri choisi.
             trouves.sort(function(a, b) { return b.h - a.h || b.uid - a.uid })
             resultatsTronques = trouves.length > resultatsMax
@@ -4890,10 +4936,17 @@ ApplicationWindow {
         for (var i = 0; i < lignes.length; ++i)
             vus[lignes[i].uid] = true
         var manquants = uidsServeur.filter(function(u) { return !vus[u] })
+        // Non lus seulement : le message que l'on lit reste, lu, tant qu'on
+        // n'en choisit pas un autre.
+        var gardeUid = rechercheNonLus && nonLusMontres[uidCourant] ? uidCourant : 0
+        if (gardeUid > 0 && !vus[gardeUid] && manquants.indexOf(gardeUid) < 0)
+            manquants.push(gardeUid)
         if (manquants.length > 0)
             lignes = lignes.concat(JSON.parse(boite.messagesParUid(manquants.join(","))))
-        if (rechercheNonLus)
-            lignes = lignes.filter(function(r) { return !r.lu })
+        if (rechercheNonLus) {
+            lignes = lignes.filter(function(r) { return !r.lu || r.uid === gardeUid })
+            lignes.forEach(function(r) { if (!r.lu) nonLusMontres[r.uid] = true })
+        }
         poserListe(trierResultats(lignes))
     }
 
@@ -4920,7 +4973,7 @@ ApplicationWindow {
 
     function trierRecherche(cle) {
         triRecherche = cle
-        if (recherche.length === 0)
+        if (!enRecherche)
             return
         poserResultats()
         colonneListe.vueMessages.positionViewAtBeginning()
@@ -4929,6 +4982,7 @@ ApplicationWindow {
     function sortirRechercheGlobale() {
         rechercheCompte = 0
         rechercheGlobale = false
+        rechercheNonLusSeuls = false
         cleChoisie = ""
         dossierAvantRecherche = null
         recherche = ""
@@ -4954,6 +5008,10 @@ ApplicationWindow {
         var nombre = accord(modeleMessages.count, qsTr("résultat"), qsTr("résultats"))
         if (resultatsTronques)
             nombre = qsTr("les %1 plus récents").arg(modeleMessages.count)
+        if (rechercheNonLusSeuls)
+            return qsTr("Non lus, %1 : %2 (messages déjà sur le poste).")
+                    .arg(rechercheCompte > 0 ? qsTr("tous les dossiers de la boîte") : qsTr("toutes les boîtes"))
+                    .arg(accord(modeleMessages.count, qsTr("message"), qsTr("messages")))
         var debut = qsTr("Recherche « %1 » dans toutes les boîtes : %2").arg(recherche).arg(nombre)
         if (dossiersPartout === 0)
             return debut + qsTr(" (messages déjà sur le poste seulement : aucun compte connecté).")
@@ -4974,7 +5032,9 @@ ApplicationWindow {
     function quitterRecherche() {
         colonneListe.champRecherche.text = ""
         colonneListe.panneauHistorique.close()
-        if (recherche.length === 0)
+        // Sortir de la recherche, c'est aussi quitter les non-lus seuls.
+        colonneListe.nonLusRecherche.checked = false
+        if (!enRecherche)
             return
         if (unifieeAvantRecherche) {
             sortirRechercheGlobale()
@@ -4992,6 +5052,7 @@ ApplicationWindow {
             return
         }
         recherche = ""
+        rechercheNonLusSeuls = false
         uidsServeur = []
         rafraichirListe(true)
     }
@@ -5036,6 +5097,9 @@ ApplicationWindow {
         tiroir.close()
         if (rechercheGlobale)
             sortirRechercheGlobale()
+        if (rechercheNonLusSeuls)
+            colonneListe.nonLusRecherche.checked = false
+        rechercheNonLusSeuls = false
         recherche = ""
         uidsServeur = []
         colonneListe.champRecherche.text = ""
@@ -6418,7 +6482,7 @@ ApplicationWindow {
     // Groupes montrés : liste triée par date seulement — une recherche rangée
     // par expéditeur, objet, taille ou dossier n'en a pas.
     readonly property bool groupesVisibles: reglages.groupesDates
-                                            && (recherche.length === 0 || triRecherche === "recents"
+                                            && (!enRecherche || triRecherche === "recents"
                                                 || triRecherche === "anciens")
     // Passé minuit, « Aujourd'hui » devient « Hier » : le jour se relève chaque
     // minute — un minuteur calé sur minuit manquerait le réveil d'un poste
@@ -7113,6 +7177,9 @@ ApplicationWindow {
             // Scénario « recherche-portee » (0.8.2, 0.8.3 ; banc LOT1=1).
             if (essai.scenario === "recherche-portee")
                 scenarios.lancerScenarioRecherchePortee()
+            // « non-lus-seuls » : demande d'une utilisatrice du 06/11/2026.
+            if (essai.scenario === "non-lus-seuls")
+                scenarios.lancerScenarioNonLusSeuls()
             // « recherche-entree » : demande d'un utilisateur du 04/11/2026.
             if (essai.scenario === "recherche-entree")
                 scenarios.lancerScenarioRechercheEntree()

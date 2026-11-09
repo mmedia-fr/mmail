@@ -1823,7 +1823,9 @@ impl Magasin {
         approche: bool,
     ) -> Resultat<Vec<Trouve>> {
         let replies: Vec<String> = texte.split_whitespace().map(replie).collect();
-        if replies.is_empty() && categories.is_empty() {
+        // Sans texte ni catégorie, les non-lus seuls se cherchent encore
+        // (« Non lus » cochée, champ vide) ; sinon, rien à chercher.
+        if replies.is_empty() && categories.is_empty() && !filtre.non_lus {
             return Ok(Vec::new());
         }
         let dossier = filtre.dossier;
@@ -3802,6 +3804,16 @@ mod tests {
         assert_eq!(sujets(Filtre { non_lus: true, ..Default::default() }), vec!["Devis B", "Devis A", "Devis 2025"]);
         let archives = m.dossier_id(a, "Archives").unwrap();
         assert!(sujets(Filtre { dossier: Some(archives), non_lus: true, ..Default::default() }).is_empty());
+        // « Non lus » cochée, champ vide : les non-lus seuls, sans texte.
+        let seuls = |f: Filtre| {
+            m.chercher_tolerant_selon(&f, "", &[], 50).unwrap().0.iter().map(|t| t.message.sujet.clone()).collect::<Vec<_>>()
+        };
+        let inbox = m.dossier_id(a, "INBOX").unwrap();
+        assert_eq!(seuls(Filtre { dossier: Some(inbox), non_lus: true, ..Default::default() }), vec!["Devis A"]);
+        assert_eq!(seuls(Filtre { compte: Some(a), non_lus: true, ..Default::default() }), vec!["Devis A", "Devis 2025"]);
+        assert!(seuls(Filtre { dossier: Some(archives), non_lus: true, ..Default::default() }).is_empty());
+        // Sans la case, un champ vide ne cherche toujours rien.
+        assert!(seuls(Filtre { dossier: Some(inbox), ..Default::default() }).is_empty());
     }
 
     /// Recherche tolérante aux fautes de frappe (0.6.22) : seulement quand la

@@ -7113,8 +7113,8 @@ ApplicationWindow {
             // Scénario « recherche-portee » (0.8.2, 0.8.3 ; banc LOT1=1).
             if (essai.scenario === "recherche-portee")
                 scenarios.lancerScenarioRecherchePortee()
-            // « signature-collee » : demande d'un utilisateur du 03/11/2026.
-            if (essai.scenario === "signature-collee")
+            // « collage-signature » : demande d'un utilisateur du 03/11/2026.
+            if (essai.scenario === "collage-signature")
                 scenarios.lancerScenarioSignatureCollee()
             // « recherche-entree » : demande d'un utilisateur du 04/11/2026.
             if (essai.scenario === "recherche-entree")

@@ -102,11 +102,13 @@ public:
 
   /// Dépose les octets d'un fichier GIF dans le presse-papier, comme un
   /// navigateur, avec sa première vue en image : pour le scénario d'essai
-  /// « signature-collee ».
+  /// « collage-signature ».
   Q_INVOKABLE bool deposerGif(const QString& fichier) const
   {
     QClipboard* presse = QGuiApplication::clipboard();
-    QFile f(fichier);
+    // Un chemin, ou une adresse `file:` (dossier de sortie des essais).
+    const QUrl adresse(fichier);
+    QFile f(adresse.isLocalFile() ? adresse.toLocalFile() : fichier);
     if (!presse || !f.open(QIODevice::ReadOnly))
       return false;
     const QByteArray octets = f.readAll();
@@ -118,7 +120,7 @@ public:
   }
 
   /// Dépose du HTML dans le presse-papier : pour le scénario d'essai
-  /// « signature-collee ».
+  /// « collage-signature ».
   Q_INVOKABLE bool deposerHtml(const QString& html) const
   {
     QClipboard* presse = QGuiApplication::clipboard();

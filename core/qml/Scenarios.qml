@@ -5207,7 +5207,7 @@ QtObject {
         })
     }
 
-    // Scénario « signature-collee » (banc : images distantes servies sur
+    // Scénario « collage-signature » (banc : images distantes servies sur
     // https://localhost/, dossier de sortie avec signature-distante.htm et
     // anime.gif) : l'image distante d'une signature importée ou collée est
     // téléchargée, en GIF ; un GIF du presse-papier reste un GIF, dans
@@ -5241,7 +5241,7 @@ QtObject {
             dlgIdentite.garderSignature()
             var sig = dlgIdentite.biblio[dlgIdentite.choisie] || {}
             bilan("éditeur, GIF collé : " + fait + " " + images(sig.html || ""), fait && gifLocal.test(sig.html || ""))
-            console.log("scenario: signature-collee " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
+            console.log("scenario: collage-signature " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
             Qt.quit()
         })
     }

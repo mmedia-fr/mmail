@@ -380,9 +380,9 @@ ApplicationWindow {
     property bool rechercheNonLusSeuls: false
     // En recherche : un texte cherché, ou les non-lus seuls.
     readonly property bool enRecherche: recherche.length > 0 || rechercheNonLusSeuls
-    // Non-lus déjà montrés par la recherche en cours : celui que l'on vient
-    // d'ouvrir y reste, lu, tant qu'on n'en choisit pas un autre — la liste
-    // ne se dérobe pas sous la lecture.
+    // Non-lus déjà montrés par la recherche en cours : lus depuis, ils y
+    // restent jusqu'à ce qu'on la quitte ou la relance, comme dans Outlook —
+    // la liste ne se dérobe pas sous la lecture.
     property var nonLusMontres: ({})
     // Recherche en cours sur l'objet et l'expéditeur seulement (0.6.38).
     property bool rechercheObjetSeul: false
@@ -4908,17 +4908,25 @@ ApplicationWindow {
                                                                          cle.slice(coupure + 1),
                                                                          absents.join(","))))
             }
-            // Trouvés par le serveur : non lus seulement, comme l'index — le
-            // message que l'on lit reste, lu, tant qu'on n'en choisit pas un
-            // autre.
+            // Trouvés par le serveur : non lus seulement, comme l'index — ceux
+            // déjà montrés restent, lus depuis.
             if (rechercheNonLus) {
-                var garde = nonLusMontres[cleChoisie] ? cleChoisie : ""
-                if (garde.length > 0 && !trouves.some(function(r) { return cleResultat(r.compte, r.chemin, r.uid) === garde })) {
-                    var parties = garde.split("\u0001")
-                    trouves = trouves.concat(JSON.parse(boite.trouvesParUid(Number(parties[0]), parties[1], parties[2])))
+                var presents = {}
+                trouves.forEach(function(r) { presents[cleResultat(r.compte, r.chemin, r.uid)] = true })
+                var parDossier = {}
+                for (var montre in nonLusMontres) {
+                    if (presents[montre])
+                        continue
+                    var parties = montre.split("\u0001")
+                    var dossier = parties[0] + "\u0001" + parties[1]
+                    parDossier[dossier] = (parDossier[dossier] || []).concat([parties[2]])
                 }
-                trouves = trouves.filter(function(r) { return !r.lu || cleResultat(r.compte, r.chemin, r.uid) === garde })
-                trouves.forEach(function(r) { if (!r.lu) nonLusMontres[cleResultat(r.compte, r.chemin, r.uid)] = true })
+                for (var d in parDossier) {
+                    var cd = d.split("\u0001")
+                    trouves = trouves.concat(JSON.parse(boite.trouvesParUid(Number(cd[0]), cd[1], parDossier[d].join(","))))
+                }
+                trouves = trouves.filter(function(r) { return !r.lu || nonLusMontres[cleResultat(r.compte, r.chemin, r.uid)] })
+                trouves.forEach(function(r) { nonLusMontres[cleResultat(r.compte, r.chemin, r.uid)] = true })
             }
             // Les plus récents d'abord pour la coupure, puis le tri choisi.
             trouves.sort(function(a, b) { return b.h - a.h || b.uid - a.uid })
@@ -4936,16 +4944,16 @@ ApplicationWindow {
         for (var i = 0; i < lignes.length; ++i)
             vus[lignes[i].uid] = true
         var manquants = uidsServeur.filter(function(u) { return !vus[u] })
-        // Non lus seulement : le message que l'on lit reste, lu, tant qu'on
-        // n'en choisit pas un autre.
-        var gardeUid = rechercheNonLus && nonLusMontres[uidCourant] ? uidCourant : 0
-        if (gardeUid > 0 && !vus[gardeUid] && manquants.indexOf(gardeUid) < 0)
-            manquants.push(gardeUid)
+        // Non lus seulement : ceux déjà montrés restent, lus depuis.
+        if (rechercheNonLus)
+            for (var montre in nonLusMontres)
+                if (!vus[montre] && manquants.indexOf(Number(montre)) < 0)
+                    manquants.push(Number(montre))
         if (manquants.length > 0)
             lignes = lignes.concat(JSON.parse(boite.messagesParUid(manquants.join(","))))
         if (rechercheNonLus) {
-            lignes = lignes.filter(function(r) { return !r.lu || r.uid === gardeUid })
-            lignes.forEach(function(r) { if (!r.lu) nonLusMontres[r.uid] = true })
+            lignes = lignes.filter(function(r) { return !r.lu || nonLusMontres[r.uid] })
+            lignes.forEach(function(r) { nonLusMontres[r.uid] = true })
         }
         poserListe(trierResultats(lignes))
     }

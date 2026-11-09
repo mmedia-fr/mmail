@@ -17,7 +17,7 @@ Menu {
     id: menuAffichage
     title: qsTr("Affichage")
     onAboutToShow: width = fenetre.largeurMenu(menuAffichage)
-    // Apparence et disposition en sous-menus (0.6.14, demande de Manu du
+    // Apparence et disposition en sous-menus (0.6.14, demande du mainteneur du
     // 22/10 : « Affichage › Apparence » et « Affichage › Disposition »).
     Menu {
         id: menuApparence

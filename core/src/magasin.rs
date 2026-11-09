@@ -644,7 +644,7 @@ impl Magasin {
             )?;
         }
         // Version 16 : les destinataires, que la liste des éléments envoyés
-        // montre à la place de l'expéditeur (demande de Fabienne, 18/10). Les
+        // montre à la place de l'expéditeur (demande d'une utilisatrice, 18/10). Les
         // dossiers d'envoyés sont relus à leur prochaine ouverture, en-têtes
         // seulement ; reconnus à leur rôle ou, faute de SPECIAL-USE (OVH), à
         // leur nom — un dossier pris à tort n'y perd qu'une relecture.

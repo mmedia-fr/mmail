@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Fenêtre d'un message, ouverte d'un double-clic (0.6.16, demande de
-// Dominique BARTHELEMY précisée par Manu le 23/10) : comme dans Outlook, le
+// Fenêtre d'un message, ouverte d'un double-clic (0.6.16, demande d'une
+// utilisatrice précisée par le mainteneur le 23/10) : comme dans Outlook, le
 // message dans sa propre fenêtre, avec ses actions en haut. Plusieurs
 // peuvent être ouvertes à la fois ; chacune vise son message — compte,
 // dossier, UID —, quel que soit le dossier ouvert dans la fenêtre principale.

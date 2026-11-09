@@ -153,7 +153,7 @@ fn boite_partagee_reconnue() {
 }
 
 /// Catégories (0.6.15) sur une boîte partagée comme chez Mailcow : B partage
-/// sa boîte de réception avec A (droits de contact@ chez Lalanne). A crée une
+/// sa boîte de réception avec A (droits de contact@ chez un client). A crée une
 /// catégorie dans le catalogue de la boîte (`METADATA`) et la pose sur un
 /// message ; B relit le catalogue et voit le mot-clé, que la recherche trouve.
 #[test]

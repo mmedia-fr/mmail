@@ -2,7 +2,7 @@
 //
 // Installation d'une mise à jour téléchargée par le noyau (cf.
 // core/src/mise_a_jour.rs) : elle suit la fin du processus, puisqu'un programme
-// en marche ne remplace pas ses propres fichiers (demande de Manu du
+// en marche ne remplace pas ses propres fichiers (demande du mainteneur du
 // 10/10/2026 : « maintenant », « à l'arrêt » ou « jamais »).
 //
 // Windows : l'installeur Inno Setup, lancé sans question à la fermeture

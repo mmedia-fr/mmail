@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Catégories de couleur (0.6.15, « Catégoriser » d'Outlook ; demande de Manu
+//! Catégories de couleur (0.6.15, « Catégoriser » d'Outlook ; demande du mainteneur
 //! du 22/10/2026, pour ne plus passer par le webmail).
 //!
 //! Une catégorie posée sur un message est un **mot-clé IMAP** : le serveur le

@@ -915,7 +915,7 @@ Pane {
                 // Double clic sur un créneau libre : un nouvel événement à la
                 // demi-heure. Cliquer-glisser, à la souris : un événement sur
                 // les demi-heures balayées, comme dans Outlook (0.6.9, demande
-                // de Gwenaëlle). Au doigt, glisser fait défiler la grille.
+                // d'une utilisatrice). Au doigt, glisser fait défiler la grille.
                 MouseArea {
                     id: zoneCreneaux
                     width: defilement.contentWidth

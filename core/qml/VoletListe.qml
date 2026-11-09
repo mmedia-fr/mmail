@@ -275,7 +275,7 @@ ColumnLayout {
                 Layout.fillWidth: true
                 placeholderText: fenetre.tactile ? qsTr("Rechercher") : qsTr("Rechercher (Ctrl+E)")
                 selectByMouse: true
-                // Mis en valeur (demande de Manu, 08/10) : une loupe, un
+                // Mis en valeur (demande du mainteneur, 08/10) : une loupe, un
                 // cadre de la couleur d'accent sur un fond teinté ; le cadre
                 // s'épaissit quand le champ a la main.
                 leftPadding: loupe.width + 13
@@ -301,7 +301,7 @@ ColumnLayout {
                 }
                 // La frappe ne cherche plus : elle propose les dernières
                 // recherches, que l'on choisit ; Entrée lance la recherche
-                // (demande de Manu, 09/10).
+                // (demande du mainteneur, 09/10).
                 onActiveFocusChanged: {
                     if (activeFocus)
                         fenetre.proposerHistorique()

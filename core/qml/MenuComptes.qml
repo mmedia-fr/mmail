@@ -2,7 +2,7 @@
 // Menu « Comptes » de la barre de menus : la gestion des comptes seule —
 // ajouter, modifier, retirer. Le reste (signature, filtres, carnet,
 // corbeilles, sauvegarde) est dans « Réglages » (MenuReglages.qml) depuis la
-// 0.6.20, à la demande de Manu (26/10).
+// 0.6.20, à la demande du mainteneur (26/10).
 //
 // Sorti de Main.qml tel quel (0.5.16, découpage) : les noms employés sans
 // être déclarés ici (fenetre, boite, reglages…) sont ceux de Main.qml,

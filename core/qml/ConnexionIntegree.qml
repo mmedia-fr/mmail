@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Connexion Microsoft dans une page intégrée à MMail, sous Android seulement
-// (0.6.0). Retour de Manu du 18/10 : dans le navigateur du système, MMail
+// (0.6.0). Retour du mainteneur du 18/10 : dans le navigateur du système, MMail
 // passait en arrière-plan et Android le gelait ; l'écoute locale ne recevait
 // jamais la réponse de Microsoft. Ici, MMail reste au premier plan : la page
 // suit la connexion jusqu'à l'adresse de retour (http://localhost?code=…),

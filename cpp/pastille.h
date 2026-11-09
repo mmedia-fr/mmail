@@ -2,7 +2,7 @@
 //
 // Pastille sur l'icône de MMail dans la barre des tâches : le nombre de
 // messages non lus des boîtes de réception, tous comptes confondus (forme
-// choisie par Manu le 10/10/2026 ; effacée à zéro).
+// choisie par le mainteneur le 10/10/2026 ; effacée à zéro).
 //
 // Windows : icône superposée au bouton de la barre des tâches
 // (ITaskbarList3::SetOverlayIcon), que Qt 6 n'expose plus. Linux : compteur du

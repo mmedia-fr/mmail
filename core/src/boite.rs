@@ -815,8 +815,9 @@ pub mod qobject {
         fn enregistrer_brouillon(self: Pin<&mut Boite>, compte: i32, redaction: &QString) -> bool;
 
         /// Importe une signature HTML — celle d'Outlook, fichier `.htm` — pour
-        /// le compte `adresse` : HTML assaini, images copiées dans le profil.
-        /// Rend le HTML, ou une chaîne vide (motif dans `erreur`).
+        /// le compte `adresse` : HTML assaini, images copiées dans le profil,
+        /// images distantes téléchargées (0.6.42). Rend le HTML, ou une chaîne
+        /// vide (motif dans `erreur`).
         #[qinvokable]
         #[cxx_name = "importerSignature"]
         fn importer_signature(self: Pin<&mut Boite>, adresse: &QString, url: &QString) -> QString;
@@ -826,6 +827,14 @@ pub mod qobject {
         #[qinvokable]
         #[cxx_name = "imageSignature"]
         fn image_signature(self: Pin<&mut Boite>, adresse: &QString, url: &QString) -> QString;
+
+        /// Télécharge dans le dossier des signatures du compte `adresse` les
+        /// images distantes (`https:`) d'une signature éditée — collée depuis
+        /// un message ou une page (0.6.42) —, et rend son HTML, ces images
+        /// désignées par leur fichier ; celles qui ne viennent pas restent.
+        #[qinvokable]
+        #[cxx_name = "rapatrierImagesSignature"]
+        fn rapatrier_images_signature(&self, adresse: &QString, html: &QString) -> QString;
 
         /// Garde sur le poste l'état d'une rédaction en cours (JSON), sous
         /// l'identifiant `id` ; faux en cas d'échec (motif dans `erreur`).
@@ -5551,6 +5560,11 @@ impl qobject::Boite {
                 QString::from("")
             }
         }
+    }
+
+    pub fn rapatrier_images_signature(&self, adresse: &QString, html: &QString) -> QString {
+        let dossier = dossier_signatures(&self.profil).join(crate::signature::nom_de_dossier(&adresse.to_string()));
+        QString::from(&crate::signature::rapatrier_distantes(&html.to_string(), &dossier, &serie_signature()))
     }
 
     pub fn image_signature(mut self: Pin<&mut Self>, adresse: &QString, url: &QString) -> QString {

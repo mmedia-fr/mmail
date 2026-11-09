@@ -416,13 +416,13 @@ mod tests {
     #[test]
     fn fiche_vcard() {
         let c = lire_vcard(
-            "BEGIN:VCARD\r\nVERSION:3.0\r\nN:Dupont;Marie;;;\r\nFN:Marie Dupont\r\nORG:Transports\\, Lalanne;Accueil\r\n\
-             item1.EMAIL;TYPE=work:marie@lalanne.fr\r\nEMAIL;TYPE=home:Marie@Exemple.FR\r\nEMAIL:marie@lalanne.fr\r\n\
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nN:Dupont;Marie;;;\r\nFN:Marie Dupont\r\nORG:Transports\\, Martinet;Accueil\r\n\
+             item1.EMAIL;TYPE=work:marie@martinet.test\r\nEMAIL;TYPE=home:Marie@Exemple.FR\r\nEMAIL:marie@martinet.test\r\n\
              TEL;TYPE=cell:06 12 34\r\n 56 78\r\nNOTE:ligne\\nsuivante\r\nEND:VCARD\r\n",
         );
         assert_eq!(c.nom, "Marie Dupont");
-        assert_eq!(c.organisation, "Transports, Lalanne, Accueil");
-        assert_eq!(c.courriels, vec!["marie@lalanne.fr", "Marie@Exemple.FR"]);
+        assert_eq!(c.organisation, "Transports, Martinet, Accueil");
+        assert_eq!(c.courriels, vec!["marie@martinet.test", "Marie@Exemple.FR"]);
         assert_eq!(c.telephones, vec!["06 12 3456 78"]);
         // Sans FN : le nom structuré, puis l'organisation.
         assert_eq!(lire_vcard("BEGIN:VCARD\nN:Martin;Paul\nEND:VCARD").nom, "Paul Martin");
@@ -440,17 +440,17 @@ mod tests {
         assert!(m.poser_carnets(compte, &carnets).unwrap());
         assert!(!m.poser_carnets(compte, &carnets).unwrap());
         let (id, _, _) = m.carnets(compte).unwrap()[0].clone();
-        let marie = lire_vcard("BEGIN:VCARD\nFN:Marie Dupont\nORG:Lalanne\nEMAIL:marie@lalanne.fr\nTEL:0612\nEND:VCARD");
+        let marie = lire_vcard("BEGIN:VCARD\nFN:Marie Dupont\nORG:Martinet\nEMAIL:marie@martinet.test\nTEL:0612\nEND:VCARD");
         m.poser_contacts(id, &[("a.vcf".into(), "\"1\"".into(), marie, "BEGIN:VCARD".into())]).unwrap();
         assert_eq!(m.etags_contacts(id).unwrap().get("a.vcf").map(String::as_str), Some("\"1\""));
-        let trouves = m.fiches_contacts("lalan", 10).unwrap();
+        let trouves = m.fiches_contacts("martin", 10).unwrap();
         assert_eq!(trouves.len(), 1);
-        assert_eq!(trouves[0].courriels, vec!["marie@lalanne.fr"]);
+        assert_eq!(trouves[0].courriels, vec!["marie@martinet.test"]);
         assert_eq!(trouves[0].telephones, vec!["0612"]);
         assert_eq!(trouves[0].carnet, "Personnel");
         // La saisie propose le contact, avec son nom.
         let saisie = m.contacts("marie", 5).unwrap();
-        assert_eq!(saisie.first(), Some(&("Marie Dupont".to_string(), "marie@lalanne.fr".to_string())));
+        assert_eq!(saisie.first(), Some(&("Marie Dupont".to_string(), "marie@martinet.test".to_string())));
         // Fiche retirée, carnet disparu : plus rien.
         m.retirer_contacts(id, &["a.vcf".into()]).unwrap();
         assert!(m.fiches_contacts("", 10).unwrap().is_empty());

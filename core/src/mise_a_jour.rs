@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Mise à jour assistée (demande de Manu du 10/10/2026) : MMail signale une
+//! Mise à jour assistée (demande du mainteneur du 10/10/2026) : MMail signale une
 //! version plus récente et, si on le lui demande, télécharge le paquet de sa
 //! plateforme, en contrôle l'empreinte et le tient prêt. L'installation — un
 //! installeur silencieux lancé à la fermeture, ou l'AppImage remplacée — revient
@@ -86,12 +86,14 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
+use std::time::Duration;
 
 use aws_lc_rs::digest;
 use cxx_qt::{CxxQtType, Threading};
 use cxx_qt_lib::QString;
 
 use crate::http;
+use crate::imap::Erreur;
 
 /// Dernière publication du dépôt : ni préversion ni brouillon.
 const PUBLICATIONS: &str = "https://api.github.com/repos/mmedia-fr/mmail/releases/latest";
@@ -218,6 +220,48 @@ fn chemin_partiel(destination: &Path, nom: &str) -> PathBuf {
     destination.with_file_name(format!(".{nom}.part"))
 }
 
+/// Pauses entre les tentatives d'une requête de la mise à jour : trois en
+/// tout, quatre secondes d'attente au plus. Le 09/11/2026, GitHub a répondu
+/// 504 au fichier des empreintes : la mise à jour s'arrêtait sur un message
+/// d'erreur, alors qu'un nouvel essai passait.
+const PAUSES: [Duration; 2] = [Duration::from_secs(1), Duration::from_secs(3)];
+
+/// Échec passager, qu'un nouvel essai peut lever : réseau, délai, ou serveur
+/// en 5xx. Une réponse 4xx — fichier absent, accès refusé — fait foi.
+fn passager(erreur: &Erreur) -> bool {
+    match erreur {
+        Erreur::Reseau(_) | Erreur::Delai => true,
+        Erreur::Refuse(m) => statut_du_refus(m).is_some_and(|s| (500..600).contains(&s)),
+        _ => false,
+    }
+}
+
+/// Statut HTTP d'un refus de `http::telecharger` (« le serveur a répondu 504 »).
+fn statut_du_refus(motif: &str) -> Option<u16> {
+    motif.strip_prefix("le serveur a répondu ")?.trim().parse().ok()
+}
+
+/// `requete` tentée jusqu'à trois fois, `pauses` entre deux, tant que
+/// l'échec est passager (cf. `passager`) ou que le serveur répond 5xx.
+fn avec_reprises(
+    pauses: &[Duration],
+    requete: &mut dyn FnMut() -> Result<http::Reponse, Erreur>,
+) -> Result<http::Reponse, Erreur> {
+    let mut resultat = requete();
+    for pause in pauses {
+        let encore = match &resultat {
+            Ok(reponse) => (500..600).contains(&reponse.statut),
+            Err(e) => passager(e),
+        };
+        if !encore {
+            break;
+        }
+        thread::sleep(*pause);
+        resultat = requete();
+    }
+    resultat
+}
+
 /// Télécharge le paquet `genre` de `version` vers `destination` et en contrôle
 /// l'empreinte. Rend un message lisible en cas d'échec.
 fn telecharger_paquet(
@@ -227,23 +271,16 @@ fn telecharger_paquet(
     progression: &mut dyn FnMut(i32),
 ) -> Result<(), String> {
     let nom = nom_du_paquet(version, genre).ok_or_else(|| format!("paquet « {genre} » inconnu"))?;
-    let sommes = http::requete_bornee(
-        "GET",
-        &format!("{TELECHARGEMENTS}/v{version}/SHA256SUMS-{version}.txt"),
-        "text/plain",
-        64 * 1024,
-    )
-    .map_err(|e| format!("empreintes de la publication illisibles — {e}"))?;
+    let adresse_sommes = format!("{TELECHARGEMENTS}/v{version}/SHA256SUMS-{version}.txt");
+    let sommes = avec_reprises(&PAUSES, &mut || http::requete_bornee("GET", &adresse_sommes, "text/plain", 64 * 1024))
+        .map_err(|e| format!("empreintes de la publication illisibles — {e}"))?;
     if sommes.statut != 200 {
         return Err(format!("empreintes de la publication introuvables (statut {})", sommes.statut));
     }
-    let signature = http::requete_bornee(
-        "GET",
-        &format!("{TELECHARGEMENTS}/v{version}/SHA256SUMS-{version}.txt.sig"),
-        "application/octet-stream",
-        1024,
-    )
-    .map_err(|e| format!("signature des empreintes illisible — {e}"))?;
+    let adresse_signature = format!("{TELECHARGEMENTS}/v{version}/SHA256SUMS-{version}.txt.sig");
+    let signature =
+        avec_reprises(&PAUSES, &mut || http::requete_bornee("GET", &adresse_signature, "application/octet-stream", 1024))
+            .map_err(|e| format!("signature des empreintes illisible — {e}"))?;
     if signature.statut != 200 {
         return Err(format!("signature des empreintes introuvable (statut {})", signature.statut));
     }
@@ -260,29 +297,20 @@ fn telecharger_paquet(
         fs::create_dir_all(dossier).map_err(|e| format!("{} : {e}", dossier.display()))?;
     }
     let partiel = chemin_partiel(destination, &nom);
+    let adresse = format!("{TELECHARGEMENTS}/v{version}/{nom}");
     let resultat = (|| {
-        let mut fichier = fs::File::create(&partiel).map_err(|e| format!("{} : {e}", partiel.display()))?;
-        let mut contexte = digest::Context::new(&digest::SHA256);
-        let mut dernier = -1;
-        http::telecharger(
-            &format!("{TELECHARGEMENTS}/v{version}/{nom}"),
-            TAILLE_MAX_PAQUET,
-            &mut |morceau| {
-                contexte.update(morceau);
-                fichier.write_all(morceau)?;
-                Ok(())
-            },
-            &mut |recus, total| {
-                let pourcent = (recus * 100 / total.max(1)) as i32;
-                if pourcent != dernier {
-                    dernier = pourcent;
-                    progression(pourcent);
+        // Un téléchargement interrompu reprend du début, fichier recréé.
+        let mut essai = 0;
+        let empreinte = loop {
+            match telecharger_vers(&adresse, &partiel, progression) {
+                Err(e) if essai < PAUSES.len() && passager(&e) => {
+                    thread::sleep(PAUSES[essai]);
+                    essai += 1;
                 }
-            },
-        )
-        .map_err(|e| e.to_string())?;
-        fichier.sync_all().map_err(|e| e.to_string())?;
-        if hexadecimal(contexte.finish().as_ref()) != attendue {
+                autre => break autre.map_err(|e| e.to_string())?,
+            }
+        };
+        if empreinte != attendue {
             return Err(format!("{nom} reçu ne correspond pas à l'empreinte publiée"));
         }
         #[cfg(unix)]
@@ -296,6 +324,33 @@ fn telecharger_paquet(
         let _ = fs::remove_file(&partiel);
     }
     resultat
+}
+
+/// Télécharge `adresse` dans `partiel`, recréé ; rend son empreinte SHA-256.
+fn telecharger_vers(adresse: &str, partiel: &Path, progression: &mut dyn FnMut(i32)) -> Result<String, Erreur> {
+    // Un fichier qui ne s'écrit pas n'a rien de passager : pas de nouvel essai.
+    let mut fichier =
+        fs::File::create(partiel).map_err(|e| Erreur::Protocole(format!("{} : {e}", partiel.display())))?;
+    let mut contexte = digest::Context::new(&digest::SHA256);
+    let mut dernier = -1;
+    http::telecharger(
+        adresse,
+        TAILLE_MAX_PAQUET,
+        &mut |morceau| {
+            contexte.update(morceau);
+            fichier.write_all(morceau)?;
+            Ok(())
+        },
+        &mut |recus, total| {
+            let pourcent = (recus * 100 / total.max(1)) as i32;
+            if pourcent != dernier {
+                dernier = pourcent;
+                progression(pourcent);
+            }
+        },
+    )?;
+    fichier.sync_all()?;
+    Ok(hexadecimal(contexte.finish().as_ref()))
 }
 
 /// Version d'un installeur d'après son nom : « …/MMail-0.5.8-setup.exe » →
@@ -396,6 +451,44 @@ impl qobject::MiseAJour {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Nouvel essai sur un échec passager — 5xx, réseau, délai —, jamais sur
+    /// une 4xx ; trois tentatives au plus.
+    #[test]
+    fn reprises_sur_echec_passager() {
+        let reponse = |statut| http::Reponse {
+            statut,
+            type_contenu: String::new(),
+            redirection: None,
+            corps: Vec::new(),
+            adresse: String::new(),
+            entetes: Vec::new(),
+        };
+        let sans_pause = [Duration::ZERO; 2];
+        let essayer = |reponses: Vec<Result<http::Reponse, Erreur>>| {
+            let mut file = std::collections::VecDeque::from(reponses);
+            let mut tentatives = 0;
+            let fin = avec_reprises(&sans_pause, &mut || {
+                tentatives += 1;
+                file.pop_front().expect("tentative de trop")
+            });
+            (fin.map(|r| r.statut).map_err(|e| e.to_string()), tentatives)
+        };
+        // Le 504 du 09/11 : le second essai passe.
+        assert_eq!(essayer(vec![Ok(reponse(504)), Ok(reponse(200))]), (Ok(200), 2));
+        assert_eq!(essayer(vec![Err(Erreur::Reseau("coupé".into())), Ok(reponse(200))]), (Ok(200), 2));
+        assert_eq!(essayer(vec![Err(Erreur::Delai), Ok(reponse(502)), Ok(reponse(200))]), (Ok(200), 3));
+        // Trois échecs : le dernier est rendu.
+        assert_eq!(essayer(vec![Ok(reponse(503)), Ok(reponse(503)), Ok(reponse(504))]), (Ok(504), 3));
+        // Une 4xx, un refus : pas de nouvel essai.
+        assert_eq!(essayer(vec![Ok(reponse(404))]), (Ok(404), 1));
+        assert_eq!(essayer(vec![Ok(reponse(200))]), (Ok(200), 1));
+        // Téléchargement du paquet : le statut se lit dans le refus.
+        assert!(passager(&Erreur::Refuse("le serveur a répondu 504".into())));
+        assert!(!passager(&Erreur::Refuse("le serveur a répondu 404".into())));
+        assert!(!passager(&Erreur::Protocole("longueur du fichier non annoncée".into())));
+        assert!(passager(&Erreur::Reseau("réponse HTTP incomplète".into())));
+    }
 
     /// La clé compilée est bien celle de MMEDIA : signature témoin faite le
     /// 17/10/2026 avec la clé privée, sur « mmail-empreintes\n ».

@@ -55,7 +55,7 @@ ApplicationWindow {
             dlgLien.ouvrir(lien, qsTr("Ce lien n'a pas pu être lu — %1").arg(message))
         }
     }
-    // Mise à jour assistée (demande de Manu du 10/10) : une version plus
+    // Mise à jour assistée (demande du mainteneur du 10/10) : une version plus
     // récente se propose — l'installer maintenant, à la fermeture de MMail, ou
     // jamais. Le paquet est téléchargé et contrôlé par le noyau, installé par le
     // programme une fois MMail fermé (cf. cpp/installeur.h).
@@ -357,7 +357,7 @@ ApplicationWindow {
     property var inachevesPartout: []
     readonly property int resultatsMax: 1000
     property bool resultatsTronques: false
-    // Tri des résultats d'une recherche (demande de Manu, 11/10) : fait sur le
+    // Tri des résultats d'une recherche (demande du mainteneur, 11/10) : fait sur le
     // poste, jamais demandé au serveur — un tri IMAP sur un gros dossier
     // continue de tourner après qu'on l'a abandonné (constaté le 05/10).
     property string triRecherche: "recents"
@@ -374,9 +374,19 @@ ApplicationWindow {
     // compte ; 0 pour toutes les boîtes. Non lus seulement (0.8.2).
     property int rechercheCompte: 0
     property bool rechercheNonLus: false
+    // « Non lus » coché, champ vide : la liste ne garde que les non-lus de la
+    // portée choisie, sans texte à chercher. Cocher la case sans rien taper ne
+    // faisait rien.
+    property bool rechercheNonLusSeuls: false
+    // En recherche : un texte cherché, ou les non-lus seuls.
+    readonly property bool enRecherche: recherche.length > 0 || rechercheNonLusSeuls
+    // Non-lus déjà montrés par la recherche en cours : lus depuis, ils y
+    // restent jusqu'à ce qu'on la quitte ou la relance, comme dans Outlook —
+    // la liste ne se dérobe pas sous la lecture.
+    property var nonLusMontres: ({})
     // Recherche en cours sur l'objet et l'expéditeur seulement (0.6.38).
     property bool rechercheObjetSeul: false
-    // Boîte de réception unifiée (« toutes les BàL », demande de Manu du
+    // Boîte de réception unifiée (« toutes les BàL », demande du mainteneur du
     // 08/10) : les réceptions de tous les comptes en une liste, sur le même
     // modèle — chaque message avec son compte, le noyau sur le dossier du
     // message choisi, sélection simple. Une recherche lancée depuis elle y
@@ -437,7 +447,7 @@ ApplicationWindow {
     // pour en ouvrir une).
     property string pieceCible: ""
     // Fond de la rubrique Favoris : un cran plus soutenu que celui des
-    // comptes, pour qu'elle s'en détache (retour de Manu, 01/10).
+    // comptes, pour qu'elle s'en détache (retour du mainteneur, 01/10).
     readonly property color fondFavoris: palette.base.hslLightness > 0.5
             ? Qt.tint(Qt.darker(palette.base, 1.07), Qt.rgba(accent.r, accent.g, accent.b, 0.10))
             : Qt.tint(palette.base, Qt.rgba(1, 1, 1, 0.08))
@@ -545,7 +555,7 @@ ApplicationWindow {
         // fenêtre, comme Outlook ; « reponse », ouvrir une réponse.
         property string doubleClic: "message"
         // Marges du corps d'un message, à gauche et à droite (0.6.23), en
-        // haut et en bas aussi (0.6.27, demande de Manu du 29/10) :
+        // haut et en bas aussi (0.6.27, demande du mainteneur du 29/10) :
         // « aucune », au ras du volet comme jusqu'ici, « etroites » ou
         // « larges » (cf. fenetre.margeMessage).
         property string margesMessage: "aucune"
@@ -553,7 +563,7 @@ ApplicationWindow {
         // (0.6.24) : adresses en minuscules, JSON. Suit la sauvegarde.
         property string expediteursConfiance: "[]"
         // Liste des messages regroupée par date de réception, comme Outlook
-        // (0.6.29, demande de Manu du 30/10 ; cf. fenetre.bornesGroupes).
+        // (0.6.29, demande du mainteneur du 30/10 ; cf. fenetre.bornesGroupes).
         property bool groupesDates: true
     }
 
@@ -563,7 +573,7 @@ ApplicationWindow {
     // palette et la police de la fenêtre qui changent, le style des contrôles
     // restant Fusion, seul à honorer une palette partout (cf. cpp/main.cpp).
     // « systeme » ne pose aucune surcharge : la palette reste celle du bureau.
-    // Par défaut « mmedia » depuis la 0.6.20 (Manu, 26/10) ; un profil qui a
+    // Par défaut « mmedia » depuis la 0.6.20 (le mainteneur, 26/10) ; un profil qui a
     // déjà tourné garde la sienne : Qt.labs.settings écrit la valeur par
     // défaut dans le profil dès le premier démarrage.
     // Celle de l'organisation (0.8.6), si elle en fournit une : par défaut
@@ -586,7 +596,7 @@ ApplicationWindow {
     // Disposition de l'en-tête du bureau (0.6.14) : « barre », une seule
     // ligne, par défaut ; « etages », les onglets et les menus sur le
     // bandeau, les boutons et les interrupteurs sur une bande dessous, comme
-    // Outlook. Choix de Manu du 22/10 : les deux, au choix de chacun.
+    // Outlook. Choix du mainteneur du 22/10 : les deux, au choix de chacun.
     property string disposition: "barre"
 
     Settings {
@@ -644,7 +654,7 @@ ApplicationWindow {
             texteAccent: "#0e6f9e", rubrique: "#276e8b", alerte: "#e61e29",
             titres: ["Saira Condensed", "Segoe UI", "Noto Sans", "DejaVu Sans", "Arial"]
         },
-        // Apparence « Pomme », reprise de la charte du Hub Double Clic : fonds
+        // Apparence « Pomme », reprise de la charte d'un site client : fonds
         // gris très clairs, surfaces blanches, bleu système pour la sélection
         // et les repères, bandeau d'en-tête anthracite.
         // Les rubriques prennent un gris de texte secondaire, ce qui garde la
@@ -840,7 +850,7 @@ ApplicationWindow {
     // dans « Créer mon apparence… », sinon celle de l'apparence si elle est
     // faite pour un fond clair, sinon le bleu des liens d'Outlook et de Word
     // (#0563c1, 6:1 sur blanc) ; ramenée au besoin à 4,5:1 au moins. Avant,
-    // Qt prenait celle du système, trop pâle (remarque de Manu, 02/11).
+    // Qt prenait celle du système, trop pâle (remarque du mainteneur, 02/11).
     readonly property color couleurLienPage: lisibleSur(
         valeurOu("lienPage", valeurOu("sombre", false) ? "" : valeurOu("lien", "")) || "#0563c1", "#ffffff")
     readonly property color couleurRubrique: marque ? marque.rubrique : palette.highlight
@@ -874,7 +884,7 @@ ApplicationWindow {
     readonly property int dureeAppui: anime ? 90 : 0
     readonly property int dureeTeinte: anime ? 140 : 0
     readonly property int dureeFilet: anime ? 220 : 0
-    // Glissement du bouton d'un interrupteur (0.6.22, Manu, 27/10) : 120 ms
+    // Glissement du bouton d'un interrupteur (0.6.22, le mainteneur, 27/10) : 120 ms
     // sous les apparences qui ne portent pas la clé « mouvement », comme
     // jusqu'à la 0.6.20 ; sous celles qui la portent (« Pomme »), la règle du
     // mouvement, garde et réglage du poste compris.
@@ -953,7 +963,7 @@ ApplicationWindow {
         }
     }
 
-    // En-tête du bureau (0.6.14, demande de Manu du 22/10 : onglets,
+    // En-tête du bureau (0.6.14, demande du mainteneur du 22/10 : onglets,
     // boutons et menus se mélangeaient) : quatre sortes d'éléments, chacune
     // son habit, dans l'ordre — les onglets (où l'on est), les boutons (ce
     // que l'on fait), les interrupteurs (ce que l'on allume), puis les menus,
@@ -1240,7 +1250,7 @@ ApplicationWindow {
         }
         SeparateurEntete { sombre: ae.sombre }
         // Boîte de réception unifiée : les réceptions de tous les comptes,
-        // avec leurs non-lus (emplacement choisi par Manu le 10/10). Éteinte,
+        // avec leurs non-lus (emplacement choisi par le mainteneur le 10/10). Éteinte,
         // la liste revient au dossier.
         InterrupteurEntete {
             sombre: ae.sombre
@@ -1322,7 +1332,7 @@ ApplicationWindow {
     readonly property real tailleMessage: tailleBase * reglages.zoomMessage
     // Marge ajoutée sur les quatre côtés du corps d'un message, en pixels
     // (0.6.23, à gauche et à droite seulement jusqu'à la 0.6.26 ; demande
-    // de Nicolas transmise par Manu le 27/10 ; Manu le préfère au ras
+    // d'un utilisateur transmise par le mainteneur le 27/10 ; lui le préfère au ras
     // du volet, d'où « aucune » par défaut). En proportion de la taille du
     // texte, pour suivre le zoom de la colonne.
     readonly property real margeMessage: reglages.margesMessage === "larges" ? Math.round(tailleMessage * 4)
@@ -1412,7 +1422,7 @@ ApplicationWindow {
         function onRevisionChanged() {
             fenetre.rafraichirArborescence()
             fenetre.nonLusReceptions = boite.nonLusReceptions()
-            if (fenetre.vueUnifiee && fenetre.recherche.length === 0)
+            if (fenetre.vueUnifiee && !fenetre.enRecherche)
                 fenetre.poserBoitesUnifiees()
             if (!boite.occupe)
                 fenetre.derniereSynchro = new Date()
@@ -1431,7 +1441,7 @@ ApplicationWindow {
         id: entete
         // Deux barres, une seule visible : la hauteur se donne ici — avec deux
         // enfants, la barre ne la tire plus d'elle-même et s'écrasait
-        // (constaté par Manu sur le téléphone le 18/10, et vrai sur le bureau).
+        // (constaté par le mainteneur sur le téléphone le 18/10, et vrai sur le bureau).
         // Au doigt, 48 au moins : la hauteur d'une barre d'application d'Android.
         contentHeight: fenetre.tactile ? Math.max(48, barreTactile.implicitHeight)
                                        : barreBureau.implicitHeight
@@ -1515,7 +1525,7 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 Layout.leftMargin: 4
             }
-            // « Toutes les BàL » reste à portée de pouce (retour de Manu du
+            // « Toutes les BàL » reste à portée de pouce (retour du mainteneur du
             // 18/10), avec ses non-lus.
             BoutonEntete {
                 cerne: true
@@ -2320,7 +2330,10 @@ ApplicationWindow {
             var boiteCherchee = rechercheCompte > 0 ? compteParId(rechercheCompte) : null
             infoDossier = (boiteCherchee ? qsTr("%1, tous dossiers").arg(boiteCherchee.adresse) : qsTr("Toutes les boîtes"))
                     + (rechercheNonLus ? qsTr(", non lus") : "")
-                    + (rechercheObjetSeul ? qsTr(", objet et expéditeur") : "") + "  —  " + (modeleMessages.count >= 500
+                    + (rechercheObjetSeul ? qsTr(", objet et expéditeur") : "") + "  —  "
+                    + (rechercheNonLusSeuls ? accord(modeleMessages.count, qsTr("message"), qsTr("messages"))
+                       + (modeleMessages.count >= 500 ? qsTr(" (les plus récents)") : "")
+                    : modeleMessages.count >= 500
                     ? qsTr("recherche « %1 » : les 500 plus récents, précisez la recherche").arg(recherche)
                     : qsTr("recherche « %1 » : %2").arg(recherche)
                       .arg(accord(modeleMessages.count, qsTr("résultat"), qsTr("résultats"))))
@@ -2343,7 +2356,11 @@ ApplicationWindow {
         }
         // Un dossier d'une boîte partagée se dit de cette boîte (0.6.25).
         var texte = ligne ? (ligne.proprietaire || ligne.adresse) + " › " + libelleLigne(ligne) : boite.dossierCourant
-        if (recherche.length > 0) {
+        if (rechercheNonLusSeuls) {
+            texte += "  —  " + qsTr("non lus seulement : %1")
+                    .arg(accord(modeleMessages.count, qsTr("message"), qsTr("messages")))
+                    + (modeleMessages.count >= 500 ? qsTr(" (les plus récents)") : "")
+        } else if (recherche.length > 0) {
             texte += "  —  " + (modeleMessages.count >= 500
                     ? qsTr("recherche « %1 » : les 500 plus récents, précisez la recherche").arg(recherche)
                     : qsTr("recherche « %1 » : %2").arg(recherche)
@@ -2514,8 +2531,8 @@ ApplicationWindow {
     // de JavaScript pourrait les détruire.
     property var fenetresMessage: []
 
-    /// Double-clic sur un message (0.6.16, demande de Dominique BARTHELEMY
-    /// précisée par Manu le 23/10) : comme dans Outlook, le message s'ouvre
+    /// Double-clic sur un message (0.6.16, demande d'une utilisatrice
+    /// précisée par le mainteneur le 23/10) : comme dans Outlook, le message s'ouvre
     /// dans sa fenêtre — ou une réponse, au choix (Affichage › Double-clic
     /// sur un message). Un brouillon se reprend.
     function doubleClicMessage(index) {
@@ -3020,7 +3037,7 @@ ApplicationWindow {
     // la connexion seulement. Sa vue web ouvre une fenêtre native que Qt compte
     // parmi celles de l'application : chargée dès le lancement, elle restait
     // seule ouverte quand Retour fermait la fenêtre principale, et MMail ne
-    // s'arrêtait plus — page blanche (retour de Manu du 21/10).
+    // s'arrêtait plus — page blanche (retour du mainteneur du 21/10).
     Loader { id: chargeurConnexion }
     Connections {
         target: chargeurConnexion.item
@@ -3246,7 +3263,7 @@ ApplicationWindow {
     // un refus y rouvre la fenêtre du compte. Une connexion automatique
     // (démarrage, réveil, reconnexion après une coupure) ne fait que passer
     // le compte en « erreur » ; un appui sur la mention ouvre sa fenêtre
-    // (0.6.31, note de Manu du 28/10 : la fenêtre revenait à chaque lancement).
+    // (0.6.31, note du mainteneur du 28/10 : la fenêtre revenait à chaque lancement).
     property var gestesCompte: ({})
 
     function marquerGeste(adresse) {
@@ -4299,7 +4316,7 @@ ApplicationWindow {
     /// Avant la page de Google : son texte d'autorisation, imposé par Google
     /// pour l'accès IMAP et SMTP à Gmail (`https://mail.google.com/`), annonce
     /// la suppression définitive de tout le courrier ; ce dialogue dit ce que
-    /// MMail en fait (retour de Nicolas, transmis par Manu le 27/10).
+    /// MMail en fait (retour d'un utilisateur, transmis par le mainteneur le 27/10).
     Dialog {
         id: dlgAvantGoogle
         property string indice: ""
@@ -4358,7 +4375,7 @@ ApplicationWindow {
     /// Ajout d'un compte Microsoft : l'adresse d'abord — elle mène à la
     /// connexion de son organisation, ou à celle des comptes personnels pour
     /// Outlook.com, sans passer par un compte déjà connecté dans le navigateur
-    /// (retour de Manu du 18/10).
+    /// (retour du mainteneur du 18/10).
     function ajouterMicrosoft(adresse) {
         if (adresse.indexOf("@") > 0) {
             connecterMicrosoft(adresse)
@@ -4414,7 +4431,7 @@ ApplicationWindow {
             return
         }
         // Sous Android, dans la page intégrée : le navigateur du système
-        // laisserait MMail gelé en arrière-plan (retour de Manu du 18/10).
+        // laisserait MMail gelé en arrière-plan (retour du mainteneur du 18/10).
         if (Qt.platform.os === "android") {
             chargeurConnexion.source = "ConnexionIntegree.qml"
             chargeurConnexion.item.ouvrir(url)
@@ -4548,6 +4565,7 @@ ApplicationWindow {
         // Un dossier choisi dans l'arborescence met fin à une recherche dans
         // toutes les boîtes, même s'il est celui du dernier résultat lu.
         var sortieGlobale = rechercheGlobale || vueUnifiee
+        var nonLusSeuls = rechercheNonLusSeuls
         if (sortieGlobale) {
             sortirRechercheGlobale()
             vueUnifiee = false
@@ -4555,6 +4573,11 @@ ApplicationWindow {
             colonneListe.champRecherche.text = ""
         }
         if (sortieGlobale || compte !== boite.compteCourant || chemin !== boite.dossierCourant) {
+            // « Non lus » sans texte ne suit pas d'un dossier à l'autre : le
+            // dossier choisi s'ouvre entier, la case décochée.
+            if (nonLusSeuls)
+                colonneListe.nonLusRecherche.checked = false
+            rechercheNonLusSeuls = false
             recherche = ""
             uidsServeur = []
             if (!colonneListe.porteeRecherche.globale)
@@ -4596,7 +4619,7 @@ ApplicationWindow {
     function rafraichirListe(complet) {
         // En recherche, la liste est celle des résultats : on la recherche à
         // nouveau, et l'index tient compte des changements.
-        if (recherche.length > 0) {
+        if (enRecherche) {
             poserResultats()
             return
         }
@@ -4777,12 +4800,16 @@ ApplicationWindow {
     function lancerRecherche(texteImpose) {
         var texte = (texteImpose !== undefined ? texteImpose : colonneListe.champRecherche.text).trim()
         colonneListe.panneauHistorique.close()
-        if (texte.length === 0) {
+        // Champ vide : les non-lus seuls si « Non lus » est cochée, sinon la
+        // liste entière revient.
+        var nonLusSeuls = texte.length === 0
+        if (nonLusSeuls && !colonneListe.nonLusRecherche.checked) {
             quitterRecherche()
             return
         }
         colonneListe.champRecherche.text = texte
-        noterRecherche(texte)
+        if (!nonLusSeuls)
+            noterRecherche(texte)
         if (vueUnifiee) {
             vueUnifiee = false
             unifieeAvantRecherche = true
@@ -4790,7 +4817,8 @@ ApplicationWindow {
             viderListe()
         }
         rechercheNonLus = colonneListe.nonLusRecherche.checked
-        rechercheObjetSeul = colonneListe.objetSeulRecherche.checked
+        rechercheObjetSeul = colonneListe.objetSeulRecherche.checked && !nonLusSeuls
+        nonLusMontres = ({})
         if (colonneListe.porteeRecherche.globale) {
             if (!rechercheGlobale)
                 dossierAvantRecherche = boite.dossierCourant.length > 0
@@ -4803,6 +4831,7 @@ ApplicationWindow {
                 return
             }
             rechercheGlobale = true
+            rechercheNonLusSeuls = nonLusSeuls
             recherche = texte
             uidsServeur = []
             cleChoisie = ""
@@ -4812,8 +4841,8 @@ ApplicationWindow {
             // L'index répond tout de suite ; le serveur suit, dossier par
             // dossier, dans le texte des messages — ou leur objet et leur
             // expéditeur seulement — et jusque dans les dossiers jamais
-            // ouverts sur ce poste.
-            dossiersPartout = rechercheCompte > 0
+            // ouverts sur ce poste. Les non-lus seuls : l'index seulement.
+            dossiersPartout = nonLusSeuls ? 0 : rechercheCompte > 0
                     ? boite.chercherDansLeCompteSurLeServeur(texte, rechercheCompte, rechercheObjetSeul)
                     : boite.chercherPartoutSurLeServeur(texte, rechercheObjetSeul)
             messageEtat.texte = (boite.rechercheApprochee() ? qsTr("Rien d'exact sur le poste : fautes de frappe tolérées. ") : "")
@@ -4830,9 +4859,17 @@ ApplicationWindow {
         }
         if (boite.dossierCourant.length === 0)
             return
+        rechercheNonLusSeuls = nonLusSeuls
         recherche = texte
         uidsServeur = []
         poserResultats()
+        // Les non-lus du dossier : son index suffit, tenu à jour par la
+        // synchronisation.
+        if (nonLusSeuls) {
+            messageEtat.texte = qsTr("Non lus seulement : %1.")
+                    .arg(accord(modeleMessages.count, qsTr("message"), qsTr("messages")))
+            return
+        }
         // Rien d'exact dans l'index : les résultats tolèrent des fautes de
         // frappe (0.6.22), et la barre le dit.
         var approchee = boite.rechercheApprochee()
@@ -4871,9 +4908,26 @@ ApplicationWindow {
                                                                          cle.slice(coupure + 1),
                                                                          absents.join(","))))
             }
-            // Trouvés par le serveur : non lus seulement, comme l'index.
-            if (rechercheNonLus)
-                trouves = trouves.filter(function(r) { return !r.lu })
+            // Trouvés par le serveur : non lus seulement, comme l'index — ceux
+            // déjà montrés restent, lus depuis.
+            if (rechercheNonLus) {
+                var presents = {}
+                trouves.forEach(function(r) { presents[cleResultat(r.compte, r.chemin, r.uid)] = true })
+                var parDossier = {}
+                for (var montre in nonLusMontres) {
+                    if (presents[montre])
+                        continue
+                    var parties = montre.split("\u0001")
+                    var dossier = parties[0] + "\u0001" + parties[1]
+                    parDossier[dossier] = (parDossier[dossier] || []).concat([parties[2]])
+                }
+                for (var d in parDossier) {
+                    var cd = d.split("\u0001")
+                    trouves = trouves.concat(JSON.parse(boite.trouvesParUid(Number(cd[0]), cd[1], parDossier[d].join(","))))
+                }
+                trouves = trouves.filter(function(r) { return !r.lu || nonLusMontres[cleResultat(r.compte, r.chemin, r.uid)] })
+                trouves.forEach(function(r) { nonLusMontres[cleResultat(r.compte, r.chemin, r.uid)] = true })
+            }
             // Les plus récents d'abord pour la coupure, puis le tri choisi.
             trouves.sort(function(a, b) { return b.h - a.h || b.uid - a.uid })
             resultatsTronques = trouves.length > resultatsMax
@@ -4890,10 +4944,17 @@ ApplicationWindow {
         for (var i = 0; i < lignes.length; ++i)
             vus[lignes[i].uid] = true
         var manquants = uidsServeur.filter(function(u) { return !vus[u] })
+        // Non lus seulement : ceux déjà montrés restent, lus depuis.
+        if (rechercheNonLus)
+            for (var montre in nonLusMontres)
+                if (!vus[montre] && manquants.indexOf(Number(montre)) < 0)
+                    manquants.push(Number(montre))
         if (manquants.length > 0)
             lignes = lignes.concat(JSON.parse(boite.messagesParUid(manquants.join(","))))
-        if (rechercheNonLus)
-            lignes = lignes.filter(function(r) { return !r.lu })
+        if (rechercheNonLus) {
+            lignes = lignes.filter(function(r) { return !r.lu || nonLusMontres[r.uid] })
+            lignes.forEach(function(r) { nonLusMontres[r.uid] = true })
+        }
         poserListe(trierResultats(lignes))
     }
 
@@ -4920,7 +4981,7 @@ ApplicationWindow {
 
     function trierRecherche(cle) {
         triRecherche = cle
-        if (recherche.length === 0)
+        if (!enRecherche)
             return
         poserResultats()
         colonneListe.vueMessages.positionViewAtBeginning()
@@ -4929,6 +4990,7 @@ ApplicationWindow {
     function sortirRechercheGlobale() {
         rechercheCompte = 0
         rechercheGlobale = false
+        rechercheNonLusSeuls = false
         cleChoisie = ""
         dossierAvantRecherche = null
         recherche = ""
@@ -4954,6 +5016,10 @@ ApplicationWindow {
         var nombre = accord(modeleMessages.count, qsTr("résultat"), qsTr("résultats"))
         if (resultatsTronques)
             nombre = qsTr("les %1 plus récents").arg(modeleMessages.count)
+        if (rechercheNonLusSeuls)
+            return qsTr("Non lus, %1 : %2 (messages déjà sur le poste).")
+                    .arg(rechercheCompte > 0 ? qsTr("tous les dossiers de la boîte") : qsTr("toutes les boîtes"))
+                    .arg(accord(modeleMessages.count, qsTr("message"), qsTr("messages")))
         var debut = qsTr("Recherche « %1 » dans toutes les boîtes : %2").arg(recherche).arg(nombre)
         if (dossiersPartout === 0)
             return debut + qsTr(" (messages déjà sur le poste seulement : aucun compte connecté).")
@@ -4974,7 +5040,9 @@ ApplicationWindow {
     function quitterRecherche() {
         colonneListe.champRecherche.text = ""
         colonneListe.panneauHistorique.close()
-        if (recherche.length === 0)
+        // Sortir de la recherche, c'est aussi quitter les non-lus seuls.
+        colonneListe.nonLusRecherche.checked = false
+        if (!enRecherche)
             return
         if (unifieeAvantRecherche) {
             sortirRechercheGlobale()
@@ -4992,6 +5060,7 @@ ApplicationWindow {
             return
         }
         recherche = ""
+        rechercheNonLusSeuls = false
         uidsServeur = []
         rafraichirListe(true)
     }
@@ -5036,6 +5105,9 @@ ApplicationWindow {
         tiroir.close()
         if (rechercheGlobale)
             sortirRechercheGlobale()
+        if (rechercheNonLusSeuls)
+            colonneListe.nonLusRecherche.checked = false
+        rechercheNonLusSeuls = false
         recherche = ""
         uidsServeur = []
         colonneListe.champRecherche.text = ""
@@ -5267,7 +5339,7 @@ ApplicationWindow {
         selection = nouvelle
     }
 
-    /// « Inverser la sélection » (0.6.14, demande de Manu du 22/10) : les
+    /// « Inverser la sélection » (0.6.14, demande du mainteneur du 22/10) : les
     /// messages de la liste qui n'étaient pas choisis, et eux seuls.
     function inverserSelection() {
         if (listeMulti)
@@ -6371,7 +6443,7 @@ ApplicationWindow {
     }
 
     // Groupes de la liste par date de réception, comme Outlook (0.6.29,
-    // demande de Manu du 30/10) : « Aujourd'hui », « Hier », « Avant-hier »,
+    // demande du mainteneur du 30/10) : « Aujourd'hui », « Hier », « Avant-hier »,
     // le nom des autres jours de la semaine, qui commence le lundi, puis « La
     // semaine dernière », « Il y a deux semaines », « Il y a trois semaines »,
     // « Plus tôt ce mois-ci », « Le mois dernier » et « Plus ancien ». Une
@@ -6418,7 +6490,7 @@ ApplicationWindow {
     // Groupes montrés : liste triée par date seulement — une recherche rangée
     // par expéditeur, objet, taille ou dossier n'en a pas.
     readonly property bool groupesVisibles: reglages.groupesDates
-                                            && (recherche.length === 0 || triRecherche === "recents"
+                                            && (!enRecherche || triRecherche === "recents"
                                                 || triRecherche === "anciens")
     // Passé minuit, « Aujourd'hui » devient « Hier » : le jour se relève chaque
     // minute — un minuteur calé sur minuit manquerait le réveil d'un poste
@@ -6558,7 +6630,7 @@ ApplicationWindow {
                 pause.start()
                 return
             }
-            // Scénario « barre-redaction » (retour de Manu du 03/11 sous
+            // Scénario « barre-redaction » (retour du mainteneur du 03/11 sous
             // Android) : au banc, MMAIL_TACTILE=1 et MMAIL_TAILLE=392x800.
             if (essai.scenario === "barre-redaction") {
                 var attente = Qt.createQmlObject('import QtQuick; Timer { interval: 1500 }', fenetre)
@@ -7113,6 +7185,9 @@ ApplicationWindow {
             // Scénario « recherche-portee » (0.8.2, 0.8.3 ; banc LOT1=1).
             if (essai.scenario === "recherche-portee")
                 scenarios.lancerScenarioRecherchePortee()
+            // « non-lus-seuls » : demande d'une utilisatrice du 06/11/2026.
+            if (essai.scenario === "non-lus-seuls")
+                scenarios.lancerScenarioNonLusSeuls()
             // « recherche-entree » : demande d'un utilisateur du 04/11/2026.
             if (essai.scenario === "recherche-entree")
                 scenarios.lancerScenarioRechercheEntree()
@@ -7186,6 +7261,9 @@ ApplicationWindow {
             // Scénario « supprimer-dossier » (0.8.5).
             if (essai.scenario === "supprimer-dossier")
                 scenarios.lancerScenarioSupprimerDossier()
+            // « collage-signature » : demande d'un utilisateur du 03/11/2026.
+            if (essai.scenario === "collage-signature")
+                scenarios.lancerScenarioSignatureCollee()
             if (essai.scenario === "coller-image") {
                 var attenteImage = Qt.createQmlObject('import QtQuick; Timer { interval: 6000 }', fenetre)
                 attenteImage.triggered.connect(scenarios.etapeScenarioCollerImage)
@@ -7445,7 +7523,7 @@ ApplicationWindow {
         if (anime)
             return "mouvement accordé à MMEDIA, qui ne le demande pas"
         // Le bouton de l'interrupteur, lui, glisse en 120 ms sous MMEDIA comme
-        // jusqu'à la 0.6.20 (0.6.22, Manu) : la règle du mouvement ne vaut que
+        // jusqu'à la 0.6.20 (0.6.22, le mainteneur) : la règle du mouvement ne vaut que
         // pour une apparence qui le demande.
         if (dureeInterrupteur !== 120)
             return "glissement de l'interrupteur MMEDIA : " + dureeInterrupteur + " ms au lieu de 120"

@@ -58,13 +58,34 @@ public:
   {
     QClipboard* presse = QGuiApplication::clipboard();
     const QMimeData* donnees = presse ? presse->mimeData() : nullptr;
-    if (!donnees || !donnees->hasImage() || !donnees->text().trimmed().isEmpty())
+    if (!donnees || !donnees->text().trimmed().isEmpty())
+      return QString();
+    const QString base = QDir(dossier).filePath(QStringLiteral("collee-")
+                                                + QUuid::createUuid().toString(QUuid::WithoutBraces));
+    // Un GIF copié tel quel — l'image animée d'une page, d'une signature — :
+    // gardé en GIF, animation comprise (0.6.42). L'image décodée par Qt n'en
+    // garde que la première vue, enregistrée en PNG.
+    const QStringList formats = donnees->formats();
+    for (const QString& format : formats) {
+      if (!format.contains(QStringLiteral("gif"), Qt::CaseInsensitive))
+        continue;
+      const QByteArray octets = donnees->data(format);
+      if (!octets.startsWith("GIF87a") && !octets.startsWith("GIF89a"))
+        continue;
+      if (octets.size() > 10 * 1024 * 1024 || !QDir().mkpath(dossier))
+        break;
+      QFile fichier(base + QStringLiteral(".gif"));
+      if (fichier.open(QIODevice::WriteOnly) && fichier.write(octets) == octets.size()) {
+        fichier.close();
+        return QUrl::fromLocalFile(fichier.fileName()).toString();
+      }
+      break;
+    }
+    if (!donnees->hasImage())
       return QString();
     const QImage image = qvariant_cast<QImage>(donnees->imageData());
     if (image.isNull() || !QDir().mkpath(dossier))
       return QString();
-    const QString base = QDir(dossier).filePath(QStringLiteral("collee-")
-                                                + QUuid::createUuid().toString(QUuid::WithoutBraces));
     // PNG, net pour une capture ; au-delà de 10 Mo, que l'envoi refuserait,
     // JPEG.
     QString chemin = base + QStringLiteral(".png");
@@ -77,6 +98,38 @@ public:
         return QString();
     }
     return QUrl::fromLocalFile(chemin).toString();
+  }
+
+  /// Dépose les octets d'un fichier GIF dans le presse-papier, comme un
+  /// navigateur, avec sa première vue en image : pour le scénario d'essai
+  /// « collage-signature ».
+  Q_INVOKABLE bool deposerGif(const QString& fichier) const
+  {
+    QClipboard* presse = QGuiApplication::clipboard();
+    // Un chemin, ou une adresse `file:` (dossier de sortie des essais).
+    const QUrl adresse(fichier);
+    QFile f(adresse.isLocalFile() ? adresse.toLocalFile() : fichier);
+    if (!presse || !f.open(QIODevice::ReadOnly))
+      return false;
+    const QByteArray octets = f.readAll();
+    auto* donnees = new QMimeData;
+    donnees->setData(QStringLiteral("image/gif"), octets);
+    donnees->setImageData(QImage::fromData(octets));
+    presse->setMimeData(donnees);
+    return true;
+  }
+
+  /// Dépose du HTML dans le presse-papier : pour le scénario d'essai
+  /// « collage-signature ».
+  Q_INVOKABLE bool deposerHtml(const QString& html) const
+  {
+    QClipboard* presse = QGuiApplication::clipboard();
+    if (!presse)
+      return false;
+    auto* donnees = new QMimeData;
+    donnees->setHtml(html);
+    presse->setMimeData(donnees);
+    return true;
   }
 
   /// Dépose l'image d'un fichier dans le presse-papier : pour le scénario

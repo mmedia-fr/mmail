@@ -43,7 +43,7 @@ Menu {
         onTriggered: fenetre.enregistrerPiece(menuPiece.piece)
     }
     MenuSeparator {}
-    // Reprendre une pièce reçue dans un autre courrier (demande de Manu,
+    // Reprendre une pièce reçue dans un autre courrier (demande du mainteneur,
     // 01/10) : la rédaction ouverte en dernier, ou une nouvelle.
     MenuItem {
         readonly property var cible: fenetre.redactions[fenetre.redactionActive] || null

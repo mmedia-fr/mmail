@@ -72,7 +72,7 @@ pub mod qobject {
         #[qproperty(bool, contacts_occupe, cxx_name = "contactsOccupe")]
         /// Marquage « lu » d'un message affiché : 0 à l'affichage, N secondes
         /// après (`marquageLuDiffere`), -1 jamais — à la main seulement
-        /// (0.6.9, demande de Gwenaëlle).
+        /// (0.6.9, demande d'une utilisatrice).
         #[qproperty(i32, delai_lu, cxx_name = "delaiLu")]
         /// Augmente à chaque changement d'un catalogue de catégories (0.6.15) :
         /// l'interface relit alors `categories()`.
@@ -815,8 +815,9 @@ pub mod qobject {
         fn enregistrer_brouillon(self: Pin<&mut Boite>, compte: i32, redaction: &QString) -> bool;
 
         /// Importe une signature HTML — celle d'Outlook, fichier `.htm` — pour
-        /// le compte `adresse` : HTML assaini, images copiées dans le profil.
-        /// Rend le HTML, ou une chaîne vide (motif dans `erreur`).
+        /// le compte `adresse` : HTML assaini, images copiées dans le profil,
+        /// images distantes téléchargées (0.6.42). Rend le HTML, ou une chaîne
+        /// vide (motif dans `erreur`).
         #[qinvokable]
         #[cxx_name = "importerSignature"]
         fn importer_signature(self: Pin<&mut Boite>, adresse: &QString, url: &QString) -> QString;
@@ -826,6 +827,14 @@ pub mod qobject {
         #[qinvokable]
         #[cxx_name = "imageSignature"]
         fn image_signature(self: Pin<&mut Boite>, adresse: &QString, url: &QString) -> QString;
+
+        /// Télécharge dans le dossier des signatures du compte `adresse` les
+        /// images distantes (`https:`) d'une signature éditée — collée depuis
+        /// un message ou une page (0.6.42) —, et rend son HTML, ces images
+        /// désignées par leur fichier ; celles qui ne viennent pas restent.
+        #[qinvokable]
+        #[cxx_name = "rapatrierImagesSignature"]
+        fn rapatrier_images_signature(&self, adresse: &QString, html: &QString) -> QString;
 
         /// Garde sur le poste l'état d'une rédaction en cours (JSON), sous
         /// l'identifiant `id` ; faux en cas d'échec (motif dans `erreur`).
@@ -2974,7 +2983,7 @@ impl qobject::Boite {
         }
         let indice = indice.to_string();
         // Sous Android, MMail est gelé en arrière-plan pendant que le navigateur
-        // montre la connexion : l'écoute locale ne répond pas (retour de Manu
+        // montre la connexion : l'écoute locale ne répond pas (retour du mainteneur
         // du 18/10). La connexion se fait dans une page intégrée à MMail, qui
         // intercepte le retour et le remet à terminer_microsoft.
         let (pkce, etat) = match crate::oauth::pkce_et_etat() {
@@ -3941,7 +3950,7 @@ impl qobject::Boite {
     /// cours de l'un d'eux, demandé avant, ne le marquera plus « lu ». Sans
     /// cela, « Marquer comme non lu » fait pendant le chargement du message
     /// était défait par le marquage automatique, parti après lui (demande de
-    /// Gwenaëlle, 19/10).
+    /// une utilisatrice, 19/10).
     fn noter_marquages(mut self: Pin<&mut Self>, dossier: i64, uids: &[u32]) {
         let numero = AFFICHAGE.load(Ordering::SeqCst);
         let mut r = self.as_mut().rust_mut();
@@ -5551,6 +5560,11 @@ impl qobject::Boite {
                 QString::from("")
             }
         }
+    }
+
+    pub fn rapatrier_images_signature(&self, adresse: &QString, html: &QString) -> QString {
+        let dossier = dossier_signatures(&self.profil).join(crate::signature::nom_de_dossier(&adresse.to_string()));
+        QString::from(&crate::signature::rapatrier_distantes(&html.to_string(), &dossier, &serie_signature()))
     }
 
     pub fn image_signature(mut self: Pin<&mut Self>, adresse: &QString, url: &QString) -> QString {
@@ -9028,7 +9042,7 @@ fn marquer_provenance(fichier: &Path) {
 /// dossier dont l'index plein texte n'est pas construit fait attendre le
 /// serveur que son indexeur ait fini, sans rien envoyer : Mailcow l'attend
 /// 300 s (`fts_index_timeout`) avant de répondre `NO [INUSE]`. MMail coupait
-/// au bout de 30 s, et le compte passait « erreur » (22/10, LALANNE).
+/// au bout de 30 s, et le compte passait « erreur » (22/10, chez un client).
 fn delai_recherche() -> Duration {
     static DELAI: OnceLock<Duration> = OnceLock::new();
     *DELAI.get_or_init(|| {
@@ -9111,7 +9125,17 @@ impl Recherche {
                 Etape::Abandon => return,
                 etape => {
                     restants -= 1;
+                    let premiers = match &etape {
+                        Etape::Trouves(uids) if seul => Some(uids.clone()),
+                        _ => None,
+                    };
                     remettre(self.issue(chemin, etape, restants));
+                    if let Some(premiers) = premiers {
+                        let criteres = (mots.as_str(), categories.as_slice());
+                        if let Some(issue) = self.noms_de_pieces(&mut client, magasin, chemin, criteres, premiers) {
+                            remettre(issue);
+                        }
+                    }
                 }
             }
         }
@@ -9130,6 +9154,59 @@ impl Recherche {
         if let Some(mut client) = client {
             client.fermer();
         }
+    }
+
+    /// Seconde passe du dossier ouvert : le texte, et aussi le nom des pièces
+    /// jointes, que l'index plein texte du serveur ne découpe pas — un numéro
+    /// de commande qui n'est que dans « BonCommande12345678.pdf » n'y était pas
+    /// trouvé. Le serveur peut y passer une minute sur un grand dossier la
+    /// première fois : les résultats de la première passe sont déjà rendus, et
+    /// celle-ci ne rend que s'il trouve davantage. Muette sinon : délai,
+    /// recherche remplacée, serveur qui ne connaît pas `MIMEPART`.
+    fn noms_de_pieces(
+        &self,
+        client: &mut Option<Client>,
+        magasin: &Magasin,
+        chemin: &str,
+        (mots, categories): (&str, &[Vec<String>]),
+        premiers: Vec<u32>,
+    ) -> Option<Issue> {
+        if self.partout || self.champs != Champs::Texte || mots.trim().is_empty() || !self.actuelle() {
+            return None;
+        }
+        // La session de la première passe, sur le dossier qu'elle a examiné.
+        let c = client.as_mut()?;
+        let courante = self.courante.clone();
+        let numero = self.numero;
+        let attente = Attente {
+            delai: self.delai,
+            prolonger: false,
+            continuer: Arc::new(move || courante.load(Ordering::SeqCst) == numero),
+        };
+        let uids = match c.chercher_patiemment(mots, categories, Champs::TexteEtNomsDePieces, attente) {
+            Ok(uids) => uids,
+            Err(Erreur::Refuse(_)) => return None,
+            // Au milieu d'une commande, ou coupée : la session ne sert plus.
+            Err(_) => {
+                *client = None;
+                return None;
+            }
+        };
+        let nouveaux: Vec<u32> = uids.into_iter().filter(|u| !premiers.contains(u)).collect();
+        if nouveaux.is_empty() || !self.actuelle() {
+            return None;
+        }
+        if let Ok(id) = magasin.dossier_id(self.compte, chemin) {
+            if let Err(e) = synchro::completer(magasin, c, id, &nouveaux, RECHERCHE_MAX) {
+                if e.reseau() {
+                    *client = None;
+                }
+            }
+        }
+        let mut tous = premiers;
+        tous.extend(nouveaux);
+        tous.sort_unstable();
+        Some(self.issue(chemin, Etape::Trouves(tous), 0))
     }
 
     /// L'index du poste ne s'ouvre pas : chaque dossier rend son motif.
@@ -9280,7 +9357,7 @@ fn est_sous(parent: &DossierLocal, d: &DossierLocal) -> bool {
 
 /// Dossiers montrés quand les dossiers masqués sont cachés : ni un dossier
 /// masqué, ni rien de ce qu'il contient — ses sous-dossiers réapparaissaient
-/// seuls, à la racine (retour de Manu, 01/10).
+/// seuls, à la racine (retour du mainteneur, 01/10).
 fn sans_masques(dossiers: Vec<DossierLocal>) -> Vec<DossierLocal> {
     let masques: Vec<DossierLocal> = dossiers.iter().filter(|d| d.masque).cloned().collect();
     dossiers
@@ -10680,6 +10757,68 @@ mod tests {
         let (issues, ouvertes) = issues_de(&recherche(&["INBOX"], false, 30, 5_000), vec![]);
         assert_eq!(issues, ["INBOX [] : connexion impossible (réseau : serveur injoignable)"]);
         assert_eq!(ouvertes, 1);
+    }
+
+    /// Dossier ouvert : une seconde passe cherche aussi le nom des pièces
+    /// jointes, et ne rend que si elle trouve davantage ; un serveur qui ne
+    /// connaît pas `MIMEPART` la refuse sans rien changer. Pas de seconde passe
+    /// dans plusieurs dossiers, ni sur l'objet et l'expéditeur.
+    #[test]
+    fn seconde_passe_dans_le_nom_des_pieces() {
+        use crate::simule::{echange, session, DOVECOT};
+        let (s, journal) = session(
+            DOVECOT,
+            vec![
+                examen("INBOX"),
+                echange("UID SEARCH CHARSET UTF-8 TEXT", "* SEARCH 4\r\n", "OK"),
+                echange("UID SEARCH CHARSET UTF-8 OR TEXT", "* SEARCH 4 9\r\n", "OK"),
+                echange("LOGOUT", "* BYE\r\n", "OK"),
+            ],
+        );
+        let (issues, _) = issues_de(&recherche(&["INBOX"], false, 30, 5_000), vec![s]);
+        assert_eq!(issues, ["INBOX [4] : fini", "INBOX [4, 9] : fini"]);
+        assert_eq!(
+            journal.lock().unwrap()[2],
+            "UID SEARCH CHARSET UTF-8 OR TEXT \"devis\" MIMEPART FILENAME CONTAINS \"devis\""
+        );
+        // Rien de plus : une seule issue.
+        let (s, _) = session(
+            DOVECOT,
+            vec![
+                examen("INBOX"),
+                echange("UID SEARCH CHARSET UTF-8 TEXT", "* SEARCH 4\r\n", "OK"),
+                echange("UID SEARCH CHARSET UTF-8 OR TEXT", "* SEARCH 4\r\n", "OK"),
+                echange("LOGOUT", "* BYE\r\n", "OK"),
+            ],
+        );
+        let (issues, _) = issues_de(&recherche(&["INBOX"], false, 30, 5_000), vec![s]);
+        assert_eq!(issues, ["INBOX [4] : fini"]);
+        // Refusée : la session reste bonne, et se ferme proprement.
+        let (s, journal) = session(
+            DOVECOT,
+            vec![
+                examen("INBOX"),
+                echange("UID SEARCH CHARSET UTF-8 TEXT", "* SEARCH 4\r\n", "OK"),
+                echange("UID SEARCH CHARSET UTF-8 OR TEXT", "", "BAD Unknown argument MIMEPART"),
+                echange("LOGOUT", "* BYE\r\n", "OK"),
+            ],
+        );
+        let (issues, _) = issues_de(&recherche(&["INBOX"], false, 30, 5_000), vec![s]);
+        assert_eq!(issues, ["INBOX [4] : fini"]);
+        assert_eq!(journal.lock().unwrap().last().unwrap(), "LOGOUT");
+        // Objet et expéditeur seulement : une seule passe.
+        let (s, journal) = session(
+            DOVECOT,
+            vec![
+                examen("INBOX"),
+                echange("UID SEARCH CHARSET UTF-8 OR SUBJECT", "* SEARCH 4\r\n", "OK"),
+                echange("LOGOUT", "* BYE\r\n", "OK"),
+            ],
+        );
+        let r = Recherche { champs: Champs::ObjetExpediteur, ..recherche(&["INBOX"], false, 30, 5_000) };
+        let (issues, _) = issues_de(&r, vec![s]);
+        assert_eq!(issues, ["INBOX [4] : fini"]);
+        assert!(!journal.lock().unwrap().iter().any(|l| l.contains("MIMEPART")));
     }
 
     /// Une recherche remplacée ne rend plus rien, et n'ouvre rien.

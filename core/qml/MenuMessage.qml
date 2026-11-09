@@ -16,7 +16,7 @@ import fr.mmedia.mmail.natif
 Menu {
     id: menuMessage
     font.pointSize: fenetre.tailleColonne("liste")
-    // 0.6.14 (demande de Manu du 22/10, le menu devenait « un foutoir
+    // 0.6.14 (demande du mainteneur du 22/10, le menu devenait « un foutoir
     // illisible ») : dix lignes au plus — lu ou non lu et le drapeau en une
     // ligne chacun, qui fait ce qui change quelque chose ; la sélection et
     // les actions rares en sous-menus ; les raccourcis à droite. Onze avec

@@ -2,7 +2,7 @@
 //! Ce que chaque compte fait en ce moment (0.6.22).
 //!
 //! « Synchronisation… » ne disait ni quel compte, ni quel dossier, ni combien
-//! il en restait (remarque de Guillaume LUDGER, 26/10/2026). Les fils de
+//! il en restait (remarque d'un utilisateur, 26/10/2026). Les fils de
 //! travail notent ici leur tâche et son avancement ; l'interface en lit une
 //! phrase à la seconde : compte, dossier, nombre et volume faits sur le total,
 //! durée restante estimée d'après le rythme observé.
@@ -169,7 +169,7 @@ pub fn nom_dossier(chemin: &str) -> String {
     decode.rsplit(['/', '.']).next().unwrap_or(&decode).to_string()
 }
 
-/// La phrase de la barre d'état : « eb@mmedia.fr › Boîte de réception :
+/// La phrase de la barre d'état : « un@exemple.fr › Boîte de réception :
 /// en-têtes 1 000 / 13 000, environ 2 min ».
 pub fn phrase(a: &Activite, adresse: &str, ecoule: f64) -> String {
     let ou = if a.dossier.is_empty() { adresse.to_string() } else { format!("{adresse} › {}", nom_dossier(&a.dossier)) };
@@ -240,10 +240,10 @@ mod tests {
             debut: Instant::now(),
             numero: 0,
         };
-        assert_eq!(phrase(&a(Tache::Dossiers, "", 0, 0, 0, 0), "eb@mmedia.fr", 0.5), "eb@mmedia.fr : liste des dossiers");
+        assert_eq!(phrase(&a(Tache::Dossiers, "", 0, 0, 0, 0), "un@exemple.fr", 0.5), "un@exemple.fr : liste des dossiers");
         assert_eq!(
-            phrase(&a(Tache::Messages, "INBOX", 1000, 13000, 0, 0), "eb@mmedia.fr", 10.0),
-            "eb@mmedia.fr › Boîte de réception : en-têtes 1\u{202f}000 / 13\u{202f}000, environ 2 min"
+            phrase(&a(Tache::Messages, "INBOX", 1000, 13000, 0, 0), "un@exemple.fr", 10.0),
+            "un@exemple.fr › Boîte de réception : en-têtes 1\u{202f}000 / 13\u{202f}000, environ 2 min"
         );
         assert_eq!(
             phrase(&a(Tache::Messages, "Archives/2025", 0, 0, 0, 0), "a@b.fr", 0.2),

@@ -9,7 +9,7 @@
 //! chaque message en image liée (`cid:`), réécrite à chaque envoi par
 //! `redaction::integrer_images`.
 //!
-//! Moteur repris du générateur de signature de Guillaume LUDGER (Double Clic,
+//! Moteur repris du générateur de signature d'un client (
 //! Hub v6 : `signatureAnim.ts` pour le dessin, `signature.rs` pour l'assemblage
 //! GIF), dont il a permis la reprise sous GPL v3 le 22/10/2026. Mêmes réglages
 //! par défaut, mêmes corrections (dossier de portage, § 9) : image entière en un
@@ -45,7 +45,7 @@ const GRIS: (u8, u8, u8) = (206, 211, 217);
 /// Anneau de contour, 3 pixels, `#cbd5e1`.
 const ANNEAU: (u8, u8, u8) = (203, 213, 225);
 
-/// Réglages de l'animation. Défauts du Hub de Double Clic, validés en
+/// Réglages de l'animation. Défauts du générateur d'origine, validés en
 /// production ; bornés aux plages de son interface.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]

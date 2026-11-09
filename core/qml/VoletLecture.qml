@@ -30,7 +30,7 @@ ColumnLayout {
     /// Retire la sélection du message sans bouger la lecture. Placé dans un
     /// ScrollView, le TextArea ramène la vue à son curseur dès que celui-ci
     /// change — deselect() suffit — : sous Android, chaque nouveau glissement
-    /// remontait ainsi le message en haut (0.6.10, constaté par Manu).
+    /// remontait ainsi le message en haut (0.6.10, constaté par le mainteneur).
     function deselectionner() {
         if (vueCorps.selectionStart === vueCorps.selectionEnd)
             return
@@ -86,7 +86,7 @@ ColumnLayout {
     // en-tête et son corps —, pas les boutons qui l'entourent : barre
     // d'actions, bandeaux des pièces jointes, des images et des invitations
     // restent à la taille de l'apparence, comme dans Outlook (0.6.29, demande
-    // de Manu du 30/10). Les éléments de l'en-tête portent leur taille.
+    // du mainteneur du 30/10). Les éléments de l'en-tête portent leur taille.
     ToolBar {
         Layout.fillWidth: true
         visible: fenetre.uidCourant > 0
@@ -102,7 +102,7 @@ ColumnLayout {
             spacing: 0
             // De vrais boutons, encadrés et espacés, en trois groupes —
             // répondre, ranger, voir la source — : des boutons plats de
-            // barre d'outils se lisaient mal (retour de Manu, 01/10).
+            // barre d'outils se lisaient mal (retour du mainteneur, 01/10).
             Flow {
                 Layout.fillWidth: true
                 Layout.topMargin: 4
@@ -350,10 +350,10 @@ ColumnLayout {
 
     // Pièces jointes du message affiché, mises en valeur sous l'en-tête :
     // une ligne par pièce — type, nom, taille, « Ouvrir », « Enregistrer
-    // sous… » (forme choisie par Manu le 09/10 sur maquettes). Clic droit,
+    // sous… » (forme choisie par le mainteneur le 09/10 sur maquettes). Clic droit,
     // ou appui long : ouvrir avec un autre logiciel, joindre à un message.
-    // Double-clic sur la ligne : comme « Ouvrir » (0.6.12, demande de
-    // Fabienne).
+    // Double-clic sur la ligne : comme « Ouvrir » (0.6.12, demande d'une
+    // utilisatrice).
     Pane {
         objectName: "bandeauPieces"
         Layout.fillWidth: true
@@ -476,7 +476,7 @@ ColumnLayout {
                 text: fenetre.imagesTentees() ? qsTr("Réessayer") : qsTr("Télécharger les images")
                 onClicked: fenetre.demanderImages()
             }
-            // Expéditeur de confiance (0.6.24, demande de Guillaume LUDGER) :
+            // Expéditeur de confiance (0.6.24, demande d'un utilisateur) :
             // ses images se téléchargeront d'office. Absent quand le serveur a
             // noté un échec DMARC.
             Button {

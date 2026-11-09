@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Impression d'un message (0.6.3, demandée par Gwenaëlle) : le message tel
+// Impression d'un message (0.6.3, demandée par une utilisatrice) : le message tel
 // que le volet de lecture le montre — son document de texte riche, images
 // déjà chargées comprises —, précédé d'un en-tête (objet, expéditeur, date,
 // pièces jointes). Sur le bureau, la boîte d'impression du système

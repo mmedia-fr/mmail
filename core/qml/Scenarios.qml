@@ -519,6 +519,45 @@ QtObject {
         r.enregistrer(false)
     }
 
+    // Scénario « collage-signature » (banc : images distantes servies sur
+    // https://localhost/, dossier de sortie avec signature-distante.htm et
+    // anime.gif) : l'image distante d'une signature importée ou collée est
+    // téléchargée, en GIF ; un GIF du presse-papier reste un GIF, dans
+    // l'éditeur de signature aussi.
+    function lancerScenarioSignatureCollee(essais) {
+        var n = essais || 0
+        if (comptesConnus.length === 0 && n < 40) {
+            plusTard(1000, function() { lancerScenarioSignatureCollee(n + 1) })
+            return
+        }
+        var echecs = 0
+        var bilan = function(texte, bon) {
+            if (!bon)
+                echecs += 1
+            console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
+        }
+        var images = function(h) { return (h.match(/<img[^>]*>/g) || []).join(" ") }
+        var gifLocal = /src="file:[^"]*\.gif"/
+        var a = comptesConnus[0]
+        var importee = boite.importerSignature(a.adresse, identifiantsEssai.sortie + "/signature-distante.htm")
+        bilan("import : " + images(importee), gifLocal.test(importee) && importee.indexOf("https://localhost") < 0)
+        var collee = boite.rapatrierImagesSignature(a.adresse, '<p>Nom</p><img src="https://localhost/anime.gif" width="80" />')
+        bilan("collée : " + images(collee), gifLocal.test(collee))
+        pressePapier.deposerGif(identifiantsEssai.sortie + "/anime.gif")
+        var gif = pressePapier.enregistrerImage(boite.dossierImagesCollees())
+        bilan("GIF du presse-papier : " + gif, /\.gif$/.test(gif))
+        dlgIdentite.ouvrir(a.compte)
+        plusTard(1500, function() {
+            pressePapier.deposerGif(identifiantsEssai.sortie + "/anime.gif")
+            var fait = dlgIdentite.collerDansSignature()
+            dlgIdentite.garderSignature()
+            var sig = dlgIdentite.biblio[dlgIdentite.choisie] || {}
+            bilan("éditeur, GIF collé : " + fait + " " + images(sig.html || ""), fait && gifLocal.test(sig.html || ""))
+            console.log("scenario: collage-signature " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
+            Qt.quit()
+        })
+    }
+
     /// Scénario « coller-piece » (0.8.4), MMAIL_DOSSIER=<image PNG> : l'image
     /// du presse-papier devient pièce jointe par « Coller en pièce jointe »,
     /// sans entrer dans le corps ; rien à coller, le motif s'affiche.
@@ -1463,7 +1502,7 @@ QtObject {
             console.log(revenue >= 0 && modeleMessages.count === avant && !bandeauGlissement.opened
                         ? "scenario: OK annulée, ligne revenue au rang " + revenue
                         : "scenario: ECHEC annulation " + modeleMessages.count + " / " + avant)
-            // Retour de Manu du 18/10 : après un glisser, d'autres lignes
+            // Retour du mainteneur du 18/10 : après un glisser, d'autres lignes
             // restaient décalées. Une fois la liste redessinée, aucune ligne
             // affichée ne doit l'être.
             essai.etape = 5  // en attente du contrôle : les autres étapes se taisent
@@ -1842,7 +1881,7 @@ QtObject {
     }
 
 
-    /// Scénario « non-lu » (0.6.7, demande de Gwenaëlle du 19/10) : un
+    /// Scénario « non-lu » (0.6.7, demande d'une utilisatrice du 19/10) : un
     /// « Marquer comme non lu » doit tenir, sur la ligne, dans l'index et sur le
     /// serveur. A : message affiché puis marqué lu à l'affichage, puis non lu
     /// avant toute veille — la 0.6.6 laissait la ligne en « lu ». B : non lu
@@ -1981,7 +2020,7 @@ QtObject {
         tic.start()
     }
 
-    /// Scénario « recherche-effacee » (0.6.12, demande de Fabienne) : le mot
+    /// Scénario « recherche-effacee » (0.6.12, demande d'une utilisatrice) : le mot
     /// effacé au clavier (champ vidé, textEdited) met fin à la recherche et
     /// rend la liste de départ — dans le dossier, puis dans toutes les boîtes.
     function lancerScenarioRechercheEffacee() {
@@ -2041,7 +2080,7 @@ QtObject {
         tic.start()
     }
 
-    /// Scénario « majuscule » (0.6.12, demande de Fabienne) : frappe simulée
+    /// Scénario « majuscule » (0.6.12, demande d'une utilisatrice) : frappe simulée
     /// dans le corps d'une rédaction, par Redaction.majuscule comme le fait
     /// Keys.onPressed — capitale en début de paragraphe et après « . », « ! »,
     /// « ? » ; rien au fil de la phrase, après « etc. », une initiale, des
@@ -2126,7 +2165,7 @@ QtObject {
         tic.start()
     }
 
-    /// Scénario « inverser-selection » (0.6.14, demande de Manu du 22/10) :
+    /// Scénario « inverser-selection » (0.6.14, demande du mainteneur du 22/10) :
     /// dans la boîte de réception (trois messages au moins), un message
     /// choisi, la sélection inversée, puis rétablie ; tout, puis rien ; le
     /// menu d'un message en dix lignes, « Marquer comme lu » s'il y a un non
@@ -2277,7 +2316,7 @@ QtObject {
         Qt.quit()
     }
 
-    /// Scénario « menu-champ » (0.6.14, demande de Manu du 22/10) : le menu
+    /// Scénario « menu-champ » (0.6.14, demande du mainteneur du 22/10) : le menu
     /// du clic droit du champ de recherche — Coller ce qu'un autre champ a
     /// copié, puis Tout sélectionner, Couper, Annuler ; Couper et Copier
     /// grisés sans sélection.
@@ -2690,7 +2729,7 @@ QtObject {
         tic.start()
     }
 
-    /// Scénario « categories » (0.6.15, demande de Manu du 22/10) : dans la
+    /// Scénario « categories » (0.6.15, demande du mainteneur du 22/10) : dans la
     /// boîte de réception (deux messages au moins), une catégorie d'origine
     /// et une catégorie créée posées ; l'état du sous-menu « Catégoriser » ;
     /// la recherche « catégorie: » dans l'index et sur le serveur (KEYWORD :
@@ -2890,7 +2929,7 @@ QtObject {
         t.start()
     }
 
-    /// Scénario « lu-differe » (0.6.9, demande de Gwenaëlle du 20/10) : le
+    /// Scénario « lu-differe » (0.6.9, demande d'une utilisatrice du 20/10) : le
     /// marquage « lu » attend le délai réglé, ne vise pas un message quitté
     /// avant, et n'a jamais lieu sur « Jamais ». La boîte de réception doit
     /// compter deux messages.
@@ -5207,6 +5246,80 @@ QtObject {
         })
     }
 
+    // Scénario « non-lus-seuls » : « Non lus » cochée, champ vide — la liste
+    // ne garde que les non-lus du dossier ; ceux que l'on ouvre restent, lus,
+    // même après un rafraîchissement ; décocher rend la liste entière ; cocher
+    // de nouveau ne montre plus les lus.
+    function lancerScenarioNonLusSeuls(essais) {
+        var n = essais || 0
+        var rang = function(sujet) {
+            for (var k = 0; k < modeleMessages.count; ++k)
+                if (modeleMessages.get(k).sujet === sujet)
+                    return k
+            return -1
+        }
+        if (rang("Essai 1") < 0 && n < 40) {
+            plusTard(1000, function() { lancerScenarioNonLusSeuls(n + 1) })
+            return
+        }
+        var echecs = 0
+        var bilan = function(texte, bon) {
+            if (!bon)
+                echecs += 1
+            console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
+        }
+        var resume = function() {
+            var l = []
+            for (var k = 0; k < modeleMessages.count; ++k) {
+                var r = modeleMessages.get(k)
+                if (r.sujet)
+                    l.push(r.sujet + (r.lu ? "(lu)" : ""))
+            }
+            return l.join(" | ")
+        }
+        var cocher = function(oui) {
+            colonneListe.nonLusRecherche.checked = oui
+            colonneListe.nonLusRecherche.toggled()
+        }
+        // « Essai 1 » affiché : il est lu.
+        choisir(rang("Essai 1"), 0)
+        plusTard(2500, function() {
+            colonneListe.porteeRecherche.currentIndex = 0
+            colonneListe.champRecherche.text = ""
+            cocher(true)
+            plusTard(3000, function() {
+                bilan("non lus seuls : " + resume() + " | " + fenetre.infoDossier,
+                      fenetre.enRecherche && rang("Essai 1") < 0 && rang("Essai 2") >= 0
+                      && !modeleMessages.get(rang("Essai 2")).lu
+                      && fenetre.infoDossier.indexOf("non lus seulement") >= 0)
+                choisir(rang("Essai 2"), 0)
+                plusTard(3000, function() {
+                    var i2 = rang("Essai 2")
+                    bilan("Essai 2 ouvert, il reste : " + resume(), i2 >= 0 && modeleMessages.get(i2).lu)
+                    choisir(rang("Essai 3"), 0)
+                    plusTard(3000, function() {
+                        // La liste reconstruite, comme à l'arrivée d'un message.
+                        fenetre.rafraichirListe(true)
+                        bilan("Essai 3 ouvert, rafraîchie, les deux restent : " + resume(),
+                              rang("Essai 2") >= 0 && rang("Essai 3") >= 0 && rang("Essai 1") < 0)
+                        cocher(false)
+                        plusTard(3000, function() {
+                            bilan("décochée, liste entière : " + resume(),
+                                  !fenetre.enRecherche && rang("Essai 1") >= 0 && rang("Essai 2") >= 0)
+                            cocher(true)
+                            plusTard(3000, function() {
+                                bilan("recochée, plus de lus : " + resume() + " | " + fenetre.infoDossier,
+                                      fenetre.enRecherche && rang("Essai 2") < 0 && rang("Essai 3") < 0)
+                                console.log("scenario: non-lus-seuls " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
+                                Qt.quit()
+                            })
+                        })
+                    })
+                })
+            })
+        })
+    }
+
     function lancerScenarioZoomLecture() {
         var suivi = { echecs: 0 }
         var bilan = function(texte, bon) {
@@ -5259,7 +5372,7 @@ QtObject {
         })
     }
 
-    /// Scénario « barre-redaction » (retour de Manu du 03/11 sous Android :
+    /// Scénario « barre-redaction » (retour du mainteneur du 03/11 sous Android :
     /// boutons de la rédaction chevauchés, plus moyen d'envoyer ni de fermer) :
     /// les boutons visibles de la barre du haut ne se chevauchent pas, gardent
     /// leur largeur et restent dans la barre ; resserrée, elle montre Envoyer,

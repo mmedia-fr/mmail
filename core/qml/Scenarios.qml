@@ -5207,6 +5207,80 @@ QtObject {
         })
     }
 
+    // Scénario « non-lus-seuls » : « Non lus » cochée, champ vide — la liste
+    // ne garde que les non-lus du dossier ; ceux que l'on ouvre restent, lus,
+    // même après un rafraîchissement ; décocher rend la liste entière ; cocher
+    // de nouveau ne montre plus les lus.
+    function lancerScenarioNonLusSeuls(essais) {
+        var n = essais || 0
+        var rang = function(sujet) {
+            for (var k = 0; k < modeleMessages.count; ++k)
+                if (modeleMessages.get(k).sujet === sujet)
+                    return k
+            return -1
+        }
+        if (rang("Essai 1") < 0 && n < 40) {
+            plusTard(1000, function() { lancerScenarioNonLusSeuls(n + 1) })
+            return
+        }
+        var echecs = 0
+        var bilan = function(texte, bon) {
+            if (!bon)
+                echecs += 1
+            console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
+        }
+        var resume = function() {
+            var l = []
+            for (var k = 0; k < modeleMessages.count; ++k) {
+                var r = modeleMessages.get(k)
+                if (r.sujet)
+                    l.push(r.sujet + (r.lu ? "(lu)" : ""))
+            }
+            return l.join(" | ")
+        }
+        var cocher = function(oui) {
+            colonneListe.nonLusRecherche.checked = oui
+            colonneListe.nonLusRecherche.toggled()
+        }
+        // « Essai 1 » affiché : il est lu.
+        choisir(rang("Essai 1"), 0)
+        plusTard(2500, function() {
+            colonneListe.porteeRecherche.currentIndex = 0
+            colonneListe.champRecherche.text = ""
+            cocher(true)
+            plusTard(3000, function() {
+                bilan("non lus seuls : " + resume() + " | " + fenetre.infoDossier,
+                      fenetre.enRecherche && rang("Essai 1") < 0 && rang("Essai 2") >= 0
+                      && !modeleMessages.get(rang("Essai 2")).lu
+                      && fenetre.infoDossier.indexOf("non lus seulement") >= 0)
+                choisir(rang("Essai 2"), 0)
+                plusTard(3000, function() {
+                    var i2 = rang("Essai 2")
+                    bilan("Essai 2 ouvert, il reste : " + resume(), i2 >= 0 && modeleMessages.get(i2).lu)
+                    choisir(rang("Essai 3"), 0)
+                    plusTard(3000, function() {
+                        // La liste reconstruite, comme à l'arrivée d'un message.
+                        fenetre.rafraichirListe(true)
+                        bilan("Essai 3 ouvert, rafraîchie, les deux restent : " + resume(),
+                              rang("Essai 2") >= 0 && rang("Essai 3") >= 0 && rang("Essai 1") < 0)
+                        cocher(false)
+                        plusTard(3000, function() {
+                            bilan("décochée, liste entière : " + resume(),
+                                  !fenetre.enRecherche && rang("Essai 1") >= 0 && rang("Essai 2") >= 0)
+                            cocher(true)
+                            plusTard(3000, function() {
+                                bilan("recochée, plus de lus : " + resume() + " | " + fenetre.infoDossier,
+                                      fenetre.enRecherche && rang("Essai 2") < 0 && rang("Essai 3") < 0)
+                                console.log("scenario: non-lus-seuls " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
+                                Qt.quit()
+                            })
+                        })
+                    })
+                })
+            })
+        })
+    }
+
     function lancerScenarioZoomLecture() {
         var suivi = { echecs: 0 }
         var bilan = function(texte, bon) {

@@ -7261,6 +7261,9 @@ ApplicationWindow {
             // Scénario « supprimer-dossier » (0.8.5).
             if (essai.scenario === "supprimer-dossier")
                 scenarios.lancerScenarioSupprimerDossier()
+            // « collage-signature » : demande d'un utilisateur du 03/11/2026.
+            if (essai.scenario === "collage-signature")
+                scenarios.lancerScenarioSignatureCollee()
             if (essai.scenario === "coller-image") {
                 var attenteImage = Qt.createQmlObject('import QtQuick; Timer { interval: 6000 }', fenetre)
                 attenteImage.triggered.connect(scenarios.etapeScenarioCollerImage)

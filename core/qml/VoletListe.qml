@@ -309,7 +309,7 @@ ColumnLayout {
                         colonneListe.rechercheOuverte = false
                 }
                 // Le mot effacé au clavier, la liste de départ revient, comme par
-                // ✕ (0.6.12, demande de Fabienne : elle restait filtrée) — ou
+                // ✕ (0.6.12, demande d'une utilisatrice : elle restait filtrée) — ou
                 // les non-lus seuls, si « Non lus » est cochée.
                 onTextEdited: {
                     if (text.length === 0 && fenetre.recherche.length > 0)

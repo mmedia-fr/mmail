@@ -273,7 +273,10 @@ de projet interne.
   repérées : numéro et type de voie (« 12 rue… », « 3 bis avenue… », ou sans
   numéro « ZA des… », « Lieu-dit… »), puis code postal et commune sur la même
   ligne ou la suivante, boîte postale et CEDEX compris. Les liens d'appel
-  posés par l'expéditeur (`tel:`) restent cliquables ;
+  posés par l'expéditeur (`tel:`) restent cliquables. Un brouillon, ou un
+  message en attente d'envoi différé, s'affiche sans ces liens ajoutés
+  (0.6.43) : tel qu'il se reprendra et partira ; le message cité d'une
+  réponse ou d'un transfert ne les emporte pas non plus ;
 - **se désabonner** (0.6.30) : une lettre d'information ou un message de liste
   de diffusion qui offre le moyen de s'en retirer porte un bandeau « Se
   désabonner… », dans le volet de lecture comme dans la fenêtre d'un message.

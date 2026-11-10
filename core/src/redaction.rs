@@ -531,8 +531,11 @@ pub fn preparer(brut: &[u8], mode: &str, propres: &[String]) -> Preparation {
     p.texte = citation;
     // Un message d'origine en HTML est cité en HTML — tableaux, mise en forme
     // et images intégrées compris —, comme dans Outlook ; le texte reste la
-    // version brute de la rédaction.
-    if let Some(corps) = crate::rendu::corps_html(brut) {
+    // version brute de la rédaction. Sans les liens que la lecture ajoute aux
+    // adresses postales, numéros et adresses écrits en clair (0.6.43) : ils
+    // partaient chez le destinataire dans le message cité, que l'expéditeur
+    // n'avait pas écrit ainsi.
+    if let Some(corps) = crate::rendu::corps_html_brouillon(brut) {
         p.html = citation_html(&de, m.date(), &a, &cc, &objet, &corps.html);
         p.images = corps.images;
     }
@@ -909,6 +912,35 @@ mod tests {
 
         let simple = preparer(ORIGINAL.as_bytes(), "repondre", &[]);
         assert_eq!(simple.html, "", "un original en texte brut est cité en texte");
+    }
+
+    /// La citation d'une réponse ou d'un transfert ne porte que les liens de
+    /// l'expéditeur, pas ceux que la lecture pose sur une adresse postale ou
+    /// un numéro écrits en clair (0.6.43, valeurs fictives).
+    #[test]
+    fn citation_sans_liens_ajoutes() {
+        let original = "From: Client <client@exemple.org>\r\n\
+            To: moi@exemple.fr\r\n\
+            Subject: Demande\r\n\
+            Date: Tue, 10 Nov 2026 09:00:00 +0100\r\n\
+            Message-ID: <origine.3@exemple.org>\r\n\
+            MIME-Version: 1.0\r\n\
+            Content-Type: text/html; charset=utf-8\r\n\r\n\
+            <p>Bonjour,</p><p style=\"margin:0\">1 rue de l'Exemple 12345 VILLE</p>\
+            <p style=\"margin:0\">01.23.45.67.89</p>\
+            <p style=\"margin:0\"><a href=\"https://www.exemple.org/\">https://www.exemple.org/</a></p>\r\n";
+        // À la lecture, l'adresse et le numéro deviennent des liens.
+        let lu = crate::rendu::corps_html(original.as_bytes()).unwrap().html;
+        assert!(lu.contains("openstreetmap.org") && lu.contains("href=\"tel:"), "{lu}");
+        for mode in ["repondre", "repondre_tous", "transferer"] {
+            let p = preparer(original.as_bytes(), mode, &["moi@exemple.fr".to_string()]);
+            assert!(!p.html.contains("openstreetmap"), "{mode} : {}", p.html);
+            assert!(!p.html.contains("tel:"), "{mode} : {}", p.html);
+            assert!(p.html.contains("<p style=\"margin:0\">1 rue de l'Exemple 12345 VILLE</p>"), "{mode} : {}", p.html);
+            assert!(p.html.contains("<p style=\"margin:0\">01.23.45.67.89</p>"), "{mode} : {}", p.html);
+            // Le lien écrit par l'expéditeur reste.
+            assert!(p.html.contains("<a href=\"https://www.exemple.org/\">"), "{mode} : {}", p.html);
+        }
     }
 
     #[test]

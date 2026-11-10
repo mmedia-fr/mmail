@@ -1068,6 +1068,8 @@ mod tests {
         assert!(!en_sept_bits(b"fin de ligne seule\n"));
         assert!(!en_sept_bits(b"retour seul\rsuite\r\n"));
         assert!(!en_sept_bits(b"octet\0nul\r\n"));
+        // Un nom accentué en UTF-8 brut dans un en-tête suffit.
+        assert!(!en_sept_bits(ORIGINAL.as_bytes()));
         let ligne = "a".repeat(998);
         assert!(en_sept_bits(format!("{ligne}\r\n{ligne}\r\n").as_bytes()));
         assert!(!en_sept_bits(format!("{ligne}a\r\n").as_bytes()));
@@ -1086,7 +1088,13 @@ mod tests {
             texte: "Voici l'échange.".into(),
             ..Default::default()
         };
-        let pj = [Fichier { nom: nom_message_joint("Devis toiture"), contenu: ORIGINAL.as_bytes().to_vec() }];
+        // En 7 bits : `ORIGINAL` porte des noms accentués en UTF-8 brut dans
+        // ses en-têtes, il partirait en base64 (cf. plus bas).
+        let sept = "From: Helene Martin <helene@exemple.fr>\r\nTo: moi@exemple.fr\r\n\
+                    Subject: =?UTF-8?Q?Devis_toiture?=\r\nDate: Tue, 29 Sep 2026 10:33:00 +0200\r\n\
+                    Message-ID: <origine.1@exemple.fr>\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n\
+                    Bonjour,\r\nVoici le devis.\r\n";
+        let pj = [Fichier { nom: nom_message_joint("Devis toiture"), contenu: sept.as_bytes().to_vec() }];
         let f = fabriquer(&r, 1_790_000_000, &pj).unwrap();
         let brut = String::from_utf8_lossy(&f.envoi).to_string();
         let debut = brut.find("Content-Type: message/rfc822").expect("partie message/rfc822");

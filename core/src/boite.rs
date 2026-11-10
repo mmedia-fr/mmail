@@ -438,6 +438,15 @@ pub mod qobject {
         #[cxx_name = "joindrePiece"]
         fn joindre_piece(self: Pin<&mut Boite>, uid: i32, indice: i32) -> bool;
 
+        /// Écrit des messages entiers en `.eml`, nommés d'après leur objet,
+        /// pour les joindre à la rédaction `jeton` (message/rfc822) — « Joindre
+        /// à un nouveau message », ou des messages déposés sur une fenêtre de
+        /// rédaction. `uids` : UID du dossier `chemin` du compte, séparés par
+        /// des virgules. Issue : `messagesAJoindre`.
+        #[qinvokable]
+        #[cxx_name = "joindreMessages"]
+        fn joindre_messages(self: Pin<&mut Boite>, compte: i32, chemin: &QString, uids: &QString, jeton: &QString) -> bool;
+
         /// Marque des messages du dossier ouvert — UID séparés par des
         /// virgules — comme lus ou non lus.
         #[qinvokable]
@@ -1064,6 +1073,13 @@ pub mod qobject {
         #[cxx_name = "pieceAJoindre"]
         fn piece_a_joindre(self: Pin<&mut Boite>, url: &QString);
 
+        /// Messages écrits pour être joints à la rédaction `jeton` : `urls`,
+        /// liste JSON des fichiers `.eml` ; `erreurs`, ce qui n'a pu l'être
+        /// (vide si tout est là).
+        #[qsignal]
+        #[cxx_name = "messagesAJoindre"]
+        fn messages_a_joindre(self: Pin<&mut Boite>, jeton: &QString, urls: &QString, erreurs: &QString);
+
         /// Messages du dossier ouvert marqués lus ou non lus : l'interface met
         /// à jour leurs seules lignes, sans relire la liste. `uids` : « 3,5,7 ».
         #[qsignal]
@@ -1634,6 +1650,9 @@ enum Commande {
     /// Écrire une pièce jointe : dans `destination` si elle est donnée, sinon
     /// dans le dossier de travail, pour l'ouvrir.
     Piece { chemin: String, uid: u32, indice: usize, destination: Option<PathBuf>, joindre: bool },
+    /// Écrire des messages entiers en `.eml` pour les joindre à la rédaction
+    /// `jeton`.
+    JoindreMessages { chemin: String, uids: Vec<u32>, jeton: String },
     /// `discret` : marquage d'un message qu'on affiche ; l'interface a déjà
     /// mis sa ligne à jour et ne relit pas la liste.
     MarquerLu { chemin: String, uids: Vec<u32>, lu: bool, discret: bool },
@@ -1789,6 +1808,9 @@ enum Issue {
     /// dans le fil : l'interface n'en sait rien.
     Precharge { chemin: String, reste: bool },
     Piece { fichier: PathBuf, ouvrir: bool, joindre: bool },
+    /// Messages écrits en `.eml` pour la rédaction `jeton` ; `erreurs` : ceux
+    /// qui manquent, et pourquoi.
+    MessagesAJoindre { jeton: String, fichiers: Vec<PathBuf>, erreurs: Vec<String> },
     Marque { discret: bool },
     /// `annulation` : de quoi le défaire, s'il était annulable.
     Deplace { cible: i64, chemin_cible: String, rapport: Rapport, annulation: Option<Annulation> },
@@ -3900,6 +3922,16 @@ impl qobject::Boite {
 
     pub fn joindre_piece(self: Pin<&mut Self>, uid: i32, indice: i32) -> bool {
         self.demander_piece(uid, indice, None, true)
+    }
+
+    pub fn joindre_messages(mut self: Pin<&mut Self>, compte: i32, chemin: &QString, uids: &QString, jeton: &QString) -> bool {
+        let uids = lire_uids(uids);
+        if compte <= 0 || uids.is_empty() {
+            self.as_mut().set_erreur(QString::from("aucun message à joindre"));
+            return false;
+        }
+        let commande = Commande::JoindreMessages { chemin: chemin.to_string(), uids, jeton: jeton.to_string() };
+        self.as_mut().envoyer(compte as i64, commande)
     }
 
     pub fn enregistrer_piece(mut self: Pin<&mut Self>, uid: i32, indice: i32, url: &QString) -> bool {
@@ -6131,6 +6163,14 @@ impl qobject::Boite {
                     self.as_mut().piece_ecrite(&url, &chemin, ouvrir);
                 }
             }
+            Issue::MessagesAJoindre { jeton, fichiers, erreurs } => {
+                let urls: Vec<String> = fichiers
+                    .iter()
+                    .map(|f| QUrl::from_local_file(&QString::from(f.to_string_lossy().as_ref())).to_qstring().to_string())
+                    .collect();
+                let urls = serde_json::to_string(&urls).unwrap_or_else(|_| "[]".into());
+                self.as_mut().messages_a_joindre(&QString::from(&jeton), &QString::from(&urls), &QString::from(&erreurs.join(" ; ")));
+            }
             Issue::Marque { discret } => {
                 self.as_mut().reviser();
                 if !discret {
@@ -6461,6 +6501,23 @@ fn dossier_affichage(profil: &str) -> PathBuf {
 fn dossier_travail_piece(profil: &str, compte: i64, uid: u32, indice: usize, joindre: bool) -> PathBuf {
     let prefixe = if joindre { "joindre-" } else { "" };
     dossier_pieces(profil).join(format!("{prefixe}{compte}-{uid}-{indice}"))
+}
+
+/// Dossier de travail d'un message entier joint à une rédaction : un par
+/// message — un UID ne le désigne que dans son dossier (`dossier`, son
+/// identifiant dans l'index), et deux messages peuvent porter le même objet.
+fn dossier_message_a_joindre(profil: &str, compte: i64, dossier: i64, uid: u32) -> PathBuf {
+    dossier_pieces(profil).join(format!("message-{compte}-{dossier}-{uid}"))
+}
+
+/// Écrit un message entier, tel que le serveur le garde, pour le joindre à une
+/// rédaction : `<dossier>/<objet>.eml` (cf. `redaction::nom_message_joint`).
+fn ecrire_message_a_joindre(octets: &[u8], dossier: &Path) -> Result<PathBuf, String> {
+    std::fs::create_dir_all(dossier).map_err(|x| format!("{} : {x}", dossier.display()))?;
+    let fichier = dossier.join(redaction::nom_message_joint(&redaction::objet_du_message(octets)));
+    std::fs::write(&fichier, octets).map_err(|x| format!("{} : {x}", fichier.display()))?;
+    marquer_provenance(&fichier);
+    Ok(fichier)
 }
 
 /// Images des signatures, à côté de l'index : l'un des deux seuls dossiers
@@ -6976,6 +7033,12 @@ impl Travail {
             Commande::MarquerLu { chemin, .. }
             | Commande::MarquerSuivi { chemin, .. }
             | Commande::MarquerCategorie { chemin, .. } => Issue::MarquageAbandonne { chemin },
+            // La rédaction le dit, au lieu d'attendre une pièce qui ne vient pas.
+            Commande::JoindreMessages { jeton, .. } => Issue::MessagesAJoindre {
+                jeton,
+                fichiers: Vec::new(),
+                erreurs: vec![format!("{motif} — rien n'est joint")],
+            },
             _ => return,
         };
         self.remettre(issue);
@@ -7272,6 +7335,28 @@ impl Travail {
                     Ok(fichier) => Issue::Piece { fichier, ouvrir, joindre },
                     Err(err) => echec("piece", format!("pièce jointe : {err}"), &err),
                 })
+            }
+            Commande::JoindreMessages { chemin, uids, jeton } => {
+                let (mut fichiers, mut erreurs) = (Vec::new(), Vec::new());
+                let dossier = e.magasin.dossier_id(compte, &chemin).unwrap_or(0);
+                for uid in uids {
+                    match message_entier(e, &self.profil, compte, &chemin, uid) {
+                        Ok(octets) => {
+                            let travail = dossier_message_a_joindre(&self.profil, compte, dossier, uid);
+                            match ecrire_message_a_joindre(&octets, &travail) {
+                                Ok(fichier) => fichiers.push(fichier),
+                                Err(m) => erreurs.push(m),
+                            }
+                        }
+                        // Session perdue : la suite échouerait de même, et le
+                        // fil doit se reconnecter.
+                        Err(err) if err.reseau() => {
+                            return Some(echec("piece", format!("message à joindre : {err}"), &err));
+                        }
+                        Err(err) => erreurs.push(format!("message {uid} : {err}")),
+                    }
+                }
+                Some(Issue::MessagesAJoindre { jeton, fichiers, erreurs })
             }
             Commande::MarquerSuivi { chemin, uids, suivi } => {
                 Some(match synchro::marquer_suivi(&mut e.client, &e.magasin, compte, &chemin, &uids, suivi) {
@@ -9715,6 +9800,7 @@ mod tests {
                 Commande::OuvrirDossier(d) => format!("ouvrir {d}"),
                 Commande::Corps { uid, .. } => format!("corps {uid}"),
                 Commande::Piece { uid, .. } => format!("piece {uid}"),
+                Commande::JoindreMessages { uids, .. } => format!("joindre {uids:?}"),
                 Commande::MarquerLu { .. } => "marquer".into(),
                 Commande::MarquerSuivi { .. } => "suivi".into(),
                 Commande::MarquerCategorie { .. } => "categorie".into(),
@@ -10836,5 +10922,46 @@ mod tests {
         assert_eq!(duree_lisible(Duration::from_secs(45)), "45 s");
         assert_eq!(duree_lisible(Duration::from_secs(300)), "5 min");
         assert_eq!(duree_lisible(Duration::from_secs(330)), "5 min 30 s");
+    }
+
+    /// « Joindre à un nouveau message » : chaque message, absent du poste, est
+    /// relu entier sur le serveur et écrit tel quel en `.eml`, nommé d'après son
+    /// objet, dans un dossier à lui ; un message disparu entre-temps est dit,
+    /// sans empêcher les autres.
+    #[test]
+    fn messages_joints_ecrits_en_eml() {
+        use crate::simule::{echange, session};
+        let brut = "From: helene@exemple.fr\r\nSubject: =?UTF-8?Q?RE=3A_Devis_n=C2=B012?=\r\n\r\nBonjour\r\n";
+        let (client, journal) = session(
+            "UIDPLUS",
+            vec![
+                echange("SELECT \"INBOX\"", "* 2 EXISTS\r\n* OK [UIDVALIDITY 7] v\r\n", "OK [READ-WRITE] fait"),
+                echange(
+                    "UID FETCH 12 (BODY.PEEK[])",
+                    &format!("* 1 FETCH (UID 12 BODY[] {{{}}}\r\n{brut})\r\n", brut.len()),
+                    "OK fait",
+                ),
+                echange("UID FETCH 13 (BODY.PEEK[])", "", "OK fait"),
+            ],
+        );
+        let (travail, mut etabli, _issues) = fil_d_essai(client, "joindre");
+        let commande = Commande::JoindreMessages { chemin: "INBOX".into(), uids: vec![12, 13], jeton: "r4".into() };
+        let Some(Issue::MessagesAJoindre { jeton, fichiers, erreurs }) = travail.traiter(commande, &mut etabli) else {
+            panic!("issue inattendue");
+        };
+        assert_eq!(jeton, "r4");
+        assert_eq!(fichiers.len(), 1, "{erreurs:?}");
+        assert_eq!(fichiers[0].file_name().unwrap().to_string_lossy(), "RE Devis n°12.eml");
+        assert!(fichiers[0].starts_with(dossier_pieces(&travail.profil)), "{:?}", fichiers[0]);
+        assert_eq!(std::fs::read(&fichiers[0]).unwrap(), brut.as_bytes());
+        assert_eq!(erreurs.len(), 1, "{erreurs:?}");
+        assert!(erreurs[0].starts_with("message 13"), "{erreurs:?}");
+        let commandes = journal.lock().unwrap().clone();
+        assert_eq!(commandes.len(), 3, "{commandes:?}");
+        // Deux messages de même objet, de deux dossiers : deux fichiers.
+        let a = dossier_message_a_joindre(&travail.profil, 1, 3, 12);
+        let b = dossier_message_a_joindre(&travail.profil, 1, 4, 12);
+        assert_ne!(a, b);
+        let _ = std::fs::remove_dir_all(Path::new(&travail.profil).parent().unwrap());
     }
 }

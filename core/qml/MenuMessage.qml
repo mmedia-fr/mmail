@@ -52,6 +52,21 @@ Menu {
         raccourci: qsTr("Ctrl+F")
         onTriggered: fenetre.rediger("transferer")
     }
+    // Le message lui-même en pièce jointe, en .eml nommé d'après son objet
+    // (demande d'une utilisatrice, 10/11) : dans un nouveau message, ou dans
+    // celui que l'on rédige — comme une pièce jointe reçue (cf. MenuPiece).
+    // Bureau seulement pour l'instant.
+    EntreeMenu {
+        visible: !fenetre.tactile
+        text: qsTr("Joindre à un nouveau message")
+        onTriggered: fenetre.joindreMessages("nouveau")
+    }
+    EntreeMenu {
+        readonly property var cible: fenetre.redactionJoignable(fenetre.redactionActive)
+        visible: !fenetre.tactile && cible !== null
+        text: cible ? qsTr("Joindre au message en cours « %1 »").arg(cible.objetActuel() || qsTr("sans objet")) : ""
+        onTriggered: fenetre.joindreMessages(fenetre.redactionActive)
+    }
     MenuSeparator {}
     // Un message non lu parmi les choisis : « lu » ; sinon « non lu ».
     EntreeMenu {

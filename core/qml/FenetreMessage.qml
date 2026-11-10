@@ -55,6 +55,10 @@ ApplicationWindow {
     property bool source: false
     property var pieces: []
     property var entete: ({})
+    // S/MIME (0.8.0) : signature et chiffrement du message, et l'attente du
+    // signal qui suit son corps.
+    property var securite: ({})
+    property bool securiteAttendue: false
     // Images distantes laissées de côté, et déjà demandées (0.6.24).
     property int bloquees: 0
     property bool imagesDemandees: false
@@ -112,6 +116,9 @@ ApplicationWindow {
             if (uidRecu !== fenetreMessage.uid || compteRecu !== fenetreMessage.compte
                     || cheminRecu !== fenetreMessage.chemin || brut !== fenetreMessage.source)
                 return
+            fenetreMessage.securiteAttendue = !brut
+            if (brut)
+                fenetreMessage.securite = ({})
             fenetreMessage.html = estHtml && !brut
             fenetreMessage.bloquees = estHtml && !brut ? bloquees : 0
             fenetreMessage.imagesTentees = !brut && fenetreMessage.imagesDemandees
@@ -130,6 +137,14 @@ ApplicationWindow {
             bornerImages()
             if (fenetre.essai && fenetre.essai.scenario === "double-clic")
                 scenarios.etapeScenarioDoubleClic(fenetreMessage)
+        }
+        // Émis juste après le corps du même message.
+        function onSecuriteRecue(uidRecu, securiteRecue) {
+            if (!fenetreMessage.securiteAttendue || uidRecu !== fenetreMessage.uid)
+                return
+            fenetreMessage.securiteAttendue = false
+            try { fenetreMessage.securite = securiteRecue.length > 0 ? JSON.parse(securiteRecue) : ({}) }
+            catch (e) { fenetreMessage.securite = ({}) }
         }
     }
 
@@ -439,6 +454,12 @@ ApplicationWindow {
                     }
                 }
             }
+        }
+
+        // S/MIME (0.8.0), comme au volet de lecture.
+        BandeauSecurite {
+            Layout.fillWidth: true
+            securite: fenetreMessage.source ? ({}) : fenetreMessage.securite
         }
 
         // « Se désabonner… » (0.6.30), comme au volet de lecture.

@@ -371,12 +371,27 @@ Connections {
         }
     }
 
+    // Signature et chiffrement S/MIME du message affiché (0.8.0).
+    function onSecuriteRecue(uid, securite) {
+        // Émis juste après le corps du même message (cf. `onCorpsRecu`) : un
+        // corps destiné à une fenêtre de message n'est pas attendu ici.
+        if (!fenetre.securiteAttendue || uid !== fenetre.uidCourant)
+            return
+        fenetre.securiteAttendue = false
+        try { fenetre.securite = securite.length > 0 ? JSON.parse(securite) : ({}) } catch (e) { fenetre.securite = ({}) }
+        if (fenetre.essai && fenetre.essai.scenario === "smime" && securite.length > 0)
+            console.log("scenario: securite", securite)
+    }
+
     function onCorpsRecu(uid, texte, brut, html, bloquees, pieces, confirmation, entete, compte, chemin) {
         // Un UID ne désigne un message que dans son dossier : celui d'une
         // fenêtre de message (0.6.16) peut porter le même numéro.
         if (uid !== fenetre.uidCourant || brut !== fenetre.sourceVisible
                 || compte !== boite.compteCourant || chemin !== boite.dossierCourant)
             return
+        fenetre.securiteAttendue = !brut
+        if (brut)
+            fenetre.securite = ({})
         // Le format d'abord : le texte s'interprète selon lui.
         fenetre.lienSurvole = ""
         fenetre.corpsHtml = html

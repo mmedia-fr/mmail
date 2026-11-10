@@ -793,6 +793,38 @@ pub mod qobject {
         #[cxx_name = "marquerErreur"]
         fn marquer_erreur(self: Pin<&mut Boite>, compte: i32, motif: &QString);
 
+        /// Importe un certificat personnel S/MIME (`.p12`, contenu en
+        /// base64) pour un compte. JSON `{ok, erreur, empreinte, titulaire,
+        /// avertissement}` ; l'interface confie ensuite le mot de passe au
+        /// coffre, sous `smime:<empreinte>`.
+        #[qinvokable]
+        #[cxx_name = "importerCertificat"]
+        fn importer_certificat(self: Pin<&mut Boite>, compte: i32, donnees: &QString, mot_de_passe: &QString) -> QString;
+
+        /// Les clés S/MIME rangées dans le profil, en JSON : `[{compte,
+        /// adresse, empreinte, titulaire, deverrouillee}]`.
+        #[qinvokable]
+        #[cxx_name = "clesSmime"]
+        fn cles_smime(&self) -> QString;
+
+        /// Ouvre une clé rangée par son mot de passe, lu au coffre : vrai si
+        /// elle s'ouvre. Ses messages se lisent dès lors.
+        #[qinvokable]
+        #[cxx_name = "deverrouillerCle"]
+        fn deverrouiller_cle(self: Pin<&mut Boite>, empreinte: &QString, mot_de_passe: &QString) -> bool;
+
+        /// Retire une clé du profil : vide si c'est fait, sinon le motif.
+        /// Les messages chiffrés pour elle deviennent illisibles.
+        #[qinvokable]
+        #[cxx_name = "retirerCle"]
+        fn retirer_cle(self: Pin<&mut Boite>, empreinte: &QString) -> QString;
+
+        /// Ajoute une autorité de confiance (`.cer`, `.crt`, `.pem`, contenu
+        /// en base64) : JSON `{ok, erreur, titulaire}`.
+        #[qinvokable]
+        #[cxx_name = "ajouterAutorite"]
+        fn ajouter_autorite(self: Pin<&mut Boite>, donnees: &QString) -> QString;
+
         /// Prépare une rédaction à partir d'un message du dossier ouvert.
         /// `mode` : « repondre », « repondre_tous », « transferer » ou
         /// « brouillon » ; `adresses` : les autres adresses d'envoi du compte
@@ -1301,6 +1333,13 @@ pub mod qobject {
         #[qsignal]
         #[cxx_name = "invitationRecue"]
         fn invitation_recue(self: Pin<&mut Boite>, uid: i32, invitation: &QString);
+
+        /// Le message affiché est signé ou chiffré (S/MIME, 0.8.0) : ce
+        /// qu'on sait de sa sécurité, en JSON (cf. `smime::Securite`) ; vide
+        /// sinon.
+        #[qsignal]
+        #[cxx_name = "securiteRecue"]
+        fn securite_recue(self: Pin<&mut Boite>, uid: i32, securite: &QString);
 
         /// Demande de désabonnement en un clic terminée : `hote` est le
         /// serveur qui l'a reçue ; `message` dit pourquoi elle a échoué.
@@ -3860,7 +3899,9 @@ impl qobject::Boite {
             let lancement = thread::Builder::new().name("mmail-fenetre".into()).spawn(move || {
                 let preparation = Cache::du_profil(&profil)
                     .lire(id)
-                    .and_then(|octets| rendre_si_actuel(0, &octets, brut, distantes, compte, &dossier_affichage(&profil), false));
+                    .and_then(|octets| {
+                        rendre_si_actuel(0, &octets, brut, distantes, compte, &dossier_affichage(&profil), false, &profil)
+                    });
                 let _ = fil.queue(move |boite: Pin<&mut qobject::Boite>| boite.afficher_du_poste(local, preparation, 0, distantes));
             });
             if lancement.is_ok() {
@@ -5507,6 +5548,102 @@ impl qobject::Boite {
         self.as_mut().reviser();
     }
 
+    pub fn importer_certificat(self: Pin<&mut Self>, compte: i32, donnees: &QString, mot_de_passe: &QString) -> QString {
+        let compte = compte as i64;
+        let issue = (|| -> Result<serde_json::Value, String> {
+            let adresse = self
+                .magasin
+                .as_ref()
+                .and_then(|m| m.compte_par_id(compte).ok().flatten())
+                .map(|c| c.adresse)
+                .ok_or("compte inconnu")?;
+            let octets = crate::rendu::base64(&donnees.to_string())
+                .filter(|o| !o.is_empty())
+                .ok_or("fichier vide ou illisible")?;
+            let cle = crate::smime::Cle::depuis_p12(&octets, &mot_de_passe.to_string())?;
+            let titulaire = cle.titulaire();
+            let avertissement = match &titulaire {
+                Some(t) if !t.adresses.iter().any(|a| a.eq_ignore_ascii_case(&adresse)) => format!(
+                    "Ce certificat est celui de {}, et non de {adresse} : vos correspondants verront une adresse différente de l'expéditeur.",
+                    if t.adresses.is_empty() { t.nom.clone() } else { t.adresses.join(", ") }
+                ),
+                _ => String::new(),
+            };
+            let rangee = crate::smime::ranger_cle(&self.profil, &adresse, &octets, &cle)
+                .map_err(|e| format!("rangement dans le profil : {e}"))?;
+            crate::smime::deposer(compte, cle);
+            Ok(serde_json::json!({
+                "ok": true,
+                "erreur": "",
+                "empreinte": rangee.empreinte,
+                "titulaire": titulaire,
+                "avertissement": avertissement,
+            }))
+        })();
+        let v = issue.unwrap_or_else(|erreur| serde_json::json!({ "ok": false, "erreur": erreur }));
+        QString::from(&v.to_string())
+    }
+
+    pub fn cles_smime(&self) -> QString {
+        let comptes = self.magasin.as_ref().and_then(|m| m.comptes().ok()).unwrap_or_default();
+        let liste: Vec<serde_json::Value> = crate::smime::cles_rangees(&self.profil)
+            .into_iter()
+            .map(|r| {
+                let compte = comptes.iter().find(|c| c.adresse.eq_ignore_ascii_case(&r.adresse)).map(|c| c.id).unwrap_or(0);
+                serde_json::json!({
+                    "compte": compte,
+                    "adresse": r.adresse,
+                    "empreinte": r.empreinte,
+                    "titulaire": r.certificat().and_then(|c| crate::smime::titulaire(&c)),
+                    "deverrouillee": crate::smime::deverrouillee(&r.empreinte),
+                })
+            })
+            .collect();
+        QString::from(&serde_json::Value::Array(liste).to_string())
+    }
+
+    pub fn deverrouiller_cle(self: Pin<&mut Self>, empreinte: &QString, mot_de_passe: &QString) -> bool {
+        let empreinte = empreinte.to_string();
+        let Some(r) = crate::smime::cles_rangees(&self.profil).into_iter().find(|r| r.empreinte == empreinte) else {
+            return false;
+        };
+        let comptes = self.magasin.as_ref().and_then(|m| m.comptes().ok()).unwrap_or_default();
+        let Some(compte) = comptes.iter().find(|c| c.adresse.eq_ignore_ascii_case(&r.adresse)).map(|c| c.id) else {
+            return false;
+        };
+        let Ok(octets) = std::fs::read(&r.chemin) else {
+            return false;
+        };
+        match crate::smime::Cle::depuis_p12(&octets, &mot_de_passe.to_string()) {
+            Ok(cle) => {
+                crate::smime::deposer(compte, cle);
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
+    pub fn retirer_cle(self: Pin<&mut Self>, empreinte: &QString) -> QString {
+        QString::from(&match crate::smime::retirer_cle(&self.profil, &empreinte.to_string()) {
+            Ok(true) => String::new(),
+            Ok(false) => "clé introuvable dans le profil".to_string(),
+            Err(e) => format!("retrait impossible : {e}"),
+        })
+    }
+
+    pub fn ajouter_autorite(self: Pin<&mut Self>, donnees: &QString) -> QString {
+        let issue = (|| -> Result<serde_json::Value, String> {
+            let octets = crate::rendu::base64(&donnees.to_string())
+                .filter(|o| !o.is_empty())
+                .ok_or("fichier vide ou illisible")?;
+            let der = crate::smime::lire_certificat(&octets)?;
+            crate::smime::ranger_autorite(&self.profil, &der).map_err(|e| format!("rangement dans le profil : {e}"))?;
+            Ok(serde_json::json!({ "ok": true, "erreur": "", "titulaire": crate::smime::titulaire(&der) }))
+        })();
+        let v = issue.unwrap_or_else(|erreur| serde_json::json!({ "ok": false, "erreur": erreur }));
+        QString::from(&v.to_string())
+    }
+
     pub fn preparer(self: Pin<&mut Self>, uid: i32, mode: &QString, jeton: &QString, adresses: &QString) -> bool {
         let Some((compte, chemin, _)) = self.courant.clone() else {
             return false;
@@ -5874,7 +6011,7 @@ impl qobject::Boite {
                 let lancement = thread::Builder::new().name("mmail-affichage".into()).spawn(move || {
                     let preparation = Cache::du_profil(&profil).lire(id).and_then(|octets| {
                         let atelier = dossier_affichage(&profil);
-                        rendre_si_actuel(numero, &octets, brut, distantes, compte, &atelier, !lu)
+                        rendre_si_actuel(numero, &octets, brut, distantes, compte, &atelier, !lu, &profil)
                     });
                     if AFFICHAGE.load(Ordering::SeqCst) == numero {
                         let _ = fil.queue(move |boite: Pin<&mut qobject::Boite>| {
@@ -6113,6 +6250,7 @@ impl qobject::Boite {
                 );
                 let invitation = lu.invitation.as_ref().map(|e| self.as_mut().decrire_invitation(compte, e)).unwrap_or_default();
                 self.as_mut().invitation_recue(uid as i32, &QString::from(&invitation));
+                self.as_mut().securite_recue(uid as i32, &QString::from(&lu.securite));
             }
             Issue::Programme { jeton, echeance } => {
                 self.as_mut().reviser();
@@ -7258,7 +7396,7 @@ impl Travail {
             Commande::Corps { chemin, uid, brut, distantes, numero } => {
                 let atelier = dossier_affichage(&self.profil);
                 let cache = Cache::du_profil(&self.profil);
-                match lire_corps(e, compte, &chemin, uid, brut, distantes, &atelier, &cache, numero) {
+                match lire_corps(e, compte, &chemin, uid, brut, distantes, &atelier, &cache, numero, &self.profil) {
                     Ok(Some((lu, non_lu))) => Some(Issue::Corps { chemin, uid, lu, non_lu, numero }),
                     // Un autre message a été demandé entre-temps.
                     Ok(None) => None,
@@ -8433,7 +8571,10 @@ impl Travail {
     }
 
     fn preparer(&self, e: &mut Etabli, chemin: &str, uid: u32, mode: &str, autres: &[String]) -> Result<Preparation, String> {
+        // Signé ou chiffré (S/MIME) : la réponse et le transfert reprennent le
+        // contenu ouvert.
         let octets = message_entier(e, &self.profil, self.compte, chemin, uid)
+            .map(|o| crate::smime::lisible(&self.profil, self.compte, o))
             .map_err(|x| format!("lecture du message : {x}"))?;
         // L'adresse du compte, puis ses autres adresses d'envoi.
         let mut propres: Vec<String> =
@@ -8676,6 +8817,9 @@ struct Lu {
     /// De, À, Cc et date, pour la fenêtre du message (0.6.16, JSON ; vide
     /// pour la source).
     entete: String,
+    /// Signature et chiffrement S/MIME (0.8.0), en JSON ; vide pour un
+    /// message ordinaire ou la source.
+    securite: String,
 }
 
 /// Lit le corps d'un message du dossier ouvert. Un message de moins d'un mois
@@ -8693,6 +8837,7 @@ fn lire_corps(
     atelier: &Path,
     cache: &Cache,
     numero: u64,
+    profil: &str,
 ) -> Result<Option<(Lu, bool)>, Echec> {
     let id = e.magasin.dossier_id(compte, chemin)?;
     let garde = e.magasin.garde_sur_le_poste(id, uid)?.and_then(|(mid, lu)| cache.lire(mid).map(|o| (o, lu)));
@@ -8724,7 +8869,7 @@ fn lire_corps(
             (complet.octets, !deja)
         }
     };
-    let Some(lu) = rendre_si_actuel(numero, &octets, brut, distantes, compte, atelier, confirmation_possible) else {
+    let Some(lu) = rendre_si_actuel(numero, &octets, brut, distantes, compte, atelier, confirmation_possible, profil) else {
         return Ok(None);
     };
     // Le message entier dit s'il porte des pièces jointes : cela prime sur ce
@@ -8746,6 +8891,7 @@ fn lire_corps(
 /// téléchargement des images distantes se font avant, si bien qu'un hôte
 /// d'images lent ne fige plus l'affichage des autres messages ; et un message
 /// quitté abandonne ses téléchargements entre deux lots (0.6.6).
+#[allow(clippy::too_many_arguments)]
 fn rendre_si_actuel(
     numero: u64,
     octets: &[u8],
@@ -8754,6 +8900,7 @@ fn rendre_si_actuel(
     compte: i64,
     atelier: &Path,
     confirmation_possible: bool,
+    profil: &str,
 ) -> Option<Lu> {
     // Numéro 0 : la fenêtre d'un message (0.6.16), hors du volet de lecture
     // — toujours actuelle.
@@ -8761,6 +8908,20 @@ fn rendre_si_actuel(
     if !actuel() {
         return None;
     }
+    // S/MIME (0.8.0) : un message signé ou chiffré s'affiche ouvert — sa
+    // source reste celle reçue. Le certificat d'une signature bonne est
+    // recueilli, pour écrire chiffré à son titulaire.
+    let ouvert = if brut { None } else { crate::smime::ouvrir_pour(profil, compte, octets) };
+    let securite = match &ouvert {
+        Some(o) => {
+            if let Some(s) = &o.securite.signature {
+                crate::smime::recueillir(profil, s);
+            }
+            serde_json::to_string(&o.securite).unwrap_or_default()
+        }
+        None => String::new(),
+    };
+    let octets: &[u8] = ouvert.as_ref().map(|o| o.message.as_slice()).unwrap_or(octets);
     let confirmation = if brut || !confirmation_possible {
         String::new()
     } else {
@@ -8768,8 +8929,17 @@ fn rendre_si_actuel(
     };
     let invitation = if brut { None } else { crate::invitation::extraire(octets) };
     let entete = if brut { String::new() } else { crate::index::entete_affichable(octets) };
-    let mut lu =
-        Lu { texte: String::new(), brut, html: false, bloquees: 0, pieces: String::new(), confirmation, invitation, entete };
+    let mut lu = Lu {
+        texte: String::new(),
+        brut,
+        html: false,
+        bloquees: 0,
+        pieces: String::new(),
+        confirmation,
+        invitation,
+        entete,
+        securite,
+    };
     lu.pieces = json_pieces(&crate::index::pieces_jointes(octets));
     if brut {
         lu.texte = String::from_utf8_lossy(octets).into_owned();
@@ -8990,7 +9160,8 @@ fn ecrire_piece(
     dossier: &Path,
     pour_ouvrir: bool,
 ) -> Result<PathBuf, Echec> {
-    let octets = message_entier(e, profil, compte, chemin, uid)?;
+    // Les pièces d'un message chiffré sont dans son contenu ouvert.
+    let octets = crate::smime::lisible(profil, compte, message_entier(e, profil, compte, chemin, uid)?);
     ecrire_piece_de(&octets, indice, destination, dossier, pour_ouvrir)
         .map_err(|m| Echec::Index(crate::magasin::Erreur(m)))
 }

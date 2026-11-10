@@ -14,3 +14,8 @@
 
 *.ico binary
 *.png binary
+
+# Messages S/MIME d'essai : octet pour octet ce qu'OpenSSL a signé ; une
+# conversion des fins de ligne au checkout (Windows) les altérerait.
+core/src/smime/essais/*.eml -text
+*.p12 binary

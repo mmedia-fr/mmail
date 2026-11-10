@@ -62,10 +62,42 @@ SwipeDelegate {
     // le dossier n'a pas été relu, ou sans « À » ni « Cc », l'expéditeur.
     readonly property string auteurLigne: roleLigne === "Sent" && (model.destinataires || "") !== ""
                                           ? qsTr("À : %1").arg(model.destinataires) : model.expediteur
-    swipe.enabled: fenetre.tactile
+    swipe.enabled: fenetre.tactile && !appuiAuBord
     swipe.left: roleLigne === "Trash" ? null : fondIndesirable
     swipe.right: roleLigne === "Trash" ? null : fondCorbeille
-    swipe.onCompleted: fenetre.glisserLigne(index, swipe.position > 0 ? "indesirable" : "corbeille")
+    // Seul compte le chemin du doigt (10/11). Qt complète aussi un glissement
+    // LANCÉ : plus de 300 px/s vers un côté au lâcher, quelle que soit la
+    // distance parcourue — 16 px en 40 ms suffisaient. Un pouce qui dérapait en
+    // faisant défiler la liste envoyait ainsi le message aux indésirables, cinq
+    // secondes plus tard, sans que la personne l'ait voulu. La ligne ne part
+    // donc que lâchée passé le tiers de sa largeur (position 0,5 : le fond
+    // découvert en a les deux tiers), du côté où elle a été portée ; un coup
+    // bref la ramène.
+    property real positionAuDoigt: 0
+    swipe.onPositionChanged: if (ligne.pressed) ligne.positionAuDoigt = ligne.swipe.position
+    swipe.onCompleted: {
+        if (!ligne.glissementVoulu(ligne.positionAuDoigt, ligne.swipe.position)) {
+            ligne.swipe.close()
+            return
+        }
+        fenetre.glisserLigne(index, ligne.swipe.position > 0 ? "indesirable" : "corbeille")
+    }
+    function glissementVoulu(auDoigt, position) {
+        return Math.abs(auDoigt) >= 0.5 && (auDoigt > 0) === (position > 0)
+    }
+    // Un appui au bord de l'écran ne glisse pas la ligne : c'est là
+    // qu'Android reconnaît le geste « retour » (balayer depuis le bord, sur
+    // une vingtaine à une trentaine de dp selon le réglage du téléphone). Un
+    // retour que le système n'a pas reconnu arrivait à la ligne comme un
+    // glisser vers la droite, c'est-à-dire vers les indésirables. La liste
+    // défile toujours depuis ces bords.
+    readonly property real margeRetour: 32
+    property bool appuiAuBord: false
+    onPressed: {
+        positionAuDoigt = 0
+        var x = mapToItem(null, pressX, pressY).x
+        appuiAuBord = x < margeRetour || x > Window.width - margeRetour
+    }
     // La liste recycle ses lignes (reuseItems) : une ligne glissée, rangée
     // puis reprise pour un autre message, gardait son décalage — d'autres
     // messages paraissaient glissés (retour du mainteneur du 18/10).

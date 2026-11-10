@@ -27,9 +27,9 @@ de projet interne.
   (ses images distantes et ses feuilles de style sont écartées) ; Cc et Cci ; pièces jointes par « Joindre… » ou glisser-déposer,
   celles d'un message transféré reprises d'office, et qu'un clic ouvre pour
   les vérifier avant l'envoi (0.6.9 ; jamais un programme ni un script) ;
-  **un courriel en pièce jointe**, quel qu'il soit : « Joindre à un nouveau
-  message » ou « Joindre au message en cours » au clic droit sur un message de
-  la liste, ou les messages glissés de la liste sur la fenêtre de rédaction
+  **un courriel en pièce jointe**, quel qu'il soit : « Autres actions ›
+  Joindre à un nouveau message » (ou « … au message en cours ») au clic droit
+  sur un message de la liste, ou les messages glissés de la liste sur la fenêtre de rédaction
   (Windows, Linux sous X11) — chacun joint entier, en `.eml` (message/rfc822)
   nommé d'après son objet, comme « Transférer en tant que pièce jointe »
   d'Outlook ; une capture d'écran se

@@ -1572,6 +1572,81 @@ QtObject {
         }
     }
 
+    /// Scénario « indesirable-differe » (vue tactile : MMAIL_TACTILE=1,
+    /// MMAIL_TAILLE=392x800) : le volet de lecture n'a plus de bouton
+    /// « Indésirable », mais « … » ; « Courrier indésirable » retire le message
+    /// de la liste derrière le bandeau « Annuler », sans rien envoyer au
+    /// serveur ; annulé, il revient ; laissé, il part après 5 s.
+    function etapeScenarioIndesirableDiffere() {
+        var echecs = 0
+        var bilan = function(texte, bon) {
+            if (!bon)
+                echecs += 1
+            console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
+        }
+        var attendre = function(condition, ensuite) {
+            var essais = 40
+            var t = Qt.createQmlObject('import QtQuick; Timer { interval: 500; repeat: true }', fenetre)
+            t.triggered.connect(function() {
+                if (condition() || --essais <= 0) {
+                    t.stop()
+                    ensuite()
+                }
+            })
+            t.start()
+        }
+        var finir = function() {
+            console.log("scenario: indesirable-differe " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
+            Qt.quit()
+        }
+        var present = function(sujet) {
+            for (var i = 0; i < modeleMessages.count; ++i) {
+                if (modeleMessages.get(i).sujet === sujet)
+                    return true
+            }
+            return false
+        }
+        if (!tactile || boite.dossierCourant !== "INBOX" || modeleMessages.count < 2) {
+            bilan("vue tactile, boîte de réception d'au moins deux messages", false)
+            finir()
+            return
+        }
+        var avant = modeleMessages.count
+        var sujet = modeleMessages.get(0).sujet
+        choisir(0, 0)
+        attendre(function() { return vue === 2 }, function() {
+            var indesirable = objetNomme(colonneLecture, "boutonIndesirable")
+            var autres = objetNomme(colonneLecture, "boutonAutresActions")
+            bilan("volet de lecture sans « Indésirable »", !!indesirable && !indesirable.visible)
+            bilan("« … » présent", !!autres && autres.visible)
+            signalerIndesirable()
+            bilan("bandeau « " + bandeauGlissement.texte + " »", bandeauGlissement.opened
+                  && bandeauGlissement.texte === qsTr("Message classé indésirable."))
+            bilan("retour à la liste, message retiré, rien d'envoyé",
+                  vue === 1 && modeleMessages.count === avant - 1 && !present(sujet) && deplacementsEnVol === 0)
+            annulerGlissement()
+            attendre(function() { return present(sujet) }, function() {
+                bilan("annulé : le message revient", present(sujet) && deplacementsEnVol === 0)
+                var rang = -1
+                for (var i = 0; i < modeleMessages.count; ++i) {
+                    if (modeleMessages.get(i).sujet === sujet)
+                        rang = i
+                }
+                choisir(rang, 0)
+                signalerIndesirable()
+                var t0 = Date.now()
+                attendre(function() { return glissement === null }, function() {
+                    var ecoule = Date.now() - t0
+                    bilan("parti après " + ecoule + " ms", ecoule >= 4500)
+                    attendre(function() { return deplacementsEnVol === 0 }, function() {
+                        bilan("déplacement fait : « " + messageEtat.texte + " »", !present(sujet))
+                        finir()
+                    })
+                })
+            })
+        })
+    }
+
     // Scénario « vider-dossier » (0.6.19) : un message de la boîte de
     // réception part à la corbeille ; la corbeille, ouverte, est vidée par
     // « Vider ce dossier… », confirmé comme au clic. La liste doit être vide

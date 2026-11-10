@@ -136,8 +136,12 @@ ColumnLayout {
                     text: qsTr("Déplacer…")
                     onClicked: fenetre.ouvrirDeplacer()
                 }
+                // Sous Android, pas ici (10/11) : entre « Déplacer… » et « Marquer
+                // comme lu », un appui malheureux classait le message — il est
+                // dans « … », plus loin, et attend derrière « Annuler ».
                 BoutonAction {
-                    visible: !fenetre.dossierDeReprise
+                    objectName: "boutonIndesirable"
+                    visible: !fenetre.dossierDeReprise && !fenetre.tactile
                     text: fenetre.roleCourant === "Junk" ? qsTr("Pas indésirable") : qsTr("Indésirable")
                     onClicked: fenetre.signalerIndesirable()
                     ToolTip.visible: hovered
@@ -161,6 +165,16 @@ ColumnLayout {
                 BoutonAction {
                     text: fenetre.sourceVisible ? qsTr("Message") : qsTr("Source")
                     onClicked: fenetre.basculerSource()
+                }
+                // Vue tactile : le reste des actions du message — « Courrier
+                // indésirable » compris —, le menu de l'appui long sur la ligne.
+                BoutonAction {
+                    id: boutonAutresActions
+                    objectName: "boutonAutresActions"
+                    visible: fenetre.tactile
+                    text: "…"
+                    Accessible.name: qsTr("Autres actions")
+                    onClicked: menuMessage.popup(boutonAutresActions, 0, boutonAutresActions.height)
                 }
             }
             // L'objet, en titre dans la police des titres sous une

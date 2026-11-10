@@ -805,6 +805,14 @@ L'intégration continue les passe sous Linux contre un Dovecot monté pour
 l'occasion — deux comptes jetables, certificat signé par une autorité d'essai
 posée dans le magasin du système —, hors envoi SMTP, agenda et carnet d’adresses.
 
+Épreuves de l'interface : des composants de `core/qml` éprouvés seuls, sans
+serveur ni noyau (`core/essais-qml/tst_*.qml` ; les noms qu'ils empruntent à
+`Main.qml` y sont posés). L'intégration continue les passe sous Linux :
+
+```sh
+QT_QPA_PLATFORM=offscreen qmltestrunner -input core/essais-qml -import core/essais-qml/modules
+```
+
 ## Licence
 
 GNU General Public License version 3 ou ultérieure — texte intégral dans

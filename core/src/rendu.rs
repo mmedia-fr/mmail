@@ -94,7 +94,9 @@ pub fn corps_html(brut: &[u8]) -> Option<CorpsHtml> {
 /// tel qu'il se reprendra et partira : ni la rédaction ni l'envoi ne posent ces
 /// liens. Capture du 10/11/2026 : sous le logo lié d'une signature, l'adresse
 /// postale s'affichait soulignée en bleu dans le brouillon, comme si le lien
-/// du logo la couvrait, et plus du tout une fois le brouillon repris.
+/// du logo la couvrait, et plus du tout une fois le brouillon repris. Sert
+/// aussi au message cité d'une réponse ou d'un transfert, où ces liens
+/// partaient chez le destinataire (`redaction::preparer`).
 pub fn corps_html_brouillon(brut: &[u8]) -> Option<CorpsHtml> {
     corps_html_lie(brut, false)
 }

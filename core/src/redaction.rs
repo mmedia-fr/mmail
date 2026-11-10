@@ -162,7 +162,94 @@ pub fn type_de_fichier(nom: &str) -> &'static str {
         "mp3" => "audio/mpeg",
         "wav" => "audio/wav",
         "mp4" => "video/mp4",
+        // Un courriel joint (« Joindre à un nouveau message », ou un fichier
+        // .eml du disque) : les logiciels de messagerie l'ouvrent comme un
+        // message.
+        "eml" => "message/rfc822",
         _ => "application/octet-stream",
+    }
+}
+
+/// Partie MIME d'une pièce jointe. Un message joint (message/rfc822) part tel
+/// quel, en 7 bits, quand il s'y prête : la RFC 2046 (§ 5.2.1) n'admet pour ce
+/// type ni base64 ni quoted-printable, et un message joint ainsi encodé ne
+/// s'ouvre pas partout comme un message. Avec des octets de 8 bits, ou des
+/// lignes que SMTP refuserait, il passe en base64 comme toute autre pièce :
+/// les logiciels courants le lisent encore.
+fn partie_jointe(f: &Fichier) -> MimePart<'_> {
+    let type_mime = type_de_fichier(&f.nom);
+    let partie = MimePart::new(type_mime, f.contenu.as_slice()).attachment(f.nom.as_str());
+    if type_mime == "message/rfc822" && en_sept_bits(&f.contenu) {
+        partie.transfer_encoding("7bit")
+    } else {
+        partie
+    }
+}
+
+/// Vrai si `octets` peut voyager tel quel en `7bit` : rien au-delà de l'ASCII,
+/// aucun octet nul, des fins de ligne CRLF seulement, et des lignes de 998
+/// octets au plus (RFC 5322 § 2.1.1).
+fn en_sept_bits(octets: &[u8]) -> bool {
+    let mut longueur = 0;
+    let mut precedent = 0u8;
+    for (i, &o) in octets.iter().enumerate() {
+        match o {
+            0 | 0x80..=0xff => return false,
+            b'\n' if precedent != b'\r' => return false,
+            b'\n' => longueur = 0,
+            b'\r' if octets.get(i + 1) != Some(&b'\n') => return false,
+            b'\r' => {}
+            _ => {
+                longueur += 1;
+                if longueur > 998 {
+                    return false;
+                }
+            }
+        }
+        precedent = o;
+    }
+    true
+}
+
+/// Objet d'un message entier, décodé ; vide s'il n'en a pas.
+pub fn objet_du_message(brut: &[u8]) -> String {
+    MessageParser::default()
+        .parse(brut)
+        .and_then(|m| m.subject().map(str::to_string))
+        .unwrap_or_default()
+}
+
+/// Nom du fichier d'un message joint : son objet, comme Outlook, suivi de
+/// `.eml`. Les caractères qu'un nom de fichier n'admet pas sous Windows
+/// (`\ / : * ? " < > |`, caractères de contrôle) deviennent des espaces,
+/// regroupés ; ni espace ni point en fin de nom (Windows les retire), ni nom
+/// réservé (`CON`, `NUL`, `COM1`…), 80 caractères au plus : le dossier du
+/// profil en prend déjà une part sous la limite de 260 de Windows. Sans objet :
+/// « sans objet.eml ».
+pub fn nom_message_joint(objet: &str) -> String {
+    let propre: String = objet
+        .chars()
+        .map(|c| if c.is_control() || "\\/:*?\"<>|".contains(c) { ' ' } else { c })
+        .collect();
+    let mut nom = propre.split_whitespace().collect::<Vec<_>>().join(" ");
+    if nom.chars().count() > 80 {
+        nom = nom.chars().take(80).collect();
+    }
+    let nom = nom.trim_end_matches(['.', ' ']);
+    let nom = if nom.is_empty() { "sans objet" } else { nom };
+    // Windows réserve ces noms quelle que soit la suite : « NUL.tar.gz » aussi.
+    let reserve = {
+        let base = nom.split('.').next().unwrap_or("").trim_end().to_ascii_uppercase();
+        matches!(base.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+            || (base.len() == 4
+                && (base.starts_with("COM") || base.starts_with("LPT"))
+                && base.as_bytes()[3].is_ascii_digit()
+                && base.as_bytes()[3] != b'0')
+    };
+    if reserve {
+        format!("_{nom}.eml")
+    } else {
+        format!("{nom}.eml")
     }
 }
 
@@ -272,11 +359,7 @@ pub fn fabriquer_avec_images(
                 alternative
             } else {
                 let mut parties = vec![alternative];
-                for f in fichiers {
-                    parties.push(
-                        MimePart::new(type_de_fichier(&f.nom), f.contenu.as_slice()).attachment(f.nom.as_str()),
-                    );
-                }
+                parties.extend(fichiers.iter().map(partie_jointe));
                 MimePart::new("multipart/mixed", parties)
             };
             m = m.body(corps);
@@ -285,8 +368,8 @@ pub fn fabriquer_avec_images(
             if !r.html.is_empty() {
                 m = m.html_body(r.html.clone());
             }
-            for f in fichiers {
-                m = m.attachment(type_de_fichier(&f.nom), f.nom.clone(), f.contenu.clone());
+            if !fichiers.is_empty() {
+                m.attachments.get_or_insert_with(Vec::new).extend(fichiers.iter().map(partie_jointe));
             }
         }
         m.write_to_vec().map_err(|e| format!("fabrication du message : {e}"))
@@ -983,6 +1066,123 @@ mod tests {
         let copie = MessageParser::default().parse(&f.copie).unwrap();
         assert_eq!(copie.bcc().unwrap().first().unwrap().address(), Some("archive@exemple.fr"));
         assert_eq!(copie.message_id(), envoi.message_id());
+    }
+
+    #[test]
+    fn nom_d_un_message_joint() {
+        assert_eq!(nom_message_joint("Devis toiture"), "Devis toiture.eml");
+        assert_eq!(nom_message_joint("RE: Devis n°12 / lot 3"), "RE Devis n°12 lot 3.eml");
+        assert_eq!(nom_message_joint("TR : \"Urgent\" <relance>?*|"), "TR Urgent relance.eml");
+        assert_eq!(nom_message_joint("Ligne\r\n\tsuivante"), "Ligne suivante.eml");
+        assert_eq!(nom_message_joint("À voir..."), "À voir.eml");
+        assert_eq!(nom_message_joint(""), "sans objet.eml");
+        assert_eq!(nom_message_joint(" ::: "), "sans objet.eml");
+        assert_eq!(nom_message_joint("con"), "_con.eml");
+        assert_eq!(nom_message_joint("NUL.tar"), "_NUL.tar.eml");
+        assert_eq!(nom_message_joint("COM1"), "_COM1.eml");
+        assert_eq!(nom_message_joint("COM0"), "COM0.eml");
+        assert_eq!(nom_message_joint("Console"), "Console.eml");
+        // 80 caractères au plus, coupés sur un caractère entier.
+        let long = "é".repeat(120);
+        let nom = nom_message_joint(&long);
+        assert_eq!(nom.chars().count(), 80 + 4, "{nom}");
+        assert!(nom.ends_with("é.eml"));
+        assert_eq!(type_de_fichier("Devis toiture.EML"), "message/rfc822");
+        assert_eq!(objet_du_message(ORIGINAL.as_bytes()), "Devis toiture");
+        assert_eq!(objet_du_message(b"From: a@exemple.fr\r\n\r\nsans objet\r\n"), "");
+    }
+
+    #[test]
+    fn sept_bits() {
+        assert!(en_sept_bits(b"Subject: essai\r\n\r\nBonjour\r\n"));
+        assert!(en_sept_bits(b"sans fin de ligne"));
+        assert!(!en_sept_bits("Objet : été\r\n".as_bytes()));
+        assert!(!en_sept_bits(b"fin de ligne seule\n"));
+        assert!(!en_sept_bits(b"retour seul\rsuite\r\n"));
+        assert!(!en_sept_bits(b"octet\0nul\r\n"));
+        // Un nom accentué en UTF-8 brut dans un en-tête suffit.
+        assert!(!en_sept_bits(ORIGINAL.as_bytes()));
+        let ligne = "a".repeat(998);
+        assert!(en_sept_bits(format!("{ligne}\r\n{ligne}\r\n").as_bytes()));
+        assert!(!en_sept_bits(format!("{ligne}a\r\n").as_bytes()));
+    }
+
+    /// Un courriel joint (« Joindre à un nouveau message ») : message/rfc822,
+    /// nommé d'après son objet, tel quel en 7 bits — ou en base64 s'il porte
+    /// des octets de 8 bits. Relu, c'est un message, objet et texte compris,
+    /// et MMail le liste parmi les pièces jointes.
+    #[test]
+    fn message_joint_en_rfc822() {
+        let r = Redaction {
+            de: "moi@exemple.fr".into(),
+            a: "toi@exemple.fr".into(),
+            objet: "Pour information".into(),
+            texte: "Voici l'échange.".into(),
+            ..Default::default()
+        };
+        // En 7 bits : `ORIGINAL` porte des noms accentués en UTF-8 brut dans
+        // ses en-têtes, il partirait en base64 (cf. plus bas).
+        let sept = "From: Helene Martin <helene@exemple.fr>\r\nTo: moi@exemple.fr\r\n\
+                    Subject: =?UTF-8?Q?Devis_toiture?=\r\nDate: Tue, 29 Sep 2026 10:33:00 +0200\r\n\
+                    Message-ID: <origine.1@exemple.fr>\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n\
+                    Bonjour,\r\nVoici le devis.\r\n";
+        let pj = [Fichier { nom: nom_message_joint("Devis toiture"), contenu: sept.as_bytes().to_vec() }];
+        let f = fabriquer(&r, 1_790_000_000, &pj).unwrap();
+        let brut = String::from_utf8_lossy(&f.envoi).to_string();
+        let debut = brut.find("Content-Type: message/rfc822").expect("partie message/rfc822");
+        let entetes = &brut[debut..debut + brut[debut..].find("\r\n\r\n").unwrap()];
+        assert!(entetes.contains("Content-Transfer-Encoding: 7bit"), "{entetes}");
+        assert!(entetes.contains("filename=\"Devis toiture.eml\""), "{entetes}");
+        // Tel quel : les en-têtes d'origine se lisent dans le message envoyé.
+        assert!(brut.contains("Subject: =?UTF-8?Q?Devis_toiture?=\r\n"), "{brut}");
+        assert!(brut.contains("Message-ID: <origine.1@exemple.fr>\r\n"));
+
+        let m = MessageParser::default().parse(&f.envoi).unwrap();
+        let piece = m.attachments().next().unwrap();
+        assert!(piece.is_message());
+        assert_eq!(piece.attachment_name(), Some("Devis toiture.eml"));
+        let joint = piece.message().unwrap();
+        assert_eq!(joint.subject(), Some("Devis toiture"));
+        assert!(joint.body_text(0).unwrap().contains("Voici le devis."));
+        let pieces = crate::index::pieces_jointes(&f.envoi);
+        assert_eq!(pieces.len(), 1);
+        assert_eq!(pieces[0].nom, "Devis toiture.eml");
+
+        // Avec la mise en forme et une image dans le corps : même partie.
+        let images = [ImageIntegree { cid: "logo@x".into(), type_mime: "image/png".into(), contenu: b"\x89PNG".to_vec() }];
+        let r_html = Redaction { html: "<p>Voici <img src=\"cid:logo@x\"></p>".into(), ..r.clone() };
+        let f = fabriquer_avec_images(&r_html, 1_790_000_000, &pj, &images).unwrap();
+        let brut = String::from_utf8_lossy(&f.envoi).to_string();
+        let debut = brut.find("Content-Type: message/rfc822").expect("partie message/rfc822");
+        assert!(brut[debut..debut + brut[debut..].find("\r\n\r\n").unwrap()].contains("Content-Transfer-Encoding: 7bit"));
+        let m = MessageParser::default().parse(&f.envoi).unwrap();
+        // mail-parser range aussi l'image du corps parmi les pièces : le
+        // message joint se cherche.
+        let joint = m.attachments().find(|p| p.is_message()).expect("message joint");
+        assert_eq!(joint.message().unwrap().subject(), Some("Devis toiture"));
+        assert_eq!(crate::index::pieces_jointes(&f.envoi).len(), 1, "l'image reste dans le corps");
+
+        // Des octets de 8 bits (objet en UTF-8 brut) : base64, relu de même.
+        let huit = "From: helene@exemple.fr\r\nSubject: Réunion d'été\r\nContent-Type: text/plain; charset=utf-8\r\n\
+                    Content-Transfer-Encoding: 8bit\r\n\r\nÀ bientôt\r\n";
+        let pj = [Fichier { nom: nom_message_joint("Réunion d'été"), contenu: huit.as_bytes().to_vec() }];
+        let f = fabriquer(&r, 1_790_000_000, &pj).unwrap();
+        let brut = String::from_utf8_lossy(&f.envoi).to_string();
+        let debut = brut.find("Content-Type: message/rfc822").expect("partie message/rfc822");
+        assert!(brut[debut..debut + brut[debut..].find("\r\n\r\n").unwrap()].contains("Content-Transfer-Encoding: base64"));
+        assert!(f.envoi.is_ascii(), "le message envoyé reste en 7 bits");
+        let m = MessageParser::default().parse(&f.envoi).unwrap();
+        let joint = m.attachments().next().unwrap();
+        assert_eq!(joint.attachment_name(), Some("Réunion d'été.eml"));
+        assert!(joint.is_message());
+        let relu = joint.message().unwrap();
+        assert_eq!(relu.subject(), Some("Réunion d'été"));
+        assert!(relu.body_text(0).unwrap().contains("À bientôt"));
+
+        // Les autres pièces jointes ne changent pas.
+        let pj = [Fichier { nom: "note.txt".into(), contenu: b"note".to_vec() }];
+        let brut = String::from_utf8_lossy(&fabriquer(&r, 1_790_000_000, &pj).unwrap().envoi).to_string();
+        assert!(brut.contains("Content-Type: text/plain") && !brut.contains("message/rfc822"));
     }
 
     #[test]

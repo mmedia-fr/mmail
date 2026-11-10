@@ -6353,6 +6353,75 @@ ApplicationWindow {
             messageEtat.texte = boite.erreur
     }
 
+    /// Un courriel en pièce jointe (demande d'une utilisatrice, 10/11 : « joindre
+    /// un mail en pièce jointe, quel qu'il soit ») : les messages choisis,
+    /// entiers, joints en `.eml` (message/rfc822) nommés d'après leur objet,
+    /// comme « Transférer en tant que pièce jointe » d'Outlook. `cible` : le
+    /// jeton d'une rédaction ouverte, ou « nouveau ». La rédaction s'ouvre
+    /// aussitôt ; les fichiers la rejoignent une fois écrits par le fil du
+    /// compte (cf. ReactionsNoyau.onMessagesAJoindre). Rend la rédaction.
+    function joindreMessages(cible) {
+        var uids = uidsChoisis()
+        if (uids.length === 0 && uidCourant > 0)
+            uids = [uidCourant]
+        if (uids.length === 0 || boite.compteCourant <= 0) {
+            messageEtat.texte = qsTr("Choisissez d'abord un message.")
+            return null
+        }
+        var r = redactionJoignable(cible)
+        if (!r) {
+            r = ouvrirRedaction(boite.compteCourant)
+            r.pret()
+        }
+        var n = accord(uids.length, qsTr("message"), qsTr("messages"))
+        if (boite.joindreMessages(boite.compteCourant, boite.dossierCourant, uids.join(","), r.jeton))
+            r.signaler(qsTr("%1 à joindre : préparation…").arg(n), false)
+        else
+            r.signaler(boite.erreur.length > 0 ? boite.erreur : qsTr("Impossible de joindre %1.").arg(n), true)
+        if (r.conteneur && r.conteneur.raise) {
+            r.conteneur.raise()
+            r.conteneur.requestActivate()
+        }
+        return r
+    }
+
+    /// Rédaction qui peut recevoir des messages joints : ouverte, ni partie ni
+    /// en attente d'envoi.
+    function redactionJoignable(jeton) {
+        var r = redactions[jeton]
+        return r && !r.enEnvoi && !r.enAttente ? r : null
+    }
+
+    /// Messages glissés depuis la liste et lâchés sur une fenêtre de
+    /// rédaction : ils y sont joints. Le glisser de la liste reste dans la
+    /// fenêtre principale — Qt ne l'y montre qu'à l'intérieur —, c'est donc le
+    /// point du lâcher, à l'écran, qui désigne la rédaction. Il doit être hors
+    /// de la fenêtre principale : saisir un message l'a mise au premier plan,
+    /// une rédaction qu'elle recouvre n'est pas visible. Rien sous Wayland, qui
+    /// ne dit pas où sont les fenêtres, ni en vue compacte, où la rédaction
+    /// occupe la fenêtre. Rend vrai si les messages vont à une rédaction.
+    function deposerSurRedaction(p) {
+        if (compact || tactile || Qt.platform.pluginName === "wayland")
+            return false
+        function dans(f) {
+            return p.x >= f.x && p.x < f.x + f.width && p.y >= f.y && p.y < f.y + f.height
+        }
+        if (dans(fenetre))
+            return false
+        var jetons = Object.keys(redactions)
+        // La rédaction active d'abord, si plusieurs se recouvrent au point.
+        jetons.sort(function(a, b) { return (b === redactionActive) - (a === redactionActive) })
+        for (var i = 0; i < jetons.length; ++i) {
+            var r = redactionJoignable(jetons[i])
+            var f = r ? r.conteneur : null
+            if (!f || f.visible !== true || f.visibility === Window.Minimized || !dans(f))
+                continue
+            joindreMessages(jetons[i])
+            return true
+        }
+        return false
+    }
+
     /// `programme` : « Ouvrir avec… » pour cette fois ; sinon le logiciel
     /// retenu pour l'extension, à défaut celui du système (cf. onPieceEcrite).
     function ouvrirPiece(piece, programme) {
@@ -7298,6 +7367,12 @@ ApplicationWindow {
                 var attentePiece = Qt.createQmlObject('import QtQuick; Timer { interval: 6000 }', fenetre)
                 attentePiece.triggered.connect(scenarios.etapeScenarioCollerPiece)
                 attentePiece.start()
+            }
+            // Scénario « joindre-message » : un courriel en pièce jointe.
+            if (essai.scenario === "joindre-message") {
+                var attenteJoint = Qt.createQmlObject('import QtQuick; Timer { interval: 8000 }', fenetre)
+                attenteJoint.triggered.connect(scenarios.etapeScenarioJoindreMessage)
+                attenteJoint.start()
             }
             if (essai.scenario === "brouillon-compte") {
                 var attenteCompte = Qt.createQmlObject('import QtQuick; Timer { interval: 8000 }', fenetre)

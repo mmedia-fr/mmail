@@ -119,6 +119,26 @@ Menu {
         title: qsTr("Autres actions")
         font: menuMessage.font
         onAboutToShow: width = fenetre.largeurMenu(menuAutres)
+        // Le message lui-même en pièce jointe, en .eml nommé d'après son objet
+        // (demande d'une utilisatrice, 10/11) : dans un nouveau message, ou dans
+        // celui que l'on rédige — comme une pièce jointe reçue (cf. MenuPiece).
+        // Ici et non au premier niveau, qui reste à dix lignes (0.6.14).
+        // Bureau seulement pour l'instant.
+        EntreeMenu {
+            visible: !fenetre.tactile
+            text: qsTr("Joindre à un nouveau message")
+            onTriggered: fenetre.joindreMessages("nouveau")
+        }
+        EntreeMenu {
+            readonly property var cible: fenetre.redactionJoignable(fenetre.redactionActive)
+            visible: !fenetre.tactile && cible !== null
+            text: cible ? qsTr("Joindre au message en cours « %1 »").arg(cible.objetActuel() || qsTr("sans objet")) : ""
+            onTriggered: fenetre.joindreMessages(fenetre.redactionActive)
+        }
+        MenuSeparator {
+            visible: !fenetre.tactile
+            height: visible ? implicitHeight : 0
+        }
         EntreeMenu {
             text: qsTr("Créer un filtre…")
             onTriggered: fenetre.creerFiltre()

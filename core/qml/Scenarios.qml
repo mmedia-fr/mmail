@@ -587,6 +587,85 @@ QtObject {
         Qt.quit()
     }
 
+    /// Scénario « joindre-message » (banc SMTP=1) : un message de la liste joint
+    /// à un nouveau message par le menu (« Joindre à un nouveau message »), un
+    /// second déposé sur la fenêtre de rédaction, hors de la fenêtre principale ;
+    /// un dépôt dans la fenêtre principale ne joint rien. Puis l'envoi : le banc
+    /// relit le message reçu par son faux serveur (deux parties message/rfc822).
+    function etapeScenarioJoindreMessage() {
+        var echecs = 0
+        var bilan = function(texte, bon) {
+            if (!bon)
+                echecs += 1
+            console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
+        }
+        var attendre = function(condition, ensuite) {
+            var essais = 40
+            var t = Qt.createQmlObject('import QtQuick; Timer { interval: 500; repeat: true }', fenetre)
+            t.triggered.connect(function() {
+                if (condition() || --essais <= 0) {
+                    t.stop()
+                    ensuite()
+                }
+            })
+            t.start()
+        }
+        var finir = function() {
+            console.log("scenario: joindre-message " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
+            Qt.quit()
+        }
+        if (boite.dossierCourant !== "INBOX" || modeleMessages.count < 2) {
+            bilan("boîte de réception d'au moins deux messages", false)
+            finir()
+            return
+        }
+        var premier = modeleMessages.get(0).sujet
+        var second = modeleMessages.get(1).sujet
+        choisir(0, 0)
+        var r = joindreMessages("nouveau")
+        bilan("rédaction ouverte", r !== null && !!redactions[r.jeton])
+        attendre(function() { return r.pieces.length >= 1 }, function() {
+            var noms = r.pieces.map(function(p) { return p.nom })
+            bilan("premier message joint : " + JSON.stringify(noms) + " | « " + r.note + " »",
+                  noms.length === 1 && noms[0] === premier + ".eml" && r.pieces[0].taille > 0)
+            // Deux fenêtres l'une sous l'autre (l'écran du banc fait 800 × 600) :
+            // la principale en haut, assez large pour ne pas passer en vue
+            // compacte, la rédaction en dessous.
+            fenetre.visibility = Window.Windowed
+            fenetre.x = 0
+            fenetre.y = 0
+            fenetre.width = 760
+            fenetre.height = 300
+            var f = r.conteneur
+            f.x = 0
+            f.y = 320
+            var dans = function(g, x, y) { return x >= g.x && x < g.x + g.width && y >= g.y && y < g.y + g.height }
+            var cadre = function(g) { return g.x + "," + g.y + " " + g.width + "x" + g.height }
+            var px = f.x + 40
+            var py = Math.max(f.y, fenetre.y + fenetre.height) + 20
+            console.log("scenario: principale", cadre(fenetre), "| rédaction", cadre(f), "| point", px, py,
+                        "| compacte", compact)
+            choisir(1, 0)
+            bilan("lâché dans la fenêtre principale : rien",
+                  !deposerSurRedaction(Qt.point(fenetre.x + 100, fenetre.y + 100)))
+            bilan("point de dépôt sur la rédaction seule", dans(f, px, py) && !dans(fenetre, px, py))
+            bilan("lâché sur la rédaction : joint", deposerSurRedaction(Qt.point(px, py)))
+            attendre(function() { return r.pieces.length >= 2 }, function() {
+                var noms2 = r.pieces.map(function(p) { return p.nom })
+                bilan("second message joint : " + JSON.stringify(noms2), noms2.length === 2 && noms2[1] === second + ".eml")
+                r.remplir({ a: "deux@essai.test", objet: "Deux messages joints", mode: "nouveau", texte: "Voici les deux.",
+                            pieces: r.pieces.map(function(p) { return p.chemin }) })
+                bilan("pièces gardées : " + r.pieces.length, r.pieces.length === 2)
+                var jeton = r.jeton
+                r.envoyer(false)
+                attendre(function() { return !redactions[jeton] }, function() {
+                    bilan("message parti", !redactions[jeton])
+                    finir()
+                })
+            })
+        })
+    }
+
     /// Scénario « brouillon-auto » : un message neuf que l'on ne touche pas ne
     /// passe pas pour modifié ; modifié, il est enregistré sur le serveur sans
     /// rien demander 30 s plus tard, puis une minute après la frappe suivante,

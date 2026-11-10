@@ -380,8 +380,13 @@ SwipeDelegate {
                 fenetre.doubleClicMessage(index)
         }
         drag.onActiveChanged: fenetre.glisse = drag.active ? etiquette : null
-        onReleased: {
-            if (drag.active)
+        // Lâchés sur une fenêtre de rédaction, hors de la fenêtre principale :
+        // les messages y sont joints (cf. Main.deposerSurRedaction) ; sinon,
+        // le dépôt sur un dossier, comme avant.
+        onReleased: function(souris) {
+            if (!drag.active)
+                return
+            if (!fenetre.deposerSurRedaction(zone.mapToGlobal(souris.x, souris.y)))
                 etiquette.Drag.drop()
         }
     }

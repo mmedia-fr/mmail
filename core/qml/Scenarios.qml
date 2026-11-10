@@ -4407,6 +4407,69 @@ QtObject {
         })
     }
 
+    /// Scénario « brouillon-police » (0.6.43 ; banc : un brouillon HTML sans
+    /// police, déposé par un autre logiciel, dans « Drafts » de un@) : le
+    /// brouillon se lit, puis se reprend, dans la même police et la même
+    /// taille, celles où il partira ; le HTML de l'envoi les porte. Relève
+    /// aussi les liens que la lecture ajoute (cartes, numéros). MMAIL_DOSSIER
+    /// « lecture » : MMail reste sur le volet de lecture, pour une capture ;
+    /// « garder » : sur la rédaction reprise.
+    function etapeScenarioBrouillonPolice() {
+        if (essai.etape === 0 && comptesConnus.length > 0 && boite.compteCourant > 0) {
+            essai.etape = 1
+            console.log("scenario: brouillon-police, ouverture des brouillons")
+            ouvrirDossier(comptesConnus[0].compte, "Drafts")
+            return
+        }
+        if (essai.etape !== 1 || !fenetre.dossierDeReprise || modeleMessages.count === 0)
+            return
+        essai.etape = 2
+        choisir(0, 0)
+        plusTard(3000, function() {
+            var echecs = 0
+            var bilan = function(texte, bon) {
+                if (!bon)
+                    ++echecs
+                console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
+            }
+            var vue = colonneLecture.vueCorps
+            var attendue = fenetre.tailleRedaction * fenetre.zoomDe("message")
+            var lecture = { famille: vue.font.family, taille: vue.font.pointSize }
+            console.log("scenario: lecture | rôle", fenetre.roleCourant, "| police", lecture.famille, lecture.taille,
+                        "| liens vers la carte", (fenetre.htmlAffiche.match(/openstreetmap\.org/g) || []).length,
+                        "| liens d'appel", (fenetre.htmlAffiche.match(/href="tel:/g) || []).length)
+            bilan("lecture dans la police de l'envoi : " + lecture.famille + " " + lecture.taille,
+                  lecture.famille === fenetre.policeRedaction && Math.abs(lecture.taille - attendue) < 0.01)
+            if (identifiantsEssai.dossier === "lecture") {
+                console.log("scenario: brouillon-police " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
+                return
+            }
+            rediger("brouillon")
+            plusTard(4000, function() {
+                var r = null
+                var jetons = Object.keys(fenetre.redactions)
+                for (var k = 0; k < jetons.length; ++k)
+                    if (fenetre.redactions[jetons[k]].brouillonUid > 0)
+                        r = fenetre.redactions[jetons[k]]
+                if (!r) {
+                    bilan("brouillon repris", false)
+                } else {
+                    var reprise = { famille: r.corps.font.family, taille: r.corps.font.pointSize }
+                    console.log("scenario: reprise | police", reprise.famille, reprise.taille, "| note", r.note)
+                    bilan("même police à la lecture et à la reprise : " + lecture.famille + " " + lecture.taille
+                          + " / " + reprise.famille + " " + reprise.taille,
+                          reprise.famille === lecture.famille && Math.abs(reprise.taille - lecture.taille) < 0.01)
+                    var corps = /<body[^>]*>/.exec(r.mefCorps.html())
+                    bilan("l'envoi les porte : " + (corps ? corps[0] : "(pas de body)"),
+                          !!corps && corps[0].indexOf("font-family:'Arial'") > 0 && corps[0].indexOf("font-size:11pt") > 0)
+                }
+                console.log("scenario: brouillon-police " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
+                if (identifiantsEssai.dossier !== "garder")
+                    Qt.quit()
+            })
+        })
+    }
+
     /// Scénario « editeur-paragraphe » (0.8.7) : police, taille, alignement
     /// et retrait se posent, se relisent sous le curseur, et partent dans le
     /// HTML en CSS ordinaire (pas de `-qt-block-indent`) ; la barre du bureau

@@ -48,7 +48,10 @@ de projet interne.
   l'orthographe en tapant » le coupe ;
 - **mise en forme** à la rédaction — gras, italique, souligné, listes à
   puces ou numérotées, liens — envoyée en HTML avec sa version en texte brut ;
-  « Mise en forme » décochée, le message part en texte brut ;
+  « Mise en forme » décochée, le message part en texte brut. Le texte sans
+  police ni taille part en Arial 11 : la rédaction l'affiche ainsi, au zoom de
+  la colonne du message près, et la lecture d'un brouillon aussi, qui garde la
+  même apparence avant et après sa reprise (0.6.43) ;
 - **envoi hors connexion** (0.6.34) : un message qui n'a pas pu partir faute
   de réseau — serveur injoignable, connexion coupée avant que son texte ne
   parte — reste dans la boîte d'envoi, sa fenêtre fermée, et repart seul au

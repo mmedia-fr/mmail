@@ -1330,6 +1330,15 @@ ApplicationWindow {
     readonly property real tailleArborescence: tailleBase * reglages.zoomArborescence
     readonly property real tailleListe: tailleBase * reglages.zoomListe
     readonly property real tailleMessage: tailleBase * reglages.zoomMessage
+    // Police et taille, avant zoom, du texte qu'un message écrit dans MMail ne
+    // met pas en forme : celles où il part (Arial 11, `MiseEnForme::html`).
+    // La rédaction l'affiche ainsi, et la lecture d'un brouillon aussi : un
+    // brouillon a la même apparence avant et après sa reprise, et à l'envoi
+    // (0.6.43 ; jusque-là, la police de l'apparence, en lecture comme en
+    // rédaction, et Arial 11 au départ). Sans Arial sur le poste, une police
+    // de mêmes dimensions.
+    readonly property string policeRedaction: premierePolice(["Arial", "Liberation Sans", "Arimo", font.family])
+    readonly property real tailleRedaction: 11
     // Marge ajoutée sur les quatre côtés du corps d'un message, en pixels
     // (0.6.23, à gauche et à droite seulement jusqu'à la 0.6.26 ; demande
     // d'un utilisateur transmise par le mainteneur le 27/10 ; lui le préfère au ras
@@ -7464,6 +7473,10 @@ ApplicationWindow {
             return "règle du presse-papier : protection contre sa propre copie"
         if (premierePolice(["police-inexistante", "autre-inexistante"]) !== "autre-inexistante")
             return "repli de police"
+        // La rédaction et la lecture d'un brouillon montrent le texte sans
+        // police dans celle de l'envoi (0.6.43) : Arial, présente sous Windows.
+        if (Qt.platform.os === "windows" && policeRedaction !== "Arial")
+            return "police de rédaction : " + policeRedaction
         // Associations des types de fichiers : un texte s'ouvre, une
         // extension inventée non (MMail fait alors choisir le logiciel).
         if (!lanceur.associe("txt"))

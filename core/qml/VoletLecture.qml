@@ -525,8 +525,12 @@ ColumnLayout {
             // reste une balise.
             textFormat: fenetre.corpsHtml && !fenetre.sourceVisible ? TextEdit.RichText : TextEdit.PlainText
             wrapMode: fenetre.sourceVisible ? TextEdit.NoWrap : TextEdit.Wrap
-            font.pointSize: fenetre.tailleMessage
-            font.family: fenetre.sourceVisible ? fenetre.policeMono : fenetre.font.family
+            // Un brouillon (ou un envoi différé) se lit dans la police et la
+            // taille où la rédaction le reprendra, pour ce qu'il ne met pas
+            // en forme : celles de l'envoi (0.6.43, cf. Main.policeRedaction).
+            readonly property bool brouillon: fenetre.dossierDeReprise && !fenetre.sourceVisible && fenetre.uidCourant > 0
+            font.pointSize: brouillon ? fenetre.tailleRedaction * fenetre.zoomDe("message") : fenetre.tailleMessage
+            font.family: fenetre.sourceVisible ? fenetre.policeMono : brouillon ? fenetre.policeRedaction : fenetre.font.family
             // Un message HTML se lit sur fond blanc, quelle que soit
             // l'apparence : ses couleurs supposent ce fond.
             color: fenetre.corpsHtml && !fenetre.sourceVisible ? "#1f1f1f" : fenetre.palette.text

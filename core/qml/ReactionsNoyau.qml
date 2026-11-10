@@ -304,6 +304,8 @@ Connections {
         }
         if (fenetre.essai && fenetre.essai.scenario)
             scenarios.etapeScenario()
+        if (fenetre.essai && fenetre.essai.scenario === "brouillon-police")
+            scenarios.etapeScenarioBrouillonPolice()
         if (fenetre.essai && fenetre.essai.scenario === "glisser")
             scenarios.etapeScenarioGlisser()
         if (fenetre.essai && fenetre.essai.scenario === "corbeille-ligne")

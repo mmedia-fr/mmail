@@ -1378,7 +1378,13 @@ Page {
                 // le défilement.
                 selectByMouse: !fenetre.tactile
                 persistentSelection: true
-                font.pointSize: fenetre.tailleColonne("message")
+                // Ce qui n'est pas mis en forme s'affiche dans la police et la
+                // taille où il partira (0.6.43, cf. Main.policeRedaction), au
+                // zoom de la colonne du message ; jusque-là dans celles de
+                // l'apparence, et un brouillon repris changeait de police à
+                // l'envoi.
+                font.family: fenetre.policeRedaction
+                font.pointSize: fenetre.tailleRedaction * fenetre.zoomDe("message")
                 enabled: !redac.chargement
                 placeholderText: qsTr("Votre message")
                 // Sous une apparence sombre, la page reste blanche, comme à la

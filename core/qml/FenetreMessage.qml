@@ -561,8 +561,11 @@ ApplicationWindow {
                 selectByMouse: true
                 textFormat: fenetreMessage.html ? TextEdit.RichText : TextEdit.PlainText
                 wrapMode: fenetreMessage.source ? TextEdit.NoWrap : TextEdit.Wrap
-                font.pointSize: fenetre.tailleMessage
-                font.family: fenetreMessage.source ? fenetre.policeMono : fenetre.font.family
+                // Un brouillon dans la police où il se reprendra, comme au
+                // volet de lecture (0.6.43).
+                readonly property bool brouillon: fenetreMessage.brouillon && !fenetreMessage.source
+                font.pointSize: brouillon ? fenetre.tailleRedaction * fenetre.zoomDe("message") : fenetre.tailleMessage
+                font.family: fenetreMessage.source ? fenetre.policeMono : brouillon ? fenetre.policeRedaction : fenetre.font.family
                 // Un message HTML se lit sur fond blanc, quelle que soit
                 // l'apparence : ses couleurs supposent ce fond.
                 color: fenetreMessage.html ? "#1f1f1f" : fenetre.palette.text

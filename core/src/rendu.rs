@@ -85,6 +85,25 @@ const ATTRIBUTS: &[&str] = &[
 /// Corps HTML d'un message entier, ou `None` s'il n'a pas de partie HTML (il
 /// s'affiche alors en texte).
 pub fn corps_html(brut: &[u8]) -> Option<CorpsHtml> {
+    corps_html_lie(brut, true)
+}
+
+/// Corps HTML d'un brouillon (0.6.43) : celui de `corps_html`, sans les liens
+/// que l'affichage pose de lui-même sur les adresses, les numéros de téléphone
+/// et les adresses postales écrits en clair (`lier_html`). Un brouillon se lit
+/// tel qu'il se reprendra et partira : ni la rédaction ni l'envoi ne posent ces
+/// liens. Capture du 10/11/2026 : sous le logo lié d'une signature, l'adresse
+/// postale s'affichait soulignée en bleu dans le brouillon, comme si le lien
+/// du logo la couvrait, et plus du tout une fois le brouillon repris. Sert
+/// aussi au message cité d'une réponse ou d'un transfert, où ces liens
+/// partaient chez le destinataire (`redaction::preparer`).
+pub fn corps_html_brouillon(brut: &[u8]) -> Option<CorpsHtml> {
+    corps_html_lie(brut, false)
+}
+
+/// Corps HTML d'un message ; `lier` : ses adresses écrites en clair rendues
+/// cliquables.
+fn corps_html_lie(brut: &[u8], lier: bool) -> Option<CorpsHtml> {
     let message = MessageParser::default().parse(brut)?;
     let parties: Vec<&mail_parser::MessagePart<'_>> = message.html_bodies().collect();
     if !parties.iter().any(|p| p.is_text_html()) {
@@ -123,7 +142,8 @@ pub fn corps_html(brut: &[u8]) -> Option<CorpsHtml> {
         integrees.get(&normaliser_cid(cid)).cloned()
     });
     corps.largeur = crate::mise_en_page::largeur_de_conception(&corps.html);
-    corps.html = lier_html(&crate::mise_en_page::aplatir(&corps.html));
+    let aplati = crate::mise_en_page::aplatir(&corps.html);
+    corps.html = if lier { lier_html(&aplati) } else { aplati };
     Some(corps)
 }
 
@@ -1692,5 +1712,62 @@ mod tests {
         let c = corps_html(&message("<a href=\"tel:+33-5-53-00-00-00\">Appeler</a><a href=\"tel:javascript:x\">b</a>"))
             .unwrap();
         assert_eq!(c.html, "<a href=\"tel:+33553000000\">Appeler</a><a>b</a>");
+    }
+
+    /// Brouillon de la capture du 10/11/2026, en valeurs fictives : réponse et
+    /// signature déposées par un autre logiciel, images de la signature en
+    /// parties `related`. Le code postal en est un valable (12345) : « 00000 »
+    /// ne serait pas reconnu, et l'adresse ne deviendrait pas un lien.
+    fn brouillon_avec_signature() -> Vec<u8> {
+        let html = "<p>Bonjour Monsieur,</p><p>Texte du message.</p><p>Bien cordialement,</p><br>\
+            <div style=\"font-family:Calibri,sans-serif;font-size:12.0pt;color:#000000\">\
+            <p style=\"margin:0\">Prénom NOM</p><p style=\"margin:0\">Fonction</p>\
+            <p style=\"margin:0\"><a href=\"https://www.exemple.fr/\"><img src=\"cid:logo-exemple\" alt=\"LOGO\" \
+            width=\"344\" height=\"67\" style=\"border:0\"></a></p>\
+            <p style=\"margin:0\">1 rue de l'Exemple 12345 VILLE</p><p style=\"margin:0\">00.00.00.00.00</p>\
+            <p style=\"margin:0\"><a href=\"https://www.exemple.fr/\">https://www.exemple.fr/</a></p>\
+            <p style=\"margin:0\">Membre de <a href=\"https://www.exemple.org/\">EXEMPLE</a> (texte)</p>\
+            <p style=\"margin:0\"><img src=\"cid:partenaires\" alt=\"Partenaires\" width=\"626\" height=\"78\" \
+            style=\"border:0\"></p></div>";
+        format!(
+            "From: a@exemple.fr\r\nTo: b@exemple.fr\r\nSubject: RE: essai\r\nMIME-Version: 1.0\r\n\
+             Content-Type: multipart/related; boundary=\"B\"\r\n\r\n\
+             --B\r\nContent-Type: text/html; charset=utf-8\r\n\r\n{html}\r\n\
+             --B\r\nContent-Type: image/png\r\nContent-ID: <logo-exemple>\r\nContent-Transfer-Encoding: base64\r\n\r\n\
+             iVBORw0KGgo=\r\n\
+             --B\r\nContent-Type: image/png\r\nContent-ID: <partenaires>\r\nContent-Transfer-Encoding: base64\r\n\r\n\
+             iVBORw0KGgo=\r\n--B--\r\n"
+        )
+        .into_bytes()
+    }
+
+    #[test]
+    fn brouillon_sans_liens_ajoutes() {
+        let brut = brouillon_avec_signature();
+        let carte = format!("<a href=\"{CARTE}1%20rue%20de%20l%27Exemple%2012345%20VILLE\">");
+        // Lu comme un message reçu, l'adresse postale de la signature, juste
+        // sous le logo lié, devient un lien vers la carte : le soulignement
+        // bleu de la capture.
+        let recu = corps_html(&brut).unwrap();
+        assert!(recu.html.contains(&carte), "{}", recu.html);
+        assert_eq!(recu.html.matches("<a ").count(), 4, "{}", recu.html);
+        // Lu comme un brouillon : les liens de l'auteur seuls, celui du logo
+        // compris, qui ne couvre que l'image ; l'adresse reste du texte, comme
+        // dans la rédaction.
+        let brouillon = corps_html_brouillon(&brut).unwrap();
+        assert!(!brouillon.html.contains(CARTE), "{}", brouillon.html);
+        assert_eq!(brouillon.html.matches("<a ").count(), 3, "{}", brouillon.html);
+        assert!(
+            brouillon.html.contains("<a href=\"https://www.exemple.fr/\"><img src=\"mmail-image:0\""),
+            "{}",
+            brouillon.html
+        );
+        assert!(brouillon.html.contains("<p style=\"margin:0\">1 rue de l'Exemple 12345 VILLE</p>"), "{}", brouillon.html);
+        // Le reste du rendu ne change pas : images, largeur de conception.
+        assert_eq!(brouillon.images.len(), 2);
+        assert_eq!(brouillon.images, recu.images);
+        assert_eq!(brouillon.largeur, recu.largeur);
+        let sans_carte = recu.html.replace(&carte, "").replacen("12345 VILLE</a>", "12345 VILLE", 1);
+        assert_eq!(brouillon.html, sans_carte);
     }
 }

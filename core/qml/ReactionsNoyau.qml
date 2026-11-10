@@ -304,6 +304,8 @@ Connections {
         }
         if (fenetre.essai && fenetre.essai.scenario)
             scenarios.etapeScenario()
+        if (fenetre.essai && fenetre.essai.scenario === "brouillon-police")
+            scenarios.etapeScenarioBrouillonPolice()
         if (fenetre.essai && fenetre.essai.scenario === "glisser")
             scenarios.etapeScenarioGlisser()
         if (fenetre.essai && fenetre.essai.scenario === "corbeille-ligne")
@@ -610,6 +612,26 @@ Connections {
             r.conteneur.requestActivate()
         }
         messageEtat.texte = qsTr("Pièce jointe ajoutée au message « %1 ».").arg(r.objetActuel())
+    }
+
+    // Courriels joints en .eml (cf. Main.joindreMessages) : la rédaction est
+    // déjà ouverte ; fermée entre-temps, rien ne se fait.
+    function onMessagesAJoindre(jeton, urls, erreurs) {
+        var r = fenetre.redactions[jeton]
+        if (!r)
+            return
+        var liste = []
+        try { liste = JSON.parse(urls) } catch (e) { liste = [] }
+        if (liste.length > 0)
+            r.ajouterFichiers(liste)
+        if (erreurs.length > 0)
+            r.signaler(liste.length > 0 ? qsTr("Certains messages n'ont pas pu être joints : %1").arg(erreurs)
+                                        : qsTr("Message non joint : %1").arg(erreurs), true)
+        else
+            r.signaler(liste.length > 1 ? qsTr("%1 messages joints.").arg(liste.length) : qsTr("Message joint."), false)
+        if (fenetre.essai && fenetre.essai.scenario === "joindre-message")
+            console.log("scenario: messages joints :", JSON.stringify(r.pieces.map(function(p) { return p.nom })),
+                        "| erreurs :", erreurs)
     }
 
     function onPieceEcrite(url, chemin, ouvrir) {

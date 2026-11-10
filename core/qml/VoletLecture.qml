@@ -136,8 +136,12 @@ ColumnLayout {
                     text: qsTr("Déplacer…")
                     onClicked: fenetre.ouvrirDeplacer()
                 }
+                // Sous Android, pas ici (10/11) : entre « Déplacer… » et « Marquer
+                // comme lu », un appui malheureux classait le message — il est
+                // dans « … », plus loin, et attend derrière « Annuler ».
                 BoutonAction {
-                    visible: !fenetre.dossierDeReprise
+                    objectName: "boutonIndesirable"
+                    visible: !fenetre.dossierDeReprise && !fenetre.tactile
                     text: fenetre.roleCourant === "Junk" ? qsTr("Pas indésirable") : qsTr("Indésirable")
                     onClicked: fenetre.signalerIndesirable()
                     ToolTip.visible: hovered
@@ -161,6 +165,16 @@ ColumnLayout {
                 BoutonAction {
                     text: fenetre.sourceVisible ? qsTr("Message") : qsTr("Source")
                     onClicked: fenetre.basculerSource()
+                }
+                // Vue tactile : le reste des actions du message — « Courrier
+                // indésirable » compris —, le menu de l'appui long sur la ligne.
+                BoutonAction {
+                    id: boutonAutresActions
+                    objectName: "boutonAutresActions"
+                    visible: fenetre.tactile
+                    text: "…"
+                    Accessible.name: qsTr("Autres actions")
+                    onClicked: menuMessage.popup(boutonAutresActions, 0, boutonAutresActions.height)
                 }
             }
             // L'objet, en titre dans la police des titres sous une
@@ -525,8 +539,12 @@ ColumnLayout {
             // reste une balise.
             textFormat: fenetre.corpsHtml && !fenetre.sourceVisible ? TextEdit.RichText : TextEdit.PlainText
             wrapMode: fenetre.sourceVisible ? TextEdit.NoWrap : TextEdit.Wrap
-            font.pointSize: fenetre.tailleMessage
-            font.family: fenetre.sourceVisible ? fenetre.policeMono : fenetre.font.family
+            // Un brouillon (ou un envoi différé) se lit dans la police et la
+            // taille où la rédaction le reprendra, pour ce qu'il ne met pas
+            // en forme : celles de l'envoi (0.6.43, cf. Main.policeRedaction).
+            readonly property bool brouillon: fenetre.dossierDeReprise && !fenetre.sourceVisible && fenetre.uidCourant > 0
+            font.pointSize: brouillon ? fenetre.tailleRedaction * fenetre.zoomDe("message") : fenetre.tailleMessage
+            font.family: fenetre.sourceVisible ? fenetre.policeMono : brouillon ? fenetre.policeRedaction : fenetre.font.family
             // Un message HTML se lit sur fond blanc, quelle que soit
             // l'apparence : ses couleurs supposent ce fond.
             color: fenetre.corpsHtml && !fenetre.sourceVisible ? "#1f1f1f" : fenetre.palette.text

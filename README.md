@@ -26,7 +26,13 @@ de projet interne.
   Objet » — cité en HTML quand il l'est, tableaux et images intégrées compris
   (ses images distantes et ses feuilles de style sont écartées) ; Cc et Cci ; pièces jointes par « Joindre… » ou glisser-déposer,
   celles d'un message transféré reprises d'office, et qu'un clic ouvre pour
-  les vérifier avant l'envoi (0.6.9 ; jamais un programme ni un script) ; une capture d'écran se
+  les vérifier avant l'envoi (0.6.9 ; jamais un programme ni un script) ;
+  **un courriel en pièce jointe**, quel qu'il soit : « Autres actions ›
+  Joindre à un nouveau message » (ou « … au message en cours ») au clic droit
+  sur un message de la liste, ou les messages glissés de la liste sur la fenêtre de rédaction
+  (Windows, Linux sous X11) — chacun joint entier, en `.eml` (message/rfc822)
+  nommé d'après son objet, comme « Transférer en tant que pièce jointe »
+  d'Outlook ; une capture d'écran se
   colle dans le corps (Ctrl+V) et une image glissée sur le corps s'y insère,
   intégrée au message à l'envoi ; envoi par la soumission
   SMTP (port 465) — celle du serveur de lecture, ou un **serveur d'envoi**
@@ -48,7 +54,10 @@ de projet interne.
   l'orthographe en tapant » le coupe ;
 - **mise en forme** à la rédaction — gras, italique, souligné, listes à
   puces ou numérotées, liens — envoyée en HTML avec sa version en texte brut ;
-  « Mise en forme » décochée, le message part en texte brut ;
+  « Mise en forme » décochée, le message part en texte brut. Le texte sans
+  police ni taille part en Arial 11 : la rédaction l'affiche ainsi, au zoom de
+  la colonne du message près, et la lecture d'un brouillon aussi, qui garde la
+  même apparence avant et après sa reprise (0.6.43) ;
 - **envoi hors connexion** (0.6.34) : un message qui n'a pas pu partir faute
   de réseau — serveur injoignable, connexion coupée avant que son texte ne
   parte — reste dans la boîte d'envoi, sa fenêtre fermée, et repart seul au
@@ -273,7 +282,10 @@ de projet interne.
   repérées : numéro et type de voie (« 12 rue… », « 3 bis avenue… », ou sans
   numéro « ZA des… », « Lieu-dit… »), puis code postal et commune sur la même
   ligne ou la suivante, boîte postale et CEDEX compris. Les liens d'appel
-  posés par l'expéditeur (`tel:`) restent cliquables ;
+  posés par l'expéditeur (`tel:`) restent cliquables. Un brouillon, ou un
+  message en attente d'envoi différé, s'affiche sans ces liens ajoutés
+  (0.6.43) : tel qu'il se reprendra et partira ; le message cité d'une
+  réponse ou d'un transfert ne les emporte pas non plus ;
 - **se désabonner** (0.6.30) : une lettre d'information ou un message de liste
   de diffusion qui offre le moyen de s'en retirer porte un bandeau « Se
   désabonner… », dans le volet de lecture comme dans la fenêtre d'un message.
@@ -798,6 +810,14 @@ cargo test --manifest-path core/Cargo.toml -- --ignored --test-threads=1
 L'intégration continue les passe sous Linux contre un Dovecot monté pour
 l'occasion — deux comptes jetables, certificat signé par une autorité d'essai
 posée dans le magasin du système —, hors envoi SMTP, agenda et carnet d’adresses.
+
+Épreuves de l'interface : des composants de `core/qml` éprouvés seuls, sans
+serveur ni noyau (`core/essais-qml/tst_*.qml` ; les noms qu'ils empruntent à
+`Main.qml` y sont posés). L'intégration continue les passe sous Linux :
+
+```sh
+QT_QPA_PLATFORM=offscreen qmltestrunner -input core/essais-qml -import core/essais-qml/modules
+```
 
 ## Licence
 

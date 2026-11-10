@@ -587,6 +587,85 @@ QtObject {
         Qt.quit()
     }
 
+    /// Scénario « joindre-message » (banc SMTP=1) : un message de la liste joint
+    /// à un nouveau message par le menu (« Joindre à un nouveau message »), un
+    /// second déposé sur la fenêtre de rédaction, hors de la fenêtre principale ;
+    /// un dépôt dans la fenêtre principale ne joint rien. Puis l'envoi : le banc
+    /// relit le message reçu par son faux serveur (deux parties message/rfc822).
+    function etapeScenarioJoindreMessage() {
+        var echecs = 0
+        var bilan = function(texte, bon) {
+            if (!bon)
+                echecs += 1
+            console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
+        }
+        var attendre = function(condition, ensuite) {
+            var essais = 40
+            var t = Qt.createQmlObject('import QtQuick; Timer { interval: 500; repeat: true }', fenetre)
+            t.triggered.connect(function() {
+                if (condition() || --essais <= 0) {
+                    t.stop()
+                    ensuite()
+                }
+            })
+            t.start()
+        }
+        var finir = function() {
+            console.log("scenario: joindre-message " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
+            Qt.quit()
+        }
+        if (boite.dossierCourant !== "INBOX" || modeleMessages.count < 2) {
+            bilan("boîte de réception d'au moins deux messages", false)
+            finir()
+            return
+        }
+        var premier = modeleMessages.get(0).sujet
+        var second = modeleMessages.get(1).sujet
+        choisir(0, 0)
+        var r = joindreMessages("nouveau")
+        bilan("rédaction ouverte", r !== null && !!redactions[r.jeton])
+        attendre(function() { return r.pieces.length >= 1 }, function() {
+            var noms = r.pieces.map(function(p) { return p.nom })
+            bilan("premier message joint : " + JSON.stringify(noms) + " | « " + r.note + " »",
+                  noms.length === 1 && noms[0] === premier + ".eml" && r.pieces[0].taille > 0)
+            // Deux fenêtres l'une sous l'autre (l'écran du banc fait 800 × 600) :
+            // la principale en haut, assez large pour ne pas passer en vue
+            // compacte, la rédaction en dessous.
+            fenetre.visibility = Window.Windowed
+            fenetre.x = 0
+            fenetre.y = 0
+            fenetre.width = 760
+            fenetre.height = 300
+            var f = r.conteneur
+            f.x = 0
+            f.y = 320
+            var dans = function(g, x, y) { return x >= g.x && x < g.x + g.width && y >= g.y && y < g.y + g.height }
+            var cadre = function(g) { return g.x + "," + g.y + " " + g.width + "x" + g.height }
+            var px = f.x + 40
+            var py = Math.max(f.y, fenetre.y + fenetre.height) + 20
+            console.log("scenario: principale", cadre(fenetre), "| rédaction", cadre(f), "| point", px, py,
+                        "| compacte", compact)
+            choisir(1, 0)
+            bilan("lâché dans la fenêtre principale : rien",
+                  !deposerSurRedaction(Qt.point(fenetre.x + 100, fenetre.y + 100)))
+            bilan("point de dépôt sur la rédaction seule", dans(f, px, py) && !dans(fenetre, px, py))
+            bilan("lâché sur la rédaction : joint", deposerSurRedaction(Qt.point(px, py)))
+            attendre(function() { return r.pieces.length >= 2 }, function() {
+                var noms2 = r.pieces.map(function(p) { return p.nom })
+                bilan("second message joint : " + JSON.stringify(noms2), noms2.length === 2 && noms2[1] === second + ".eml")
+                r.remplir({ a: "deux@essai.test", objet: "Deux messages joints", mode: "nouveau", texte: "Voici les deux.",
+                            pieces: r.pieces.map(function(p) { return p.chemin }) })
+                bilan("pièces gardées : " + r.pieces.length, r.pieces.length === 2)
+                var jeton = r.jeton
+                r.envoyer(false)
+                attendre(function() { return !redactions[jeton] }, function() {
+                    bilan("message parti", !redactions[jeton])
+                    finir()
+                })
+            })
+        })
+    }
+
     /// Scénario « brouillon-auto » : un message neuf que l'on ne touche pas ne
     /// passe pas pour modifié ; modifié, il est enregistré sur le serveur sans
     /// rien demander 30 s plus tard, puis une minute après la frappe suivante,
@@ -1570,6 +1649,81 @@ QtObject {
             console.log("scenario: message ramene en boite de reception")
             Qt.quit()
         }
+    }
+
+    /// Scénario « indesirable-differe » (vue tactile : MMAIL_TACTILE=1,
+    /// MMAIL_TAILLE=392x800) : le volet de lecture n'a plus de bouton
+    /// « Indésirable », mais « … » ; « Courrier indésirable » retire le message
+    /// de la liste derrière le bandeau « Annuler », sans rien envoyer au
+    /// serveur ; annulé, il revient ; laissé, il part après 5 s.
+    function etapeScenarioIndesirableDiffere() {
+        var echecs = 0
+        var bilan = function(texte, bon) {
+            if (!bon)
+                echecs += 1
+            console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
+        }
+        var attendre = function(condition, ensuite) {
+            var essais = 40
+            var t = Qt.createQmlObject('import QtQuick; Timer { interval: 500; repeat: true }', fenetre)
+            t.triggered.connect(function() {
+                if (condition() || --essais <= 0) {
+                    t.stop()
+                    ensuite()
+                }
+            })
+            t.start()
+        }
+        var finir = function() {
+            console.log("scenario: indesirable-differe " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
+            Qt.quit()
+        }
+        var present = function(sujet) {
+            for (var i = 0; i < modeleMessages.count; ++i) {
+                if (modeleMessages.get(i).sujet === sujet)
+                    return true
+            }
+            return false
+        }
+        if (!tactile || boite.dossierCourant !== "INBOX" || modeleMessages.count < 2) {
+            bilan("vue tactile, boîte de réception d'au moins deux messages", false)
+            finir()
+            return
+        }
+        var avant = modeleMessages.count
+        var sujet = modeleMessages.get(0).sujet
+        choisir(0, 0)
+        attendre(function() { return vue === 2 }, function() {
+            var indesirable = objetNomme(colonneLecture, "boutonIndesirable")
+            var autres = objetNomme(colonneLecture, "boutonAutresActions")
+            bilan("volet de lecture sans « Indésirable »", !!indesirable && !indesirable.visible)
+            bilan("« … » présent", !!autres && autres.visible)
+            signalerIndesirable()
+            bilan("bandeau « " + bandeauGlissement.texte + " »", bandeauGlissement.opened
+                  && bandeauGlissement.texte === qsTr("Message classé indésirable."))
+            bilan("retour à la liste, message retiré, rien d'envoyé",
+                  vue === 1 && modeleMessages.count === avant - 1 && !present(sujet) && deplacementsEnVol === 0)
+            annulerGlissement()
+            attendre(function() { return present(sujet) }, function() {
+                bilan("annulé : le message revient", present(sujet) && deplacementsEnVol === 0)
+                var rang = -1
+                for (var i = 0; i < modeleMessages.count; ++i) {
+                    if (modeleMessages.get(i).sujet === sujet)
+                        rang = i
+                }
+                choisir(rang, 0)
+                signalerIndesirable()
+                var t0 = Date.now()
+                attendre(function() { return glissement === null }, function() {
+                    var ecoule = Date.now() - t0
+                    bilan("parti après " + ecoule + " ms", ecoule >= 4500)
+                    attendre(function() { return deplacementsEnVol === 0 }, function() {
+                        bilan("déplacement fait : « " + messageEtat.texte + " »", !present(sujet))
+                        finir()
+                    })
+                })
+            })
+        })
     }
 
     // Scénario « vider-dossier » (0.6.19) : un message de la boîte de
@@ -4404,6 +4558,69 @@ QtObject {
             console.log("scenario: editeur-tableau " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
             if (identifiantsEssai.dossier !== "garder")
                 Qt.quit()
+        })
+    }
+
+    /// Scénario « brouillon-police » (0.6.43 ; banc : un brouillon HTML sans
+    /// police, déposé par un autre logiciel, dans « Drafts » de un@) : le
+    /// brouillon se lit, puis se reprend, dans la même police et la même
+    /// taille, celles où il partira ; le HTML de l'envoi les porte. Relève
+    /// aussi les liens que la lecture ajoute (cartes, numéros). MMAIL_DOSSIER
+    /// « lecture » : MMail reste sur le volet de lecture, pour une capture ;
+    /// « garder » : sur la rédaction reprise.
+    function etapeScenarioBrouillonPolice() {
+        if (essai.etape === 0 && comptesConnus.length > 0 && boite.compteCourant > 0) {
+            essai.etape = 1
+            console.log("scenario: brouillon-police, ouverture des brouillons")
+            ouvrirDossier(comptesConnus[0].compte, "Drafts")
+            return
+        }
+        if (essai.etape !== 1 || !fenetre.dossierDeReprise || modeleMessages.count === 0)
+            return
+        essai.etape = 2
+        choisir(0, 0)
+        plusTard(3000, function() {
+            var echecs = 0
+            var bilan = function(texte, bon) {
+                if (!bon)
+                    ++echecs
+                console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
+            }
+            var vue = colonneLecture.vueCorps
+            var attendue = fenetre.tailleRedaction * fenetre.zoomDe("message")
+            var lecture = { famille: vue.font.family, taille: vue.font.pointSize }
+            console.log("scenario: lecture | rôle", fenetre.roleCourant, "| police", lecture.famille, lecture.taille,
+                        "| liens vers la carte", (fenetre.htmlAffiche.match(/openstreetmap\.org/g) || []).length,
+                        "| liens d'appel", (fenetre.htmlAffiche.match(/href="tel:/g) || []).length)
+            bilan("lecture dans la police de l'envoi : " + lecture.famille + " " + lecture.taille,
+                  lecture.famille === fenetre.policeRedaction && Math.abs(lecture.taille - attendue) < 0.01)
+            if (identifiantsEssai.dossier === "lecture") {
+                console.log("scenario: brouillon-police " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
+                return
+            }
+            rediger("brouillon")
+            plusTard(4000, function() {
+                var r = null
+                var jetons = Object.keys(fenetre.redactions)
+                for (var k = 0; k < jetons.length; ++k)
+                    if (fenetre.redactions[jetons[k]].brouillonUid > 0)
+                        r = fenetre.redactions[jetons[k]]
+                if (!r) {
+                    bilan("brouillon repris", false)
+                } else {
+                    var reprise = { famille: r.corps.font.family, taille: r.corps.font.pointSize }
+                    console.log("scenario: reprise | police", reprise.famille, reprise.taille, "| note", r.note)
+                    bilan("même police à la lecture et à la reprise : " + lecture.famille + " " + lecture.taille
+                          + " / " + reprise.famille + " " + reprise.taille,
+                          reprise.famille === lecture.famille && Math.abs(reprise.taille - lecture.taille) < 0.01)
+                    var corps = /<body[^>]*>/.exec(r.mefCorps.html())
+                    bilan("l'envoi les porte : " + (corps ? corps[0] : "(pas de body)"),
+                          !!corps && corps[0].indexOf("font-family:'Arial'") > 0 && corps[0].indexOf("font-size:11pt") > 0)
+                }
+                console.log("scenario: brouillon-police " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
+                if (identifiantsEssai.dossier !== "garder")
+                    Qt.quit()
+            })
         })
     }
 

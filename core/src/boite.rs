@@ -438,6 +438,15 @@ pub mod qobject {
         #[cxx_name = "joindrePiece"]
         fn joindre_piece(self: Pin<&mut Boite>, uid: i32, indice: i32) -> bool;
 
+        /// Écrit des messages entiers en `.eml`, nommés d'après leur objet,
+        /// pour les joindre à la rédaction `jeton` (message/rfc822) — « Joindre
+        /// à un nouveau message », ou des messages déposés sur une fenêtre de
+        /// rédaction. `uids` : UID du dossier `chemin` du compte, séparés par
+        /// des virgules. Issue : `messagesAJoindre`.
+        #[qinvokable]
+        #[cxx_name = "joindreMessages"]
+        fn joindre_messages(self: Pin<&mut Boite>, compte: i32, chemin: &QString, uids: &QString, jeton: &QString) -> bool;
+
         /// Marque des messages du dossier ouvert — UID séparés par des
         /// virgules — comme lus ou non lus.
         #[qinvokable]
@@ -1064,6 +1073,13 @@ pub mod qobject {
         #[cxx_name = "pieceAJoindre"]
         fn piece_a_joindre(self: Pin<&mut Boite>, url: &QString);
 
+        /// Messages écrits pour être joints à la rédaction `jeton` : `urls`,
+        /// liste JSON des fichiers `.eml` ; `erreurs`, ce qui n'a pu l'être
+        /// (vide si tout est là).
+        #[qsignal]
+        #[cxx_name = "messagesAJoindre"]
+        fn messages_a_joindre(self: Pin<&mut Boite>, jeton: &QString, urls: &QString, erreurs: &QString);
+
         /// Messages du dossier ouvert marqués lus ou non lus : l'interface met
         /// à jour leurs seules lignes, sans relire la liste. `uids` : « 3,5,7 ».
         #[qsignal]
@@ -1634,6 +1650,9 @@ enum Commande {
     /// Écrire une pièce jointe : dans `destination` si elle est donnée, sinon
     /// dans le dossier de travail, pour l'ouvrir.
     Piece { chemin: String, uid: u32, indice: usize, destination: Option<PathBuf>, joindre: bool },
+    /// Écrire des messages entiers en `.eml` pour les joindre à la rédaction
+    /// `jeton`.
+    JoindreMessages { chemin: String, uids: Vec<u32>, jeton: String },
     /// `discret` : marquage d'un message qu'on affiche ; l'interface a déjà
     /// mis sa ligne à jour et ne relit pas la liste.
     MarquerLu { chemin: String, uids: Vec<u32>, lu: bool, discret: bool },
@@ -1789,6 +1808,9 @@ enum Issue {
     /// dans le fil : l'interface n'en sait rien.
     Precharge { chemin: String, reste: bool },
     Piece { fichier: PathBuf, ouvrir: bool, joindre: bool },
+    /// Messages écrits en `.eml` pour la rédaction `jeton` ; `erreurs` : ceux
+    /// qui manquent, et pourquoi.
+    MessagesAJoindre { jeton: String, fichiers: Vec<PathBuf>, erreurs: Vec<String> },
     Marque { discret: bool },
     /// `annulation` : de quoi le défaire, s'il était annulable.
     Deplace { cible: i64, chemin_cible: String, rapport: Rapport, annulation: Option<Annulation> },
@@ -3857,10 +3879,11 @@ impl qobject::Boite {
         if let Some((id, _)) = garde {
             let profil = self.profil.clone();
             let fil = self.qt_thread();
+            let reprise = self.magasin.as_ref().is_some_and(|m| dossier_de_reprise(m, compte, &chemin, dossier));
             let lancement = thread::Builder::new().name("mmail-fenetre".into()).spawn(move || {
-                let preparation = Cache::du_profil(&profil)
-                    .lire(id)
-                    .and_then(|octets| rendre_si_actuel(0, &octets, brut, distantes, compte, &dossier_affichage(&profil), false));
+                let preparation = Cache::du_profil(&profil).lire(id).and_then(|octets| {
+                    rendre_si_actuel(0, &octets, brut, distantes, compte, &dossier_affichage(&profil), false, reprise)
+                });
                 let _ = fil.queue(move |boite: Pin<&mut qobject::Boite>| boite.afficher_du_poste(local, preparation, 0, distantes));
             });
             if lancement.is_ok() {
@@ -3900,6 +3923,16 @@ impl qobject::Boite {
 
     pub fn joindre_piece(self: Pin<&mut Self>, uid: i32, indice: i32) -> bool {
         self.demander_piece(uid, indice, None, true)
+    }
+
+    pub fn joindre_messages(mut self: Pin<&mut Self>, compte: i32, chemin: &QString, uids: &QString, jeton: &QString) -> bool {
+        let uids = lire_uids(uids);
+        if compte <= 0 || uids.is_empty() {
+            self.as_mut().set_erreur(QString::from("aucun message à joindre"));
+            return false;
+        }
+        let commande = Commande::JoindreMessages { chemin: chemin.to_string(), uids, jeton: jeton.to_string() };
+        self.as_mut().envoyer(compte as i64, commande)
     }
 
     pub fn enregistrer_piece(mut self: Pin<&mut Self>, uid: i32, indice: i32, url: &QString) -> bool {
@@ -5718,30 +5751,7 @@ impl qobject::Boite {
 
     pub fn role_courant(&self) -> QString {
         let role = match (&self.courant, &self.magasin) {
-            (Some((compte, chemin, id)), Some(m)) => m
-                .dossier(*id)
-                .ok()
-                .flatten()
-                .map(|d| {
-                    if !d.role.is_empty() {
-                        return d.role;
-                    }
-                    if d.profondeur == 0 && d.nom == DOSSIER_DIFFERE {
-                        return "Differe".to_string();
-                    }
-                    // Rôle reconnu au nom du dossier, faute d'attribut
-                    // SPECIAL-USE : un brouillon s'y reprend d'un double clic.
-                    let dossiers = m.dossiers(*compte).unwrap_or_default();
-                    if dossier_indesirables(&dossiers).as_ref() == Some(chemin) {
-                        return "Junk".to_string();
-                    }
-                    ["Drafts", "Sent", "Trash"]
-                        .into_iter()
-                        .find(|role| dossier_de_role(&dossiers, role).as_ref() == Some(chemin))
-                        .unwrap_or_default()
-                        .to_string()
-                })
-                .unwrap_or_default(),
+            (Some((compte, chemin, id)), Some(m)) => role_du_dossier(m, *compte, chemin, *id),
             _ => String::new(),
         };
         QString::from(&role)
@@ -5871,10 +5881,11 @@ impl qobject::Boite {
                 let profil = self.profil.clone();
                 let fil = self.qt_thread();
                 let local = Local { compte, chemin: chemin.clone(), dossier, uid, lu, brut, en_ligne };
+                let reprise = self.magasin.as_ref().is_some_and(|m| dossier_de_reprise(m, compte, &chemin, dossier));
                 let lancement = thread::Builder::new().name("mmail-affichage".into()).spawn(move || {
                     let preparation = Cache::du_profil(&profil).lire(id).and_then(|octets| {
                         let atelier = dossier_affichage(&profil);
-                        rendre_si_actuel(numero, &octets, brut, distantes, compte, &atelier, !lu)
+                        rendre_si_actuel(numero, &octets, brut, distantes, compte, &atelier, !lu, reprise)
                     });
                     if AFFICHAGE.load(Ordering::SeqCst) == numero {
                         let _ = fil.queue(move |boite: Pin<&mut qobject::Boite>| {
@@ -6130,6 +6141,14 @@ impl qobject::Boite {
                 } else {
                     self.as_mut().piece_ecrite(&url, &chemin, ouvrir);
                 }
+            }
+            Issue::MessagesAJoindre { jeton, fichiers, erreurs } => {
+                let urls: Vec<String> = fichiers
+                    .iter()
+                    .map(|f| QUrl::from_local_file(&QString::from(f.to_string_lossy().as_ref())).to_qstring().to_string())
+                    .collect();
+                let urls = serde_json::to_string(&urls).unwrap_or_else(|_| "[]".into());
+                self.as_mut().messages_a_joindre(&QString::from(&jeton), &QString::from(&urls), &QString::from(&erreurs.join(" ; ")));
             }
             Issue::Marque { discret } => {
                 self.as_mut().reviser();
@@ -6463,6 +6482,23 @@ fn dossier_travail_piece(profil: &str, compte: i64, uid: u32, indice: usize, joi
     dossier_pieces(profil).join(format!("{prefixe}{compte}-{uid}-{indice}"))
 }
 
+/// Dossier de travail d'un message entier joint à une rédaction : un par
+/// message — un UID ne le désigne que dans son dossier (`dossier`, son
+/// identifiant dans l'index), et deux messages peuvent porter le même objet.
+fn dossier_message_a_joindre(profil: &str, compte: i64, dossier: i64, uid: u32) -> PathBuf {
+    dossier_pieces(profil).join(format!("message-{compte}-{dossier}-{uid}"))
+}
+
+/// Écrit un message entier, tel que le serveur le garde, pour le joindre à une
+/// rédaction : `<dossier>/<objet>.eml` (cf. `redaction::nom_message_joint`).
+fn ecrire_message_a_joindre(octets: &[u8], dossier: &Path) -> Result<PathBuf, String> {
+    std::fs::create_dir_all(dossier).map_err(|x| format!("{} : {x}", dossier.display()))?;
+    let fichier = dossier.join(redaction::nom_message_joint(&redaction::objet_du_message(octets)));
+    std::fs::write(&fichier, octets).map_err(|x| format!("{} : {x}", fichier.display()))?;
+    marquer_provenance(&fichier);
+    Ok(fichier)
+}
+
 /// Images des signatures, à côté de l'index : l'un des deux seuls dossiers
 /// d'où une image part intégrée à un message.
 fn dossier_signatures(profil: &str) -> PathBuf {
@@ -6659,6 +6695,44 @@ fn dossier_de_role(dossiers: &[DossierLocal], role: &str) -> Option<String> {
         })
         .min_by_key(|(cle, _)| *cle)
         .map(|(_, d)| d.chemin.clone())
+}
+
+/// Rôle d'un dossier, celui que l'interface lit (`roleCourant`) : son
+/// attribut SPECIAL-USE ; à défaut « Differe » pour le dossier des envois
+/// différés, ou le rôle que son nom désigne (« Junk », « Drafts », « Sent »,
+/// « Trash ») ; vide sinon.
+fn role_du_dossier(m: &Magasin, compte: i64, chemin: &str, id: i64) -> String {
+    m.dossier(id)
+        .ok()
+        .flatten()
+        .map(|d| {
+            if !d.role.is_empty() {
+                return d.role;
+            }
+            if d.profondeur == 0 && d.nom == DOSSIER_DIFFERE {
+                return "Differe".to_string();
+            }
+            // Rôle reconnu au nom du dossier, faute d'attribut
+            // SPECIAL-USE : un brouillon s'y reprend d'un double clic.
+            let dossiers = m.dossiers(compte).unwrap_or_default();
+            if dossier_indesirables(&dossiers).as_deref() == Some(chemin) {
+                return "Junk".to_string();
+            }
+            ["Drafts", "Sent", "Trash"]
+                .into_iter()
+                .find(|role| dossier_de_role(&dossiers, role).as_deref() == Some(chemin))
+                .unwrap_or_default()
+                .to_string()
+        })
+        .unwrap_or_default()
+}
+
+/// Vrai pour un dossier d'où un message se reprend en rédaction — brouillons,
+/// envois différés —, comme `dossierDeReprise` dans l'interface : ses
+/// messages s'affichent tels qu'ils se reprendront (cf.
+/// `rendu::corps_html_brouillon`).
+fn dossier_de_reprise(m: &Magasin, compte: i64, chemin: &str, id: i64) -> bool {
+    matches!(role_du_dossier(m, compte, chemin, id).as_str(), "Drafts" | "Differe")
 }
 
 /// Noms usuels d'une corbeille ou d'un dossier d'indésirables, pour un
@@ -6976,6 +7050,12 @@ impl Travail {
             Commande::MarquerLu { chemin, .. }
             | Commande::MarquerSuivi { chemin, .. }
             | Commande::MarquerCategorie { chemin, .. } => Issue::MarquageAbandonne { chemin },
+            // La rédaction le dit, au lieu d'attendre une pièce qui ne vient pas.
+            Commande::JoindreMessages { jeton, .. } => Issue::MessagesAJoindre {
+                jeton,
+                fichiers: Vec::new(),
+                erreurs: vec![format!("{motif} — rien n'est joint")],
+            },
             _ => return,
         };
         self.remettre(issue);
@@ -7272,6 +7352,28 @@ impl Travail {
                     Ok(fichier) => Issue::Piece { fichier, ouvrir, joindre },
                     Err(err) => echec("piece", format!("pièce jointe : {err}"), &err),
                 })
+            }
+            Commande::JoindreMessages { chemin, uids, jeton } => {
+                let (mut fichiers, mut erreurs) = (Vec::new(), Vec::new());
+                let dossier = e.magasin.dossier_id(compte, &chemin).unwrap_or(0);
+                for uid in uids {
+                    match message_entier(e, &self.profil, compte, &chemin, uid) {
+                        Ok(octets) => {
+                            let travail = dossier_message_a_joindre(&self.profil, compte, dossier, uid);
+                            match ecrire_message_a_joindre(&octets, &travail) {
+                                Ok(fichier) => fichiers.push(fichier),
+                                Err(m) => erreurs.push(m),
+                            }
+                        }
+                        // Session perdue : la suite échouerait de même, et le
+                        // fil doit se reconnecter.
+                        Err(err) if err.reseau() => {
+                            return Some(echec("piece", format!("message à joindre : {err}"), &err));
+                        }
+                        Err(err) => erreurs.push(format!("message {uid} : {err}")),
+                    }
+                }
+                Some(Issue::MessagesAJoindre { jeton, fichiers, erreurs })
             }
             Commande::MarquerSuivi { chemin, uids, suivi } => {
                 Some(match synchro::marquer_suivi(&mut e.client, &e.magasin, compte, &chemin, &uids, suivi) {
@@ -8724,7 +8826,9 @@ fn lire_corps(
             (complet.octets, !deja)
         }
     };
-    let Some(lu) = rendre_si_actuel(numero, &octets, brut, distantes, compte, atelier, confirmation_possible) else {
+    let reprise = dossier_de_reprise(&e.magasin, compte, chemin, id);
+    let Some(lu) = rendre_si_actuel(numero, &octets, brut, distantes, compte, atelier, confirmation_possible, reprise)
+    else {
         return Ok(None);
     };
     // Le message entier dit s'il porte des pièces jointes : cela prime sur ce
@@ -8746,6 +8850,12 @@ fn lire_corps(
 /// téléchargement des images distantes se font avant, si bien qu'un hôte
 /// d'images lent ne fige plus l'affichage des autres messages ; et un message
 /// quitté abandonne ses téléchargements entre deux lots (0.6.6).
+///
+/// `reprise` : le message est dans un dossier d'où il se reprend en rédaction
+/// (`dossier_de_reprise`). Il s'affiche alors tel que la rédaction le
+/// montrera, sans les liens que l'affichage pose de lui-même sur ce qui est
+/// écrit en clair (0.6.43).
+#[allow(clippy::too_many_arguments)]
 fn rendre_si_actuel(
     numero: u64,
     octets: &[u8],
@@ -8754,6 +8864,7 @@ fn rendre_si_actuel(
     compte: i64,
     atelier: &Path,
     confirmation_possible: bool,
+    reprise: bool,
 ) -> Option<Lu> {
     // Numéro 0 : la fenêtre d'un message (0.6.16), hors du volet de lecture
     // — toujours actuelle.
@@ -8771,9 +8882,11 @@ fn rendre_si_actuel(
     let mut lu =
         Lu { texte: String::new(), brut, html: false, bloquees: 0, pieces: String::new(), confirmation, invitation, entete };
     lu.pieces = json_pieces(&crate::index::pieces_jointes(octets));
+    let corps_html: fn(&[u8]) -> Option<crate::rendu::CorpsHtml> =
+        if reprise { crate::rendu::corps_html_brouillon } else { crate::rendu::corps_html };
     if brut {
         lu.texte = String::from_utf8_lossy(octets).into_owned();
-    } else if let Some(corps) = crate::rendu::corps_html(octets) {
+    } else if let Some(corps) = corps_html(octets) {
         let telechargees = if distantes {
             telecharger(&corps.distantes, &actuel)?
         } else {
@@ -8798,8 +8911,8 @@ fn rendre_si_actuel(
     } else {
         lu.texte = crate::index::corps_affichable(octets);
         // Ses adresses écrites en clair deviennent cliquables (0.6.21) : il
-        // passe alors en HTML, sans images.
-        if let Some(html) = crate::rendu::texte_en_html(&lu.texte) {
+        // passe alors en HTML, sans images. Pas celles d'un brouillon.
+        if let Some(html) = crate::rendu::texte_en_html(&lu.texte).filter(|_| !reprise) {
             lu.texte = html;
             lu.html = true;
         }
@@ -9715,6 +9828,7 @@ mod tests {
                 Commande::OuvrirDossier(d) => format!("ouvrir {d}"),
                 Commande::Corps { uid, .. } => format!("corps {uid}"),
                 Commande::Piece { uid, .. } => format!("piece {uid}"),
+                Commande::JoindreMessages { uids, .. } => format!("joindre {uids:?}"),
                 Commande::MarquerLu { .. } => "marquer".into(),
                 Commande::MarquerSuivi { .. } => "suivi".into(),
                 Commande::MarquerCategorie { .. } => "categorie".into(),
@@ -10513,6 +10627,62 @@ mod tests {
         assert_eq!(dossier_indesirables(&[d("INBOX", ""), d("Trash", "Trash")]), None);
     }
 
+    /// Dossiers dont les messages s'affichent tels qu'ils se reprendront
+    /// (0.6.43) : ceux dont `roleCourant` fait des dossiers de reprise.
+    #[test]
+    fn dossiers_de_reprise() {
+        let magasin = Magasin::en_memoire().unwrap();
+        let d = |chemin: &str, attributs: &[&str]| crate::protocole::Dossier {
+            chemin: chemin.into(),
+            separateur: "/".into(),
+            attributs: attributs.iter().map(|a| a.to_string()).collect(),
+        };
+        let reprise = |compte: i64, chemin: &str| {
+            let id = magasin.dossier_id(compte, chemin).unwrap();
+            (dossier_de_reprise(&magasin, compte, chemin, id), role_du_dossier(&magasin, compte, chemin, id))
+        };
+        // Rôles annoncés (SPECIAL-USE).
+        let a = magasin.compte("a@exemple.fr", "h", 993, "a@exemple.fr").unwrap();
+        magasin
+            .poser_dossiers(a, &[d("INBOX", &[]), d("Drafts", &["\\Drafts"]), d("Sent", &["\\Sent"]), d("Brouillons", &[])])
+            .unwrap();
+        assert_eq!(reprise(a, "Drafts"), (true, "Drafts".to_string()));
+        assert_eq!(reprise(a, "INBOX"), (false, String::new()));
+        assert_eq!(reprise(a, "Sent"), (false, "Sent".to_string()));
+        // Un dossier de l'utilisateur nommé comme des brouillons, quand le
+        // serveur désigne les siens, n'en est pas un.
+        assert_eq!(reprise(a, "Brouillons"), (false, String::new()));
+        // Sans SPECIAL-USE : les noms usuels, et les envois différés.
+        let b = magasin.compte("b@exemple.fr", "h", 993, "b@exemple.fr").unwrap();
+        let differe = crate::protocole::encoder_utf7(DOSSIER_DIFFERE);
+        magasin.poser_dossiers(b, &[d("INBOX", &[]), d("Brouillons", &[]), d(&differe, &[])]).unwrap();
+        assert_eq!(reprise(b, "Brouillons"), (true, "Drafts".to_string()));
+        assert_eq!(reprise(b, &differe), (true, "Differe".to_string()));
+        assert_eq!(reprise(b, "INBOX"), (false, String::new()));
+    }
+
+    /// Un message d'un dossier de reprise s'affiche sans les liens que
+    /// l'affichage pose de lui-même (capture du 10/11/2026, valeurs fictives).
+    #[test]
+    fn brouillon_affiche_sans_liens_ajoutes() {
+        let atelier = std::env::temp_dir().join(format!("mmail-reprise-{}", std::process::id()));
+        let html: &[u8] = b"From: a@exemple.fr\r\nSubject: x\r\nMIME-Version: 1.0\r\n\
+            Content-Type: text/html; charset=utf-8\r\n\r\n<p>1 rue de l'Exemple 12345 VILLE</p>\r\n";
+        let texte: &[u8] = b"From: a@exemple.fr\r\nSubject: x\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n\
+            Voir https://www.exemple.fr/\r\n";
+        let lu = |octets: &[u8], reprise: bool| rendre_si_actuel(0, octets, false, false, 1, &atelier, false, reprise).unwrap();
+        // Message reçu : l'adresse postale mène à la carte.
+        assert!(lu(html, false).texte.contains("openstreetmap"));
+        // Brouillon : du texte, comme à la reprise.
+        let brouillon = lu(html, true);
+        assert!(brouillon.html && !brouillon.texte.contains("<a "), "{}", brouillon.texte);
+        // Brouillon en texte brut : il reste du texte, son adresse web aussi.
+        assert!(lu(texte, false).html);
+        let brouillon = lu(texte, true);
+        assert!(!brouillon.html && brouillon.texte.contains("https://www.exemple.fr/"), "{}", brouillon.texte);
+        let _ = std::fs::remove_dir_all(&atelier);
+    }
+
     #[test]
     fn adresse_de_fichier() {
         use crate::rendu::{chemin_de_url, url_fichier};
@@ -10836,5 +11006,46 @@ mod tests {
         assert_eq!(duree_lisible(Duration::from_secs(45)), "45 s");
         assert_eq!(duree_lisible(Duration::from_secs(300)), "5 min");
         assert_eq!(duree_lisible(Duration::from_secs(330)), "5 min 30 s");
+    }
+
+    /// « Joindre à un nouveau message » : chaque message, absent du poste, est
+    /// relu entier sur le serveur et écrit tel quel en `.eml`, nommé d'après son
+    /// objet, dans un dossier à lui ; un message disparu entre-temps est dit,
+    /// sans empêcher les autres.
+    #[test]
+    fn messages_joints_ecrits_en_eml() {
+        use crate::simule::{echange, session};
+        let brut = "From: helene@exemple.fr\r\nSubject: =?UTF-8?Q?RE=3A_Devis_n=C2=B012?=\r\n\r\nBonjour\r\n";
+        let (client, journal) = session(
+            "UIDPLUS",
+            vec![
+                echange("SELECT \"INBOX\"", "* 2 EXISTS\r\n* OK [UIDVALIDITY 7] v\r\n", "OK [READ-WRITE] fait"),
+                echange(
+                    "UID FETCH 12 (BODY.PEEK[])",
+                    &format!("* 1 FETCH (UID 12 BODY[] {{{}}}\r\n{brut})\r\n", brut.len()),
+                    "OK fait",
+                ),
+                echange("UID FETCH 13 (BODY.PEEK[])", "", "OK fait"),
+            ],
+        );
+        let (travail, mut etabli, _issues) = fil_d_essai(client, "joindre");
+        let commande = Commande::JoindreMessages { chemin: "INBOX".into(), uids: vec![12, 13], jeton: "r4".into() };
+        let Some(Issue::MessagesAJoindre { jeton, fichiers, erreurs }) = travail.traiter(commande, &mut etabli) else {
+            panic!("issue inattendue");
+        };
+        assert_eq!(jeton, "r4");
+        assert_eq!(fichiers.len(), 1, "{erreurs:?}");
+        assert_eq!(fichiers[0].file_name().unwrap().to_string_lossy(), "RE Devis n°12.eml");
+        assert!(fichiers[0].starts_with(dossier_pieces(&travail.profil)), "{:?}", fichiers[0]);
+        assert_eq!(std::fs::read(&fichiers[0]).unwrap(), brut.as_bytes());
+        assert_eq!(erreurs.len(), 1, "{erreurs:?}");
+        assert!(erreurs[0].starts_with("message 13"), "{erreurs:?}");
+        let commandes = journal.lock().unwrap().clone();
+        assert_eq!(commandes.len(), 3, "{commandes:?}");
+        // Deux messages de même objet, de deux dossiers : deux fichiers.
+        let a = dossier_message_a_joindre(&travail.profil, 1, 3, 12);
+        let b = dossier_message_a_joindre(&travail.profil, 1, 4, 12);
+        assert_ne!(a, b);
+        let _ = std::fs::remove_dir_all(Path::new(&travail.profil).parent().unwrap());
     }
 }

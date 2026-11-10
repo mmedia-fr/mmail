@@ -1330,6 +1330,15 @@ ApplicationWindow {
     readonly property real tailleArborescence: tailleBase * reglages.zoomArborescence
     readonly property real tailleListe: tailleBase * reglages.zoomListe
     readonly property real tailleMessage: tailleBase * reglages.zoomMessage
+    // Police et taille, avant zoom, du texte qu'un message écrit dans MMail ne
+    // met pas en forme : celles où il part (Arial 11, `MiseEnForme::html`).
+    // La rédaction l'affiche ainsi, et la lecture d'un brouillon aussi : un
+    // brouillon a la même apparence avant et après sa reprise, et à l'envoi
+    // (0.6.43 ; jusque-là, la police de l'apparence, en lecture comme en
+    // rédaction, et Arial 11 au départ). Sans Arial sur le poste, une police
+    // de mêmes dimensions.
+    readonly property string policeRedaction: premierePolice(["Arial", "Liberation Sans", "Arimo", font.family])
+    readonly property real tailleRedaction: 11
     // Marge ajoutée sur les quatre côtés du corps d'un message, en pixels
     // (0.6.23, à gauche et à droite seulement jusqu'à la 0.6.26 ; demande
     // d'un utilisateur transmise par le mainteneur le 27/10 ; lui le préfère au ras
@@ -6013,6 +6022,21 @@ ApplicationWindow {
         var uids = uidsChoisis()
         if (uids.length === 0)
             return
+        // Vue tactile (10/11) : comme le glisser d'une ligne, le message quitte
+        // la liste et l'action attend 5 s derrière le bandeau « Annuler » — un
+        // appui malheureux se rattrape. Quatre messages légitimes étaient partis
+        // un à un aux indésirables sous Android ; l'apprentissage du filtre du
+        // serveur suit le déplacement, il ne se défait pas d'un geste.
+        if (tactile && uids.length === 1) {
+            var rang = indexDe(uids[0])
+            if (rang >= 0) {
+                glisserLigne(rang, "indesirable")
+                selection = ({})
+                if (compact)
+                    vue = 1
+                return
+            }
+        }
         var retour = roleCourant === "Junk"
         if (!boite.signalerIndesirable(uids.join(",")))
             return
@@ -6327,6 +6351,75 @@ ApplicationWindow {
         pieceCible = cible
         if (!boite.joindrePiece(uidCourant, piece.indice))
             messageEtat.texte = boite.erreur
+    }
+
+    /// Un courriel en pièce jointe (demande d'une utilisatrice, 10/11 : « joindre
+    /// un mail en pièce jointe, quel qu'il soit ») : les messages choisis,
+    /// entiers, joints en `.eml` (message/rfc822) nommés d'après leur objet,
+    /// comme « Transférer en tant que pièce jointe » d'Outlook. `cible` : le
+    /// jeton d'une rédaction ouverte, ou « nouveau ». La rédaction s'ouvre
+    /// aussitôt ; les fichiers la rejoignent une fois écrits par le fil du
+    /// compte (cf. ReactionsNoyau.onMessagesAJoindre). Rend la rédaction.
+    function joindreMessages(cible) {
+        var uids = uidsChoisis()
+        if (uids.length === 0 && uidCourant > 0)
+            uids = [uidCourant]
+        if (uids.length === 0 || boite.compteCourant <= 0) {
+            messageEtat.texte = qsTr("Choisissez d'abord un message.")
+            return null
+        }
+        var r = redactionJoignable(cible)
+        if (!r) {
+            r = ouvrirRedaction(boite.compteCourant)
+            r.pret()
+        }
+        var n = accord(uids.length, qsTr("message"), qsTr("messages"))
+        if (boite.joindreMessages(boite.compteCourant, boite.dossierCourant, uids.join(","), r.jeton))
+            r.signaler(qsTr("%1 à joindre : préparation…").arg(n), false)
+        else
+            r.signaler(boite.erreur.length > 0 ? boite.erreur : qsTr("Impossible de joindre %1.").arg(n), true)
+        if (r.conteneur && r.conteneur.raise) {
+            r.conteneur.raise()
+            r.conteneur.requestActivate()
+        }
+        return r
+    }
+
+    /// Rédaction qui peut recevoir des messages joints : ouverte, ni partie ni
+    /// en attente d'envoi.
+    function redactionJoignable(jeton) {
+        var r = redactions[jeton]
+        return r && !r.enEnvoi && !r.enAttente ? r : null
+    }
+
+    /// Messages glissés depuis la liste et lâchés sur une fenêtre de
+    /// rédaction : ils y sont joints. Le glisser de la liste reste dans la
+    /// fenêtre principale — Qt ne l'y montre qu'à l'intérieur —, c'est donc le
+    /// point du lâcher, à l'écran, qui désigne la rédaction. Il doit être hors
+    /// de la fenêtre principale : saisir un message l'a mise au premier plan,
+    /// une rédaction qu'elle recouvre n'est pas visible. Rien sous Wayland, qui
+    /// ne dit pas où sont les fenêtres, ni en vue compacte, où la rédaction
+    /// occupe la fenêtre. Rend vrai si les messages vont à une rédaction.
+    function deposerSurRedaction(p) {
+        if (compact || tactile || Qt.platform.pluginName === "wayland")
+            return false
+        function dans(f) {
+            return p.x >= f.x && p.x < f.x + f.width && p.y >= f.y && p.y < f.y + f.height
+        }
+        if (dans(fenetre))
+            return false
+        var jetons = Object.keys(redactions)
+        // La rédaction active d'abord, si plusieurs se recouvrent au point.
+        jetons.sort(function(a, b) { return (b === redactionActive) - (a === redactionActive) })
+        for (var i = 0; i < jetons.length; ++i) {
+            var r = redactionJoignable(jetons[i])
+            var f = r ? r.conteneur : null
+            if (!f || f.visible !== true || f.visibility === Window.Minimized || !dans(f))
+                continue
+            joindreMessages(jetons[i])
+            return true
+        }
+        return false
     }
 
     /// `programme` : « Ouvrir avec… » pour cette fois ; sinon le logiciel
@@ -7275,6 +7368,12 @@ ApplicationWindow {
                 attentePiece.triggered.connect(scenarios.etapeScenarioCollerPiece)
                 attentePiece.start()
             }
+            // Scénario « joindre-message » : un courriel en pièce jointe.
+            if (essai.scenario === "joindre-message") {
+                var attenteJoint = Qt.createQmlObject('import QtQuick; Timer { interval: 8000 }', fenetre)
+                attenteJoint.triggered.connect(scenarios.etapeScenarioJoindreMessage)
+                attenteJoint.start()
+            }
             if (essai.scenario === "brouillon-compte") {
                 var attenteCompte = Qt.createQmlObject('import QtQuick; Timer { interval: 8000 }', fenetre)
                 attenteCompte.triggered.connect(function() { scenarios.etapeScenarioBrouillonCompte(null, 0, 0, "") })
@@ -7284,6 +7383,12 @@ ApplicationWindow {
                 var attenteHors = Qt.createQmlObject('import QtQuick; Timer { interval: 8000 }', fenetre)
                 attenteHors.triggered.connect(function() { scenarios.etapeScenarioHorsConnexion(0) })
                 attenteHors.start()
+            }
+            // Scénario « indesirable-differe » : « Courrier indésirable » au doigt.
+            if (essai.scenario === "indesirable-differe") {
+                var attenteIndesirable = Qt.createQmlObject('import QtQuick; Timer { interval: 8000 }', fenetre)
+                attenteIndesirable.triggered.connect(scenarios.etapeScenarioIndesirableDiffere)
+                attenteIndesirable.start()
             }
             if (essai.scenario === "filtre-autre-boite") {
                 var attenteFiltre = Qt.createQmlObject('import QtQuick; Timer { interval: 12000 }', fenetre)
@@ -7464,6 +7569,10 @@ ApplicationWindow {
             return "règle du presse-papier : protection contre sa propre copie"
         if (premierePolice(["police-inexistante", "autre-inexistante"]) !== "autre-inexistante")
             return "repli de police"
+        // La rédaction et la lecture d'un brouillon montrent le texte sans
+        // police dans celle de l'envoi (0.6.43) : Arial, présente sous Windows.
+        if (Qt.platform.os === "windows" && policeRedaction !== "Arial")
+            return "police de rédaction : " + policeRedaction
         // Associations des types de fichiers : un texte s'ouvre, une
         // extension inventée non (MMail fait alors choisir le logiciel).
         if (!lanceur.associe("txt"))

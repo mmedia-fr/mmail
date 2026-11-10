@@ -65,7 +65,28 @@ SwipeDelegate {
     swipe.enabled: fenetre.tactile
     swipe.left: roleLigne === "Trash" ? null : fondIndesirable
     swipe.right: roleLigne === "Trash" ? null : fondCorbeille
-    swipe.onCompleted: fenetre.glisserLigne(index, swipe.position > 0 ? "indesirable" : "corbeille")
+    // Seul compte le chemin du doigt (10/11). Qt complète aussi un glissement
+    // LANCÉ : plus de 300 px/s vers un côté au lâcher, quelle que soit la
+    // distance parcourue — 16 px en 40 ms suffisaient. Un pouce qui dérapait en
+    // faisant défiler la liste envoyait ainsi le message aux indésirables, cinq
+    // secondes plus tard, sans que la personne l'ait voulu. La ligne ne part
+    // donc que lâchée passé le tiers de sa largeur (position 0,5 : le fond
+    // découvert en a les deux tiers), du côté où elle a été portée ; un coup
+    // bref la ramène.
+    property real positionAuDoigt: 0
+    swipe.onPositionChanged: if (ligne.pressed) ligne.positionAuDoigt = ligne.swipe.position
+    swipe.onCompleted: {
+        if (!ligne.glissementVoulu(ligne.positionAuDoigt, ligne.swipe.position)) {
+            ligne.swipe.close()
+            return
+        }
+        fenetre.glisserLigne(index, ligne.swipe.position > 0 ? "indesirable" : "corbeille")
+    }
+    function glissementVoulu(auDoigt, position) {
+        return Math.abs(auDoigt) >= 0.5 && (auDoigt > 0) === (position > 0)
+    }
+    // Chaque geste part de zéro.
+    onPressed: positionAuDoigt = 0
     // La liste recycle ses lignes (reuseItems) : une ligne glissée, rangée
     // puis reprise pour un autre message, gardait son décalage — d'autres
     // messages paraissaient glissés (retour du mainteneur du 18/10).
@@ -359,8 +380,13 @@ SwipeDelegate {
                 fenetre.doubleClicMessage(index)
         }
         drag.onActiveChanged: fenetre.glisse = drag.active ? etiquette : null
-        onReleased: {
-            if (drag.active)
+        // Lâchés sur une fenêtre de rédaction, hors de la fenêtre principale :
+        // les messages y sont joints (cf. Main.deposerSurRedaction) ; sinon,
+        // le dépôt sur un dossier, comme avant.
+        onReleased: function(souris) {
+            if (!drag.active)
+                return
+            if (!fenetre.deposerSurRedaction(zone.mapToGlobal(souris.x, souris.y)))
                 etiquette.Drag.drop()
         }
     }

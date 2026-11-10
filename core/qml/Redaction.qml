@@ -167,6 +167,13 @@ Page {
     property bool accuseRemise: false
     property bool confirmationLecture: false
     property real envoiDiffere: 0
+    // S/MIME (0.8.0) : signer, chiffrer (pour chaque destinataire et pour
+    // soi). Proposés quand le compte a un certificat ouvert.
+    property bool signer: false
+    property bool chiffrer: false
+    // « Chiffrer » coché ou décoché à la main, ou imposé (réponse à un
+    // message chiffré) : le chiffrement automatique ne s'en mêle plus.
+    property bool chiffrerManuel: false
     readonly property string resumeOptions: {
         var t = []
         if (importance > 0) t.push(qsTr("Importance haute"))
@@ -174,6 +181,8 @@ Page {
         if (accuseRemise) t.push(qsTr("Accusé de réception"))
         if (confirmationLecture) t.push(qsTr("Confirmation de lecture"))
         if (envoiDiffere > 0) t.push(qsTr("Envoi %1").arg(fenetre.heureEnvoi(envoiDiffere)))
+        if (signer) t.push(qsTr("Signé"))
+        if (chiffrer) t.push(qsTr("Chiffré"))
         return t.join("  ·  ")
     }
     property string note: ""
@@ -213,8 +222,60 @@ Page {
         return fenetre.identiteExpediteur(compteChoisi())
     }
 
+    /// S/MIME (0.8.0) : le compte signe-t-il par défaut, avec un certificat
+    /// ouvert ?
+    function signerParDefaut() {
+        var c = compteChoisi()
+        return !!c && fenetre.signeParDefaut(c.adresse) && boite.cleSmime(c.compte).length > 0
+    }
+
+    /// Le compte chiffre-t-il d'office, avec un certificat ouvert ?
+    function chiffrerParDefaut() {
+        var c = compteChoisi()
+        return !!c && fenetre.chiffreParDefaut(c.adresse) && boite.cleSmime(c.compte).length > 0
+    }
+
+    function destinataires() {
+        return [champA.text, champCc.text, champCci.text].filter(function(t) { return t.trim().length > 0 }).join("; ")
+    }
+
+    /// Chiffrement d'office (choix de Manu du 04/11) : pour un compte qui
+    /// chiffre par défaut, « Chiffrer » se coche quand chaque destinataire a
+    /// un certificat, et se décoche sinon — le message part alors en clair.
+    /// Un choix fait à la main l'emporte.
+    function ajusterChiffrement() {
+        if (chiffrerManuel || !chiffrerParDefaut())
+            return
+        var c = compteChoisi()
+        var liste = destinataires()
+        var manquants = ["?"]
+        try { manquants = JSON.parse(boite.sansCertificat(c.compte, liste)) } catch (e) {}
+        chiffrer = liste.length > 0 && manquants.length === 0
+    }
+
+    /// « Chiffrer » coché : dit tout de suite à qui le message ne pourrait pas
+    /// partir chiffré, faute de certificat — plutôt qu'à l'envoi.
+    function verifierChiffrement() {
+        ajusterChiffrement()
+        var c = compteChoisi()
+        if (!chiffrer || !c) {
+            if (noteErreur && note.indexOf(qsTr("Pas de certificat")) === 0)
+                signaler("", false)
+            return
+        }
+        var manquants = []
+        try { manquants = JSON.parse(boite.sansCertificat(c.compte, destinataires())) } catch (e) {}
+        if (boite.cleSmime(c.compte).length === 0)
+            signaler(qsTr("Pas de certificat S/MIME ouvert pour ce compte : « Certificats S/MIME… », dans le menu du compte."), true)
+        else if (manquants.length > 0)
+            signaler(qsTr("Pas de certificat pour %1 : le message ne peut pas leur partir chiffré. Un message signé de leur part suffit à le recueillir.").arg(manquants.join(", ")), true)
+        else if (noteErreur && note.indexOf(qsTr("Pas de certificat")) === 0)
+            signaler("", false)
+    }
+
     function pret() {
         chargement = true
+        signer = signerParDefaut()
         var s = identiteChoisie().nouvelle
         if (s.html.length > 0) {
             // Signature avec images : elle exige la mise en forme.
@@ -380,6 +441,11 @@ Page {
         accuseRemise = p.accuseRemise === true
         confirmationLecture = p.confirmationLecture === true
         envoiDiffere = p.envoiDiffere || 0
+        signer = p.signer === true || (p.mode !== "brouillon" && signerParDefaut())
+        chiffrer = p.chiffrer === true
+        // Réponse à un message chiffré : chiffrée d'office, comme imposée.
+        chiffrerManuel = p.chiffrerManuel === true || (p.mode !== "brouillon" && p.chiffrer === true)
+        ajusterChiffrement()
         origineChemin = p.origineChemin || ""
         origineUid = p.origineUid || 0
         origineMode = p.origineMode || ""
@@ -429,7 +495,8 @@ Page {
             brouillonChemin: brouillonChemin, brouillonCompte: brouillonCompte,
             origineChemin: origineChemin, origineUid: origineUid, origineMode: origineMode,
             importance: importance, accuseRemise: accuseRemise,
-            confirmationLecture: confirmationLecture, envoiDiffere: Math.round(envoiDiffere)
+            confirmationLecture: confirmationLecture, envoiDiffere: Math.round(envoiDiffere),
+            signer: signer, chiffrer: chiffrer, chiffrerManuel: chiffrerManuel
         }
     }
 
@@ -579,6 +646,9 @@ Page {
             champA.forceActiveFocus()
             return
         }
+        // Un destinataire tapé puis « Envoyer » aussitôt : le champ n'a pas
+        // perdu le focus, le chiffrement d'office se règle ici.
+        ajusterChiffrement()
         if (champObjet.text.trim().length === 0 && !sansObjet) {
             dlgSansObjet.open()
             return
@@ -993,7 +1063,7 @@ Page {
                     text: modelData.adresse
                 }
                 Layout.fillWidth: true
-                onActivated: redac.modifie = true
+                onActivated: { redac.modifie = true; redac.ajusterChiffrement() }
             }
             Label { text: qsTr("À :") }
             TextField {
@@ -1005,7 +1075,12 @@ Page {
                     redac.proposer(champA)
                 }
                 Keys.onPressed: function(ev) { redac.toucheAdresse(ev) }
-                onActiveFocusChanged: if (!activeFocus && suggestions.champ === champA) suggestions.close()
+                onActiveFocusChanged: {
+                    if (!activeFocus && suggestions.champ === champA)
+                        suggestions.close()
+                    if (!activeFocus)
+                        redac.verifierChiffrement()
+                }
                 placeholderText: qsTr("nom@exemple.fr ; autre@exemple.fr")
                 inputMethodHints: Qt.ImhEmailCharactersOnly | Qt.ImhNoAutoUppercase
                 Layout.fillWidth: true
@@ -1019,7 +1094,12 @@ Page {
                     redac.proposer(champCc)
                 }
                 Keys.onPressed: function(ev) { redac.toucheAdresse(ev) }
-                onActiveFocusChanged: if (!activeFocus && suggestions.champ === champCc) suggestions.close()
+                onActiveFocusChanged: {
+                    if (!activeFocus && suggestions.champ === champCc)
+                        suggestions.close()
+                    if (!activeFocus)
+                        redac.verifierChiffrement()
+                }
                 visible: redac.afficherCopies
                 inputMethodHints: Qt.ImhEmailCharactersOnly | Qt.ImhNoAutoUppercase
                 Layout.fillWidth: true
@@ -1033,7 +1113,12 @@ Page {
                     redac.proposer(champCci)
                 }
                 Keys.onPressed: function(ev) { redac.toucheAdresse(ev) }
-                onActiveFocusChanged: if (!activeFocus && suggestions.champ === champCci) suggestions.close()
+                onActiveFocusChanged: {
+                    if (!activeFocus && suggestions.champ === champCci)
+                        suggestions.close()
+                    if (!activeFocus)
+                        redac.verifierChiffrement()
+                }
                 visible: redac.afficherCopies
                 inputMethodHints: Qt.ImhEmailCharactersOnly | Qt.ImhNoAutoUppercase
                 Layout.fillWidth: true
@@ -1752,6 +1837,28 @@ Page {
             checkable: true
             checked: redac.confirmationLecture
             onTriggered: { redac.confirmationLecture = checked; redac.modifie = true }
+        }
+        MenuSeparator {}
+        // S/MIME (0.8.0) : il faut un certificat, importé par « Certificats
+        // S/MIME… » au menu du compte. Le chiffrement exige celui de chaque
+        // destinataire, recueilli sur un message signé de sa part ; l'objet et
+        // les adresses restent en clair.
+        MenuItem {
+            text: qsTr("Signer le message")
+            checkable: true
+            checked: redac.signer
+            onTriggered: { redac.signer = checked; redac.modifie = true }
+        }
+        MenuItem {
+            text: qsTr("Chiffrer le message (l'objet reste visible)")
+            checkable: true
+            checked: redac.chiffrer
+            onTriggered: {
+                redac.chiffrer = checked
+                redac.chiffrerManuel = true
+                redac.modifie = true
+                redac.verifierChiffrement()
+            }
         }
         MenuSeparator {}
         MenuItem {

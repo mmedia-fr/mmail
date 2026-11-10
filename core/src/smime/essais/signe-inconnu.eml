@@ -1,0 +1,64 @@
+To: bob@exemple.fr
+From: inconnu@exemple.fr
+Subject: Devis
+MIME-Version: 1.0
+Content-Type: multipart/signed; protocol="application/pkcs7-signature"; micalg="sha-256"; boundary="----621054D3B02A3A1FCACA2A2985A327D8"
+
+This is an S/MIME signed message
+
+------621054D3B02A3A1FCACA2A2985A327D8
+Content-Type: multipart/mixed; boundary="contenu"
+
+--contenu
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: 8bit
+
+Bonjour Bob, voici le devis signé.
+--contenu
+Content-Type: text/plain; name="devis.txt"
+Content-Disposition: attachment; filename="devis.txt"
+
+Total : 1 234,56 euros
+--contenu--
+
+------621054D3B02A3A1FCACA2A2985A327D8
+Content-Type: application/pkcs7-signature; name="smime.p7s"
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment; filename="smime.p7s"
+
+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
+
+------621054D3B02A3A1FCACA2A2985A327D8--
+

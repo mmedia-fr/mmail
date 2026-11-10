@@ -61,6 +61,7 @@ extern const std::size_t nombreTraductionsQt;
 #include "personnalisation.h"
 #include "mise_en_forme.h"
 #include "rendu_complet.h"
+#include "lecteur_fichier.h"
 #include "essai.h"
 
 #ifdef Q_OS_WIN
@@ -578,6 +579,8 @@ int main(int argc, char* argv[])
   qmlRegisterType<RenduComplet>("fr.mmedia.mmail.natif", 1, 0, "RenduComplet");
   // Importation d'une personnalisation dans le profil (0.8.6, Android).
   qmlRegisterType<Personnalisation>("fr.mmedia.mmail.natif", 1, 0, "Personnalisation");
+  // Certificats S/MIME choisis dans le sélecteur (content:// sous Android).
+  qmlRegisterType<LecteurFichier>("fr.mmedia.mmail.natif", 1, 0, "LecteurFichier");
 
   // Gestes simulés des scénarios d'essai (cf. essai.h) : déclarés avant le
   // moteur, qui s'arrête avant eux.

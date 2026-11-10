@@ -1124,7 +1124,11 @@ mod tests {
         let debut = brut.find("Content-Type: message/rfc822").expect("partie message/rfc822");
         assert!(brut[debut..debut + brut[debut..].find("\r\n\r\n").unwrap()].contains("Content-Transfer-Encoding: 7bit"));
         let m = MessageParser::default().parse(&f.envoi).unwrap();
-        assert_eq!(m.attachments().next().unwrap().message().unwrap().subject(), Some("Devis toiture"));
+        // mail-parser range aussi l'image du corps parmi les pièces : le
+        // message joint se cherche.
+        let joint = m.attachments().find(|p| p.is_message()).expect("message joint");
+        assert_eq!(joint.message().unwrap().subject(), Some("Devis toiture"));
+        assert_eq!(crate::index::pieces_jointes(&f.envoi).len(), 1, "l'image reste dans le corps");
 
         // Des octets de 8 bits (objet en UTF-8 brut) : base64, relu de même.
         let huit = "From: helene@exemple.fr\r\nSubject: Réunion d'été\r\nContent-Type: text/plain; charset=utf-8\r\n\

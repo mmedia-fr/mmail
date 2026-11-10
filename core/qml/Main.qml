@@ -6013,6 +6013,21 @@ ApplicationWindow {
         var uids = uidsChoisis()
         if (uids.length === 0)
             return
+        // Vue tactile (10/11) : comme le glisser d'une ligne, le message quitte
+        // la liste et l'action attend 5 s derrière le bandeau « Annuler » — un
+        // appui malheureux se rattrape. Quatre messages légitimes étaient partis
+        // un à un aux indésirables sous Android ; l'apprentissage du filtre du
+        // serveur suit le déplacement, il ne se défait pas d'un geste.
+        if (tactile && uids.length === 1) {
+            var rang = indexDe(uids[0])
+            if (rang >= 0) {
+                glisserLigne(rang, "indesirable")
+                selection = ({})
+                if (compact)
+                    vue = 1
+                return
+            }
+        }
         var retour = roleCourant === "Junk"
         if (!boite.signalerIndesirable(uids.join(",")))
             return
@@ -7284,6 +7299,12 @@ ApplicationWindow {
                 var attenteHors = Qt.createQmlObject('import QtQuick; Timer { interval: 8000 }', fenetre)
                 attenteHors.triggered.connect(function() { scenarios.etapeScenarioHorsConnexion(0) })
                 attenteHors.start()
+            }
+            // Scénario « indesirable-differe » : « Courrier indésirable » au doigt.
+            if (essai.scenario === "indesirable-differe") {
+                var attenteIndesirable = Qt.createQmlObject('import QtQuick; Timer { interval: 8000 }', fenetre)
+                attenteIndesirable.triggered.connect(scenarios.etapeScenarioIndesirableDiffere)
+                attenteIndesirable.start()
             }
             if (essai.scenario === "filtre-autre-boite") {
                 var attenteFiltre = Qt.createQmlObject('import QtQuick; Timer { interval: 12000 }', fenetre)

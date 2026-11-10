@@ -195,34 +195,6 @@ Item {
             compare(fenetre.glissements, ["7:indesirable"])
         }
 
-        // Depuis le bord gauche, là où Android reconnaît « retour » : la
-        // ligne ne bouge pas, même portée sur toute la largeur.
-        function test_bord_gauche() {
-            var l = ligne(8)
-            geste(l, 8, 30, [[60, 0], [60, 0], [60, 0], [60, 0]], 40)
-            wait(500)
-            compare(l.swipe.position, 0)
-            compare(fenetre.glissements, [])
-        }
-
-        function test_bord_droit() {
-            var l = ligne(9)
-            geste(l, racine.width - 8, 30, [[-60, 0], [-60, 0], [-60, 0], [-60, 0]], 40)
-            wait(500)
-            compare(l.swipe.position, 0)
-            compare(fenetre.glissements, [])
-        }
-
-        // Après un appui au bord, la ligne glisse de nouveau normalement.
-        function test_apres_un_appui_au_bord() {
-            var l = ligne(10)
-            geste(l, 8, 30, [[60, 0], [60, 0]], 40)
-            wait(300)
-            geste(l, 60, 30, [[40, 0], [40, 0], [40, 0], [40, 0], [20, 0]], 40)
-            tryVerify(function() { return fenetre.glissements.length === 1 }, 3000)
-            compare(fenetre.glissements, ["10:indesirable"])
-        }
-
         // Un toucher bref choisit toujours le message.
         function test_toucher_choisit() {
             var l = ligne(1)

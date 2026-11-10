@@ -3857,10 +3857,11 @@ impl qobject::Boite {
         if let Some((id, _)) = garde {
             let profil = self.profil.clone();
             let fil = self.qt_thread();
+            let reprise = self.magasin.as_ref().is_some_and(|m| dossier_de_reprise(m, compte, &chemin, dossier));
             let lancement = thread::Builder::new().name("mmail-fenetre".into()).spawn(move || {
-                let preparation = Cache::du_profil(&profil)
-                    .lire(id)
-                    .and_then(|octets| rendre_si_actuel(0, &octets, brut, distantes, compte, &dossier_affichage(&profil), false));
+                let preparation = Cache::du_profil(&profil).lire(id).and_then(|octets| {
+                    rendre_si_actuel(0, &octets, brut, distantes, compte, &dossier_affichage(&profil), false, reprise)
+                });
                 let _ = fil.queue(move |boite: Pin<&mut qobject::Boite>| boite.afficher_du_poste(local, preparation, 0, distantes));
             });
             if lancement.is_ok() {
@@ -5718,30 +5719,7 @@ impl qobject::Boite {
 
     pub fn role_courant(&self) -> QString {
         let role = match (&self.courant, &self.magasin) {
-            (Some((compte, chemin, id)), Some(m)) => m
-                .dossier(*id)
-                .ok()
-                .flatten()
-                .map(|d| {
-                    if !d.role.is_empty() {
-                        return d.role;
-                    }
-                    if d.profondeur == 0 && d.nom == DOSSIER_DIFFERE {
-                        return "Differe".to_string();
-                    }
-                    // Rôle reconnu au nom du dossier, faute d'attribut
-                    // SPECIAL-USE : un brouillon s'y reprend d'un double clic.
-                    let dossiers = m.dossiers(*compte).unwrap_or_default();
-                    if dossier_indesirables(&dossiers).as_ref() == Some(chemin) {
-                        return "Junk".to_string();
-                    }
-                    ["Drafts", "Sent", "Trash"]
-                        .into_iter()
-                        .find(|role| dossier_de_role(&dossiers, role).as_ref() == Some(chemin))
-                        .unwrap_or_default()
-                        .to_string()
-                })
-                .unwrap_or_default(),
+            (Some((compte, chemin, id)), Some(m)) => role_du_dossier(m, *compte, chemin, *id),
             _ => String::new(),
         };
         QString::from(&role)
@@ -5871,10 +5849,11 @@ impl qobject::Boite {
                 let profil = self.profil.clone();
                 let fil = self.qt_thread();
                 let local = Local { compte, chemin: chemin.clone(), dossier, uid, lu, brut, en_ligne };
+                let reprise = self.magasin.as_ref().is_some_and(|m| dossier_de_reprise(m, compte, &chemin, dossier));
                 let lancement = thread::Builder::new().name("mmail-affichage".into()).spawn(move || {
                     let preparation = Cache::du_profil(&profil).lire(id).and_then(|octets| {
                         let atelier = dossier_affichage(&profil);
-                        rendre_si_actuel(numero, &octets, brut, distantes, compte, &atelier, !lu)
+                        rendre_si_actuel(numero, &octets, brut, distantes, compte, &atelier, !lu, reprise)
                     });
                     if AFFICHAGE.load(Ordering::SeqCst) == numero {
                         let _ = fil.queue(move |boite: Pin<&mut qobject::Boite>| {
@@ -6659,6 +6638,44 @@ fn dossier_de_role(dossiers: &[DossierLocal], role: &str) -> Option<String> {
         })
         .min_by_key(|(cle, _)| *cle)
         .map(|(_, d)| d.chemin.clone())
+}
+
+/// Rôle d'un dossier, celui que l'interface lit (`roleCourant`) : son
+/// attribut SPECIAL-USE ; à défaut « Differe » pour le dossier des envois
+/// différés, ou le rôle que son nom désigne (« Junk », « Drafts », « Sent »,
+/// « Trash ») ; vide sinon.
+fn role_du_dossier(m: &Magasin, compte: i64, chemin: &str, id: i64) -> String {
+    m.dossier(id)
+        .ok()
+        .flatten()
+        .map(|d| {
+            if !d.role.is_empty() {
+                return d.role;
+            }
+            if d.profondeur == 0 && d.nom == DOSSIER_DIFFERE {
+                return "Differe".to_string();
+            }
+            // Rôle reconnu au nom du dossier, faute d'attribut
+            // SPECIAL-USE : un brouillon s'y reprend d'un double clic.
+            let dossiers = m.dossiers(compte).unwrap_or_default();
+            if dossier_indesirables(&dossiers).as_deref() == Some(chemin) {
+                return "Junk".to_string();
+            }
+            ["Drafts", "Sent", "Trash"]
+                .into_iter()
+                .find(|role| dossier_de_role(&dossiers, role).as_deref() == Some(chemin))
+                .unwrap_or_default()
+                .to_string()
+        })
+        .unwrap_or_default()
+}
+
+/// Vrai pour un dossier d'où un message se reprend en rédaction — brouillons,
+/// envois différés —, comme `dossierDeReprise` dans l'interface : ses
+/// messages s'affichent tels qu'ils se reprendront (cf.
+/// `rendu::corps_html_brouillon`).
+fn dossier_de_reprise(m: &Magasin, compte: i64, chemin: &str, id: i64) -> bool {
+    matches!(role_du_dossier(m, compte, chemin, id).as_str(), "Drafts" | "Differe")
 }
 
 /// Noms usuels d'une corbeille ou d'un dossier d'indésirables, pour un
@@ -8724,7 +8741,9 @@ fn lire_corps(
             (complet.octets, !deja)
         }
     };
-    let Some(lu) = rendre_si_actuel(numero, &octets, brut, distantes, compte, atelier, confirmation_possible) else {
+    let reprise = dossier_de_reprise(&e.magasin, compte, chemin, id);
+    let Some(lu) = rendre_si_actuel(numero, &octets, brut, distantes, compte, atelier, confirmation_possible, reprise)
+    else {
         return Ok(None);
     };
     // Le message entier dit s'il porte des pièces jointes : cela prime sur ce
@@ -8746,6 +8765,12 @@ fn lire_corps(
 /// téléchargement des images distantes se font avant, si bien qu'un hôte
 /// d'images lent ne fige plus l'affichage des autres messages ; et un message
 /// quitté abandonne ses téléchargements entre deux lots (0.6.6).
+///
+/// `reprise` : le message est dans un dossier d'où il se reprend en rédaction
+/// (`dossier_de_reprise`). Il s'affiche alors tel que la rédaction le
+/// montrera, sans les liens que l'affichage pose de lui-même sur ce qui est
+/// écrit en clair (0.6.43).
+#[allow(clippy::too_many_arguments)]
 fn rendre_si_actuel(
     numero: u64,
     octets: &[u8],
@@ -8754,6 +8779,7 @@ fn rendre_si_actuel(
     compte: i64,
     atelier: &Path,
     confirmation_possible: bool,
+    reprise: bool,
 ) -> Option<Lu> {
     // Numéro 0 : la fenêtre d'un message (0.6.16), hors du volet de lecture
     // — toujours actuelle.
@@ -8771,9 +8797,11 @@ fn rendre_si_actuel(
     let mut lu =
         Lu { texte: String::new(), brut, html: false, bloquees: 0, pieces: String::new(), confirmation, invitation, entete };
     lu.pieces = json_pieces(&crate::index::pieces_jointes(octets));
+    let corps_html: fn(&[u8]) -> Option<crate::rendu::CorpsHtml> =
+        if reprise { crate::rendu::corps_html_brouillon } else { crate::rendu::corps_html };
     if brut {
         lu.texte = String::from_utf8_lossy(octets).into_owned();
-    } else if let Some(corps) = crate::rendu::corps_html(octets) {
+    } else if let Some(corps) = corps_html(octets) {
         let telechargees = if distantes {
             telecharger(&corps.distantes, &actuel)?
         } else {
@@ -8798,8 +8826,8 @@ fn rendre_si_actuel(
     } else {
         lu.texte = crate::index::corps_affichable(octets);
         // Ses adresses écrites en clair deviennent cliquables (0.6.21) : il
-        // passe alors en HTML, sans images.
-        if let Some(html) = crate::rendu::texte_en_html(&lu.texte) {
+        // passe alors en HTML, sans images. Pas celles d'un brouillon.
+        if let Some(html) = crate::rendu::texte_en_html(&lu.texte).filter(|_| !reprise) {
             lu.texte = html;
             lu.html = true;
         }
@@ -10511,6 +10539,62 @@ mod tests {
         assert_eq!(dossier_indesirables(&[d("Spambox", ""), d("Junk", "")]).as_deref(), Some("Junk"));
         assert_eq!(dossier_indesirables(&[d("INBOX", ""), d("Courrier indésirable", "")]).as_deref(), Some("Courrier indésirable"));
         assert_eq!(dossier_indesirables(&[d("INBOX", ""), d("Trash", "Trash")]), None);
+    }
+
+    /// Dossiers dont les messages s'affichent tels qu'ils se reprendront
+    /// (0.6.43) : ceux dont `roleCourant` fait des dossiers de reprise.
+    #[test]
+    fn dossiers_de_reprise() {
+        let magasin = Magasin::en_memoire().unwrap();
+        let d = |chemin: &str, attributs: &[&str]| crate::protocole::Dossier {
+            chemin: chemin.into(),
+            separateur: "/".into(),
+            attributs: attributs.iter().map(|a| a.to_string()).collect(),
+        };
+        let reprise = |compte: i64, chemin: &str| {
+            let id = magasin.dossier_id(compte, chemin).unwrap();
+            (dossier_de_reprise(&magasin, compte, chemin, id), role_du_dossier(&magasin, compte, chemin, id))
+        };
+        // Rôles annoncés (SPECIAL-USE).
+        let a = magasin.compte("a@exemple.fr", "h", 993, "a@exemple.fr").unwrap();
+        magasin
+            .poser_dossiers(a, &[d("INBOX", &[]), d("Drafts", &["\\Drafts"]), d("Sent", &["\\Sent"]), d("Brouillons", &[])])
+            .unwrap();
+        assert_eq!(reprise(a, "Drafts"), (true, "Drafts".to_string()));
+        assert_eq!(reprise(a, "INBOX"), (false, String::new()));
+        assert_eq!(reprise(a, "Sent"), (false, "Sent".to_string()));
+        // Un dossier de l'utilisateur nommé comme des brouillons, quand le
+        // serveur désigne les siens, n'en est pas un.
+        assert_eq!(reprise(a, "Brouillons"), (false, String::new()));
+        // Sans SPECIAL-USE : les noms usuels, et les envois différés.
+        let b = magasin.compte("b@exemple.fr", "h", 993, "b@exemple.fr").unwrap();
+        let differe = crate::protocole::encoder_utf7(DOSSIER_DIFFERE);
+        magasin.poser_dossiers(b, &[d("INBOX", &[]), d("Brouillons", &[]), d(&differe, &[])]).unwrap();
+        assert_eq!(reprise(b, "Brouillons"), (true, "Drafts".to_string()));
+        assert_eq!(reprise(b, &differe), (true, "Differe".to_string()));
+        assert_eq!(reprise(b, "INBOX"), (false, String::new()));
+    }
+
+    /// Un message d'un dossier de reprise s'affiche sans les liens que
+    /// l'affichage pose de lui-même (capture du 10/11/2026, valeurs fictives).
+    #[test]
+    fn brouillon_affiche_sans_liens_ajoutes() {
+        let atelier = std::env::temp_dir().join(format!("mmail-reprise-{}", std::process::id()));
+        let html: &[u8] = b"From: a@exemple.fr\r\nSubject: x\r\nMIME-Version: 1.0\r\n\
+            Content-Type: text/html; charset=utf-8\r\n\r\n<p>1 rue de l'Exemple 12345 VILLE</p>\r\n";
+        let texte: &[u8] = b"From: a@exemple.fr\r\nSubject: x\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n\
+            Voir https://www.exemple.fr/\r\n";
+        let lu = |octets: &[u8], reprise: bool| rendre_si_actuel(0, octets, false, false, 1, &atelier, false, reprise).unwrap();
+        // Message reçu : l'adresse postale mène à la carte.
+        assert!(lu(html, false).texte.contains("openstreetmap"));
+        // Brouillon : du texte, comme à la reprise.
+        let brouillon = lu(html, true);
+        assert!(brouillon.html && !brouillon.texte.contains("<a "), "{}", brouillon.texte);
+        // Brouillon en texte brut : il reste du texte, son adresse web aussi.
+        assert!(lu(texte, false).html);
+        let brouillon = lu(texte, true);
+        assert!(!brouillon.html && brouillon.texte.contains("https://www.exemple.fr/"), "{}", brouillon.texte);
+        let _ = std::fs::remove_dir_all(&atelier);
     }
 
     #[test]

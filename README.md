@@ -311,6 +311,14 @@ de projet interne.
   défaut de Windows ;
 - **masquage local** des dossiers peu utilisés, réaffichage en un clic ;
 - affichage du **message brut** (bouton « Source ») ;
+- **barres d'actions compactes** : au-dessus du message affiché (bureau comme
+  téléphone), dans la barre du haut du bureau et en tête du menu d'un message,
+  des pictogrammes encadrés pour répondre, répondre à tous, transférer,
+  déplacer, classer indésirable, marquer lu ou non lu, poser un drapeau,
+  supprimer, écrire un nouveau message, actualiser ; un nom court pour ce qui
+  est propre à MMail (« Source », « BàL », « Masqués », « Autres ») ; le nom
+  complet et le raccourci en infobulle, à l'appui long au doigt. Le menu d'un
+  message tient en sept lignes, la barre du message en une ;
 - **copie automatique de la sélection**, comme dans MMdedit : un texte
   sélectionné dans un message part au presse-papier, sauf ce qu'un autre
   logiciel vient d'y déposer, protégé une minute ; clic droit sur le message :

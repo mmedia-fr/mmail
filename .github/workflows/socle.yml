@@ -69,7 +69,8 @@ jobs:
         shell: bash
         run: |
           # Composants de core/qml éprouvés seuls, sous le Qt de la construction
-          # (cf. core/essais-qml/tst_*.qml) : gestes sur une ligne de la liste.
+          # (cf. core/essais-qml/tst_*.qml) : gestes sur une ligne de la liste,
+          # barres d'actions (message, menu d'un message, barre du haut).
           QT_QPA_PLATFORM=offscreen "$QT_ROOT_DIR/bin/qmltestrunner" \
             -input core/essais-qml -import core/essais-qml/modules
       # ---- Linux : le client contre un vrai Dovecot ---------------------------

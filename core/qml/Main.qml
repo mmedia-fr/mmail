@@ -615,7 +615,6 @@ ApplicationWindow {
     // Une seule ligne sur une fenêtre moyenne : libellés courts, Actualiser
     // réduit à son icône ; plus étroite encore, des marges resserrées et le
     // signe sans le nom du logiciel.
-    readonly property bool enteteSerree: !deuxEtages && width < 1180
     readonly property bool enteteEtroite: !deuxEtages && width < 940
 
     readonly property var jeuxApparence: avecApparenceOrganisation(avecApparencePerso(jeuxDeBase, reglagesApparence.perso),
@@ -1041,124 +1040,6 @@ ApplicationWindow {
         }
     }
 
-    // Bouton : un cadre ; plein pour l'action principale. « dessin » : son
-    // icône (cf. dessinerPlus), « iconeSeule » : sans libellé.
-    component BoutonOutil: ToolButton {
-        id: bo
-        property bool principal: false
-        property bool sombre: fenetre.marque !== null
-        property var dessin: null
-        property bool iconeSeule: false
-        readonly property color encre: bo.principal ? fenetre.encreSurAccent
-                                                    : fenetre.encreEntete(bo.sombre)
-        font.bold: bo.principal
-        leftPadding: bo.iconeSeule ? 7 : 12
-        rightPadding: bo.iconeSeule ? 7 : 14
-        topPadding: 3
-        bottomPadding: 3
-        ToolTip.visible: bo.iconeSeule && bo.hovered
-        ToolTip.text: bo.text
-        Accessible.name: bo.text
-        contentItem: RowLayout {
-            spacing: 6
-            Canvas {
-                visible: bo.dessin !== null
-                Layout.preferredWidth: 13
-                Layout.preferredHeight: 13
-                Layout.alignment: Qt.AlignVCenter
-                property color encre: bo.encre
-                onEncreChanged: requestPaint()
-                onPaint: if (bo.dessin) bo.dessin(getContext("2d"), width, height, encre)
-            }
-            Label {
-                visible: !bo.iconeSeule
-                text: bo.text
-                font: bo.font
-                color: bo.encre
-                Layout.alignment: Qt.AlignVCenter
-            }
-        }
-        background: Rectangle {
-            implicitHeight: 24
-            radius: fenetre.marque ? height / 2 : 3
-            color: bo.principal ? (bo.down ? Qt.darker(fenetre.accent, 1.15) : bo.hovered ? Qt.lighter(fenetre.accent, 1.08) : fenetre.accent)
-                 : bo.down || bo.hovered ? fenetre.survolEntete(bo.sombre)
-                 : bo.sombre && fenetre.marque ? "transparent" : fenetre.palette.button
-            border.width: bo.principal ? 0 : 1
-            border.color: bo.sombre && fenetre.marque ? Qt.rgba(1, 1, 1, 0.45)
-                        : Qt.rgba(fenetre.palette.windowText.r, fenetre.palette.windowText.g, fenetre.palette.windowText.b, 0.32)
-            Behavior on color {
-                enabled: fenetre.anime
-                ColorAnimation { duration: fenetre.dureeTeinte }
-            }
-            // Sur le fond, jamais sur le contrôle : cf. BoutonEntete.
-            scale: bo.down && fenetre.anime ? 0.97 : 1
-            Behavior on scale {
-                enabled: fenetre.anime
-                NumberAnimation { duration: fenetre.dureeAppui; easing.type: Easing.OutQuad }
-            }
-        }
-    }
-
-    // Interrupteur : un curseur allumé ou éteint, devant son libellé ; les
-    // non-lus en pastille après.
-    component InterrupteurEntete: ToolButton {
-        id: ie
-        property bool sombre: fenetre.marque !== null
-        property int compteur: 0
-        // Le bouton qui glisse, lu par le scénario « lot-2 ».
-        readonly property alias bouton: boutonRail
-        checkable: true
-        leftPadding: 6
-        rightPadding: 8
-        topPadding: 3
-        bottomPadding: 3
-        Accessible.role: Accessible.CheckBox
-        contentItem: RowLayout {
-            spacing: 7
-            Rectangle {
-                id: rail
-                implicitWidth: 28
-                implicitHeight: 16
-                radius: height / 2
-                Layout.alignment: Qt.AlignVCenter
-                readonly property color eteint: fenetre.encreEntete(ie.sombre)
-                color: ie.checked ? fenetre.accent : Qt.rgba(rail.eteint.r, rail.eteint.g, rail.eteint.b, 0.3)
-                Rectangle {
-                    id: boutonRail
-                    width: 12
-                    height: 12
-                    radius: 6
-                    y: 2
-                    x: ie.checked ? rail.width - width - 2 : 2
-                    color: "#ffffff"
-                    // Cf. « dureeInterrupteur » : sous « Pomme », le garde du
-                    // mouvement ; ailleurs, le glissement d'avant la 0.6.21.
-                    Behavior on x {
-                        enabled: fenetre.dureeInterrupteur > 0
-                        NumberAnimation { duration: fenetre.dureeInterrupteur }
-                    }
-                }
-            }
-            Label {
-                text: ie.text
-                font: ie.font
-                color: fenetre.encreEntete(ie.sombre)
-                Layout.alignment: Qt.AlignVCenter
-            }
-            CompteurNonLus {
-                visible: ie.compteur > 0
-                nombre: ie.compteur
-                taille: fenetre.tailleBase
-                Layout.alignment: Qt.AlignVCenter
-            }
-        }
-        background: Rectangle {
-            radius: 4
-            color: ie.hovered ? fenetre.survolEntete(ie.sombre) : "transparent"
-        }
-    }
-
     // Menu : le libellé suivi de ▼ ; la liste s'ouvre dessous.
     component MenuEntete: ToolButton {
         id: me
@@ -1200,86 +1081,6 @@ ApplicationWindow {
         background: Rectangle {
             radius: 4
             color: me.hovered || me.down || (me.menu !== null && me.menu.visible) ? fenetre.survolEntete(me.sombre) : "transparent"
-        }
-    }
-
-    component SeparateurEntete: Rectangle {
-        property bool sombre: fenetre.marque !== null
-        readonly property color encre: fenetre.encreEntete(sombre)
-        implicitWidth: 1
-        Layout.preferredHeight: 20
-        Layout.alignment: Qt.AlignVCenter
-        Layout.leftMargin: fenetre.enteteEtroite ? 2 : 6
-        Layout.rightMargin: Layout.leftMargin
-        color: Qt.rgba(encre.r, encre.g, encre.b, 0.25)
-    }
-
-    // Boutons et interrupteurs du courrier : sur la barre (« barre »), ou
-    // sur la bande dessous (« etages »).
-    component ActionsEntete: RowLayout {
-        id: ae
-        property bool sombre: fenetre.marque !== null
-        spacing: 6
-        BoutonOutil {
-            sombre: ae.sombre
-            principal: true
-            dessin: fenetre.dessinerPlus
-            text: fenetre.enteteSerree ? qsTr("Nouveau") : qsTr("Nouveau message")
-            onClicked: fenetre.rediger("nouveau")
-            ToolTip.visible: hovered && fenetre.enteteSerree
-            ToolTip.text: qsTr("Nouveau message (Ctrl+N)")
-        }
-        BoutonOutil {
-            sombre: ae.sombre
-            dessin: fenetre.dessinerActualiser
-            iconeSeule: fenetre.enteteSerree
-            text: qsTr("Actualiser")
-            onClicked: fenetre.module === "agenda" ? boite.synchroniserAgendas(true) : boite.actualiser()
-        }
-        // 0.8.1 : marquer la sélection lue (ou non lue, si tout y est lu), sans
-        // passer par le menu.
-        BoutonOutil {
-            objectName: "boutonMarquerLuBarre"
-            sombre: ae.sombre
-            visible: fenetre.module !== "agenda"
-            enabled: fenetre.etatChoix.nombre > 0
-            dessin: fenetre.dessinerLu
-            iconeSeule: fenetre.enteteSerree
-            text: fenetre.etatChoix.nonLu || fenetre.etatChoix.nombre === 0 ? qsTr("Marquer comme lu") : qsTr("Marquer comme non lu")
-            onClicked: fenetre.marquerSelection(fenetre.etatChoix.nonLu)
-        }
-        SeparateurEntete { sombre: ae.sombre }
-        // Boîte de réception unifiée : les réceptions de tous les comptes,
-        // avec leurs non-lus (emplacement choisi par le mainteneur le 10/10). Éteinte,
-        // la liste revient au dossier.
-        InterrupteurEntete {
-            sombre: ae.sombre
-            compteur: fenetre.nonLusReceptions
-            text: fenetre.compact || fenetre.enteteSerree ? qsTr("BàL") : qsTr("Toutes les BàL")
-            checked: fenetre.vueUnifiee
-            onClicked: {
-                checked = Qt.binding(function() { return fenetre.vueUnifiee })
-                if (fenetre.vueUnifiee)
-                    fenetre.quitterBoitesUnifiees()
-                else
-                    fenetre.ouvrirBoitesUnifiees()
-            }
-            ToolTip.visible: hovered
-            ToolTip.delay: 500
-            ToolTip.text: qsTr("Les boîtes de réception de tous les comptes, en une liste")
-        }
-        InterrupteurEntete {
-            objectName: "interrupteurMasques"
-            sombre: ae.sombre
-            visible: (!fenetre.compact || fenetre.vue === 0) && fenetre.module === "courrier"
-            checked: reglages.afficherMasques
-            text: fenetre.enteteSerree ? qsTr("Masqués") : qsTr("Dossiers masqués")
-            onToggled: {
-                reglages.afficherMasques = checked
-                fenetre.rafraichirArborescence()
-            }
-            ToolTip.visible: hovered && fenetre.enteteSerree
-            ToolTip.text: qsTr("Dossiers masqués")
         }
     }
 
@@ -3439,6 +3240,104 @@ ApplicationWindow {
             ctx.fill()
         else
             ctx.stroke()
+    }
+
+    // ---- pictogrammes des barres d'actions (barre compacte, 10/11)
+
+    /// Prépare un trait arrondi de l'épaisseur des autres pictogrammes.
+    function traitPictogramme(ctx, w, encre) {
+        ctx.reset()
+        ctx.strokeStyle = encre
+        ctx.fillStyle = encre
+        ctx.lineWidth = Math.max(1.5, w * 0.1)
+        ctx.lineCap = "round"
+        ctx.lineJoin = "round"
+    }
+    /// « Répondre » : flèche vers la gauche qui repart en courbe.
+    function dessinerRepondre(ctx, w, h, encre) {
+        traitPictogramme(ctx, w, encre)
+        ctx.beginPath()
+        ctx.moveTo(w * 0.4, h * 0.16)
+        ctx.lineTo(w * 0.1, h * 0.42)
+        ctx.lineTo(w * 0.4, h * 0.68)
+        ctx.moveTo(w * 0.12, h * 0.42)
+        ctx.bezierCurveTo(w * 0.62, h * 0.42, w * 0.9, h * 0.52, w * 0.9, h * 0.88)
+        ctx.stroke()
+    }
+    /// « Répondre à tous » : la même, à deux pointes.
+    function dessinerRepondreTous(ctx, w, h, encre) {
+        traitPictogramme(ctx, w, encre)
+        ctx.beginPath()
+        ctx.moveTo(w * 0.32, h * 0.16)
+        ctx.lineTo(w * 0.04, h * 0.42)
+        ctx.lineTo(w * 0.32, h * 0.68)
+        ctx.moveTo(w * 0.54, h * 0.16)
+        ctx.lineTo(w * 0.26, h * 0.42)
+        ctx.lineTo(w * 0.54, h * 0.68)
+        ctx.moveTo(w * 0.28, h * 0.42)
+        ctx.bezierCurveTo(w * 0.7, h * 0.42, w * 0.94, h * 0.52, w * 0.94, h * 0.88)
+        ctx.stroke()
+    }
+    /// « Transférer » : flèche vers la droite.
+    function dessinerTransferer(ctx, w, h, encre) {
+        traitPictogramme(ctx, w, encre)
+        ctx.beginPath()
+        ctx.moveTo(w * 0.6, h * 0.16)
+        ctx.lineTo(w * 0.9, h * 0.42)
+        ctx.lineTo(w * 0.6, h * 0.68)
+        ctx.moveTo(w * 0.88, h * 0.42)
+        ctx.bezierCurveTo(w * 0.38, h * 0.42, w * 0.1, h * 0.52, w * 0.1, h * 0.88)
+        ctx.stroke()
+    }
+    /// « Déplacer… » : un dossier traversé d'une flèche.
+    function dessinerDeplacer(ctx, w, h, encre) {
+        traitPictogramme(ctx, w, encre)
+        ctx.beginPath()
+        ctx.moveTo(w * 0.06, h * 0.18)
+        ctx.lineTo(w * 0.38, h * 0.18)
+        ctx.lineTo(w * 0.47, h * 0.3)
+        ctx.lineTo(w * 0.94, h * 0.3)
+        ctx.lineTo(w * 0.94, h * 0.86)
+        ctx.lineTo(w * 0.06, h * 0.86)
+        ctx.closePath()
+        ctx.moveTo(w * 0.28, h * 0.58)
+        ctx.lineTo(w * 0.72, h * 0.58)
+        ctx.moveTo(w * 0.58, h * 0.46)
+        ctx.lineTo(w * 0.72, h * 0.58)
+        ctx.lineTo(w * 0.58, h * 0.7)
+        ctx.stroke()
+    }
+    /// « Indésirable » : un cercle barré.
+    function dessinerIndesirable(ctx, w, h, encre) {
+        traitPictogramme(ctx, w, encre)
+        var r = Math.min(w, h) * 0.4
+        ctx.beginPath()
+        ctx.arc(w / 2, h / 2, r, 0, 2 * Math.PI, false)
+        ctx.moveTo(w / 2 - r * 0.7, h / 2 - r * 0.7)
+        ctx.lineTo(w / 2 + r * 0.7, h / 2 + r * 0.7)
+        ctx.stroke()
+    }
+    /// « Marquer comme non lu » : l'enveloppe et le point des non-lus.
+    function dessinerNonLu(ctx, w, h, encre) {
+        dessinerLu(ctx, w, h, encre)
+        ctx.fillStyle = encre
+        ctx.beginPath()
+        ctx.arc(w * 0.84, h * 0.2, w * 0.14, 0, 2 * Math.PI, false)
+        ctx.fill()
+    }
+    /// « Autres actions » : trois points.
+    function dessinerAutres(ctx, w, h, encre) {
+        ctx.reset()
+        ctx.fillStyle = encre
+        for (var i = 0; i < 3; ++i) {
+            ctx.beginPath()
+            ctx.arc(w * (0.2 + i * 0.3), h / 2, w * 0.08, 0, 2 * Math.PI, false)
+            ctx.fill()
+        }
+    }
+    /// « Suivi » : le drapeau en creux.
+    function dessinerSuivi(ctx, w, h, encre) {
+        dessinerDrapeau(ctx, w, h, encre, false)
     }
 
     function dessinerCorbeille(ctx, w, h, encre) {
@@ -7383,6 +7282,12 @@ ApplicationWindow {
                 var attenteHors = Qt.createQmlObject('import QtQuick; Timer { interval: 8000 }', fenetre)
                 attenteHors.triggered.connect(function() { scenarios.etapeScenarioHorsConnexion(0) })
                 attenteHors.start()
+            }
+            // Scénario « captures-barres » : la barre compacte, en images.
+            if (essai.scenario === "captures-barres") {
+                var attenteCaptures = Qt.createQmlObject('import QtQuick; Timer { interval: 8000 }', fenetre)
+                attenteCaptures.triggered.connect(scenarios.etapeScenarioCapturesBarres)
+                attenteCaptures.start()
             }
             // Scénario « indesirable-differe » : « Courrier indésirable » au doigt.
             if (essai.scenario === "indesirable-differe") {

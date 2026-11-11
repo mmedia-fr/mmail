@@ -1510,6 +1510,75 @@ QtObject {
 
     // Scénario « tactile » : la vue du téléphone en images, sans téléphone
     // (MMAIL_TACTILE=1, MMAIL_TAILLE=412x915) — liste, tiroir, menu ⋮, message.
+    /// Scénario « captures-barres » (barre compacte, 11/11 ; MMAIL_SORTIE=<dossier>) :
+    /// la fenêtre avec le message affiché, puis le menu d'un message — au doigt
+    /// (MMAIL_TACTILE=1), celui de « … » —, en images <bureau|android>-<volet|menu>.png ;
+    /// et ce qui fait la barre compacte : une seule ligne de boutons dans le
+    /// volet, sept lignes au plus dans le menu.
+    function etapeScenarioCapturesBarres() {
+        var echecs = 0
+        var bilan = function(texte, bon) {
+            if (!bon)
+                echecs += 1
+            console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
+        }
+        var racine = fenetre.contentItem
+        while (racine.parent)
+            racine = racine.parent
+        var prefixe = tactile ? "android-" : "bureau-"
+        var saisir = function(nom) {
+            var chemin = lanceur.chemin(identifiantsEssai.sortie + "/" + prefixe + nom + ".png")
+            racine.grabToImage(function(r) { r.saveToFile(chemin) })
+            console.log("scenario: image", prefixe + nom, "| vue", vue, "| largeur", fenetre.width)
+        }
+        var lignesDuMenu = function() {
+            var n = 0
+            for (var i = 0; i < menuMessage.count; ++i) {
+                var e = menuMessage.itemAt(i)
+                if (e && e.visible && e.height > 0 && !(e instanceof MenuSeparator))
+                    n += 1
+            }
+            return n
+        }
+        var etapes = [
+            function() { choisir(0, 0) },
+            function() {
+                var r = objetNomme(colonneLecture, "boutonRepondre")
+                var s = objetNomme(colonneLecture, "boutonSource")
+                bilan("barre du volet sur une ligne (Répondre y " + (r ? r.y : "?") + ", Source y " + (s ? s.y : "?") + ")",
+                      !!r && !!s && r.visible && s.visible && r.y === s.y && s.text === qsTr("Source"))
+                saisir("volet")
+            },
+            function() {
+                if (tactile) {
+                    var autres = objetNomme(colonneLecture, "boutonAutresActions")
+                    if (autres)
+                        menuMessage.popup(autres, 0, autres.height)
+                } else {
+                    var l = colonneListe.vueMessages.itemAtIndex(0)
+                    if (l)
+                        menuMessage.popup(l, 80, l.height / 2)
+                }
+            },
+            function() {
+                bilan("menu d'un message : " + lignesDuMenu() + " lignes", menuMessage.opened && lignesDuMenu() <= 7)
+                saisir("menu")
+            },
+            function() {
+                menuMessage.close()
+                console.log("scenario: captures-barres " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
+                Qt.quit()
+            }
+        ]
+        var i = 0
+        var t = Qt.createQmlObject("import QtQuick; Timer { interval: 1200; repeat: true }", fenetre)
+        t.triggered.connect(function() {
+            if (i < etapes.length)
+                etapes[i++]()
+        })
+        t.start()
+    }
+
     function etapeScenarioTactile() {
         var a = listeComptes()[0]
         if (!a || a.etat !== "pret" || essai.etape || boite.dossierCourant !== "INBOX" || modeleMessages.count < 1)

@@ -289,43 +289,60 @@ pub mod qobject {
         fn chercher(&self, texte: &QString, partout: bool) -> QString;
 
         /// Comme `chercher`, dans une portée (0.8.3) : 0 le dossier ouvert,
-        /// 1 tous les dossiers du compte `compte`, 2 tous les
-        /// comptes ; les non-lus seulement si `non_lus` (0.8.2). Les portées 1
-        /// et 2 rendent des lignes à compte, chemin et dossier, comme
-        /// `chercher(texte, true)`.
+        /// 1 tous les dossiers de la boîte du dossier `chemin` du compte
+        /// `compte` — sa boîte personnelle, ou la boîte partagée qui le
+        /// contient (0.6.45) —, 2 tous les comptes ; les non-lus seulement si
+        /// `non_lus` (0.8.2). Les portées 1 et 2 rendent des lignes à compte,
+        /// chemin et dossier, comme `chercher(texte, true)`.
         #[qinvokable]
         #[cxx_name = "chercherSelon"]
-        fn chercher_selon(&self, texte: &QString, portee: i32, compte: i32, non_lus: bool) -> QString;
+        fn chercher_selon(&self, texte: &QString, portee: i32, compte: i32, chemin: &QString, non_lus: bool) -> QString;
 
         /// Cherche aussi dans le texte entier des messages du dossier ouvert,
         /// sur le serveur, par une connexion à part (0.6.16) ; dans leur objet
         /// et leur expéditeur seulement si `objet_seul` (0.6.38). Issue :
         /// `resultatsServeur`, précédé de `rechercheInachevee` si le serveur
-        /// n'a pas fini.
+        /// n'a pas fini. `non_lus_seuls`, le texte vide : les messages non lus
+        /// (0.6.45).
         #[qinvokable]
         #[cxx_name = "chercherSurLeServeur"]
-        fn chercher_sur_le_serveur(self: Pin<&mut Boite>, texte: &QString, objet_seul: bool) -> bool;
+        fn chercher_sur_le_serveur(
+            self: Pin<&mut Boite>,
+            texte: &QString,
+            objet_seul: bool,
+            non_lus_seuls: bool,
+        ) -> bool;
 
         /// Cherche aussi sur le serveur, dans chaque dossier de chaque compte
         /// connecté, par une connexion à part pour chaque compte (0.6.16) : un
         /// dossier lent passe après les autres. Rend le nombre de dossiers à
         /// interroger ; un texte vide arrête la recherche en cours. Issue :
         /// `resultatsPartout`, par dossier, après `rechercheInachevee` si le
-        /// serveur n'a pas fini d'y chercher. `objet_seul` : comme
-        /// `chercherSurLeServeur`.
+        /// serveur n'a pas fini d'y chercher. `objet_seul`, `non_lus_seuls` :
+        /// comme `chercherSurLeServeur` ; un texte vide sans `non_lus_seuls`
+        /// arrête la recherche en cours.
         #[qinvokable]
         #[cxx_name = "chercherPartoutSurLeServeur"]
-        fn chercher_partout_sur_le_serveur(self: Pin<&mut Boite>, texte: &QString, objet_seul: bool) -> i32;
+        fn chercher_partout_sur_le_serveur(
+            self: Pin<&mut Boite>,
+            texte: &QString,
+            objet_seul: bool,
+            non_lus_seuls: bool,
+        ) -> i32;
 
-        /// Comme `chercherPartoutSurLeServeur`, dans les seuls dossiers d'un
-        /// compte (0.8.3, « cette boîte, tous dossiers »).
+        /// Comme `chercherPartoutSurLeServeur`, dans les seuls dossiers de la
+        /// boîte du dossier `chemin` du compte `compte` (0.8.3, « cette boîte,
+        /// tous dossiers ») : sa boîte personnelle, sans les boîtes partagées
+        /// que le compte voit, ou la boîte partagée qui le contient (0.6.45).
         #[qinvokable]
         #[cxx_name = "chercherDansLeCompteSurLeServeur"]
         fn chercher_dans_le_compte_sur_le_serveur(
             self: Pin<&mut Boite>,
             texte: &QString,
             compte: i32,
+            chemin: &QString,
             objet_seul: bool,
+            non_lus_seuls: bool,
         ) -> i32;
 
         /// Lignes d'un dossier quelconque pour des UID (« 3,5,7 »), comme
@@ -3683,7 +3700,7 @@ impl qobject::Boite {
         QString::from(&json_messages(&messages))
     }
 
-    pub fn chercher_selon(&self, texte: &QString, portee: i32, compte: i32, non_lus: bool) -> QString {
+    pub fn chercher_selon(&self, texte: &QString, portee: i32, compte: i32, chemin: &QString, non_lus: bool) -> QString {
         let Some(magasin) = self.magasin.as_ref() else {
             return QString::from("[]");
         };
@@ -3692,7 +3709,11 @@ impl qobject::Boite {
         let courant = self.courant.as_ref().map(|(_, _, id)| *id);
         let filtre = match (portee, courant) {
             (0, Some(id)) => crate::magasin::Filtre { dossier: Some(id), non_lus, ..Default::default() },
-            (1, _) if compte > 0 => crate::magasin::Filtre { compte: Some(compte as i64), non_lus, ..Default::default() },
+            (1, _) if compte > 0 => {
+                let compte = compte as i64;
+                let parmi = dossiers_de_la_boite(magasin, compte, &chemin.to_string()).iter().map(|d| d.id).collect();
+                crate::magasin::Filtre { compte: Some(compte), parmi: Some(parmi), non_lus, ..Default::default() }
+            }
             (2, _) => crate::magasin::Filtre { non_lus, ..Default::default() },
             _ => return QString::from("[]"),
         };
@@ -3710,57 +3731,72 @@ impl qobject::Boite {
         self: Pin<&mut Self>,
         texte: &QString,
         compte: i32,
+        chemin: &QString,
         objet_seul: bool,
+        non_lus_seuls: bool,
     ) -> i32 {
-        self.chercher_dans_les_comptes(texte, Some(compte as i64), champs_recherche(objet_seul))
+        let boite = Some((compte as i64, chemin.to_string()));
+        self.chercher_dans_les_comptes(texte, boite, champs_recherche(objet_seul, non_lus_seuls))
     }
 
-    pub fn chercher_sur_le_serveur(mut self: Pin<&mut Self>, texte: &QString, objet_seul: bool) -> bool {
+    pub fn chercher_sur_le_serveur(
+        mut self: Pin<&mut Self>,
+        texte: &QString,
+        objet_seul: bool,
+        non_lus_seuls: bool,
+    ) -> bool {
         // Une nouvelle recherche remplace la précédente, partout comprise.
         let numero = self.recherche.fetch_add(1, Ordering::SeqCst) + 1;
         let Some((compte, chemin, _)) = self.courant.clone() else {
             return false;
         };
         let texte = texte.to_string().trim().to_string();
-        if texte.is_empty() || !self.sessions.contains_key(&compte) {
+        let champs = champs_recherche(objet_seul, non_lus_seuls);
+        if (texte.is_empty() && champs != Champs::NonLus) || !self.sessions.contains_key(&compte) {
             return false;
         }
-        self.as_mut().lancer_recherche(compte, texte, champs_recherche(objet_seul), vec![chemin], false, numero)
+        self.as_mut().lancer_recherche(compte, texte, champs, vec![chemin], false, numero)
     }
 
-    pub fn chercher_partout_sur_le_serveur(self: Pin<&mut Self>, texte: &QString, objet_seul: bool) -> i32 {
-        self.chercher_dans_les_comptes(texte, None, champs_recherche(objet_seul))
+    pub fn chercher_partout_sur_le_serveur(
+        self: Pin<&mut Self>,
+        texte: &QString,
+        objet_seul: bool,
+        non_lus_seuls: bool,
+    ) -> i32 {
+        self.chercher_dans_les_comptes(texte, None, champs_recherche(objet_seul, non_lus_seuls))
     }
 
-    /// Recherche sur le serveur dans tous les dossiers d'un compte, ou de
-    /// tous les comptes connectés (`seul` absent).
+    /// Recherche sur le serveur dans tous les dossiers d'une boîte — celle
+    /// d'un dossier (compte, chemin) : cf. `dossiers_de_la_boite` —, ou de
+    /// tous les comptes connectés (`boite` absente).
     fn chercher_dans_les_comptes(
         mut self: Pin<&mut Self>,
         texte: &QString,
-        seul: Option<i64>,
+        boite: Option<(i64, String)>,
         champs: Champs,
     ) -> i32 {
         // Nouvelle recherche ou arrêt : les fils de la précédente s'arrêtent.
         let numero = self.recherche.fetch_add(1, Ordering::SeqCst) + 1;
         let texte = texte.to_string().trim().to_string();
-        if texte.is_empty() {
+        if texte.is_empty() && champs != Champs::NonLus {
             return 0;
         }
-        let mut comptes: Vec<i64> = self.sessions.keys().copied().filter(|c| seul.is_none_or(|s| s == *c)).collect();
+        let mut comptes: Vec<i64> =
+            self.sessions.keys().copied().filter(|c| boite.as_ref().is_none_or(|(s, _)| s == c)).collect();
         comptes.sort_unstable();
         let mut total = 0;
         for compte in comptes {
             // Tous les dossiers qui contiennent des messages, masqués compris :
             // la boîte de réception d'abord, puis l'ordre de l'arborescence.
-            let chemins: Vec<String> = self
-                .magasin
-                .as_ref()
-                .and_then(|m| m.dossiers(compte).ok())
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|d| d.selectionnable)
-                .map(|d| d.chemin)
-                .collect();
+            // « Cette boîte » : ceux de la boîte du dossier d'où l'on part.
+            let dossiers = match (self.magasin.as_ref(), &boite) {
+                (Some(m), Some((_, chemin))) => dossiers_de_la_boite(m, compte, chemin),
+                (Some(m), None) => m.dossiers(compte).unwrap_or_default(),
+                (None, _) => Vec::new(),
+            };
+            let chemins: Vec<String> =
+                dossiers.into_iter().filter(|d| d.selectionnable).map(|d| d.chemin).collect();
             let nombre = chemins.len();
             if nombre > 0 && self.as_mut().lancer_recherche(compte, texte.clone(), champs, chemins, true, numero) {
                 total += nombre;
@@ -9422,6 +9458,11 @@ impl Recherche {
                 *client = None;
             }
         }
+        // Les non-lus : le serveur fait foi, l'index d'un dossier que la
+        // session n'a pas synchronisé pouvait les croire lus (0.6.45).
+        if self.champs == Champs::NonLus {
+            let _ = magasin.marquer_lu(id, &uids, false);
+        }
         Etape::Trouves(uids)
     }
 }
@@ -9429,12 +9470,34 @@ impl Recherche {
 /// La case « Objet et expéditeur seulement » de la recherche (0.6.38) : sans
 /// elle, le serveur cherche aussi dans le texte des messages et, sur Mailcow,
 /// dans celui de leurs pièces jointes.
-fn champs_recherche(objet_seul: bool) -> Champs {
-    if objet_seul {
+fn champs_recherche(objet_seul: bool, non_lus_seuls: bool) -> Champs {
+    if non_lus_seuls {
+        Champs::NonLus
+    } else if objet_seul {
         Champs::ObjetExpediteur
     } else {
         Champs::Texte
     }
+}
+
+/// Dossiers de la boîte qui contient le dossier `chemin` du compte (0.6.45) :
+/// la boîte partagée dont il fait partie — ses seuls dossiers
+/// « Shared/contact@exemple.fr/… » —, sinon la boîte personnelle du compte,
+/// tous ses dossiers hors des boîtes partagées qu'il voit. « Cette boîte »
+/// comprenait jusque-là tout le compte IMAP : chercher dans sa boîte
+/// ramenait aussi les messages des boîtes partagées, et plus lentement.
+fn dossiers_de_la_boite(magasin: &Magasin, compte: i64, chemin: &str) -> Vec<DossierLocal> {
+    let dossiers = magasin.dossiers(compte).unwrap_or_default();
+    let partagees = magasin
+        .comptes()
+        .unwrap_or_default()
+        .into_iter()
+        .find(|c| c.id == compte)
+        .map(|c| c.partagees)
+        .unwrap_or_default();
+    let boite_de = |d: &DossierLocal| crate::protocole::boite_partagee(&d.chemin, &d.separateur, &partagees).map(|(_, a)| a);
+    let visee = dossiers.iter().find(|d| d.chemin == chemin).and_then(boite_de);
+    dossiers.into_iter().filter(|d| boite_de(d) == visee).collect()
 }
 
 /// Une durée pour l'utilisateur : « 45 s », « 5 min », « 5 min 30 s ».
@@ -10625,6 +10688,48 @@ mod tests {
         assert_eq!(dossier_indesirables(&[d("Spambox", ""), d("Junk", "")]).as_deref(), Some("Junk"));
         assert_eq!(dossier_indesirables(&[d("INBOX", ""), d("Courrier indésirable", "")]).as_deref(), Some("Courrier indésirable"));
         assert_eq!(dossier_indesirables(&[d("INBOX", ""), d("Trash", "Trash")]), None);
+    }
+
+    /// « Cette boîte » (0.6.45) : la boîte personnelle sans les boîtes
+    /// partagées que le compte voit, ou une boîte partagée seule.
+    #[test]
+    fn dossiers_d_une_boite() {
+        let magasin = Magasin::en_memoire().unwrap();
+        let d = |chemin: &str| crate::protocole::Dossier {
+            chemin: chemin.into(),
+            separateur: "/".into(),
+            attributs: Vec::new(),
+        };
+        let a = magasin.compte("a@exemple.fr", "h", 993, "a@exemple.fr").unwrap();
+        magasin
+            .poser_dossiers(
+                a,
+                &[
+                    d("INBOX"),
+                    d("INBOX/Clients"),
+                    d("Sent"),
+                    d("Shared"),
+                    d("Shared/contact@exemple.fr"),
+                    d("Shared/contact@exemple.fr/INBOX"),
+                    d("Shared/contact@exemple.fr/INBOX/Livraisons"),
+                    d("Shared/commande@exemple.fr/INBOX"),
+                ],
+            )
+            .unwrap();
+        magasin.poser_partagees(a, &["commande@exemple.fr".into(), "contact@exemple.fr".into()]).unwrap();
+        let chemins = |chemin: &str| {
+            let mut c: Vec<String> = dossiers_de_la_boite(&magasin, a, chemin).into_iter().map(|d| d.chemin).collect();
+            c.sort();
+            c
+        };
+        assert_eq!(chemins("INBOX/Clients"), vec!["INBOX", "INBOX/Clients", "Sent", "Shared"]);
+        assert_eq!(
+            chemins("Shared/contact@exemple.fr/INBOX"),
+            vec!["Shared/contact@exemple.fr", "Shared/contact@exemple.fr/INBOX", "Shared/contact@exemple.fr/INBOX/Livraisons"]
+        );
+        assert_eq!(chemins("Shared/commande@exemple.fr/INBOX"), vec!["Shared/commande@exemple.fr/INBOX"]);
+        // Dossier inconnu : la boîte personnelle.
+        assert_eq!(chemins(""), vec!["INBOX", "INBOX/Clients", "Sent", "Shared"]);
     }
 
     /// Dossiers dont les messages s'affichent tels qu'ils se reprendront

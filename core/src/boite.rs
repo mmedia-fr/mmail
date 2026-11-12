@@ -9458,11 +9458,6 @@ impl Recherche {
                 *client = None;
             }
         }
-        // Les non-lus : le serveur fait foi, l'index d'un dossier que la
-        // session n'a pas synchronisé pouvait les croire lus (0.6.45).
-        if self.champs == Champs::NonLus {
-            let _ = magasin.marquer_lu(id, &uids, false);
-        }
         Etape::Trouves(uids)
     }
 }

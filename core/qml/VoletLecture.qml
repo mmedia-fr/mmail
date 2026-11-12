@@ -320,6 +320,28 @@ ColumnLayout {
                                                        : fenetre.logicielPour(modelData.nom)
                     Layout.fillWidth: true
                     spacing: 8
+                    // Copier et glisser la pièce vers une rédaction (0.6.45) :
+                    // un clic la choisit, Ctrl+C la copie ; tirée à la souris,
+                    // elle part dès que le noyau l'a écrite sur le disque.
+                    activeFocusOnTab: true
+                    Keys.onPressed: function(ev) {
+                        if (ev.matches(StandardKey.Copy)) {
+                            fenetre.copierPiece(lignePiece.modelData)
+                            ev.accepted = true
+                        }
+                    }
+                    readonly property string adressePrete: fenetre.piecesPretes[fenetre.clePiece(modelData)] || ""
+                    Drag.dragType: Drag.Automatic
+                    Drag.supportedActions: Qt.CopyAction
+                    Drag.mimeData: ({ "text/uri-list": lignePiece.adressePrete })
+                    Drag.active: glisserPiece.active && lignePiece.adressePrete.length > 0
+                    DragHandler {
+                        id: glisserPiece
+                        target: null
+                        enabled: Qt.platform.os !== "android"
+                        acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad | PointerDevice.Stylus
+                        onActiveChanged: if (active) fenetre.preparerGlisser(lignePiece.modelData)
+                    }
                     // Au doigt, c'est l'appui long ci-dessous : le
                     // toucher ne doit pas passer pour un clic droit.
                     TapHandler {
@@ -335,6 +357,7 @@ ColumnLayout {
                     TapHandler {
                         acceptedButtons: Qt.LeftButton
                         acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad | PointerDevice.Stylus
+                        onTapped: lignePiece.forceActiveFocus()
                         onDoubleTapped: function(point) {
                             var cible = lignePiece.childAt(point.position.x, point.position.y)
                             if (cible !== boutonOuvrirPiece && cible !== boutonEnregistrerPiece
@@ -360,6 +383,9 @@ ColumnLayout {
                         text: lignePiece.modelData.nom
                         elide: Text.ElideMiddle
                         Layout.fillWidth: true
+                        // Choisie : Ctrl+C la copie.
+                        color: lignePiece.activeFocus ? fenetre.palette.highlight : fenetre.palette.windowText
+                        font.underline: lignePiece.activeFocus
                     }
                     Label {
                         text: fenetre.tailleLisible(lignePiece.modelData.taille)

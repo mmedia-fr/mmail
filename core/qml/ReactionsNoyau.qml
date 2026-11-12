@@ -593,6 +593,13 @@ Connections {
     }
 
     function onPieceAJoindre(url) {
+        // Copiée ou glissée (0.6.45) : rien à ouvrir.
+        if (fenetre.pieceCible === "copier" || fenetre.pieceCible === "glisser") {
+            fenetre.pieceDisponible(url)
+            if (fenetre.essai && fenetre.essai.scenario === "copier-piece")
+                console.log("scenario: piece prete", url)
+            return
+        }
         var r = fenetre.redactions[fenetre.pieceCible]
         if (!r) {
             r = fenetre.ouvrirRedaction(boite.compteCourant > 0 ? boite.compteCourant
@@ -706,9 +713,13 @@ Connections {
             return
         fenetre.uidsServeur = uids.length > 0 ? uids.split(",").map(Number) : []
         fenetre.poserResultats()
-        messageEtat.texte = qsTr("Recherche « %1 » : %2%3.").arg(texte)
-                .arg(fenetre.accord(modeleMessages.count, qsTr("résultat"), qsTr("résultats")))
-                .arg(boite.rechercheApprochee() ? qsTr(", fautes de frappe tolérées sur le poste") : "")
+        if (fenetre.rechercheNonLusSeuls)
+            messageEtat.texte = qsTr("Non lus seulement : %1.")
+                    .arg(fenetre.accord(modeleMessages.count, qsTr("message"), qsTr("messages")))
+        else
+            messageEtat.texte = qsTr("Recherche « %1 » : %2%3.").arg(texte)
+                    .arg(fenetre.accord(modeleMessages.count, qsTr("résultat"), qsTr("résultats")))
+                    .arg(boite.rechercheApprochee() ? qsTr(", fautes de frappe tolérées sur le poste") : "")
         if (fenetre.essai && fenetre.essai.scenario === "recherche-lente" && !fenetre.essai.partout) {
             // `rechercheInachevee`, s'il vient, suit ce signal : le bilan
             // attend qu'il soit passé.

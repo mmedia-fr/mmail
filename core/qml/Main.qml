@@ -329,6 +329,7 @@ ApplicationWindow {
     property string reponseInvitation: ""
     onUidCourantChanged: {
         invitation = ({})
+        piecesPretes = ({})
         majCategoriesAffichees()
     }
     property bool sourceVisible: false
@@ -373,6 +374,9 @@ ApplicationWindow {
     // Recherche en cours dans une seule boîte, tous ses dossiers (0.8.3) : son
     // compte ; 0 pour toutes les boîtes. Non lus seulement (0.8.2).
     property int rechercheCompte: 0
+    // … et le dossier d'où l'on part, qui dit quelle boîte du compte : la
+    // personnelle, ou la boîte partagée qui le contient (0.6.45).
+    property string rechercheChemin: ""
     property bool rechercheNonLus: false
     // « Non lus » coché, champ vide : la liste ne garde que les non-lus de la
     // portée choisie, sans texte à chercher. Cocher la case sans rien taper ne
@@ -446,6 +450,11 @@ ApplicationWindow {
     // Rédaction qui attend une pièce jointe en cours d'écriture (« nouveau »
     // pour en ouvrir une).
     property string pieceCible: ""
+    // Pièces du message affiché déjà écrites sur le disque pour être copiées
+    // ou glissées (0.6.45) : clé de `clePiece` → adresse `file:` ; et celle
+    // qu'on attend. Vidées d'un message à l'autre.
+    property var piecesPretes: ({})
+    property string piecePreparee: ""
     // Fond de la rubrique Favoris : un cran plus soutenu que celui des
     // comptes, pour qu'elle s'en détache (retour du mainteneur, 01/10).
     readonly property color fondFavoris: palette.base.hslLightness > 0.5
@@ -565,6 +574,10 @@ ApplicationWindow {
         // Liste des messages regroupée par date de réception, comme Outlook
         // (0.6.29, demande du mainteneur du 30/10 ; cf. fenetre.bornesGroupes).
         property bool groupesDates: true
+        // Boutons de la barre du message et de la barre du haut : le nom à
+        // côté du pictogramme (demande du mainteneur du 12/11, « Affichage ›
+        // Boutons des barres »). Au bureau seulement : cf. libellesBarres.
+        property bool libellesBoutons: false
     }
 
     // ---------------------------------------------------------- apparences
@@ -616,6 +629,12 @@ ApplicationWindow {
     // réduit à son icône ; plus étroite encore, des marges resserrées et le
     // signe sans le nom du logiciel.
     readonly property bool enteteEtroite: !deuxEtages && width < 940
+    // Pictogrammes et texte dans les barres (reglages.libellesBoutons) : au
+    // bureau seulement, un téléphone n'a pas la place. Sur une seule ligne,
+    // la barre du haut ne garde les noms qu'à partir de 1 180 points, le seuil
+    // qui valait pour ses libellés jusqu'à la 0.6.43.
+    readonly property bool libellesBarres: !tactile && reglages.libellesBoutons
+    readonly property bool enteteSerree: !deuxEtages && width < 1180
 
     readonly property var jeuxApparence: avecApparenceOrganisation(avecApparencePerso(jeuxDeBase, reglagesApparence.perso),
                                                                    personnalisation)
@@ -1516,6 +1535,19 @@ ApplicationWindow {
             MenuEntete {
                 text: fenetre.compact ? "?" : qsTr("Aide")
                 menu: menuAide
+            }
+            // « Suggestion » en vue, au bureau (demande du mainteneur du 12/11 :
+            // dans « Aide », personne ne la trouvait). Sur une seule ligne, à
+            // partir de 1 024 points : à 900, il débordait (vu au banc). Au
+            // doigt ou plus étroit, elle reste dans le menu « Aide ».
+            BoutonOutil {
+                objectName: "boutonSuggestion"
+                visible: !fenetre.tactile && !fenetre.compact && (fenetre.deuxEtages || fenetre.width >= 1024)
+                text: qsTr("Suggestion")
+                infobulle: qsTr("Envoyer une suggestion à MMEDIA : une idée, un défaut, une remarque")
+                onClicked: fenetre.envoyerSuggestion()
+                Layout.alignment: Qt.AlignVCenter
+                Layout.leftMargin: 4
             }
         }
     }
@@ -4734,6 +4766,7 @@ ApplicationWindow {
             // « Cette boîte » : celle du dossier d'où l'on part.
             rechercheCompte = colonneListe.porteeRecherche.boiteSeule
                     ? (dossierAvantRecherche ? dossierAvantRecherche.compte : boite.compteCourant) : 0
+            rechercheChemin = dossierAvantRecherche ? dossierAvantRecherche.chemin : boite.dossierCourant
             if (colonneListe.porteeRecherche.boiteSeule && rechercheCompte <= 0) {
                 messageEtat.texte = qsTr("Ouvrez d'abord un dossier de la boîte où chercher.")
                 return
@@ -4749,10 +4782,12 @@ ApplicationWindow {
             // L'index répond tout de suite ; le serveur suit, dossier par
             // dossier, dans le texte des messages — ou leur objet et leur
             // expéditeur seulement — et jusque dans les dossiers jamais
-            // ouverts sur ce poste. Les non-lus seuls : l'index seulement.
-            dossiersPartout = nonLusSeuls ? 0 : rechercheCompte > 0
-                    ? boite.chercherDansLeCompteSurLeServeur(texte, rechercheCompte, rechercheObjetSeul)
-                    : boite.chercherPartoutSurLeServeur(texte, rechercheObjetSeul)
+            // ouverts sur ce poste. Les non-lus seuls aussi (0.6.45) : ceux
+            // de l'index seul laissaient de côté ces dossiers-là.
+            dossiersPartout = rechercheCompte > 0
+                    ? boite.chercherDansLeCompteSurLeServeur(texte, rechercheCompte, rechercheChemin,
+                                                             rechercheObjetSeul, nonLusSeuls)
+                    : boite.chercherPartoutSurLeServeur(texte, rechercheObjetSeul, nonLusSeuls)
             messageEtat.texte = (boite.rechercheApprochee() ? qsTr("Rien d'exact sur le poste : fautes de frappe tolérées. ") : "")
                     + etatRecherchePartout()
             return
@@ -4771,11 +4806,14 @@ ApplicationWindow {
         recherche = texte
         uidsServeur = []
         poserResultats()
-        // Les non-lus du dossier : son index suffit, tenu à jour par la
-        // synchronisation.
+        // Les non-lus du dossier : l'index tout de suite, puis le serveur
+        // (0.6.45), qui connaît aussi ceux que l'index n'a pas encore.
         if (nonLusSeuls) {
-            messageEtat.texte = qsTr("Non lus seulement : %1.")
-                    .arg(accord(modeleMessages.count, qsTr("message"), qsTr("messages")))
+            messageEtat.texte = boite.chercherSurLeServeur("", false, true)
+                    ? qsTr("Non lus seulement : %1 sur le poste — le serveur cherche aussi…")
+                      .arg(accord(modeleMessages.count, qsTr("message"), qsTr("messages")))
+                    : qsTr("Non lus seulement : %1 (messages déjà sur le poste, compte hors ligne).")
+                      .arg(accord(modeleMessages.count, qsTr("message"), qsTr("messages")))
             return
         }
         // Rien d'exact dans l'index : les résultats tolèrent des fautes de
@@ -4784,7 +4822,7 @@ ApplicationWindow {
         // Ce que le serveur parcourt, pour la barre d'état.
         var ouCherche = rechercheObjetSeul ? qsTr("dans l'objet et l'expéditeur des messages")
                                            : qsTr("dans le texte des messages")
-        if (!boite.chercherSurLeServeur(texte, rechercheObjetSeul))
+        if (!boite.chercherSurLeServeur(texte, rechercheObjetSeul, false))
             messageEtat.texte = approchee
                     ? qsTr("Recherche « %1 » : rien d'exact ; %2 en tolérant des fautes de frappe (index seulement, compte hors ligne).")
                       .arg(texte).arg(accord(modeleMessages.count, qsTr("résultat"), qsTr("résultats")))
@@ -4803,7 +4841,7 @@ ApplicationWindow {
     function poserResultats() {
         if (rechercheGlobale) {
             var trouves = JSON.parse(boite.chercherSelon(recherche, rechercheCompte > 0 ? 1 : 2, rechercheCompte,
-                                                         rechercheNonLus))
+                                                         rechercheChemin, rechercheNonLus))
             var connus = {}
             for (var j = 0; j < trouves.length; ++j)
                 connus[trouves[j].compte + "\n" + trouves[j].chemin + "\n" + trouves[j].uid] = true
@@ -4847,7 +4885,7 @@ ApplicationWindow {
             })))
             return
         }
-        var lignes = JSON.parse(boite.chercherSelon(recherche, 0, 0, rechercheNonLus))
+        var lignes = JSON.parse(boite.chercherSelon(recherche, 0, 0, "", rechercheNonLus))
         var vus = {}
         for (var i = 0; i < lignes.length; ++i)
             vus[lignes[i].uid] = true
@@ -4897,6 +4935,7 @@ ApplicationWindow {
 
     function sortirRechercheGlobale() {
         rechercheCompte = 0
+        rechercheChemin = ""
         rechercheGlobale = false
         rechercheNonLusSeuls = false
         cleChoisie = ""
@@ -4911,7 +4950,7 @@ ApplicationWindow {
     /// encore : les dossiers qui restaient ne sont pas interrogés.
     function arreterRecherchePartout() {
         if (dossiersFaits < dossiersPartout)
-            boite.chercherPartoutSurLeServeur("", false)
+            boite.chercherPartoutSurLeServeur("", false, false)
         trouvesPartout = ({})
         dossiersPartout = 0
         dossiersFaits = 0
@@ -4924,11 +4963,11 @@ ApplicationWindow {
         var nombre = accord(modeleMessages.count, qsTr("résultat"), qsTr("résultats"))
         if (resultatsTronques)
             nombre = qsTr("les %1 plus récents").arg(modeleMessages.count)
+        var debut = qsTr("Recherche « %1 » dans toutes les boîtes : %2").arg(recherche).arg(nombre)
         if (rechercheNonLusSeuls)
-            return qsTr("Non lus, %1 : %2 (messages déjà sur le poste).")
+            debut = qsTr("Non lus, %1 : %2")
                     .arg(rechercheCompte > 0 ? qsTr("tous les dossiers de la boîte") : qsTr("toutes les boîtes"))
                     .arg(accord(modeleMessages.count, qsTr("message"), qsTr("messages")))
-        var debut = qsTr("Recherche « %1 » dans toutes les boîtes : %2").arg(recherche).arg(nombre)
         if (dossiersPartout === 0)
             return debut + qsTr(" (messages déjà sur le poste seulement : aucun compte connecté).")
         if (dossiersFaits < dossiersPartout)
@@ -6252,6 +6291,59 @@ ApplicationWindow {
             messageEtat.texte = boite.erreur
     }
 
+    /// Une pièce jointe du message affiché vers une rédaction, sans
+    /// l'enregistrer d'abord (0.6.45, demande d'un utilisateur) : copiée
+    /// (Ctrl+V la joint, comme un fichier de l'explorateur) ou glissée sur la
+    /// rédaction. Le noyau l'écrit comme pour « Joindre à… » ; son adresse
+    /// `file:` part ensuite dans le presse-papier, ou dans le glisser (cf.
+    /// ReactionsNoyau.onPieceAJoindre).
+    function clePiece(piece) {
+        return piece ? [boite.compteCourant, boite.dossierCourant, uidCourant, piece.indice].join("\u0001") : ""
+    }
+    function copierPiece(piece) {
+        if (!piece || uidCourant <= 0)
+            return
+        var prete = piecesPretes[clePiece(piece)]
+        if (prete) {
+            deposerPiece(prete, piece.nom)
+            return
+        }
+        preparerPiece(piece, "copier")
+    }
+    /// Au début d'un glisser : la pièce s'écrit pendant que la souris bouge ;
+    /// le glisser part dès qu'elle est prête.
+    function preparerGlisser(piece) {
+        if (piece && uidCourant > 0 && !piecesPretes[clePiece(piece)])
+            preparerPiece(piece, "glisser")
+    }
+    function preparerPiece(piece, usage) {
+        pieceCible = usage
+        piecePreparee = clePiece(piece)
+        messageEtat.texte = qsTr("Préparation de %1…").arg(piece.nom)
+        if (!boite.joindrePiece(uidCourant, piece.indice)) {
+            pieceCible = ""
+            messageEtat.texte = boite.erreur
+        }
+    }
+    /// Pièce prête : notée, et copiée si c'était demandé.
+    function pieceDisponible(url) {
+        var pretes = Object.assign({}, piecesPretes)
+        pretes[piecePreparee] = url
+        piecesPretes = pretes
+        var nom = decodeURIComponent(url.toString().split("/").pop())
+        if (pieceCible === "copier")
+            deposerPiece(url, nom)
+        else
+            messageEtat.texte = qsTr("%1 prête : glissez-la sur le message en cours de rédaction.").arg(nom)
+        pieceCible = ""
+        piecePreparee = ""
+    }
+    function deposerPiece(url, nom) {
+        messageEtat.texte = pressePapier.deposerFichiers([url.toString()])
+                ? qsTr("%1 copiée : collez-la (Ctrl+V) dans le message en cours de rédaction.").arg(nom)
+                : qsTr("%1 n'a pas pu être copiée.").arg(nom)
+    }
+
     /// Un courriel en pièce jointe (demande d'une utilisatrice, 10/11 : « joindre
     /// un mail en pièce jointe, quel qu'il soit ») : les messages choisis,
     /// entiers, joints en `.eml` (message/rfc822) nommés d'après leur objet,
@@ -7177,12 +7269,18 @@ ApplicationWindow {
             // Scénario « recherche-portee » (0.8.2, 0.8.3 ; banc LOT1=1).
             if (essai.scenario === "recherche-portee")
                 scenarios.lancerScenarioRecherchePortee()
+            // « recherche-boite » (0.6.45 ; banc PARTAGE=1 LOT1=1).
+            if (essai.scenario === "recherche-boite")
+                scenarios.lancerScenarioRechercheBoite()
             // « non-lus-seuls » : demande d'une utilisatrice du 06/11/2026.
             if (essai.scenario === "non-lus-seuls")
                 scenarios.lancerScenarioNonLusSeuls()
             // « recherche-entree » : demande d'un utilisateur du 04/11/2026.
             if (essai.scenario === "recherche-entree")
                 scenarios.lancerScenarioRechercheEntree()
+            // « copier-piece » (0.6.45 ; banc PIECE=1).
+            if (essai.scenario === "copier-piece")
+                scenarios.lancerScenarioCopierPiece()
             // « recherche-objet » (0.6.38 ; banc MARGES=1) : demande d'un
             // utilisateur du 04/11/2026.
             if (essai.scenario === "recherche-objet")

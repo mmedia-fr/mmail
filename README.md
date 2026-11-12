@@ -185,7 +185,9 @@ de projet interne.
 - **menu « ? »** : aide (F1), « Envoyer une suggestion… » (rédaction adressée
   à l'équipe de MMail, version et système dans l'objet ; sans compte, par la
   messagerie du poste) et « À propos » — versions de MMail, du noyau et
-  de Qt ;
+  de Qt. Sur ordinateur, le bouton « Suggestion », tout à droite de la barre
+  du haut (fenêtre d'au moins 1 024 points, ou disposition « Deux étages »),
+  fait la même chose que « Envoyer une suggestion… » ;
 - **ascenseurs toujours visibles** dès qu'une colonne a de quoi défiler ;
 - **trombone** dans la liste pour un message à pièces jointes : supposé
   d'après les en-têtes (`multipart/mixed`, ou corps entier qui n'est pas du
@@ -310,15 +312,22 @@ de projet interne.
   MMail se propose aussi pour les liens « mailto: », dans les applications par
   défaut de Windows ;
 - **masquage local** des dossiers peu utilisés, réaffichage en un clic ;
-- affichage du **message brut** (bouton « Source ») ;
+- affichage du **message brut** (bouton « Source » ; sous Android, « … ›
+  Autres › Afficher la source », qui ramène aussi au message) ;
 - **barres d'actions compactes** : au-dessus du message affiché (bureau comme
   téléphone), dans la barre du haut du bureau et en tête du menu d'un message,
   des pictogrammes encadrés pour répondre, répondre à tous, transférer,
   déplacer, classer indésirable, marquer lu ou non lu, poser un drapeau,
   supprimer, écrire un nouveau message, actualiser ; un nom court pour ce qui
   est propre à MMail (« Source », « BàL », « Masqués », « Autres ») ; le nom
-  complet et le raccourci en infobulle, à l'appui long au doigt. Le menu d'un
-  message tient en sept lignes, la barre du message en une ;
+  complet et le raccourci en infobulle, à l'appui long au doigt. La barre du
+  message range ses boutons en quatre groupes : répondre, répondre à tous,
+  transférer ; marquer lu ou non lu, déplacer ; indésirable, supprimer ;
+  source. Le menu d'un message tient en sept lignes, la barre du message en
+  une, avec les pictogrammes seuls. Au bureau, « Affichage › Boutons des barres › Pictogrammes et texte »
+  met le nom à côté de chaque pictogramme, dans la barre du message (qui passe
+  alors à la ligne si le volet est étroit) et dans la barre du haut (sur une
+  seule ligne, à partir de 1 180 points de large) ;
 - **copie automatique de la sélection**, comme dans MMdedit : un texte
   sélectionné dans un message part au presse-papier, sauf ce qu'un autre
   logiciel vient d'y déposer, protégé une minute ; clic droit sur le message :

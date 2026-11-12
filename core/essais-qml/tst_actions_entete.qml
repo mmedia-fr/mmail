@@ -3,7 +3,8 @@
 // 10/11) : « Nouveau message », « Actualiser » et « Marquer comme lu » en
 // pictogrammes encadrés, nom complet et raccourci en infobulle ; « BàL » et
 // « Masqués », noms courts de ce qui est propre à MMail, au nom complet en
-// infobulle.
+// infobulle ; le nom à côté du pictogramme avec « Pictogrammes et texte »,
+// sauf sur une barre trop étroite (12/11).
 import QtQuick
 import QtQuick.Controls
 import QtTest
@@ -42,6 +43,8 @@ Item {
             fenetre.appels = []
             boite.appels = []
             fenetre.etatChoix = { nonLu: false, nombre: 1, sansDrapeau: true }
+            fenetre.libellesBarres = false
+            fenetre.enteteSerree = false
         }
 
         function test_pictogrammes() {
@@ -69,6 +72,24 @@ Item {
             compare(masques.text, "Masqués")
             verify(masques.ToolTip.text.indexOf("Dossiers masqués") === 0, masques.ToolTip.text)
             verify(actions.implicitWidth < 400, "barre du haut : " + actions.implicitWidth + " px")
+        }
+
+        function test_pictogrammes_et_texte() {
+            var noms = ["boutonNouveau", "boutonActualiser", "boutonMarquerLuBarre"]
+            var avant = actions.implicitWidth
+            fenetre.libellesBarres = true
+            wait(50)
+            for (var i = 0; i < noms.length; ++i) {
+                var b = enfant(noms[i])
+                verify(!b.iconeSeule, noms[i] + " avec son nom")
+                verify(b.width > 60, noms[i] + " : " + b.width + " px")
+            }
+            verify(actions.implicitWidth > avant, "plus large avec les noms : " + actions.implicitWidth + " px")
+            // Sur une seule ligne trop étroite : les pictogrammes seuls.
+            fenetre.enteteSerree = true
+            wait(50)
+            for (var j = 0; j < noms.length; ++j)
+                verify(enfant(noms[j]).iconeSeule, noms[j] + " en pictogramme sur une barre serrée")
         }
 
         function test_actions() {

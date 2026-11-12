@@ -992,11 +992,30 @@ QtObject {
         attente.start()
     }
 
-    /// Scénario d'essai « suggestion » : sans connexion, l'entrée du menu « ? »
-    /// ouvre une rédaction adressée à `adresseSuggestions`, version et système
-    /// dans l'objet.
+    /// Scénario d'essai « suggestion » : sans connexion, le bouton
+    /// « Suggestion » de la barre du haut (au bureau ; au doigt, l'entrée du
+    /// menu « ? ») ouvre une rédaction adressée à `adresseSuggestions`,
+    /// version et système dans l'objet — ou, sans aucun compte dans le
+    /// profil (banc neuf), passe la main à la messagerie du poste.
     function etapeScenarioSuggestion() {
-        var r = envoyerSuggestion()
+        var bouton = objetNomme(fenetre.menuBar, "boutonSuggestion")
+        // Au bureau, à partir de 1 024 points sur une seule ligne.
+        var attendu = !tactile && !compact && (deuxEtages || fenetre.width >= 1024)
+        console.log("scenario: bouton « Suggestion »", attendu ? "dans la barre du haut" : "absent",
+                    "| largeur", fenetre.width, !!bouton && bouton.visible === attendu ? "OK" : "ECHEC")
+        var sansCompte = comptesConnus.length === 0
+        var avant = redactionActive
+        var r = null
+        if (!tactile && bouton && bouton.visible) {
+            bouton.clicked()
+            r = redactionActive !== avant ? redactions[redactionActive] || null : null
+        } else {
+            r = envoyerSuggestion()
+        }
+        if (sansCompte) {
+            console.log("scenario: suggestion sans compte : messagerie du poste", r === null ? "OK" : "ECHEC")
+            return
+        }
         var a = r ? r.contenu().a : ""
         var objet = r ? r.contenu().objet : ""
         console.log("scenario: suggestion,", a, "|", objet,
@@ -1514,7 +1533,9 @@ QtObject {
     /// la fenêtre avec le message affiché, puis le menu d'un message — au doigt
     /// (MMAIL_TACTILE=1), celui de « … » —, en images <bureau|android>-<volet|menu>.png ;
     /// et ce qui fait la barre compacte : une seule ligne de boutons dans le
-    /// volet, sept lignes au plus dans le menu.
+    /// volet, sept lignes au plus dans le menu. L'ordre du 12/11 (répondre,
+    /// répondre à tous, transférer | lu, déplacer | indésirable, supprimer |
+    /// source) ; au bureau, « Pictogrammes et texte » en image bureau-volet-texte.
     function etapeScenarioCapturesBarres() {
         var echecs = 0
         var bilan = function(texte, bon) {
@@ -1544,9 +1565,24 @@ QtObject {
             function() { choisir(0, 0) },
             function() {
                 var r = objetNomme(colonneLecture, "boutonRepondre")
+                var j = objetNomme(colonneLecture, "boutonIndesirable")
+                var d = objetNomme(colonneLecture, "boutonSupprimer")
                 var s = objetNomme(colonneLecture, "boutonSource")
-                bilan("barre du volet sur une ligne (Répondre y " + (r ? r.y : "?") + ", Source y " + (s ? s.y : "?") + ")",
-                      !!r && !!s && r.visible && s.visible && r.y === s.y && s.text === qsTr("Source"))
+                // Positions dans la fenêtre : les groupes sont des rangées.
+                var y = function(e) { return e ? Math.round(e.mapToItem(null, 0, 0).y) : -1 }
+                var x = function(e) { return e ? e.mapToItem(null, 0, 0).x : -1 }
+                bilan("barre du volet sur une ligne (Répondre y " + y(r) + ", Indésirable y " + y(j)
+                      + ", Supprimer y " + y(d) + ")",
+                      !!r && !!j && !!d && r.visible && j.visible && d.visible && y(r) === y(j) && y(j) === y(d))
+                bilan("« Indésirable » juste avant « Supprimer »", !!j && !!d && x(j) < x(d) && x(d) - (x(j) + j.width) <= 8)
+                var ordre = ["boutonRepondre", "boutonRepondreTous", "boutonTransferer", "boutonMarquerLu",
+                             "boutonDeplacer", "boutonIndesirable", "boutonSupprimer"]
+                var xs = ordre.map(function(nom) { return x(objetNomme(colonneLecture, nom)) })
+                var range = xs.every(function(v, k) { return v >= 0 && (k === 0 || v > xs[k - 1]) })
+                bilan("ordre de la barre (" + xs.map(Math.round).join(", ") + ")", range)
+                // Au doigt, « Source » est dans « … » (12/11).
+                bilan(tactile ? "« Source » hors de la barre au doigt" : "« Source » en toutes lettres",
+                      !!s && (tactile ? !s.visible : s.visible && y(r) === y(s) && s.text === qsTr("Source")))
                 saisir("volet")
             },
             function() {
@@ -1566,6 +1602,25 @@ QtObject {
             },
             function() {
                 menuMessage.close()
+                // Au bureau : le nom à côté des pictogrammes (12/11).
+                if (!tactile)
+                    reglages.libellesBoutons = true
+            },
+            function() {
+                if (!tactile) {
+                    var d = objetNomme(colonneLecture, "boutonSupprimer")
+                    var n = objetNomme(entete, "boutonNouveau")
+                    bilan("« Supprimer » avec son nom (" + (d ? d.width : "?") + " px)", !!d && d.libelleVisible && d.width > 60)
+                    bilan("« Nouveau message » avec son nom, fenêtre de " + fenetre.width + " px",
+                          !!n && (fenetre.enteteSerree ? n.iconeSeule : !n.iconeSeule))
+                    // L'image se prend à l'image suivante : le réglage se
+                    // rend à l'étape d'après.
+                    saisir("volet-texte")
+                }
+            },
+            function() {
+                if (!tactile)
+                    reglages.libellesBoutons = false
                 console.log("scenario: captures-barres " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
                 Qt.quit()
             }
@@ -5464,6 +5519,110 @@ QtObject {
     /// le message, pas les boutons. « Devis joint » (banc PIECE=1) affiché, le
     /// zoom passe à 1,5 : le corps et l'objet grossissent d'autant ; le bouton
     /// « Répondre » et le bandeau des pièces jointes gardent leur taille.
+    // Scénario « recherche-boite » (0.6.45), banc PARTAGE=1 LOT1=1, un seul
+    // compte : « Cette boîte » depuis la boîte de réception ne rend rien de la
+    // boîte partagée de deux@, et depuis celle-ci rien d'autre qu'elle ; « Non
+    // lus » sans texte interroge le serveur, dossiers jamais ouverts compris.
+    function lancerScenarioRechercheBoite(essais) {
+        var n = essais || 0
+        var partagee = ""
+        for (var a = 0; a < modeleArborescence.count; ++a) {
+            var d = modeleArborescence.get(a)
+            // « Shared/deux@essai.test » (Dovecot du banc), ou sa boîte de
+            // réception « …/INBOX » quand le serveur la montre ainsi (Mailcow).
+            if (d.genre === "dossier" && d.chemin.indexOf("Shared/") === 0
+                    && (partagee.length === 0 || /\/INBOX$/.test(d.chemin)))
+                partagee = d.chemin
+        }
+        var trouve = false
+        for (var j = 0; j < modeleMessages.count; ++j)
+            if (modeleMessages.get(j).sujet === "Essai 1")
+                trouve = true
+        if ((!trouve || partagee.length === 0) && n < 40) {
+            plusTard(1000, function() { lancerScenarioRechercheBoite(n + 1) })
+            return
+        }
+        var echecs = 0
+        var bilan = function(texte, bon) {
+            if (!bon)
+                echecs += 1
+            console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
+        }
+        bilan("boîte partagée vue : " + partagee, partagee.length > 0)
+        var un = boite.compteCourant
+        var lignes = function() {
+            var l = []
+            for (var k = 0; k < modeleMessages.count; ++k)
+                l.push(modeleMessages.get(k))
+            return l
+        }
+        var resume = function(l) {
+            return l.map(function(r) { return r.sujet + "@" + (r.chemin || boite.dossierCourant) + (r.lu ? "(lu)" : "") }).join(" | ")
+        }
+        var partage = function(r) { return (r.chemin || "").indexOf("Shared/") === 0 }
+        // Fin de la recherche sur le serveur, dossier par dossier.
+        var apresServeur = function(suite, k) {
+            k = k || 0
+            if (fenetre.dossiersFaits < fenetre.dossiersPartout && k < 90) {
+                plusTard(500, function() { apresServeur(suite, k + 1) })
+                return
+            }
+            plusTard(800, suite)
+        }
+        colonneListe.porteeRecherche.currentIndex = 1
+        colonneListe.nonLusRecherche.checked = false
+        fenetre.lancerRecherche("essai")
+        apresServeur(function() {
+            var l = lignes()
+            bilan("boîte personnelle, " + fenetre.dossiersPartout + " dossier(s) interrogé(s) : " + resume(l),
+                  l.length > 0 && !l.some(partage) && fenetre.dossiersPartout > 0)
+            fenetre.quitterRecherche()
+            fenetre.ouvrirDossier(un, partagee)
+            plusTard(3000, function() {
+                colonneListe.porteeRecherche.currentIndex = 1
+                fenetre.lancerRecherche("essai")
+                apresServeur(function() {
+                    var l2 = lignes()
+                    var prefixe = partagee.replace(/\/INBOX$/, "")
+                    bilan("boîte partagée seule, " + fenetre.dossiersPartout + " dossier(s) : " + resume(l2),
+                          l2.length > 0 && l2.every(function(r) { return (r.chemin || "").indexOf(prefixe) === 0 }))
+                    fenetre.quitterRecherche()
+                    fenetre.ouvrirDossier(un, "INBOX")
+                    plusTard(3000, function() {
+                        colonneListe.porteeRecherche.currentIndex = 1
+                        colonneListe.nonLusRecherche.checked = true
+                        fenetre.lancerRecherche("")
+                        apresServeur(function() {
+                            var l3 = lignes()
+                            var chemins = {}
+                            l3.forEach(function(r) { chemins[r.chemin] = true })
+                            bilan("non lus, cette boîte, " + fenetre.dossiersPartout + " dossier(s) au serveur : " + resume(l3),
+                                  fenetre.dossiersPartout > 0 && l3.length > 0 && !l3.some(partage)
+                                  && l3.every(function(r) { return !r.lu }) && Object.keys(chemins).length >= 2)
+                            bilan("état : " + messageEtat.texte, messageEtat.texte.indexOf("Non lus") === 0)
+                            fenetre.quitterRecherche()
+                            plusTard(2000, function() {
+                                // Le dossier actif : l'index, puis le serveur.
+                                colonneListe.porteeRecherche.currentIndex = 0
+                                colonneListe.nonLusRecherche.checked = true
+                                fenetre.lancerRecherche("")
+                                plusTard(6000, function() {
+                                    var l4 = lignes()
+                                    bilan("non lus du dossier actif : " + resume(l4) + " | " + messageEtat.texte,
+                                          l4.length > 0 && l4.every(function(r) { return !r.lu })
+                                          && messageEtat.texte.indexOf("Non lus seulement : ") === 0
+                                          && messageEtat.texte.indexOf("serveur") < 0)
+                                    console.log("scenario: recherche-boite " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
+                                    Qt.quit()
+                                })
+                            })
+                        })
+                    })
+                })
+            })
+        })
+    }
+
     // Scénario « recherche-portee » (0.8.2, 0.8.3), banc LOT1=1 : la portée
     // « Cette boîte (tous dossiers) » ne rend que les messages du compte, de
     // plusieurs dossiers ; « Toutes les boîtes » ajoute ceux de l'autre
@@ -6099,5 +6258,76 @@ QtObject {
             }
         })
         tic.start()
+    }
+
+    // Scénario « copier-piece » (0.6.45), banc PIECE=1 : la pièce de « Devis
+    // joint » copiée du volet de lecture se colle dans une rédaction ; copiée
+    // de cette rédaction, elle se colle dans une autre ; préparée pour un
+    // glisser, elle est prête sans rien ouvrir.
+    function lancerScenarioCopierPiece(essais, etat) {
+        var n = essais || 0
+        var e = etat || { echecs: 0 }
+        var bilan = function(texte, bon) {
+            if (!bon)
+                e.echecs += 1
+            console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
+        }
+        var fin = function() {
+            console.log("scenario: copier-piece " + (e.echecs === 0 ? "OK" : "ECHEC (" + e.echecs + ")"))
+            Qt.quit()
+        }
+        var attendre = function(condition, suite, k) {
+            k = k || 0
+            if (!condition() && k < 40) {
+                plusTard(500, function() { attendre(condition, suite, k + 1) })
+                return
+            }
+            suite(condition())
+        }
+        var indice = -1
+        for (var j = 0; j < modeleMessages.count; ++j)
+            if (modeleMessages.get(j).sujet === "Devis joint")
+                indice = j
+        if (indice < 0 && n < 40) {
+            plusTard(1000, function() { lancerScenarioCopierPiece(n + 1, e) })
+            return
+        }
+        fenetre.choisir(indice, 0)
+        attendre(function() { return fenetre.pieces.length > 0 }, function(vu) {
+            bilan("pièces affichées : " + fenetre.pieces.length, vu)
+            if (!vu)
+                return fin()
+            var piece = fenetre.pieces[0]
+            fenetre.copierPiece(piece)
+            attendre(function() { return pressePapier.fichiers().length > 0 }, function(copie) {
+                var f = pressePapier.fichiers()
+                bilan("presse-papier : " + f.join(", ") + " | " + messageEtat.texte,
+                      copie && f.length === 1 && /devis\.pdf$/.test(f[0]) && messageEtat.texte.indexOf("copiée") >= 0)
+                var r = fenetre.ouvrirRedaction(boite.compteCourant)
+                r.pret()
+                plusTard(1500, function() {
+                    bilan("collée en pièce jointe", r.collerPieces() && r.pieces.length === 1 && r.pieces[0].nom === "devis.pdf")
+                    // De la rédaction vers une autre.
+                    pressePapier.deposer("")
+                    r.copierPiece(r.pieces[0])
+                    var f2 = pressePapier.fichiers()
+                    var r2 = fenetre.ouvrirRedaction(boite.compteCourant)
+                    r2.pret()
+                    plusTard(1500, function() {
+                        bilan("de rédaction à rédaction : " + f2.join(", "),
+                              f2.length === 1 && r2.collerPieces() && r2.pieces.length === 1 && r2.pieces[0].nom === "devis.pdf")
+                        // Un glisser : la pièce s'écrit, sans rédaction ouverte.
+                        fenetre.piecesPretes = ({})
+                        var avant = Object.keys(fenetre.redactions).length
+                        fenetre.preparerGlisser(piece)
+                        attendre(function() { return (fenetre.piecesPretes[fenetre.clePiece(piece)] || "").length > 0 }, function(prete) {
+                            bilan("prête à glisser : " + (fenetre.piecesPretes[fenetre.clePiece(piece)] || "—") + " | " + messageEtat.texte,
+                                  prete && Object.keys(fenetre.redactions).length === avant && fenetre.pieceCible === "")
+                            fin()
+                        })
+                    })
+                })
+            })
+        })
     }
 }

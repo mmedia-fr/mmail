@@ -1478,6 +1478,7 @@ Pane {
                     Label { text: qsTr("Titre") }
                     TextField {
                         id: champTitre
+                        objectName: "champTitre"
                         MenuSaisie {}
                         Layout.fillWidth: true
                         placeholderText: qsTr("Objet de l'événement")
@@ -1489,6 +1490,7 @@ Pane {
                         Layout.fillWidth: true
                         TextField {
                             id: champLieu
+                            objectName: "champLieu"
                             MenuSaisie {}
                             Layout.fillWidth: true
                         }
@@ -1661,6 +1663,7 @@ Pane {
                     }
                     TextArea {
                         id: champDescription
+                        objectName: "champDescription"
                         MenuSaisie {}
                         Layout.fillWidth: true
                         Layout.preferredHeight: 110
@@ -1699,6 +1702,7 @@ Pane {
                     onClicked: popupSaisie.close()
                 }
                 Button {
+                    objectName: "boutonEnregistrerEvenement"
                     text: qsTr("Enregistrer")
                     enabled: !popupSaisie.enCours
                     highlighted: true

@@ -7196,6 +7196,9 @@ ApplicationWindow {
             // Scénario « marquer-lu » (0.8.1).
             if (essai.scenario === "marquer-lu")
                 scenarios.lancerScenarioMarquerLu()
+            // Scénario « visio » (0.7.0, banc AGENDA=1).
+            if (essai.scenario === "visio")
+                scenarios.lancerScenarioVisio()
             // Scénario « zoom-lecture » (0.6.29) : le zoom du volet de lecture
             // laisse les boutons à leur taille (banc PIECE=1).
             if (essai.scenario === "zoom-lecture")

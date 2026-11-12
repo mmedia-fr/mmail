@@ -565,6 +565,10 @@ ApplicationWindow {
         // Liste des messages regroupée par date de réception, comme Outlook
         // (0.6.29, demande du mainteneur du 30/10 ; cf. fenetre.bornesGroupes).
         property bool groupesDates: true
+        // Boutons de la barre du message et de la barre du haut : le nom à
+        // côté du pictogramme (demande du mainteneur du 12/11, « Affichage ›
+        // Boutons des barres »). Au bureau seulement : cf. libellesBarres.
+        property bool libellesBoutons: false
     }
 
     // ---------------------------------------------------------- apparences
@@ -616,6 +620,12 @@ ApplicationWindow {
     // réduit à son icône ; plus étroite encore, des marges resserrées et le
     // signe sans le nom du logiciel.
     readonly property bool enteteEtroite: !deuxEtages && width < 940
+    // Pictogrammes et texte dans les barres (reglages.libellesBoutons) : au
+    // bureau seulement, un téléphone n'a pas la place. Sur une seule ligne,
+    // la barre du haut ne garde les noms qu'à partir de 1 180 points, le seuil
+    // qui valait pour ses libellés jusqu'à la 0.6.43.
+    readonly property bool libellesBarres: !tactile && reglages.libellesBoutons
+    readonly property bool enteteSerree: !deuxEtages && width < 1180
 
     readonly property var jeuxApparence: avecApparenceOrganisation(avecApparencePerso(jeuxDeBase, reglagesApparence.perso),
                                                                    personnalisation)

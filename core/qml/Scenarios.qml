@@ -1514,7 +1514,9 @@ QtObject {
     /// la fenêtre avec le message affiché, puis le menu d'un message — au doigt
     /// (MMAIL_TACTILE=1), celui de « … » —, en images <bureau|android>-<volet|menu>.png ;
     /// et ce qui fait la barre compacte : une seule ligne de boutons dans le
-    /// volet, sept lignes au plus dans le menu.
+    /// volet, sept lignes au plus dans le menu. L'ordre du 12/11 (répondre,
+    /// répondre à tous, transférer | lu, déplacer | indésirable, supprimer |
+    /// source) ; au bureau, « Pictogrammes et texte » en image bureau-volet-texte.
     function etapeScenarioCapturesBarres() {
         var echecs = 0
         var bilan = function(texte, bon) {
@@ -1544,9 +1546,24 @@ QtObject {
             function() { choisir(0, 0) },
             function() {
                 var r = objetNomme(colonneLecture, "boutonRepondre")
+                var j = objetNomme(colonneLecture, "boutonIndesirable")
+                var d = objetNomme(colonneLecture, "boutonSupprimer")
                 var s = objetNomme(colonneLecture, "boutonSource")
-                bilan("barre du volet sur une ligne (Répondre y " + (r ? r.y : "?") + ", Source y " + (s ? s.y : "?") + ")",
-                      !!r && !!s && r.visible && s.visible && r.y === s.y && s.text === qsTr("Source"))
+                // Positions dans la fenêtre : les groupes sont des rangées.
+                var y = function(e) { return e ? Math.round(e.mapToItem(null, 0, 0).y) : -1 }
+                var x = function(e) { return e ? e.mapToItem(null, 0, 0).x : -1 }
+                bilan("barre du volet sur une ligne (Répondre y " + y(r) + ", Indésirable y " + y(j)
+                      + ", Supprimer y " + y(d) + ")",
+                      !!r && !!j && !!d && r.visible && j.visible && d.visible && y(r) === y(j) && y(j) === y(d))
+                bilan("« Indésirable » juste avant « Supprimer »", !!j && !!d && x(j) < x(d) && x(d) - (x(j) + j.width) <= 8)
+                var ordre = ["boutonRepondre", "boutonRepondreTous", "boutonTransferer", "boutonMarquerLu",
+                             "boutonDeplacer", "boutonIndesirable", "boutonSupprimer"]
+                var xs = ordre.map(function(nom) { return x(objetNomme(colonneLecture, nom)) })
+                var range = xs.every(function(v, k) { return v >= 0 && (k === 0 || v > xs[k - 1]) })
+                bilan("ordre de la barre (" + xs.map(Math.round).join(", ") + ")", range)
+                // Au doigt, « Source » est dans « … » (12/11).
+                bilan(tactile ? "« Source » hors de la barre au doigt" : "« Source » en toutes lettres",
+                      !!s && (tactile ? !s.visible : s.visible && y(r) === y(s) && s.text === qsTr("Source")))
                 saisir("volet")
             },
             function() {
@@ -1566,6 +1583,25 @@ QtObject {
             },
             function() {
                 menuMessage.close()
+                // Au bureau : le nom à côté des pictogrammes (12/11).
+                if (!tactile)
+                    reglages.libellesBoutons = true
+            },
+            function() {
+                if (!tactile) {
+                    var d = objetNomme(colonneLecture, "boutonSupprimer")
+                    var n = objetNomme(entete, "boutonNouveau")
+                    bilan("« Supprimer » avec son nom (" + (d ? d.width : "?") + " px)", !!d && d.libelleVisible && d.width > 60)
+                    bilan("« Nouveau message » avec son nom, fenêtre de " + fenetre.width + " px",
+                          !!n && (fenetre.enteteSerree ? n.iconeSeule : !n.iconeSeule))
+                    // L'image se prend à l'image suivante : le réglage se
+                    // rend à l'étape d'après.
+                    saisir("volet-texte")
+                }
+            },
+            function() {
+                if (!tactile)
+                    reglages.libellesBoutons = false
                 console.log("scenario: captures-barres " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
                 Qt.quit()
             }

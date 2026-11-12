@@ -60,7 +60,25 @@ Item {
             tryCompare(menuMessage, "visible", false)
             fenetre.appels = []
             fenetre.dossierDeReprise = false
+            fenetre.tactile = false
+            fenetre.sourceVisible = false
             boite.annulation = ""
+        }
+        function sousMenu(titre) {
+            for (var i = 0; i < menuMessage.count; ++i) {
+                var e = menuMessage.itemAt(i)
+                if (e && e.subMenu && e.subMenu.title === titre)
+                    return e.subMenu
+            }
+            return null
+        }
+        function entreeNommee(menu, nom) {
+            for (var i = 0; i < menu.count; ++i) {
+                var e = menu.itemAt(i)
+                if (e && e.objectName === nom)
+                    return e
+            }
+            return null
         }
 
         function test_sept_lignes() {
@@ -96,6 +114,28 @@ Item {
                 tryCompare(menuMessage, "visible", false)
                 compare(fenetre.appels, [cas[i][1]], cas[i][0])
             }
+        }
+
+        // Au doigt, « Source » n'est plus dans la barre (12/11) : « Autres ›
+        // Afficher la source » y mène, et en ramène.
+        function test_source_au_doigt() {
+            var autres = sousMenu("Autres")
+            verify(autres, "sous-menu « Autres »")
+            var s = entreeNommee(autres, "entreeSource")
+            verify(s, "entrée de la source")
+            compare(s.text, "Afficher la source")
+            fenetre.sourceVisible = true
+            compare(s.text, "Afficher la source", "au bureau, le bouton « Message » ramène au message")
+            fenetre.tactile = true
+            compare(s.text, "Afficher le message", "au doigt, retour au message par le menu")
+            s.triggered()
+            compare(fenetre.appels, ["source"])
+            verify(fenetre.sourceVisible, "la bascule part de la source affichée")
+            fenetre.sourceVisible = false
+            compare(s.text, "Afficher la source")
+            fenetre.appels = []
+            s.triggered()
+            compare(fenetre.appels, ["source"])
         }
 
         function test_brouillon() {

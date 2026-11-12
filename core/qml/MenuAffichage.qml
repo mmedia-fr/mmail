@@ -67,6 +67,7 @@ Menu {
     Component.onCompleted: {
         if (fenetre.tactile) {
             menuAffichage.removeMenu(menuDisposition)
+            menuAffichage.removeMenu(menuBoutonsBarres)
             menuAffichage.removeMenu(menuDoubleClic)
         }
     }
@@ -83,6 +84,29 @@ Menu {
                 checked: fenetre.disposition === modelData
                 onTriggered: fenetre.choisirDisposition(modelData)
             }
+        }
+    }
+    // Boutons de la barre du message et de la barre du haut (demande du
+    // mainteneur du 12/11) : le pictogramme seul, comme depuis la 0.6.44, ou
+    // avec son nom à côté. Au bureau seulement (retiré à la création).
+    Menu {
+        id: menuBoutonsBarres
+        objectName: "menuBoutonsBarres"
+        title: qsTr("Boutons des barres")
+        onAboutToShow: width = fenetre.largeurMenu(menuBoutonsBarres)
+        MenuItem {
+            objectName: "pictogrammesSeuls"
+            text: qsTr("Pictogrammes seuls")
+            checkable: true
+            checked: !reglages.libellesBoutons
+            onTriggered: reglages.libellesBoutons = false
+        }
+        MenuItem {
+            objectName: "pictogrammesEtTexte"
+            text: qsTr("Pictogrammes et texte")
+            checkable: true
+            checked: reglages.libellesBoutons
+            onTriggered: reglages.libellesBoutons = true
         }
     }
     // Marges du corps d'un message (0.6.23 ; en haut et en bas aussi depuis

@@ -13,17 +13,20 @@ import fr.mmedia.mmail
 
 // Barre compacte (11/11, choix du mainteneur) : pictogrammes encadrés pour les
 // actions évidentes, noms courts pour celles propres à MMail, nom complet et
-// raccourci en infobulle.
+// raccourci en infobulle. Le nom à côté du pictogramme avec « Affichage ›
+// Boutons des barres › Pictogrammes et texte » (12/11), si la place le permet
+// (fenetre.enteteSerree).
 RowLayout {
     id: ae
     property bool sombre: fenetre.marque !== null
+    readonly property bool libelles: fenetre.libellesBarres && !fenetre.enteteSerree
     spacing: 6
     BoutonOutil {
         sombre: ae.sombre
         principal: true
         objectName: "boutonNouveau"
         dessin: fenetre.dessinerPlus
-        iconeSeule: true
+        iconeSeule: !ae.libelles
         text: qsTr("Nouveau message")
         infobulle: qsTr("Nouveau message (Ctrl+N)")
         onClicked: fenetre.rediger("nouveau")
@@ -32,7 +35,7 @@ RowLayout {
         sombre: ae.sombre
         objectName: "boutonActualiser"
         dessin: fenetre.dessinerActualiser
-        iconeSeule: true
+        iconeSeule: !ae.libelles
         text: qsTr("Actualiser")
         infobulle: qsTr("Actualiser (F5)")
         onClicked: fenetre.module === "agenda" ? boite.synchroniserAgendas(true) : boite.actualiser()
@@ -46,7 +49,7 @@ RowLayout {
         enabled: fenetre.etatChoix.nombre > 0
         readonly property bool versLu: fenetre.etatChoix.nonLu || fenetre.etatChoix.nombre === 0
         dessin: versLu ? fenetre.dessinerLu : fenetre.dessinerNonLu
-        iconeSeule: true
+        iconeSeule: !ae.libelles
         text: versLu ? qsTr("Marquer comme lu") : qsTr("Marquer comme non lu")
         infobulle: versLu ? qsTr("Marquer comme lu (Ctrl+Q)") : qsTr("Marquer comme non lu (Ctrl+U)")
         onClicked: fenetre.marquerSelection(fenetre.etatChoix.nonLu)

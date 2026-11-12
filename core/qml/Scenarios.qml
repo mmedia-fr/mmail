@@ -1514,7 +1514,9 @@ QtObject {
     /// la fenêtre avec le message affiché, puis le menu d'un message — au doigt
     /// (MMAIL_TACTILE=1), celui de « … » —, en images <bureau|android>-<volet|menu>.png ;
     /// et ce qui fait la barre compacte : une seule ligne de boutons dans le
-    /// volet, sept lignes au plus dans le menu.
+    /// volet, sept lignes au plus dans le menu. L'ordre du 12/11 (répondre,
+    /// répondre à tous, transférer | lu, déplacer | indésirable, supprimer |
+    /// source) ; au bureau, « Pictogrammes et texte » en image bureau-volet-texte.
     function etapeScenarioCapturesBarres() {
         var echecs = 0
         var bilan = function(texte, bon) {
@@ -1551,6 +1553,11 @@ QtObject {
                       + ", Supprimer y " + (d ? d.y : "?") + ")",
                       !!r && !!j && !!d && r.visible && j.visible && d.visible && r.y === j.y && j.y === d.y)
                 bilan("« Indésirable » juste avant « Supprimer »", !!j && !!d && j.x < d.x && d.x - (j.x + j.width) <= 8)
+                var ordre = ["boutonRepondre", "boutonRepondreTous", "boutonTransferer", "boutonMarquerLu",
+                             "boutonDeplacer", "boutonIndesirable", "boutonSupprimer"]
+                var xs = ordre.map(function(nom) { var b = objetNomme(colonneLecture, nom); return b ? b.x : -1 })
+                var range = xs.every(function(x, k) { return x >= 0 && (k === 0 || x > xs[k - 1]) })
+                bilan("ordre de la barre (" + xs.join(", ") + ")", range)
                 // Au doigt, « Source » est dans « … » (12/11).
                 bilan(tactile ? "« Source » hors de la barre au doigt" : "« Source » en toutes lettres",
                       !!s && (tactile ? !s.visible : s.visible && r.y === s.y && s.text === qsTr("Source")))
@@ -1573,6 +1580,22 @@ QtObject {
             },
             function() {
                 menuMessage.close()
+                // Au bureau : le nom à côté des pictogrammes (12/11).
+                if (!tactile)
+                    reglages.libellesBoutons = true
+            },
+            function() {
+                if (!tactile) {
+                    var d = objetNomme(colonneLecture, "boutonSupprimer")
+                    var n = objetNomme(entete, "boutonNouveau")
+                    bilan("« Supprimer » avec son nom (" + (d ? d.width : "?") + " px)", !!d && d.libelleVisible && d.width > 60)
+                    bilan("« Nouveau message » avec son nom, fenêtre de " + fenetre.width + " px",
+                          !!n && (fenetre.enteteSerree ? n.iconeSeule : !n.iconeSeule))
+                    saisir("volet-texte")
+                    reglages.libellesBoutons = false
+                }
+            },
+            function() {
                 console.log("scenario: captures-barres " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
                 Qt.quit()
             }

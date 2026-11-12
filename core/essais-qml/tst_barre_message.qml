@@ -4,7 +4,9 @@
 // complet et au raccourci en infobulle, « Source » en toutes lettres au bureau
 // et dans « … » au doigt, « Indésirable » juste avant « Supprimer » partout
 // (12/11), « … » au doigt seulement ; chaque bouton fait ce que faisait le
-// bouton à libellé.
+// bouton à libellé. Ordre du 12/11 : répondre, répondre à tous, transférer |
+// lu ou non lu, déplacer | indésirable, supprimer | source ; le nom à côté
+// du pictogramme avec « Pictogrammes et texte », à la ligne s'il le faut.
 import QtQuick
 import QtQuick.Controls
 import QtTest
@@ -43,15 +45,28 @@ Item {
             fenetre.roleCourant = ""
             fenetre.sourceVisible = false
             fenetre.etatChoix = { nonLu: false, nombre: 1, sansDrapeau: true }
+            fenetre.libellesBarres = false
             fenetre.appels = []
             menuMessage.ouvert = null
             racine.width = 900
             wait(50)
         }
 
+        // Les éléments visibles, de gauche à droite, sur une même ligne.
+        function dansLOrdre(noms) {
+            for (var i = 1; i < noms.length; ++i) {
+                var a = enfant(noms[i - 1])
+                var b = enfant(noms[i])
+                verify(a && a.visible, noms[i - 1])
+                verify(b && b.visible, noms[i])
+                compare(b.y + b.height / 2, a.y + a.height / 2, noms[i] + " sur la ligne de " + noms[i - 1])
+                verify(b.x > a.x + a.width - 1, noms[i] + " après " + noms[i - 1])
+            }
+        }
+
         function test_bureau_une_ligne() {
-            var noms = ["boutonRepondre", "boutonRepondreTous", "boutonTransferer", "boutonDeplacer",
-                        "boutonMarquerLu", "boutonIndesirable", "boutonSupprimer", "boutonSource"]
+            var noms = ["boutonRepondre", "boutonRepondreTous", "boutonTransferer", "boutonMarquerLu",
+                        "boutonDeplacer", "boutonIndesirable", "boutonSupprimer", "boutonSource"]
             var y = -1
             for (var i = 0; i < noms.length; ++i) {
                 var b = enfant(noms[i])
@@ -63,8 +78,75 @@ Item {
             }
             verify(!enfant("boutonAutresActions").visible, "« … » seulement au doigt")
             verify(!enfant("boutonReprendre").visible)
-            verify(barre.implicitWidth < 420, "barre compacte : " + barre.implicitWidth + " px")
+            verify(barre.largeurBoutons < 420, "barre compacte : " + barre.largeurBoutons + " px")
+            compare(barre.implicitHeight, enfant("boutonSupprimer").height, "une seule ligne")
             voisinDeSupprimer()
+        }
+
+        // Ordre du mainteneur (12/11), en quatre groupes séparés d'un trait.
+        function test_ordre_bureau() {
+            dansLOrdre(["boutonRepondre", "boutonRepondreTous", "boutonTransferer", "separateurRepondre",
+                        "boutonMarquerLu", "boutonDeplacer", "separateurRanger",
+                        "boutonIndesirable", "boutonSupprimer", "separateurSource", "boutonSource"])
+            // Le trait est à la hauteur des boutons : la ligne n'en grandit pas.
+            compare(enfant("separateurRanger").height, enfant("boutonSupprimer").height)
+        }
+
+        function test_ordre_au_doigt() {
+            fenetre.tactile = true
+            racine.width = 392
+            wait(50)
+            dansLOrdre(["boutonRepondre", "boutonRepondreTous", "boutonTransferer", "boutonMarquerLu",
+                        "boutonDeplacer", "boutonIndesirable", "boutonSupprimer", "boutonAutresActions"])
+            verify(!enfant("separateurRepondre").visible, "pas de trait au doigt")
+            verify(!enfant("separateurRanger").visible, "pas de trait au doigt")
+            verify(!enfant("separateurSource").visible, "pas de trait au doigt")
+        }
+
+        // Pictogrammes et texte : le nom à côté de chaque dessin ; « Source »
+        // reste un nom court.
+        function test_pictogrammes_et_texte() {
+            var noms = ["boutonRepondre", "boutonRepondreTous", "boutonTransferer", "boutonMarquerLu",
+                        "boutonDeplacer", "boutonIndesirable", "boutonSupprimer"]
+            var largeurs = []
+            for (var i = 0; i < noms.length; ++i) {
+                verify(!enfant(noms[i]).libelleVisible, noms[i] + " : pictogramme seul d'office")
+                largeurs.push(enfant(noms[i]).width)
+            }
+            fenetre.libellesBarres = true
+            racine.width = 1400
+            wait(50)
+            for (var j = 0; j < noms.length; ++j) {
+                var b = enfant(noms[j])
+                verify(b.libelleVisible, noms[j] + " avec son nom")
+                verify(!!b.dessin, noms[j] + " garde son dessin")
+                verify(b.width > largeurs[j] + 20, noms[j] + " : " + b.width + " px")
+            }
+            compare(enfant("boutonSource").court, "Source")
+            dansLOrdre(["boutonRepondre", "boutonRepondreTous", "boutonTransferer", "separateurRepondre",
+                        "boutonMarquerLu", "boutonDeplacer", "separateurRanger",
+                        "boutonIndesirable", "boutonSupprimer", "separateurSource", "boutonSource"])
+            mouseClick(enfant("boutonDeplacer"))
+            compare(fenetre.appels, ["deplacer"], "« Déplacer… » avec son nom")
+        }
+
+        // Un volet trop étroit pour les noms : la barre passe à la ligne, sans
+        // rien couper ni déborder.
+        function test_pictogrammes_et_texte_a_la_ligne() {
+            fenetre.libellesBarres = true
+            racine.width = 420
+            wait(50)
+            var noms = ["boutonRepondre", "boutonRepondreTous", "boutonTransferer", "boutonMarquerLu",
+                        "boutonDeplacer", "boutonIndesirable", "boutonSupprimer", "boutonSource"]
+            var lignes = {}
+            for (var i = 0; i < noms.length; ++i) {
+                var b = enfant(noms[i])
+                verify(b.visible, noms[i])
+                verify(b.x + b.width <= barre.width, noms[i] + " dans le volet : " + (b.x + b.width))
+                lignes[b.y] = true
+            }
+            verify(Object.keys(lignes).length > 1, "sur plusieurs lignes")
+            verify(barre.implicitHeight > enfant("boutonSupprimer").height, "la barre grandit : " + barre.implicitHeight)
         }
 
         // « Indésirable » juste avant « Supprimer », sans rien entre eux.
@@ -138,8 +220,9 @@ Item {
             compare(j.y, r.y, "sur une ligne")
             compare(autres.y, r.y, "sur une ligne")
             verify(autres.x + autres.width <= 392, "« … » dans l'écran : " + (autres.x + autres.width))
+            verify(autres.x + autres.width >= 392 - 4, "« … » au bord droit : " + (autres.x + autres.width))
             // Téléphone de 360 points, moins les 16 de marge du volet.
-            verify(barre.implicitWidth <= 344, "tient sur un téléphone : " + barre.implicitWidth + " px")
+            verify(barre.largeurBoutons <= 344, "tient sur un téléphone : " + barre.largeurBoutons + " px")
             mouseClick(j)
             compare(fenetre.appels, ["indesirable"], "« Indésirable » au doigt")
             mouseClick(autres)

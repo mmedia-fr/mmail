@@ -26,6 +26,7 @@ QtObject {
     property real tailleArborescence: 10
     property bool enteteEtroite: false
     property bool enteteSerree: false
+    property bool libellesBarres: false
     property var palette: ({ window: "#ffffff", base: "#ffffff", windowText: "#000000", buttonText: "#000000",
                              button: "#f0f0f0", highlight: "#3060c0", highlightedText: "#ffffff", text: "#000000" })
     property int nonLusReceptions: 4

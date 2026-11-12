@@ -318,10 +318,14 @@ de projet interne.
   déplacer, classer indésirable, marquer lu ou non lu, poser un drapeau,
   supprimer, écrire un nouveau message, actualiser ; un nom court pour ce qui
   est propre à MMail (« Source », « BàL », « Masqués », « Autres ») ; le nom
-  complet et le raccourci en infobulle, à l'appui long au doigt. Dans la barre
-  du message, « Indésirable » est juste avant « Supprimer », sous Android
-  comme au bureau. Le menu d'un message tient en sept lignes, la barre du
-  message en une ;
+  complet et le raccourci en infobulle, à l'appui long au doigt. La barre du
+  message range ses boutons en quatre groupes : répondre, répondre à tous,
+  transférer ; marquer lu ou non lu, déplacer ; indésirable, supprimer ;
+  source. Le menu d'un message tient en sept lignes, la barre du message en
+  une, avec les pictogrammes seuls. Au bureau, « Affichage › Boutons des barres › Pictogrammes et texte »
+  met le nom à côté de chaque pictogramme, dans la barre du message (qui passe
+  alors à la ligne si le volet est étroit) et dans la barre du haut (sur une
+  seule ligne, à partir de 1 180 points de large) ;
 - **copie automatique de la sélection**, comme dans MMdedit : un texte
   sélectionné dans un message part au presse-papier, sauf ce qu'un autre
   logiciel vient d'y déposer, protégé une minute ; clic droit sur le message :

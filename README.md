@@ -424,7 +424,12 @@ participants), après connexion avec le compte de messagerie, en invité sinon.
 Le nom de la réunion commence par le domaine du compte, points changés en
 tirets, suivi de trois groupes de quatre signes tirés au hasard (sans `l`, `o`,
 `0` ni `1`) : le service n'accepte en organisateur que la boîte de ce domaine.
-Pas de bouton sur un agenda Microsoft 365, dont les réunions passent par Teams.
+Une boîte hébergée par MMEDIA (serveur `mail.mmedia.fr`) a d'office le service
+de MMEDIA, `https://visio.mmedia.fr`. Pour un compte sans service — autre
+hébergeur, ou agenda Microsoft 365 —, « Visio » explique que la visio est
+comprise dans les boîtes hébergées par MMEDIA et propose « Faire la demande à
+MMEDIA » : un message depuis ce compte, adressé à `contact@mmedia.fr`, que la
+personne relit et envoie elle-même.
 
 **Rappels** : ceux des agendas affichés, posés depuis MMail ou ailleurs,
 s'affichent à l'heure dite tant que MMail est ouvert, avec « Ignorer » et
@@ -471,7 +476,8 @@ de la configuration.
 « Comptes › Modifier un compte », ou « Modifier ce compte… » au clic droit sur
 le compte, rouvre la fenêtre de l'ajout pour un compte présent : serveur de
 lecture, serveur d'envoi, mot de passe (laissé vide, il ne change pas),
-service de visio (une adresse `https://`, vide pour aucun ; cf. « L'agenda »),
+service de visio (une adresse `https://` ; vide, celui de MMEDIA pour une boîte
+MMEDIA, aucun sinon ; cf. « L'agenda »),
 et de là « Nom et signature… ». L'adresse ne change pas : c'est elle qui désigne le
 compte, son index et ses réglages. Un nouveau serveur de lecture reprend le
 mot de passe mémorisé, qui change de clé dans le coffre avec lui ; s'il est

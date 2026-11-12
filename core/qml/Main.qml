@@ -403,6 +403,8 @@ ApplicationWindow {
     property string pageVersion: ""
     // Destinataire de « Envoyer une suggestion… » (menu « ? »).
     readonly property string adresseSuggestions: "suggestions.mmail@mmedia.fr"
+    // Destinataire d'une demande de boîte MMEDIA, pour la visio (0.7.0).
+    readonly property string adresseDemandeVisio: "contact@mmedia.fr"
     // Bandeau de mise à jour : "" (caché), "proposee", "telechargement",
     // "prete" ou "echec".
     property string etatMiseAJour: ""
@@ -1729,6 +1731,7 @@ ApplicationWindow {
         accent: fenetre.accent
         texteAccent: fenetre.texteAccent
         onAnnoncer: function(texte, erreur) { fenetre.annoncer(texte, erreur) }
+        onDemanderVisio: function(adresse) { fenetre.demanderVisio(adresse) }
     }
 
     // Rappels de l'agenda : contrôlés toutes les 30 secondes, quel que soit
@@ -5941,6 +5944,25 @@ ApplicationWindow {
         }
         var r = ouvrirRedaction(compte)
         r.remplir({ a: adresseSuggestions, objet: objet, mode: "nouveau" })
+        return r
+    }
+
+    /// « Visio » d'un compte sans service (0.7.0) : une rédaction depuis ce
+    /// compte, adressée à MMEDIA, que la personne relit et envoie elle-même.
+    function demanderVisio(adresse) {
+        var c = listeComptes().find(function(x) { return x.adresse === adresse })
+        var compte = c ? c.id : (boite.compteCourant > 0 ? boite.compteCourant : 0)
+        if (compte === 0) {
+            Qt.openUrlExternally("mailto:" + adresseDemandeVisio + "?subject="
+                                 + encodeURIComponent(qsTr("Demande de messagerie MMEDIA avec visio")))
+            return null
+        }
+        var r = ouvrirRedaction(compte)
+        r.remplir({ a: adresseDemandeVisio, objet: qsTr("Demande de messagerie MMEDIA avec visio"), mode: "nouveau" })
+        // Le texte avant la signature.
+        r.mefCorps.inserer(0, qsTr("Bonjour,") + "\n\n"
+                              + qsTr("Je souhaite que ma messagerie %1 soit hébergée par MMEDIA, pour organiser mes réunions en visio depuis MMail.").arg(adresse)
+                              + "\n\n" + qsTr("Merci de me recontacter."))
         return r
     }
 

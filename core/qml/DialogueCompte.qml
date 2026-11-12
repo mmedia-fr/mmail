@@ -158,8 +158,8 @@ Dialog {
                    : "")
                   + qsTr("Proposées dans le champ « De » d'un message, en plus de l'adresse du compte et des boîtes partagées que le serveur lui montre : alias, autres boîtes. Le serveur doit autoriser ce compte à envoyer en leur nom ; la copie va dans les éléments envoyés du compte.")
         }
-        // Service de visio du compte (0.7.0) : vide, pas de bouton « Visio »
-        // dans les événements de ses agendas.
+        // Service de visio du compte (0.7.0). Vide : celui de MMEDIA pour une
+        // boîte MMEDIA, aucun sinon — « Visio » invite alors à le demander.
         Label {
             text: qsTr("Service de visio :")
             visible: dlgCompte.compteId === 0 || dlgCompte.modification
@@ -169,7 +169,9 @@ Dialog {
             objectName: "champVisio"
             MenuSaisie {}
             visible: dlgCompte.compteId === 0 || dlgCompte.modification
-            placeholderText: qsTr("aucun ; par exemple https://visio.exemple.fr")
+            readonly property string dOffice: boite.visioDOffice(champHote.text)
+            placeholderText: dOffice.length > 0 ? qsTr("d'office : %1").arg(dOffice)
+                                                : qsTr("aucun ; par exemple https://visio.exemple.fr")
             inputMethodHints: Qt.ImhUrlCharactersOnly | Qt.ImhNoAutoUppercase
             Layout.fillWidth: true
             onAccepted: dlgCompte.accept()

@@ -123,6 +123,13 @@ pub mod qobject {
         #[cxx_name = "poserVisio"]
         fn poser_visio(self: Pin<&mut Boite>, adresse: &QString, service: &QString) -> bool;
 
+        /// Service de visio d'office pour un compte du serveur `hote` (celui
+        /// de MMEDIA pour ses boîtes), vide sinon : l'indication du champ
+        /// « Service de visio » laissé vide.
+        #[qinvokable]
+        #[cxx_name = "visioDOffice"]
+        fn visio_d_office(&self, hote: &QString) -> QString;
+
         /// Lieu et description d'un événement de l'agenda `agenda` une fois
         /// la visio posée : `{"lieu", "description"}` en JSON, vide si son
         /// compte n'a pas de service ou qu'aucun nom de réunion ne peut être
@@ -2157,9 +2164,9 @@ impl qobject::Boite {
                     "microsoft": crate::microsoft::agenda::est_graph(&a.adresse),
                     // Le service de visio du compte ; jamais pour un agenda
                     // Microsoft 365, dont les réunions passent par Teams.
-                    "visio": crate::visio::service_de_l_agenda(
-                        comptes.iter().find(|c| c.id == a.compte).map(|c| c.visio.as_str()).unwrap_or(""),
-                        crate::microsoft::agenda::est_graph(&a.adresse)),
+                    "visio": comptes.iter().find(|c| c.id == a.compte).map(|c| crate::visio::service_de_l_agenda(
+                        crate::visio::service_du_compte(&c.visio, &c.hote),
+                        crate::microsoft::agenda::est_graph(&a.adresse))).unwrap_or(""),
                 })
             })
             .collect();
@@ -3411,8 +3418,15 @@ impl qobject::Boite {
         let magasin = self.magasin.as_ref()?;
         let a = magasin.agendas().ok()?.into_iter().find(|a| a.id == agenda as i64)?;
         let c = magasin.compte_par_id(a.compte).ok()??;
-        let service = crate::visio::service_de_l_agenda(&c.visio, crate::microsoft::agenda::est_graph(&a.adresse));
+        let service = crate::visio::service_de_l_agenda(
+            crate::visio::service_du_compte(&c.visio, &c.hote),
+            crate::microsoft::agenda::est_graph(&a.adresse),
+        );
         (!service.is_empty()).then(|| (c.adresse.clone(), service.to_string()))
+    }
+
+    pub fn visio_d_office(&self, hote: &QString) -> QString {
+        QString::from(crate::visio::service_du_compte("", &hote.to_string()))
     }
 
     pub fn visio_evenement(&self, agenda: i32, lieu: &QString, description: &QString) -> QString {

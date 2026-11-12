@@ -28,9 +28,11 @@ Pane {
     property date jour: new Date()
     property var donnees: ({})
     property var agendas: []
-    // Pour les scénarios d'essai : la saisie et la fiche d'un événement.
+    // Pour les scénarios d'essai : la saisie et la fiche d'un événement, et
+    // l'invitation à demander la visio.
     property alias saisieEvenement: popupSaisie
     property alias ficheEvenement: popupFiche
+    property alias demandeVisio: popupDemandeVisio
     // Comptes Microsoft 365 dont la lecture des agendas reste à autoriser
     // (0.9.0).
     property var agendasMicrosoft: []
@@ -47,6 +49,9 @@ Pane {
 
     // Message passager, montré par la fenêtre principale.
     signal annoncer(string texte, bool erreur)
+    // « Faire la demande à MMEDIA » (visio) : Main prépare le message, depuis
+    // le compte de cette adresse.
+    signal demanderVisio(string adresse)
 
     // Mise en valeur, donnée par la fenêtre (cf. « accent » et « texteAccent »
     // dans Main.qml) : la couleur de sélection, hors apparence de marque.
@@ -223,8 +228,9 @@ Pane {
                  "NEEDS-ACTION": qsTr("en attente") }[statut] || statut
     }
 
-    // Service de visio du compte de cet agenda, vide sans service ou sur un
-    // agenda Microsoft 365 (cf. Boite::agendas) : pas de bouton « Visio ».
+    // Service de visio du compte de cet agenda — d'office celui de MMEDIA pour
+    // une boîte MMEDIA —, vide sans service ou sur un agenda Microsoft 365 (cf.
+    // Boite::agendas) : « Visio » invite alors à en faire la demande.
     function serviceVisio(idAgenda) {
         var a = agendas.find(function(x) { return x.id === idAgenda })
         return a && a.visio ? a.visio : ""
@@ -243,6 +249,12 @@ Pane {
     // Lien à ouvrir pour la visio d'un événement : en organisateur, après
     // connexion avec le compte de messagerie, ou en invité ; vide sans lien du
     // service dans le lieu.
+    // Adresse de la boîte d'un agenda.
+    function boiteDe(idAgenda) {
+        var a = agendas.find(function(x) { return x.id === idAgenda })
+        return a ? a.boite || "" : ""
+    }
+
     function lienVisio(f) {
         if (!f || !f.agenda)
             return ""
@@ -1297,6 +1309,57 @@ Pane {
         }
     }
 
+    // --- visio sans service : en faire la demande ------------------------------------
+    // La boîte n'est pas hébergée par MMEDIA (ou c'est un agenda Microsoft
+    // 365) : la visio n'y est pas comprise. « Faire la demande à MMEDIA »
+    // prépare un message, que la personne relit et envoie elle-même.
+    Popup {
+        id: popupDemandeVisio
+        property string adresse: ""
+        anchors.centerIn: Overlay.overlay
+        width: Math.min(agenda.width - 32, 460)
+        modal: true
+        focus: true
+        padding: 16
+        contentItem: ColumnLayout {
+            spacing: 12
+            Label {
+                Layout.fillWidth: true
+                font.bold: true
+                font.pixelSize: 15
+                text: qsTr("Visio")
+            }
+            Label {
+                objectName: "texteDemandeVisio"
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                text: qsTr("La visio est comprise dans les boîtes de messagerie hébergées par MMEDIA. Le compte %1 n'en fait pas partie.")
+                          .arg(popupDemandeVisio.adresse)
+                      + "\n\n"
+                      + qsTr("Pour en bénéficier, demandez-nous une boîte MMEDIA : MMail prépare le message, vous le relisez avant de l'envoyer.")
+            }
+            Flow {
+                Layout.fillWidth: true
+                layoutDirection: Qt.RightToLeft
+                spacing: 6
+                Button {
+                    text: qsTr("Fermer")
+                    flat: true
+                    onClicked: popupDemandeVisio.close()
+                }
+                Button {
+                    objectName: "boutonDemanderVisio"
+                    text: qsTr("Faire la demande à MMEDIA")
+                    highlighted: true
+                    onClicked: {
+                        popupDemandeVisio.close()
+                        agenda.demanderVisio(popupDemandeVisio.adresse)
+                    }
+                }
+            }
+        }
+    }
+
     // --- saisie d'un événement -----------------------------------------------------
     Popup {
         id: popupSaisie
@@ -1337,13 +1400,19 @@ Pane {
         // Participants proposés : le serveur de la boîte de l'agenda doit
         // distribuer les invitations, et une occurrence seule n'en change pas.
         readonly property bool reunionPossible: !occurrence && agenda.invitationsPossibles(agendaChoisi)
-        // Bouton « Visio » : le compte de l'agenda a un service de visio.
+        // Service de visio du compte de l'agenda ; sans lui, « Visio » invite
+        // à en faire la demande.
         readonly property string serviceVisio: agenda.serviceVisio(agendaChoisi)
 
         // « Visio » : le lien d'une réunion dans « Lieu », et « Rejoindre la
         // visio » en tête de la description. Un lien du service déjà posé
         // reste : celui d'une réunion envoyée ne doit pas changer.
         function poserVisio() {
+            if (serviceVisio.length === 0) {
+                popupDemandeVisio.adresse = agenda.boiteDe(agendaChoisi)
+                popupDemandeVisio.open()
+                return
+            }
             var r = agenda.boite.visioEvenement(agendaChoisi, champLieu.text, champDescription.text)
             if (r.length === 0) {
                 erreur = qsTr("Lien de visio impossible : l'adresse du compte n'a pas de domaine utilisable.")
@@ -1497,14 +1566,18 @@ Pane {
                             MenuSaisie {}
                             Layout.fillWidth: true
                         }
-                        // Réunion sur le service de visio du compte (0.7.0).
+                        // Réunion sur le service de visio du compte (0.7.0) ;
+                        // sans service, l'invitation à le demander à MMEDIA
+                        // (choix du mainteneur, 12/11).
                         Button {
                             objectName: "boutonVisio"
-                            visible: popupSaisie.serviceVisio.length > 0
+                            visible: popupSaisie.agendaChoisi > 0
                             text: qsTr("Visio")
                             ToolTip.visible: hovered
                             ToolTip.delay: 500
-                            ToolTip.text: qsTr("Ajouter un lien de réunion sur %1").arg(popupSaisie.serviceVisio)
+                            ToolTip.text: popupSaisie.serviceVisio.length > 0
+                                          ? qsTr("Ajouter un lien de réunion sur %1").arg(popupSaisie.serviceVisio)
+                                          : qsTr("Visio : comprise avec les boîtes de messagerie MMEDIA")
                             onClicked: popupSaisie.poserVisio()
                         }
                     }

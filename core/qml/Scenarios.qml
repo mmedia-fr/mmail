@@ -5238,8 +5238,9 @@ QtObject {
     /// https://localhost/) : service de visio du compte, bouton « Visio » de la
     /// saisie d'un événement (lien dans « Lieu », ligne en tête de la
     /// description, lien gardé au second clic), « Ouvrir la visio » de sa
-    /// fiche en organisateur, puis plus de bouton sans service. Images
-    /// visio-saisie et visio-fiche dans MMAIL_SORTIE.
+    /// fiche en organisateur ; sans service, « Visio » invite à demander une
+    /// boîte MMEDIA et prépare le message. Images visio-saisie, visio-fiche et
+    /// visio-demande dans MMAIL_SORTIE.
     function lancerScenarioVisio(essais) {
         var n = essais || 0
         if (boite.compteCourant <= 0 && n < 40) {
@@ -5265,6 +5266,7 @@ QtObject {
         var dans = function(nom) {
             return objetNomme(vueAgenda.saisieEvenement.contentItem, nom)
                 || objetNomme(vueAgenda.ficheEvenement.contentItem, nom)
+                || objetNomme(vueAgenda.demandeVisio.contentItem, nom)
         }
         var fin = function() {
             console.log("scenario: visio " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
@@ -5272,6 +5274,8 @@ QtObject {
         }
         var adresse = identifiantsEssai.utilisateur
         var service = "https://visio.essai.test"
+        bilan("service d'office des boîtes MMEDIA (" + boite.visioDOffice("mail.mmedia.fr") + "), aucun ailleurs",
+              boite.visioDOffice("mail.mmedia.fr") === "https://visio.mmedia.fr" && boite.visioDOffice("localhost") === "")
         bilan("adresse http refusée", !boite.poserVisio(adresse, "http://visio.essai.test"))
         bilan("service posé", boite.poserVisio(adresse, service + "/"))
         bilan("service du compte, sans barre finale",
@@ -5345,11 +5349,38 @@ QtObject {
                                 vueAgenda.agendas = JSON.parse(boite.agendas())
                                 bilan("« Ouvrir la visio » absent sans service",
                                       vueAgenda.lienVisio(fiches[i]) === "")
+                                vueAgenda.ficheEvenement.close()
                                 vueAgenda.nouvelEvenement(jour, 14 * 60, false, 60)
                                 plusTard(1500, function() {
                                     var b = dans("boutonVisio")
-                                    bilan("bouton « Visio » absent sans service", !!b && !b.visible)
-                                    fin()
+                                    var l = dans("champLieu")
+                                    bilan("sans service : bouton « Visio » présent", !!b && b.visible)
+                                    if (!b) {
+                                        fin()
+                                        return
+                                    }
+                                    b.clicked()
+                                    plusTard(800, function() {
+                                        var t = dans("texteDemandeVisio")
+                                        bilan("invitation à demander une boîte MMEDIA, lieu inchangé",
+                                              vueAgenda.demandeVisio.opened && !!t && t.text.indexOf(adresse) > 0
+                                              && l.text === "")
+                                        saisir("visio-demande")
+                                        plusTard(800, function() {
+                                            dans("boutonDemanderVisio").clicked()
+                                            plusTard(1500, function() {
+                                                var r = redactions[redactionActive]
+                                                var c = r ? r.contenu() : {}
+                                                bilan("demande préparée : de " + c.de + " à " + c.a + ", « " + c.objet + " »",
+                                                      !vueAgenda.demandeVisio.opened && c.de === adresse
+                                                      && c.a === adresseDemandeVisio
+                                                      && c.objet === qsTr("Demande de messagerie MMEDIA avec visio")
+                                                      && (c.texte || "").indexOf("Bonjour,") === 0
+                                                      && (c.texte || "").indexOf(adresse) > 0)
+                                                fin()
+                                            })
+                                        })
+                                    })
                                 })
                             })
                         })

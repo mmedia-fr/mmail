@@ -14,7 +14,10 @@
 //!   au domaine de sa boîte : une réunion d'un autre domaine lui est refusée.
 //!
 //! Le service lui-même est un réglage du compte (`accounts.visio`) : une
-//! adresse HTTPS, vide par défaut. Rien n'est écrit en dur ici.
+//! adresse HTTPS, vide par défaut. Une seule exception : une boîte hébergée
+//! par MMEDIA (serveur [`HOTE_MMEDIA`]) a d'office le service de MMEDIA
+//! ([`SERVICE_MMEDIA`]), même saisie à la main — sans quoi le bouton « Visio »
+//! l'inviterait à demander ce qu'elle a déjà.
 
 use aws_lc_rs::rand::{SecureRandom, SystemRandom};
 
@@ -24,6 +27,24 @@ pub const ALPHABET: &[u8; 32] = b"abcdefghijkmnpqrstuvwxyz23456789";
 
 /// Longueur maximale d'un nom de réunion.
 pub const LONGUEUR_MAX: usize = 64;
+
+/// Serveur des boîtes hébergées par MMEDIA.
+pub const HOTE_MMEDIA: &str = "mail.mmedia.fr";
+
+/// Service de visio de MMEDIA, d'office pour ses boîtes.
+pub const SERVICE_MMEDIA: &str = "https://visio.mmedia.fr";
+
+/// Service de visio d'un compte : celui qui est réglé, sinon celui de MMEDIA
+/// pour une boîte de son serveur, sinon aucun (vide).
+pub fn service_du_compte<'a>(reglage: &'a str, hote: &str) -> &'a str {
+    if !reglage.is_empty() {
+        reglage
+    } else if hote.trim().eq_ignore_ascii_case(HOTE_MMEDIA) {
+        SERVICE_MMEDIA
+    } else {
+        ""
+    }
+}
 
 /// Préfixe des réunions d'une adresse : son domaine, en minuscules, points en
 /// tirets. `None` pour une adresse sans domaine, ou dont le domaine n'est pas
@@ -235,6 +256,15 @@ mod essais {
         assert_eq!(reunion_dans("https://visio.autre.fr/exemple-fr-k3mz-8qhw-tp2a", SERVICE), None);
         assert_eq!(reunion_dans("https://visio.exemple.fr/organiser/mailcow?salle=x", SERVICE), None);
         assert_eq!(reunion_dans("https://visio.exemple.fr/", SERVICE), None);
+    }
+
+    #[test]
+    fn service_d_office_des_boites_mmedia() {
+        assert_eq!(service_du_compte("", "mail.mmedia.fr"), SERVICE_MMEDIA);
+        assert_eq!(service_du_compte("", " Mail.MMEDIA.fr "), SERVICE_MMEDIA);
+        assert_eq!(service_du_compte(SERVICE, "mail.mmedia.fr"), SERVICE, "le réglage l'emporte");
+        assert_eq!(service_du_compte("", "imap.orange.fr"), "", "autre hébergeur");
+        assert_eq!(service_du_compte(SERVICE, "imap.orange.fr"), SERVICE);
     }
 
     #[test]

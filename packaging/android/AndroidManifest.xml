@@ -72,6 +72,33 @@
             android:permission="android.permission.BIND_JOB_SERVICE"
             android:exported="false" />
 
+        <!-- Connexion Microsoft par MSAL (0.7.0, cf. src/fr/mmedia/mmail/Jetons.java) :
+             retour de la page de connexion, à l'adresse déclarée dans
+             l'inscription Entra « MMail » (plateforme Android). Le hachage de
+             la signature est écrit tel quel ici, encodé dans
+             res/raw/msal_config.json (README de MSAL). -->
+        <activity
+            android:name="com.microsoft.identity.client.BrowserTabActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="msauth"
+                    android:host="fr.mmedia.mmail"
+                    android:path="/tl5nygZ5xvjjG29XWZS9fkDd1Jc=" />
+            </intent-filter>
+        </activity>
+
+        <!-- Connexion Google (0.7.0, cf. src/fr/mmedia/mmail/ConnexionGoogle.java) :
+             activité transparente qui porte le choix du compte et l'accord
+             des services Google, puis rend la main. -->
+        <activity
+            android:name="fr.mmedia.mmail.ConnexionGoogle"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:exported="false" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.qtprovider"

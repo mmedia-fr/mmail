@@ -730,6 +730,7 @@ jobs:
           name: mmail-android-logcat
           path: |
             logcat.txt
+            logcat-connexion.txt
             lanceur-*.png
             veille-*.png
             retour-*.png

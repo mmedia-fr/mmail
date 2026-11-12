@@ -5261,7 +5261,11 @@ QtObject {
             var chemin = lanceur.chemin(identifiantsEssai.sortie + "/" + nom + ".png")
             racine.grabToImage(function(r) { r.saveToFile(chemin) })
         }
-        var dans = function(nom) { return objetNomme(fenetre.overlay, nom) }
+        // Dans la saisie ou la fiche d'un événement, ouvertes.
+        var dans = function(nom) {
+            return objetNomme(vueAgenda.saisieEvenement.contentItem, nom)
+                || objetNomme(vueAgenda.ficheEvenement.contentItem, nom)
+        }
         var fin = function() {
             console.log("scenario: visio " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
             Qt.quit()
@@ -5293,7 +5297,7 @@ QtObject {
                 var bouton = dans("boutonVisio")
                 var lieu = dans("champLieu")
                 var description = dans("champDescription")
-                bilan("bouton « Visio » visible", !!bouton && bouton.visible)
+                bilan("saisie ouverte, bouton « Visio » visible", vueAgenda.saisieEvenement.opened && !!bouton && bouton.visible)
                 if (!bouton || !lieu || !description) {
                     fin()
                     return

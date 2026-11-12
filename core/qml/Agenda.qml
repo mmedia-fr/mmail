@@ -28,6 +28,9 @@ Pane {
     property date jour: new Date()
     property var donnees: ({})
     property var agendas: []
+    // Pour les scénarios d'essai : la saisie et la fiche d'un événement.
+    property alias saisieEvenement: popupSaisie
+    property alias ficheEvenement: popupFiche
     // Comptes Microsoft 365 dont la lecture des agendas reste à autoriser
     // (0.9.0).
     property var agendasMicrosoft: []

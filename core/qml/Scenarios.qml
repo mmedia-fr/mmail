@@ -999,8 +999,10 @@ QtObject {
     /// profil (banc neuf), passe la main à la messagerie du poste.
     function etapeScenarioSuggestion() {
         var bouton = objetNomme(fenetre.menuBar, "boutonSuggestion")
-        console.log("scenario: bouton « Suggestion »", tactile ? "absent au doigt" : "dans la barre du haut",
-                    !!bouton && bouton.visible === !tactile ? "OK" : "ECHEC")
+        // Au bureau, à partir de 1 024 points sur une seule ligne.
+        var attendu = !tactile && !compact && (deuxEtages || fenetre.width >= 1024)
+        console.log("scenario: bouton « Suggestion »", attendu ? "dans la barre du haut" : "absent",
+                    "| largeur", fenetre.width, !!bouton && bouton.visible === attendu ? "OK" : "ECHEC")
         var sansCompte = comptesConnus.length === 0
         var avant = redactionActive
         var r = null

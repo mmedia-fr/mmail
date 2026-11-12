@@ -29,40 +29,71 @@ Menu {
         unSansDrapeau = etat.sansDrapeau
         width = fenetre.largeurMenu(menuMessage)
     }
+    // Barre compacte (choix du mainteneur, 10/11) : les actions que tout
+    // logiciel de messagerie montre en pictogrammes, sur une rangée en tête du
+    // menu, comme le menu contextuel de l'Explorateur de Windows 11 ; nom
+    // complet et raccourci en infobulle. Le reste en libellés courts : sept
+    // lignes au lieu de onze.
+    Item {
+        objectName: "rangeePictogrammes"
+        width: menuMessage.width - menuMessage.leftPadding - menuMessage.rightPadding
+        height: rangee.implicitHeight + 8
+        implicitWidth: rangee.implicitWidth + 16
+        RowLayout {
+            id: rangee
+            anchors.centerIn: parent
+            spacing: 4
+            BoutonPictogramme {
+                objectName: "menuRepondre"
+                visible: !fenetre.dossierDeReprise
+                text: qsTr("Répondre")
+                infobulle: qsTr("Répondre (Ctrl+R)")
+                dessin: fenetre.dessinerRepondre
+                onClicked: { menuMessage.close(); fenetre.rediger("repondre") }
+            }
+            BoutonPictogramme {
+                objectName: "menuRepondreTous"
+                visible: !fenetre.dossierDeReprise
+                text: qsTr("Répondre à tous")
+                infobulle: qsTr("Répondre à tous (Ctrl+Maj+R)")
+                dessin: fenetre.dessinerRepondreTous
+                onClicked: { menuMessage.close(); fenetre.rediger("repondre_tous") }
+            }
+            BoutonPictogramme {
+                objectName: "menuTransferer"
+                text: qsTr("Transférer")
+                infobulle: qsTr("Transférer (Ctrl+F)")
+                dessin: fenetre.dessinerTransferer
+                onClicked: { menuMessage.close(); fenetre.rediger("transferer") }
+            }
+            BoutonPictogramme {
+                objectName: "menuSuivi"
+                text: menuMessage.unSansDrapeau ? qsTr("Poser un drapeau de suivi") : qsTr("Retirer le drapeau")
+                infobulle: text + " (Inser)"
+                dessin: fenetre.dessinerSuivi
+                onClicked: { menuMessage.close(); fenetre.basculerSuivi(fenetre.uidsChoisis(), menuMessage.unSansDrapeau) }
+            }
+            BoutonPictogramme {
+                objectName: "menuSupprimer"
+                text: qsTr("Supprimer")
+                infobulle: qsTr("Supprimer (Suppr)")
+                dessin: fenetre.dessinerCorbeille
+                onClicked: { menuMessage.close(); fenetre.supprimerSelection() }
+            }
+        }
+    }
     EntreeMenu {
         visible: fenetre.dossierDeReprise
         text: qsTr("Reprendre")
         raccourci: qsTr("Ctrl+R")
         onTriggered: fenetre.rediger("brouillon")
     }
-    EntreeMenu {
-        visible: !fenetre.dossierDeReprise
-        text: qsTr("Répondre")
-        raccourci: qsTr("Ctrl+R")
-        onTriggered: fenetre.rediger("repondre")
-    }
-    EntreeMenu {
-        visible: !fenetre.dossierDeReprise
-        text: qsTr("Répondre à tous")
-        raccourci: qsTr("Ctrl+Maj+R")
-        onTriggered: fenetre.rediger("repondre_tous")
-    }
-    EntreeMenu {
-        text: qsTr("Transférer")
-        raccourci: qsTr("Ctrl+F")
-        onTriggered: fenetre.rediger("transferer")
-    }
     MenuSeparator {}
     // Un message non lu parmi les choisis : « lu » ; sinon « non lu ».
     EntreeMenu {
-        text: menuMessage.unNonLu ? qsTr("Marquer comme lu") : qsTr("Marquer comme non lu")
+        text: menuMessage.unNonLu ? qsTr("Marquer lu") : qsTr("Marquer non lu")
         raccourci: menuMessage.unNonLu ? qsTr("Ctrl+Q") : qsTr("Ctrl+U")
         onTriggered: fenetre.marquerSelection(menuMessage.unNonLu)
-    }
-    EntreeMenu {
-        text: menuMessage.unSansDrapeau ? qsTr("Poser un drapeau de suivi") : qsTr("Retirer le drapeau")
-        raccourci: qsTr("Inser")
-        onTriggered: fenetre.basculerSuivi(fenetre.uidsChoisis(), menuMessage.unSansDrapeau)
     }
     // 0.6.15 : les catégories de couleur, comme « Catégoriser » d'Outlook.
     MenuCategories {
@@ -71,20 +102,15 @@ Menu {
     }
     MenuSeparator {}
     EntreeMenu {
-        text: qsTr("Déplacer vers…")
+        text: qsTr("Déplacer…")
         raccourci: qsTr("Ctrl+Maj+V")
         onTriggered: fenetre.ouvrirDeplacer()
     }
     EntreeMenu {
         visible: !fenetre.dossierDeReprise
-        text: fenetre.roleCourant === "Junk" ? qsTr("Pas indésirable") : qsTr("Courrier indésirable")
+        text: fenetre.roleCourant === "Junk" ? qsTr("Pas indésirable") : qsTr("Indésirable")
         raccourci: qsTr("Ctrl+Alt+J")
         onTriggered: fenetre.signalerIndesirable()
-    }
-    EntreeMenu {
-        text: qsTr("Supprimer")
-        raccourci: qsTr("Suppr")
-        onTriggered: fenetre.supprimerSelection()
     }
     // « Annuler la suppression », « Annuler le déplacement » : ce que
     // Ctrl+Z défait, s'il y a quelque chose.
@@ -116,7 +142,7 @@ Menu {
     }
     Menu {
         id: menuAutres
-        title: qsTr("Autres actions")
+        title: qsTr("Autres")
         font: menuMessage.font
         onAboutToShow: width = fenetre.largeurMenu(menuAutres)
         // Le message lui-même en pièce jointe, en .eml nommé d'après son objet

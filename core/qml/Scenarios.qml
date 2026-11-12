@@ -5473,7 +5473,10 @@ QtObject {
         var partagee = ""
         for (var a = 0; a < modeleArborescence.count; ++a) {
             var d = modeleArborescence.get(a)
-            if (d.genre === "dossier" && d.chemin.indexOf("Shared/") === 0 && /\/INBOX$/.test(d.chemin))
+            // « Shared/deux@essai.test » (Dovecot du banc), ou sa boîte de
+            // réception « …/INBOX » quand le serveur la montre ainsi (Mailcow).
+            if (d.genre === "dossier" && d.chemin.indexOf("Shared/") === 0
+                    && (partagee.length === 0 || /\/INBOX$/.test(d.chemin)))
                 partagee = d.chemin
         }
         var trouve = false
@@ -5525,7 +5528,7 @@ QtObject {
                 fenetre.lancerRecherche("essai")
                 apresServeur(function() {
                     var l2 = lignes()
-                    var prefixe = partagee.replace(/INBOX$/, "")
+                    var prefixe = partagee.replace(/\/INBOX$/, "")
                     bilan("boîte partagée seule, " + fenetre.dossiersPartout + " dossier(s) : " + resume(l2),
                           l2.length > 0 && l2.every(function(r) { return (r.chemin || "").indexOf(prefixe) === 0 }))
                     fenetre.quitterRecherche()

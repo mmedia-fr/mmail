@@ -100,6 +100,30 @@ public:
     return QUrl::fromLocalFile(chemin).toString();
   }
 
+  /// Dépose des fichiers dans le presse-papier, comme l'explorateur (0.6.45) :
+  /// une pièce jointe copiée se colle dans une rédaction (Ctrl+V), ou dans
+  /// l'explorateur. `fichiers` : des chemins ou des adresses `file:`.
+  Q_INVOKABLE bool deposerFichiers(const QStringList& fichiers) const
+  {
+    QClipboard* presse = QGuiApplication::clipboard();
+    QList<QUrl> adresses;
+    for (const QString& f : fichiers)
+      adresses.append(adresseLocale(f));
+    if (!presse || adresses.isEmpty())
+      return false;
+    auto* donnees = new QMimeData;
+    donnees->setUrls(adresses);
+    presse->setMimeData(donnees);
+    return true;
+  }
+
+  /// Adresse `file:` d'un chemin (ou l'adresse elle-même), pour glisser un
+  /// fichier (`text/uri-list`, 0.6.45).
+  Q_INVOKABLE QString adresseFichier(const QString& chemin) const
+  {
+    return adresseLocale(chemin).toString();
+  }
+
   /// Dépose les octets d'un fichier GIF dans le presse-papier, comme un
   /// navigateur, avec sa première vue en image : pour le scénario d'essai
   /// « collage-signature ».
@@ -249,4 +273,13 @@ public:
 
 Q_SIGNALS:
   void change();
+
+private:
+  /// « C:\x\y.pdf » ou « /tmp/y.pdf » : un chemin ; « file:///… » : déjà
+  /// une adresse.
+  static QUrl adresseLocale(const QString& f)
+  {
+    const QUrl u(f);
+    return u.isLocalFile() ? u : QUrl::fromLocalFile(f);
+  }
 };

@@ -992,11 +992,30 @@ QtObject {
         attente.start()
     }
 
-    /// Scénario d'essai « suggestion » : sans connexion, l'entrée du menu « ? »
-    /// ouvre une rédaction adressée à `adresseSuggestions`, version et système
-    /// dans l'objet.
+    /// Scénario d'essai « suggestion » : sans connexion, le bouton
+    /// « Suggestion » de la barre du haut (au bureau ; au doigt, l'entrée du
+    /// menu « ? ») ouvre une rédaction adressée à `adresseSuggestions`,
+    /// version et système dans l'objet — ou, sans aucun compte dans le
+    /// profil (banc neuf), passe la main à la messagerie du poste.
     function etapeScenarioSuggestion() {
-        var r = envoyerSuggestion()
+        var bouton = objetNomme(fenetre.menuBar, "boutonSuggestion")
+        // Au bureau, à partir de 1 024 points sur une seule ligne.
+        var attendu = !tactile && !compact && (deuxEtages || fenetre.width >= 1024)
+        console.log("scenario: bouton « Suggestion »", attendu ? "dans la barre du haut" : "absent",
+                    "| largeur", fenetre.width, !!bouton && bouton.visible === attendu ? "OK" : "ECHEC")
+        var sansCompte = comptesConnus.length === 0
+        var avant = redactionActive
+        var r = null
+        if (!tactile && bouton && bouton.visible) {
+            bouton.clicked()
+            r = redactionActive !== avant ? redactions[redactionActive] || null : null
+        } else {
+            r = envoyerSuggestion()
+        }
+        if (sansCompte) {
+            console.log("scenario: suggestion sans compte : messagerie du poste", r === null ? "OK" : "ECHEC")
+            return
+        }
         var a = r ? r.contenu().a : ""
         var objet = r ? r.contenu().objet : ""
         console.log("scenario: suggestion,", a, "|", objet,

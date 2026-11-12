@@ -1527,6 +1527,19 @@ ApplicationWindow {
                 text: fenetre.compact ? "?" : qsTr("Aide")
                 menu: menuAide
             }
+            // « Suggestion » en vue, au bureau (demande du mainteneur du 12/11 :
+            // dans « Aide », personne ne la trouvait). Sur une seule ligne, à
+            // partir de 1 024 points : à 900, il débordait (vu au banc). Au
+            // doigt ou plus étroit, elle reste dans le menu « Aide ».
+            BoutonOutil {
+                objectName: "boutonSuggestion"
+                visible: !fenetre.tactile && !fenetre.compact && (fenetre.deuxEtages || fenetre.width >= 1024)
+                text: qsTr("Suggestion")
+                infobulle: qsTr("Envoyer une suggestion à MMEDIA : une idée, un défaut, une remarque")
+                onClicked: fenetre.envoyerSuggestion()
+                Layout.alignment: Qt.AlignVCenter
+                Layout.leftMargin: 4
+            }
         }
     }
 

@@ -7187,6 +7187,9 @@ ApplicationWindow {
             // Scénario « recherche-portee » (0.8.2, 0.8.3 ; banc LOT1=1).
             if (essai.scenario === "recherche-portee")
                 scenarios.lancerScenarioRecherchePortee()
+            // « recherche-boite » (0.6.45 ; banc PARTAGE=1 LOT1=1).
+            if (essai.scenario === "recherche-boite")
+                scenarios.lancerScenarioRechercheBoite()
             // « non-lus-seuls » : demande d'une utilisatrice du 06/11/2026.
             if (essai.scenario === "non-lus-seuls")
                 scenarios.lancerScenarioNonLusSeuls()

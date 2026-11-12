@@ -7221,6 +7221,9 @@ ApplicationWindow {
             // Scénario « visio » (0.7.0, banc AGENDA=1).
             if (essai.scenario === "visio")
                 scenarios.lancerScenarioVisio()
+            // Scénario « visio-reel » : une vraie boîte hébergée par MMEDIA.
+            if (essai.scenario === "visio-reel")
+                scenarios.lancerScenarioVisioReel()
             // Scénario « zoom-lecture » (0.6.29) : le zoom du volet de lecture
             // laisse les boutons à leur taille (banc PIECE=1).
             if (essai.scenario === "zoom-lecture")

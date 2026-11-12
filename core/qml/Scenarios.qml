@@ -5392,6 +5392,119 @@ QtObject {
         attendreAgenda(0)
     }
 
+    // Scénario « visio-reel » : contre une vraie boîte hébergée par MMEDIA
+    // (MMAIL_HOTE = son serveur, ou un autre nom de la même adresse IP), sans
+    // banc. Aucun service n'est réglé : il doit venir d'office. Un événement
+    // « Essai visio MMail » est enregistré dans le premier agenda modifiable,
+    // et y reste : le lien de la réunion et celui de l'organisateur sont
+    // écrits dans le journal (« scenario: lien-… »), pour les ouvrir dans un
+    // navigateur ; l'événement se retire ensuite, à la main ou par CalDAV.
+    function lancerScenarioVisioReel(essais) {
+        var n = essais || 0
+        if (boite.compteCourant <= 0 && n < 40) {
+            plusTard(1000, function() { lancerScenarioVisioReel(n + 1) })
+            return
+        }
+        var echecs = 0
+        var bilan = function(texte, bon) {
+            if (!bon)
+                echecs += 1
+            console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
+        }
+        var dans = function(nom) {
+            return objetNomme(vueAgenda.saisieEvenement.contentItem, nom)
+                || objetNomme(vueAgenda.ficheEvenement.contentItem, nom)
+        }
+        var fin = function() {
+            console.log("scenario: visio-reel " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
+            Qt.quit()
+        }
+        var adresse = identifiantsEssai.utilisateur
+        var hote = identifiantsEssai.hote
+        var service = "https://visio.mmedia.fr"
+        var prefixe = adresse.split("@")[1].toLowerCase().replace(/\./g, "-")
+        var compte = listeComptes().filter(function(c) { return c.adresse === adresse })[0]
+        bilan("compte " + adresse + " sur " + hote + ", aucun service réglé", !!compte && compte.visio === "")
+        fenetre.module = "agenda"
+        boite.synchroniserAgendas(true)
+        // La reconnaissance du serveur (recherche DNS) se fait pendant la
+        // synchronisation des agendas : attendre qu'elle ait donné le service.
+        var attendreAgenda = function(k) {
+            vueAgenda.agendas = JSON.parse(boite.agendas())
+            var modifiables = vueAgenda.agendasModifiables()
+            if ((modifiables.length === 0 || modifiables[0].visio === "") && k < 60) {
+                plusTard(1000, function() { attendreAgenda(k + 1) })
+                return
+            }
+            if (modifiables.length === 0) {
+                bilan("un agenda modifiable", false)
+                fin()
+                return
+            }
+            var a = modifiables[0]
+            bilan("serveur reconnu, agenda « " + a.nom + " » : service d'office « " + a.visio + " »", a.visio === service)
+            bilan("dialogue du compte : service d'office « " + boite.visioDOffice(compte.id, hote) + " »",
+                  boite.visioDOffice(compte.id, hote) === service)
+            var jour = vueAgenda.isoJour(new Date())
+            vueAgenda.nouvelEvenement(jour, 19 * 60, false, 60)
+            plusTard(1500, function() {
+                var bouton = dans("boutonVisio")
+                var lieu = dans("champLieu")
+                var description = dans("champDescription")
+                bilan("saisie ouverte, bouton « Visio » visible", vueAgenda.saisieEvenement.opened && !!bouton && bouton.visible)
+                if (!bouton || !lieu || !description) {
+                    fin()
+                    return
+                }
+                dans("champTitre").text = "Essai visio MMail"
+                bouton.clicked()
+                var forme = new RegExp("^https://visio\\.mmedia\\.fr/(" + prefixe
+                                       + "-[a-kmnp-z2-9]{4}-[a-kmnp-z2-9]{4}-[a-kmnp-z2-9]{4})$")
+                var m = forme.exec(lieu.text)
+                bilan("lieu : " + lieu.text, !!m)
+                if (!m) {
+                    fin()
+                    return
+                }
+                var lien = service + "/" + m[1]
+                bilan("description : " + JSON.stringify(description.text),
+                      description.text === "Rejoindre la visio : " + lien)
+                plusTard(800, function() {
+                    dans("boutonEnregistrerEvenement").clicked()
+                    var attendreFiche = function(k) {
+                        var fiches = vueAgenda.donnees.fiches || []
+                        var i = fiches.findIndex(function(f) { return f.titre === "Essai visio MMail" && f.lieu === lien })
+                        if (i < 0) {
+                            if (k < 30) {
+                                plusTard(1000, function() { attendreFiche(k + 1) })
+                                return
+                            }
+                            bilan("événement enregistré", false)
+                            fin()
+                            return
+                        }
+                        bilan("événement enregistré", true)
+                        vueAgenda.montrerFiche(i)
+                        plusTard(1000, function() {
+                            var ouvrir = dans("boutonOuvrirVisio")
+                            var organisateur = ouvrir ? ouvrir.lien : ""
+                            bilan("« Ouvrir la visio » en organisateur : " + organisateur,
+                                  !!ouvrir && ouvrir.visible
+                                  && organisateur === service + "/organiser/mailcow?salle=" + m[1])
+                            console.log("scenario: lien-reunion " + lien)
+                            console.log("scenario: lien-organisateur " + organisateur)
+                            vueAgenda.ficheEvenement.close()
+                            // Le temps que l'écriture CalDAV aboutisse.
+                            plusTard(5000, fin)
+                        })
+                    }
+                    plusTard(2000, function() { attendreFiche(0) })
+                })
+            })
+        }
+        attendreAgenda(0)
+    }
+
     function lancerScenarioMarquerLu(essais) {
         var n = essais || 0
         // Le compte connecté et sa boîte de réception rouverte : cette

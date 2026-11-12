@@ -32,12 +32,22 @@ Item {
         name: "BarreMessage"
         when: windowShown
 
-        function enfant(nom) {
-            for (var i = 0; i < barre.children.length; ++i) {
-                if (barre.children[i].objectName === nom)
-                    return barre.children[i]
+        // Un élément de la barre, rangées des groupes comprises.
+        function enfant(nom, depuis) {
+            var parent = depuis || barre
+            for (var i = 0; i < parent.children.length; ++i) {
+                var e = parent.children[i]
+                if (e.objectName === nom)
+                    return e
+                var trouve = enfant(nom, e)
+                if (trouve)
+                    return trouve
             }
             return null
+        }
+        // Position dans le repère de la barre.
+        function pos(e) {
+            return e.mapToItem(barre, 0, 0)
         }
         function init() {
             fenetre.tactile = false
@@ -59,8 +69,8 @@ Item {
                 var b = enfant(noms[i])
                 verify(a && a.visible, noms[i - 1])
                 verify(b && b.visible, noms[i])
-                compare(b.y + b.height / 2, a.y + a.height / 2, noms[i] + " sur la ligne de " + noms[i - 1])
-                verify(b.x > a.x + a.width - 1, noms[i] + " après " + noms[i - 1])
+                compare(pos(b).y + b.height / 2, pos(a).y + a.height / 2, noms[i] + " sur la ligne de " + noms[i - 1])
+                verify(pos(b).x > pos(a).x + a.width - 1, noms[i] + " après " + noms[i - 1])
             }
         }
 
@@ -73,8 +83,8 @@ Item {
                 verify(b, noms[i])
                 verify(b.visible, noms[i] + " visible")
                 if (y < 0)
-                    y = b.y
-                compare(b.y, y, noms[i] + " sur la même ligne")
+                    y = pos(b).y
+                compare(pos(b).y, y, noms[i] + " sur la même ligne")
             }
             verify(!enfant("boutonAutresActions").visible, "« … » seulement au doigt")
             verify(!enfant("boutonReprendre").visible)
@@ -142,10 +152,15 @@ Item {
             for (var i = 0; i < noms.length; ++i) {
                 var b = enfant(noms[i])
                 verify(b.visible, noms[i])
-                verify(b.x + b.width <= barre.width, noms[i] + " dans le volet : " + (b.x + b.width))
-                lignes[b.y] = true
+                verify(pos(b).x + b.width <= barre.width, noms[i] + " dans le volet : " + (pos(b).x + b.width))
+                lignes[pos(b).y] = true
             }
             verify(Object.keys(lignes).length > 1, "sur plusieurs lignes")
+            // Jamais au milieu d'un groupe.
+            var groupes = [["boutonRepondre", "boutonRepondreTous", "boutonTransferer"],
+                           ["boutonMarquerLu", "boutonDeplacer"], ["boutonIndesirable", "boutonSupprimer"]]
+            for (var g = 0; g < groupes.length; ++g)
+                dansLOrdre(groupes[g])
             verify(barre.implicitHeight > enfant("boutonSupprimer").height, "la barre grandit : " + barre.implicitHeight)
         }
 
@@ -153,8 +168,8 @@ Item {
         function voisinDeSupprimer() {
             var j = enfant("boutonIndesirable")
             var d = enfant("boutonSupprimer")
-            compare(j.y, d.y, "même ligne")
-            compare(d.x, j.x + j.width + barre.spacing, "« Indésirable » à gauche de « Supprimer »")
+            compare(pos(j).y, pos(d).y, "même ligne")
+            compare(pos(d).x, pos(j).x + j.width + barre.spacing, "« Indésirable » à gauche de « Supprimer »")
         }
 
         function test_infobulles_et_noms() {
@@ -217,8 +232,8 @@ Item {
             compare(autres.text, "Autres actions")
             var r = enfant("boutonRepondre")
             verify(r.width >= 40 && r.height >= 40, "cible du doigt : " + r.width + " × " + r.height)
-            compare(j.y, r.y, "sur une ligne")
-            compare(autres.y, r.y, "sur une ligne")
+            compare(pos(j).y, pos(r).y, "sur une ligne")
+            compare(pos(autres).y, pos(r).y, "sur une ligne")
             verify(autres.x + autres.width <= 392, "« … » dans l'écran : " + (autres.x + autres.width))
             verify(autres.x + autres.width >= 392 - 4, "« … » au bord droit : " + (autres.x + autres.width))
             // Téléphone de 360 points, moins les 16 de marge du volet.

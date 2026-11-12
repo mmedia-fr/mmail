@@ -11,7 +11,8 @@
 //
 // Au bureau, « Affichage › Boutons des barres › Pictogrammes et texte » met le
 // nom à côté de chaque dessin (fenetre.libellesBarres) : d'où un Flow, qui
-// passe à la ligne quand le volet est trop étroit. Au doigt, une seule ligne,
+// passe à la ligne quand le volet est trop étroit — entre deux groupes, jamais
+// au milieu d'un groupe (une rangée par groupe). Au doigt, une seule ligne,
 // « … » au bord droit.
 //
 // Les noms employés sans être déclarés ici (fenetre, menuMessage…) sont ceux
@@ -24,7 +25,7 @@ Flow {
     id: barre
     spacing: fenetre.tactile ? 2 : 4
     readonly property bool libelles: fenetre.libellesBarres
-    // Ce qu'occupent les boutons visibles, sans le ressort qui pousse « … »
+    // Ce qu'occupent les groupes visibles, sans le ressort qui pousse « … »
     // au bord : la largeur utile de la barre (cf. les épreuves).
     readonly property real largeurBoutons: {
         var l = 0
@@ -38,91 +39,106 @@ Flow {
         }
         return n > 0 ? l + barre.spacing * (n - 1) : 0
     }
-    // Un brouillon se reprend ; un message reçu reçoit une réponse.
-    BoutonAction {
-        objectName: "boutonReprendre"
-        visible: fenetre.dossierDeReprise
-        text: qsTr("Reprendre")
-        onClicked: fenetre.rediger("brouillon")
-    }
-    BoutonPictogramme {
-        objectName: "boutonRepondre"
-        visible: !fenetre.dossierDeReprise
-        avecLibelle: barre.libelles
-        text: qsTr("Répondre")
-        infobulle: qsTr("Répondre (Ctrl+R)")
-        dessin: fenetre.dessinerRepondre
-        onClicked: fenetre.rediger("repondre")
-    }
-    BoutonPictogramme {
-        objectName: "boutonRepondreTous"
-        visible: !fenetre.dossierDeReprise
-        avecLibelle: barre.libelles
-        text: qsTr("Répondre à tous")
-        infobulle: qsTr("Répondre à tous (Ctrl+Maj+R)")
-        dessin: fenetre.dessinerRepondreTous
-        onClicked: fenetre.rediger("repondre_tous")
-    }
-    BoutonPictogramme {
-        objectName: "boutonTransferer"
-        visible: !fenetre.dossierDeReprise
-        avecLibelle: barre.libelles
-        text: qsTr("Transférer")
-        infobulle: qsTr("Transférer (Ctrl+F)")
-        dessin: fenetre.dessinerTransferer
-        onClicked: fenetre.rediger("transferer")
+
+    // Répondre. Un brouillon se reprend ; un message reçu reçoit une réponse.
+    Row {
+        objectName: "groupeRepondre"
+        spacing: barre.spacing
+        BoutonAction {
+            objectName: "boutonReprendre"
+            visible: fenetre.dossierDeReprise
+            text: qsTr("Reprendre")
+            onClicked: fenetre.rediger("brouillon")
+        }
+        BoutonPictogramme {
+            objectName: "boutonRepondre"
+            visible: !fenetre.dossierDeReprise
+            avecLibelle: barre.libelles
+            text: qsTr("Répondre")
+            infobulle: qsTr("Répondre (Ctrl+R)")
+            dessin: fenetre.dessinerRepondre
+            onClicked: fenetre.rediger("repondre")
+        }
+        BoutonPictogramme {
+            objectName: "boutonRepondreTous"
+            visible: !fenetre.dossierDeReprise
+            avecLibelle: barre.libelles
+            text: qsTr("Répondre à tous")
+            infobulle: qsTr("Répondre à tous (Ctrl+Maj+R)")
+            dessin: fenetre.dessinerRepondreTous
+            onClicked: fenetre.rediger("repondre_tous")
+        }
+        BoutonPictogramme {
+            objectName: "boutonTransferer"
+            visible: !fenetre.dossierDeReprise
+            avecLibelle: barre.libelles
+            text: qsTr("Transférer")
+            infobulle: qsTr("Transférer (Ctrl+F)")
+            dessin: fenetre.dessinerTransferer
+            onClicked: fenetre.rediger("transferer")
+        }
     }
     ToolSeparator {
         objectName: "separateurRepondre"
         visible: !fenetre.tactile
         height: boutonSupprimer.height
     }
-    // 0.8.1 : lu ou non lu, à côté du message ; Ctrl+Q, Ctrl+U.
-    BoutonPictogramme {
-        objectName: "boutonMarquerLu"
-        avecLibelle: barre.libelles
-        text: fenetre.etatChoix.nonLu ? qsTr("Marquer comme lu") : qsTr("Marquer comme non lu")
-        infobulle: fenetre.etatChoix.nonLu ? qsTr("Marquer comme lu (Ctrl+Q)") : qsTr("Marquer comme non lu (Ctrl+U)")
-        dessin: fenetre.etatChoix.nonLu ? fenetre.dessinerLu : fenetre.dessinerNonLu
-        onClicked: fenetre.marquerSelection(fenetre.etatChoix.nonLu)
-    }
-    BoutonPictogramme {
-        objectName: "boutonDeplacer"
-        avecLibelle: barre.libelles
-        text: qsTr("Déplacer…")
-        infobulle: qsTr("Déplacer vers un dossier… (Ctrl+Maj+V)")
-        dessin: fenetre.dessinerDeplacer
-        onClicked: fenetre.ouvrirDeplacer()
+    // Lire et ranger.
+    Row {
+        objectName: "groupeRanger"
+        spacing: barre.spacing
+        // 0.8.1 : lu ou non lu, à côté du message ; Ctrl+Q, Ctrl+U.
+        BoutonPictogramme {
+            objectName: "boutonMarquerLu"
+            avecLibelle: barre.libelles
+            text: fenetre.etatChoix.nonLu ? qsTr("Marquer comme lu") : qsTr("Marquer comme non lu")
+            infobulle: fenetre.etatChoix.nonLu ? qsTr("Marquer comme lu (Ctrl+Q)") : qsTr("Marquer comme non lu (Ctrl+U)")
+            dessin: fenetre.etatChoix.nonLu ? fenetre.dessinerLu : fenetre.dessinerNonLu
+            onClicked: fenetre.marquerSelection(fenetre.etatChoix.nonLu)
+        }
+        BoutonPictogramme {
+            objectName: "boutonDeplacer"
+            avecLibelle: barre.libelles
+            text: qsTr("Déplacer…")
+            infobulle: qsTr("Déplacer vers un dossier… (Ctrl+Maj+V)")
+            dessin: fenetre.dessinerDeplacer
+            onClicked: fenetre.ouvrirDeplacer()
+        }
     }
     ToolSeparator {
         objectName: "separateurRanger"
         visible: !fenetre.tactile
         height: boutonSupprimer.height
     }
-    // À côté de « Supprimer », au bureau comme sous Android (choix du
-    // mainteneur, 12/11) : relégué dans « … » sous Android le 10/11, il n'y
-    // était plus qu'une ligne sans dessin. Au doigt, un appui malheureux se
-    // rattrape : le message attend 5 s derrière « Annuler »
-    // (Main.signalerIndesirable).
-    BoutonPictogramme {
-        objectName: "boutonIndesirable"
-        visible: !fenetre.dossierDeReprise
-        avecLibelle: barre.libelles
-        text: fenetre.roleCourant === "Junk" ? qsTr("Pas indésirable") : qsTr("Indésirable")
-        infobulle: fenetre.roleCourant === "Junk"
-                   ? qsTr("Pas indésirable : remettre en boîte de réception ; le filtre du serveur l'apprend (Ctrl+Alt+J)")
-                   : qsTr("Courrier indésirable ; le filtre du serveur l'apprend (Ctrl+Alt+J)")
-        dessin: fenetre.dessinerIndesirable
-        onClicked: fenetre.signalerIndesirable()
-    }
-    BoutonPictogramme {
-        id: boutonSupprimer
-        objectName: "boutonSupprimer"
-        avecLibelle: barre.libelles
-        text: qsTr("Supprimer")
-        infobulle: qsTr("Supprimer (Suppr)")
-        dessin: fenetre.dessinerCorbeille
-        onClicked: fenetre.supprimerSelection()
+    // Se débarrasser du message.
+    Row {
+        objectName: "groupeSupprimer"
+        spacing: barre.spacing
+        // À côté de « Supprimer », au bureau comme sous Android (choix du
+        // mainteneur, 12/11) : relégué dans « … » sous Android le 10/11, il
+        // n'y était plus qu'une ligne sans dessin. Au doigt, un appui
+        // malheureux se rattrape : le message attend 5 s derrière « Annuler »
+        // (Main.signalerIndesirable).
+        BoutonPictogramme {
+            objectName: "boutonIndesirable"
+            visible: !fenetre.dossierDeReprise
+            avecLibelle: barre.libelles
+            text: fenetre.roleCourant === "Junk" ? qsTr("Pas indésirable") : qsTr("Indésirable")
+            infobulle: fenetre.roleCourant === "Junk"
+                       ? qsTr("Pas indésirable : remettre en boîte de réception ; le filtre du serveur l'apprend (Ctrl+Alt+J)")
+                       : qsTr("Courrier indésirable ; le filtre du serveur l'apprend (Ctrl+Alt+J)")
+            dessin: fenetre.dessinerIndesirable
+            onClicked: fenetre.signalerIndesirable()
+        }
+        BoutonPictogramme {
+            id: boutonSupprimer
+            objectName: "boutonSupprimer"
+            avecLibelle: barre.libelles
+            text: qsTr("Supprimer")
+            infobulle: qsTr("Supprimer (Suppr)")
+            dessin: fenetre.dessinerCorbeille
+            onClicked: fenetre.supprimerSelection()
+        }
     }
     ToolSeparator {
         objectName: "separateurSource"

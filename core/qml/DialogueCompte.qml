@@ -169,7 +169,7 @@ Dialog {
             objectName: "champVisio"
             MenuSaisie {}
             visible: dlgCompte.compteId === 0 || dlgCompte.modification
-            readonly property string dOffice: boite.visioDOffice(champHote.text)
+            readonly property string dOffice: boite.visioDOffice(dlgCompte.compteId, champHote.text)
             placeholderText: dOffice.length > 0 ? qsTr("d'office : %1").arg(dOffice)
                                                 : qsTr("aucun ; par exemple https://visio.exemple.fr")
             inputMethodHints: Qt.ImhUrlCharactersOnly | Qt.ImhNoAutoUppercase

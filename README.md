@@ -424,8 +424,11 @@ participants), après connexion avec le compte de messagerie, en invité sinon.
 Le nom de la réunion commence par le domaine du compte, points changés en
 tirets, suivi de trois groupes de quatre signes tirés au hasard (sans `l`, `o`,
 `0` ni `1`) : le service n'accepte en organisateur que la boîte de ce domaine.
-Une boîte hébergée par MMEDIA (serveur `mail.mmedia.fr`) a d'office le service
-de MMEDIA, `https://visio.mmedia.fr`. Pour un compte sans service — autre
+Une boîte hébergée par MMEDIA a d'office le service de MMEDIA,
+`https://visio.mmedia.fr`. Elle se reconnaît à son serveur : `mail.mmedia.fr`,
+ou un nom qui a une adresse IP en commun avec lui, comme `mail.<domaine du
+client>`. La vérification se fait une fois par compte et par lancement, avec la
+synchronisation des agendas ; hors connexion, la boîte n'est pas reconnue. Pour un compte sans service — autre
 hébergeur, ou agenda Microsoft 365 —, « Visio » explique que la visio est
 comprise dans les boîtes hébergées par MMEDIA et propose « Faire la demande à
 MMEDIA » : un message depuis ce compte, adressé à `contact@mmedia.fr`, que la

@@ -5274,8 +5274,8 @@ QtObject {
         }
         var adresse = identifiantsEssai.utilisateur
         var service = "https://visio.essai.test"
-        bilan("service d'office des boîtes MMEDIA (" + boite.visioDOffice("mail.mmedia.fr") + "), aucun ailleurs",
-              boite.visioDOffice("mail.mmedia.fr") === "https://visio.mmedia.fr" && boite.visioDOffice("localhost") === "")
+        bilan("service d'office des boîtes MMEDIA (" + boite.visioDOffice(0, "mail.mmedia.fr") + "), aucun ailleurs",
+              boite.visioDOffice(0, "mail.mmedia.fr") === "https://visio.mmedia.fr" && boite.visioDOffice(0, "localhost") === "")
         bilan("adresse http refusée", !boite.poserVisio(adresse, "http://visio.essai.test"))
         bilan("service posé", boite.poserVisio(adresse, service + "/"))
         bilan("service du compte, sans barre finale",

@@ -15,11 +15,14 @@
 //!
 //! Le service lui-même est un réglage du compte (`accounts.visio`) : une
 //! adresse HTTPS, vide par défaut. Une seule exception : une boîte hébergée
-//! par MMEDIA (serveur [`HOTE_MMEDIA`]) a d'office le service de MMEDIA
-//! ([`SERVICE_MMEDIA`]), même saisie à la main — sans quoi le bouton « Visio »
-//! l'inviterait à demander ce qu'elle a déjà.
+//! par MMEDIA a d'office le service de MMEDIA ([`SERVICE_MMEDIA`]), même
+//! saisie à la main — sans quoi le bouton « Visio » l'inviterait à demander ce
+//! qu'elle a déjà. Elle se reconnaît à son serveur : [`HOTE_MMEDIA`], ou un
+//! nom qui a une adresse IP en commun avec lui (`mail.<domaine du client>`,
+//! déclaré directement ou en alias ; cf. [`meme_serveur`]).
 
 use aws_lc_rs::rand::{SecureRandom, SystemRandom};
+use std::net::{IpAddr, ToSocketAddrs};
 
 /// Les 32 signes du suffixe : ni `l`, ni `o`, ni `0`, ni `1`, qui se
 /// confondent à la lecture.
@@ -35,15 +38,36 @@ pub const HOTE_MMEDIA: &str = "mail.mmedia.fr";
 pub const SERVICE_MMEDIA: &str = "https://visio.mmedia.fr";
 
 /// Service de visio d'un compte : celui qui est réglé, sinon celui de MMEDIA
-/// pour une boîte de son serveur, sinon aucun (vide).
-pub fn service_du_compte<'a>(reglage: &'a str, hote: &str) -> &'a str {
+/// pour une boîte de son serveur — `serveur_mmedia` : son serveur a été
+/// reconnu (cf. [`meme_serveur`]) —, sinon aucun (vide).
+pub fn service_du_compte<'a>(reglage: &'a str, hote: &str, serveur_mmedia: bool) -> &'a str {
     if !reglage.is_empty() {
         reglage
-    } else if hote.trim().eq_ignore_ascii_case(HOTE_MMEDIA) {
+    } else if serveur_mmedia || hote.trim().eq_ignore_ascii_case(HOTE_MMEDIA) {
         SERVICE_MMEDIA
     } else {
         ""
     }
+}
+
+/// Adresses IP d'un nom de serveur ; vide si la recherche échoue.
+fn adresses(hote: &str) -> Vec<IpAddr> {
+    (hote.trim(), 993).to_socket_addrs().map(|a| a.map(|s| s.ip()).collect()).unwrap_or_default()
+}
+
+/// `hote` désigne-t-il le même serveur que `reference` ? Oui pour le même nom,
+/// sans recherche ; sinon, s'ils ont une adresse IP en commun. `None` si l'une
+/// des deux recherches ne donne rien (hors connexion) : à refaire plus tard.
+/// La recherche peut durer : jamais depuis l'interface.
+pub fn meme_serveur(hote: &str, reference: &str) -> Option<bool> {
+    if hote.trim().eq_ignore_ascii_case(reference.trim()) {
+        return Some(true);
+    }
+    let (a, b) = (adresses(hote), adresses(reference));
+    if a.is_empty() || b.is_empty() {
+        return None;
+    }
+    Some(a.iter().any(|x| b.contains(x)))
 }
 
 /// Préfixe des réunions d'une adresse : son domaine, en minuscules, points en
@@ -260,11 +284,21 @@ mod essais {
 
     #[test]
     fn service_d_office_des_boites_mmedia() {
-        assert_eq!(service_du_compte("", "mail.mmedia.fr"), SERVICE_MMEDIA);
-        assert_eq!(service_du_compte("", " Mail.MMEDIA.fr "), SERVICE_MMEDIA);
-        assert_eq!(service_du_compte(SERVICE, "mail.mmedia.fr"), SERVICE, "le réglage l'emporte");
-        assert_eq!(service_du_compte("", "imap.orange.fr"), "", "autre hébergeur");
-        assert_eq!(service_du_compte(SERVICE, "imap.orange.fr"), SERVICE);
+        assert_eq!(service_du_compte("", "mail.mmedia.fr", false), SERVICE_MMEDIA);
+        assert_eq!(service_du_compte("", " Mail.MMEDIA.fr ", false), SERVICE_MMEDIA);
+        assert_eq!(service_du_compte("", "mail.client.fr", true), SERVICE_MMEDIA, "serveur reconnu");
+        assert_eq!(service_du_compte(SERVICE, "mail.mmedia.fr", true), SERVICE, "le réglage l'emporte");
+        assert_eq!(service_du_compte("", "imap.orange.fr", false), "", "autre hébergeur");
+        assert_eq!(service_du_compte(SERVICE, "imap.orange.fr", false), SERVICE);
+    }
+
+    #[test]
+    fn meme_serveur_par_le_nom_ou_l_adresse() {
+        assert_eq!(meme_serveur("Mail.Exemple.fr", "mail.exemple.fr"), Some(true), "même nom, sans recherche");
+        assert_eq!(meme_serveur("127.0.0.1", "127.0.0.1 "), Some(true));
+        assert_eq!(meme_serveur("localhost", "127.0.0.1"), Some(true), "nom et adresse du même serveur");
+        assert_eq!(meme_serveur("127.0.0.2", "127.0.0.1"), Some(false));
+        assert_eq!(meme_serveur("serveur.invalid", "127.0.0.1"), None, "recherche sans réponse");
     }
 
     #[test]

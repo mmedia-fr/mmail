@@ -123,12 +123,12 @@ pub mod qobject {
         #[cxx_name = "poserVisio"]
         fn poser_visio(self: Pin<&mut Boite>, adresse: &QString, service: &QString) -> bool;
 
-        /// Service de visio d'office pour un compte du serveur `hote` (celui
-        /// de MMEDIA pour ses boîtes), vide sinon : l'indication du champ
-        /// « Service de visio » laissé vide.
+        /// Service de visio d'office du compte `compte` (0 pour un nouveau)
+        /// sur le serveur `hote` : celui de MMEDIA pour ses boîtes, vide
+        /// sinon ; l'indication du champ « Service de visio » laissé vide.
         #[qinvokable]
         #[cxx_name = "visioDOffice"]
-        fn visio_d_office(&self, hote: &QString) -> QString;
+        fn visio_d_office(&self, compte: i32, hote: &QString) -> QString;
 
         /// Lieu et description d'un événement de l'agenda `agenda` une fois
         /// la visio posée : `{"lieu", "description"}` en JSON, vide si son
@@ -1952,6 +1952,10 @@ pub struct BoiteRust {
     /// Lecture des agendas Microsoft 365 (0.9.0), par compte : autorisée, ou
     /// refusée — elle n'est alors redemandée qu'à la demande de l'utilisateur.
     agendas_microsoft: HashMap<i64, bool>,
+    /// Comptes dont le serveur est (ou n'est pas) celui de MMEDIA, vérifié
+    /// une fois par lancement avec la synchronisation des agendas (cf.
+    /// `visio::meme_serveur`) : service de visio d'office.
+    serveurs_mmedia: HashMap<i64, bool>,
     /// Une synchronisation des agendas demandée pendant qu'une autre tournait
     /// (après une autorisation) : relancée à la fin de celle-ci.
     agendas_a_relire: bool,
@@ -2072,6 +2076,7 @@ impl Default for BoiteRust {
             marquages: HashMap::new(),
             agenda_occupe: false,
             agendas_microsoft: HashMap::new(),
+            serveurs_mmedia: HashMap::new(),
             agendas_a_relire: false,
             contacts_occupe: false,
             delai_lu: 0,
@@ -2165,7 +2170,7 @@ impl qobject::Boite {
                     // Le service de visio du compte ; jamais pour un agenda
                     // Microsoft 365, dont les réunions passent par Teams.
                     "visio": comptes.iter().find(|c| c.id == a.compte).map(|c| crate::visio::service_de_l_agenda(
-                        crate::visio::service_du_compte(&c.visio, &c.hote),
+                        crate::visio::service_du_compte(&c.visio, &c.hote, self.serveurs_mmedia.get(&c.id) == Some(&true)),
                         crate::microsoft::agenda::est_graph(&a.adresse))).unwrap_or(""),
                 })
             })
@@ -2214,11 +2219,26 @@ impl qobject::Boite {
         if comptes.is_empty() && microsoft.is_empty() {
             return;
         }
+        // Serveur de MMEDIA ou non : une fois par compte et par lancement,
+        // hors de l'interface (recherche DNS), pour le service de visio
+        // d'office.
+        let a_verifier: Vec<(i64, String)> = comptes
+            .iter()
+            .filter(|(compte, _, _)| !self.serveurs_mmedia.contains_key(compte))
+            .map(|(compte, _, id)| (*compte, id.hote.clone()))
+            .collect();
         let profil = self.profil.clone();
         let fil = self.qt_thread();
         self.as_mut().set_agenda_occupe(true);
         let lance = thread::Builder::new().name("mmail-agenda".into()).spawn(move || {
-            let mut change = false;
+            let verifies: Vec<(i64, bool)> = a_verifier
+                .iter()
+                .filter_map(|(compte, hote)| {
+                    crate::visio::meme_serveur(hote, crate::visio::HOTE_MMEDIA).map(|oui| (*compte, oui))
+                })
+                .collect();
+            // Une boîte MMEDIA reconnue : ses agendas reçoivent le service.
+            let mut change = verifies.iter().any(|(_, oui)| *oui);
             let mut erreurs = Vec::new();
             let (mut autorises, mut refuses) = (Vec::new(), Vec::new());
             match Magasin::ouvrir(&profil) {
@@ -2256,6 +2276,9 @@ impl qobject::Boite {
                 Err(e) => erreurs.push(format!("index local : {e}")),
             }
             let _ = fil.queue(move |mut boite: Pin<&mut qobject::Boite>| {
+                for (compte, oui) in verifies {
+                    boite.as_mut().rust_mut().serveurs_mmedia.insert(compte, oui);
+                }
                 for compte in autorises {
                     boite.as_mut().rust_mut().agendas_microsoft.insert(compte, true);
                 }
@@ -3419,14 +3442,15 @@ impl qobject::Boite {
         let a = magasin.agendas().ok()?.into_iter().find(|a| a.id == agenda as i64)?;
         let c = magasin.compte_par_id(a.compte).ok()??;
         let service = crate::visio::service_de_l_agenda(
-            crate::visio::service_du_compte(&c.visio, &c.hote),
+            crate::visio::service_du_compte(&c.visio, &c.hote, self.serveurs_mmedia.get(&c.id) == Some(&true)),
             crate::microsoft::agenda::est_graph(&a.adresse),
         );
         (!service.is_empty()).then(|| (c.adresse.clone(), service.to_string()))
     }
 
-    pub fn visio_d_office(&self, hote: &QString) -> QString {
-        QString::from(crate::visio::service_du_compte("", &hote.to_string()))
+    pub fn visio_d_office(&self, compte: i32, hote: &QString) -> QString {
+        let reconnu = self.serveurs_mmedia.get(&(compte as i64)) == Some(&true);
+        QString::from(crate::visio::service_du_compte("", &hote.to_string(), reconnu))
     }
 
     pub fn visio_evenement(&self, agenda: i32, lieu: &QString, description: &QString) -> QString {

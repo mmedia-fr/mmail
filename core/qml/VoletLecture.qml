@@ -95,87 +95,15 @@ ColumnLayout {
         rightPadding: 8
         // Les actions sur leur ligne, au-dessus de l'objet, comme dans
         // le volet de lecture d'Outlook : à côté, elles tronquaient
-        // l'objet et l'expéditeur. Elles passent à la ligne si la
-        // colonne est étroite.
+        // l'objet et l'expéditeur.
         ColumnLayout {
             width: parent.width
             spacing: 0
-            // De vrais boutons, encadrés et espacés, en trois groupes —
-            // répondre, ranger, voir la source — : des boutons plats de
-            // barre d'outils se lisaient mal (retour du mainteneur, 01/10).
-            Flow {
+            // Barre compacte (choix du mainteneur, 10/11) : cf. BarreMessage.qml.
+            BarreMessage {
                 Layout.fillWidth: true
                 Layout.topMargin: 4
                 Layout.bottomMargin: 6
-                spacing: 6
-                // Un brouillon se reprend ; un message reçu reçoit une réponse.
-                BoutonAction {
-                    visible: fenetre.dossierDeReprise
-                    text: qsTr("Reprendre")
-                    onClicked: fenetre.rediger("brouillon")
-                }
-                BoutonAction {
-                    objectName: "boutonRepondre"
-                    visible: !fenetre.dossierDeReprise
-                    text: qsTr("Répondre")
-                    onClicked: fenetre.rediger("repondre")
-                }
-                BoutonAction {
-                    visible: !fenetre.dossierDeReprise
-                    text: qsTr("Répondre à tous")
-                    onClicked: fenetre.rediger("repondre_tous")
-                }
-                BoutonAction {
-                    visible: !fenetre.dossierDeReprise
-                    text: qsTr("Transférer")
-                    onClicked: fenetre.rediger("transferer")
-                }
-                ToolSeparator { height: boutonDeplacer.height }
-                BoutonAction {
-                    id: boutonDeplacer
-                    text: qsTr("Déplacer…")
-                    onClicked: fenetre.ouvrirDeplacer()
-                }
-                // Sous Android, pas ici (10/11) : entre « Déplacer… » et « Marquer
-                // comme lu », un appui malheureux classait le message — il est
-                // dans « … », plus loin, et attend derrière « Annuler ».
-                BoutonAction {
-                    objectName: "boutonIndesirable"
-                    visible: !fenetre.dossierDeReprise && !fenetre.tactile
-                    text: fenetre.roleCourant === "Junk" ? qsTr("Pas indésirable") : qsTr("Indésirable")
-                    onClicked: fenetre.signalerIndesirable()
-                    ToolTip.visible: hovered
-                    ToolTip.delay: 600
-                    ToolTip.text: fenetre.roleCourant === "Junk"
-                                  ? qsTr("Remettre en boîte de réception ; le filtre du serveur apprend que le message est légitime (Ctrl+Alt+J).")
-                                  : qsTr("Classer en courrier indésirable ; le filtre du serveur l'apprend (Ctrl+Alt+J).")
-                }
-                // 0.8.1 : lu ou non lu, à côté du message ; Ctrl+Q, Ctrl+U.
-                BoutonAction {
-                    objectName: "boutonMarquerLu"
-                    text: fenetre.etatChoix.nonLu ? qsTr("Marquer comme lu") : qsTr("Marquer comme non lu")
-                    onClicked: fenetre.marquerSelection(fenetre.etatChoix.nonLu)
-                }
-                BoutonAction {
-                    text: qsTr("Supprimer")
-                    onClicked: fenetre.supprimerSelection()
-                }
-                ToolSeparator { height: boutonDeplacer.height }
-                // Décision 6 : voir le message brut, en-têtes compris, en un geste.
-                BoutonAction {
-                    text: fenetre.sourceVisible ? qsTr("Message") : qsTr("Source")
-                    onClicked: fenetre.basculerSource()
-                }
-                // Vue tactile : le reste des actions du message — « Courrier
-                // indésirable » compris —, le menu de l'appui long sur la ligne.
-                BoutonAction {
-                    id: boutonAutresActions
-                    objectName: "boutonAutresActions"
-                    visible: fenetre.tactile
-                    text: "…"
-                    Accessible.name: qsTr("Autres actions")
-                    onClicked: menuMessage.popup(boutonAutresActions, 0, boutonAutresActions.height)
-                }
             }
             // L'objet, en titre dans la police des titres sous une
             // apparence de marque. L'objet et l'expéditeur se

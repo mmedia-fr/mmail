@@ -7236,15 +7236,15 @@ ApplicationWindow {
             // Scénario « recherche-portee » (0.8.2, 0.8.3 ; banc LOT1=1).
             if (essai.scenario === "recherche-portee")
                 scenarios.lancerScenarioRecherchePortee()
-            // « copier-piece » (0.6.45 ; banc PIECE=1).
-            if (essai.scenario === "copier-piece")
-                scenarios.lancerScenarioCopierPiece()
             // « non-lus-seuls » : demande d'une utilisatrice du 06/11/2026.
             if (essai.scenario === "non-lus-seuls")
                 scenarios.lancerScenarioNonLusSeuls()
             // « recherche-entree » : demande d'un utilisateur du 04/11/2026.
             if (essai.scenario === "recherche-entree")
                 scenarios.lancerScenarioRechercheEntree()
+            // « copier-piece » (0.6.45 ; banc PIECE=1).
+            if (essai.scenario === "copier-piece")
+                scenarios.lancerScenarioCopierPiece()
             // « recherche-objet » (0.6.38 ; banc MARGES=1) : demande d'un
             // utilisateur du 04/11/2026.
             if (essai.scenario === "recherche-objet")

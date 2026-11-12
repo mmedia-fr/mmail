@@ -593,6 +593,13 @@ Connections {
     }
 
     function onPieceAJoindre(url) {
+        // Copiée ou glissée (0.6.45) : rien à ouvrir.
+        if (fenetre.pieceCible === "copier" || fenetre.pieceCible === "glisser") {
+            fenetre.pieceDisponible(url)
+            if (fenetre.essai && fenetre.essai.scenario === "copier-piece")
+                console.log("scenario: piece prete", url)
+            return
+        }
         var r = fenetre.redactions[fenetre.pieceCible]
         if (!r) {
             r = fenetre.ouvrirRedaction(boite.compteCourant > 0 ? boite.compteCourant

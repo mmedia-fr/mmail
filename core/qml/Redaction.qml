@@ -545,6 +545,15 @@ Page {
     /// d'une utilisatrice) : comme à la lecture, avec le logiciel retenu pour son
     /// type, à défaut celui du système. Un programme ou un script ne s'ouvre
     /// pas.
+    /// Copie une pièce de la rédaction (0.6.45) : collée (Ctrl+V) dans une
+    /// autre rédaction, ou dans l'explorateur.
+    function copierPiece(p) {
+        if (pressePapier.deposerFichiers([p.chemin]))
+            signaler(qsTr("%1 copiée : collez-la (Ctrl+V) dans un autre message.").arg(p.nom), false)
+        else
+            signaler(qsTr("%1 n'a pas pu être copiée.").arg(p.nom), true)
+    }
+
     function ouvrirPiece(p) {
         if (p.risquee) {
             signaler(qsTr("Programme ou script : %1 ne s'ouvre pas depuis MMail.").arg(p.nom), true)
@@ -1268,6 +1277,7 @@ Page {
             Repeater {
                 model: redac.pieces
                 delegate: Rectangle {
+                    id: puce
                     required property var modelData
                     required property int index
                     radius: 4
@@ -1275,6 +1285,43 @@ Page {
                     border.color: fenetre.palette.mid
                     width: lignePiece.implicitWidth + 8
                     height: lignePiece.implicitHeight + 4
+                    // Glissée vers une autre rédaction, ou l'explorateur ;
+                    // copiée par Ctrl+C ou par son menu (0.6.45).
+                    Drag.dragType: Drag.Automatic
+                    Drag.supportedActions: Qt.CopyAction
+                    Drag.mimeData: ({ "text/uri-list": pressePapier.adresseFichier(puce.modelData.chemin) })
+                    Drag.active: glisserPuce.active
+                    DragHandler {
+                        id: glisserPuce
+                        target: null
+                        enabled: Qt.platform.os !== "android"
+                        acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad | PointerDevice.Stylus
+                    }
+                    TapHandler {
+                        acceptedButtons: Qt.RightButton
+                        acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad | PointerDevice.Stylus
+                        enabled: Qt.platform.os !== "android"
+                        onTapped: menuPuce.popup()
+                    }
+                    Menu {
+                        id: menuPuce
+                        onAboutToShow: width = fenetre.largeurMenu(menuPuce)
+                        EntreeMenu {
+                            text: qsTr("Ouvrir")
+                            enabled: !puce.modelData.risquee
+                            onTriggered: redac.ouvrirPiece(puce.modelData)
+                        }
+                        EntreeMenu {
+                            text: qsTr("Copier")
+                            raccourci: qsTr("Ctrl+C")
+                            onTriggered: redac.copierPiece(puce.modelData)
+                        }
+                        EntreeMenu {
+                            text: qsTr("Retirer")
+                            enabled: !redac.occupe
+                            onTriggered: redac.retirerPiece(puce.index)
+                        }
+                    }
                     RowLayout {
                         id: lignePiece
                         anchors.centerIn: parent
@@ -1283,6 +1330,12 @@ Page {
                         ToolButton {
                             text: modelData.nom + "  (" + fenetre.tailleLisible(modelData.taille) + ")"
                             Layout.leftMargin: 2
+                            Keys.onPressed: function(ev) {
+                                if (ev.matches(StandardKey.Copy)) {
+                                    redac.copierPiece(puce.modelData)
+                                    ev.accepted = true
+                                }
+                            }
                             onClicked: redac.ouvrirPiece(modelData)
                             ToolTip.visible: hovered
                             ToolTip.delay: 500

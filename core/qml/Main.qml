@@ -329,6 +329,7 @@ ApplicationWindow {
     property string reponseInvitation: ""
     onUidCourantChanged: {
         invitation = ({})
+        piecesPretes = ({})
         majCategoriesAffichees()
     }
     property bool sourceVisible: false
@@ -446,6 +447,11 @@ ApplicationWindow {
     // Rédaction qui attend une pièce jointe en cours d'écriture (« nouveau »
     // pour en ouvrir une).
     property string pieceCible: ""
+    // Pièces du message affiché déjà écrites sur le disque pour être copiées
+    // ou glissées (0.6.45) : clé de `clePiece` → adresse `file:` ; et celle
+    // qu'on attend. Vidées d'un message à l'autre.
+    property var piecesPretes: ({})
+    property string piecePreparee: ""
     // Fond de la rubrique Favoris : un cran plus soutenu que celui des
     // comptes, pour qu'elle s'en détache (retour du mainteneur, 01/10).
     readonly property color fondFavoris: palette.base.hslLightness > 0.5
@@ -6252,6 +6258,59 @@ ApplicationWindow {
             messageEtat.texte = boite.erreur
     }
 
+    /// Une pièce jointe du message affiché vers une rédaction, sans
+    /// l'enregistrer d'abord (0.6.45, demande d'un utilisateur) : copiée
+    /// (Ctrl+V la joint, comme un fichier de l'explorateur) ou glissée sur la
+    /// rédaction. Le noyau l'écrit comme pour « Joindre à… » ; son adresse
+    /// `file:` part ensuite dans le presse-papier, ou dans le glisser (cf.
+    /// ReactionsNoyau.onPieceAJoindre).
+    function clePiece(piece) {
+        return piece ? [boite.compteCourant, boite.dossierCourant, uidCourant, piece.indice].join("\u0001") : ""
+    }
+    function copierPiece(piece) {
+        if (!piece || uidCourant <= 0)
+            return
+        var prete = piecesPretes[clePiece(piece)]
+        if (prete) {
+            deposerPiece(prete, piece.nom)
+            return
+        }
+        preparerPiece(piece, "copier")
+    }
+    /// Au début d'un glisser : la pièce s'écrit pendant que la souris bouge ;
+    /// le glisser part dès qu'elle est prête.
+    function preparerGlisser(piece) {
+        if (piece && uidCourant > 0 && !piecesPretes[clePiece(piece)])
+            preparerPiece(piece, "glisser")
+    }
+    function preparerPiece(piece, usage) {
+        pieceCible = usage
+        piecePreparee = clePiece(piece)
+        messageEtat.texte = qsTr("Préparation de %1…").arg(piece.nom)
+        if (!boite.joindrePiece(uidCourant, piece.indice)) {
+            pieceCible = ""
+            messageEtat.texte = boite.erreur
+        }
+    }
+    /// Pièce prête : notée, et copiée si c'était demandé.
+    function pieceDisponible(url) {
+        var pretes = Object.assign({}, piecesPretes)
+        pretes[piecePreparee] = url
+        piecesPretes = pretes
+        var nom = decodeURIComponent(url.toString().split("/").pop())
+        if (pieceCible === "copier")
+            deposerPiece(url, nom)
+        else
+            messageEtat.texte = qsTr("%1 prête : glissez-la sur le message en cours de rédaction.").arg(nom)
+        pieceCible = ""
+        piecePreparee = ""
+    }
+    function deposerPiece(url, nom) {
+        messageEtat.texte = pressePapier.deposerFichiers([url.toString()])
+                ? qsTr("%1 copiée : collez-la (Ctrl+V) dans le message en cours de rédaction.").arg(nom)
+                : qsTr("%1 n'a pas pu être copiée.").arg(nom)
+    }
+
     /// Un courriel en pièce jointe (demande d'une utilisatrice, 10/11 : « joindre
     /// un mail en pièce jointe, quel qu'il soit ») : les messages choisis,
     /// entiers, joints en `.eml` (message/rfc822) nommés d'après leur objet,
@@ -7177,6 +7236,9 @@ ApplicationWindow {
             // Scénario « recherche-portee » (0.8.2, 0.8.3 ; banc LOT1=1).
             if (essai.scenario === "recherche-portee")
                 scenarios.lancerScenarioRecherchePortee()
+            // « copier-piece » (0.6.45 ; banc PIECE=1).
+            if (essai.scenario === "copier-piece")
+                scenarios.lancerScenarioCopierPiece()
             // « non-lus-seuls » : demande d'une utilisatrice du 06/11/2026.
             if (essai.scenario === "non-lus-seuls")
                 scenarios.lancerScenarioNonLusSeuls()

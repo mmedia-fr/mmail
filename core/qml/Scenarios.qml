@@ -5464,6 +5464,77 @@ QtObject {
     /// le message, pas les boutons. « Devis joint » (banc PIECE=1) affiché, le
     /// zoom passe à 1,5 : le corps et l'objet grossissent d'autant ; le bouton
     /// « Répondre » et le bandeau des pièces jointes gardent leur taille.
+    // Scénario « copier-piece » (0.6.45), banc PIECE=1 : la pièce de « Devis
+    // joint » copiée du volet de lecture se colle dans une rédaction ; copiée
+    // de cette rédaction, elle se colle dans une autre ; préparée pour un
+    // glisser, elle est prête sans rien ouvrir.
+    function lancerScenarioCopierPiece(essais, etat) {
+        var n = essais || 0
+        var e = etat || { echecs: 0 }
+        var bilan = function(texte, bon) {
+            if (!bon)
+                e.echecs += 1
+            console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
+        }
+        var fin = function() {
+            console.log("scenario: copier-piece " + (e.echecs === 0 ? "OK" : "ECHEC (" + e.echecs + ")"))
+            Qt.quit()
+        }
+        var attendre = function(condition, suite, k) {
+            k = k || 0
+            if (!condition() && k < 40) {
+                plusTard(500, function() { attendre(condition, suite, k + 1) })
+                return
+            }
+            suite(condition())
+        }
+        var indice = -1
+        for (var j = 0; j < modeleMessages.count; ++j)
+            if (modeleMessages.get(j).sujet === "Devis joint")
+                indice = j
+        if (indice < 0 && n < 40) {
+            plusTard(1000, function() { lancerScenarioCopierPiece(n + 1, e) })
+            return
+        }
+        fenetre.choisir(indice, 0)
+        attendre(function() { return fenetre.pieces.length > 0 }, function(vu) {
+            bilan("pièces affichées : " + fenetre.pieces.length, vu)
+            if (!vu)
+                return fin()
+            var piece = fenetre.pieces[0]
+            fenetre.copierPiece(piece)
+            attendre(function() { return pressePapier.fichiers().length > 0 }, function(copie) {
+                var f = pressePapier.fichiers()
+                bilan("presse-papier : " + f.join(", ") + " | " + messageEtat.texte,
+                      copie && f.length === 1 && /devis\.pdf$/.test(f[0]) && messageEtat.texte.indexOf("copiée") >= 0)
+                var r = fenetre.ouvrirRedaction(boite.compteCourant)
+                r.pret()
+                plusTard(1500, function() {
+                    bilan("collée en pièce jointe", r.collerPieces() && r.pieces.length === 1 && r.pieces[0].nom === "devis.pdf")
+                    // De la rédaction vers une autre.
+                    pressePapier.deposer("")
+                    r.copierPiece(r.pieces[0])
+                    var f2 = pressePapier.fichiers()
+                    var r2 = fenetre.ouvrirRedaction(boite.compteCourant)
+                    r2.pret()
+                    plusTard(1500, function() {
+                        bilan("de rédaction à rédaction : " + f2.join(", "),
+                              f2.length === 1 && r2.collerPieces() && r2.pieces.length === 1 && r2.pieces[0].nom === "devis.pdf")
+                        // Un glisser : la pièce s'écrit, sans rédaction ouverte.
+                        fenetre.piecesPretes = ({})
+                        var avant = Object.keys(fenetre.redactions).length
+                        fenetre.preparerGlisser(piece)
+                        attendre(function() { return (fenetre.piecesPretes[fenetre.clePiece(piece)] || "").length > 0 }, function(prete) {
+                            bilan("prête à glisser : " + (fenetre.piecesPretes[fenetre.clePiece(piece)] || "—") + " | " + messageEtat.texte,
+                                  prete && Object.keys(fenetre.redactions).length === avant && fenetre.pieceCible === "")
+                            fin()
+                        })
+                    })
+                })
+            })
+        })
+    }
+
     // Scénario « recherche-portee » (0.8.2, 0.8.3), banc LOT1=1 : la portée
     // « Cette boîte (tous dossiers) » ne rend que les messages du compte, de
     // plusieurs dossiers ; « Toutes les boîtes » ajoute ceux de l'autre

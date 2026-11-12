@@ -1517,6 +1517,18 @@ ApplicationWindow {
                 text: fenetre.compact ? "?" : qsTr("Aide")
                 menu: menuAide
             }
+            // « Suggestion » en vue, au bureau (demande du mainteneur du 12/11 :
+            // dans « Aide », personne ne la trouvait). Au doigt, elle reste
+            // dans le menu « ? ».
+            BoutonOutil {
+                objectName: "boutonSuggestion"
+                visible: !fenetre.tactile && !fenetre.compact
+                text: qsTr("Suggestion")
+                infobulle: qsTr("Envoyer une suggestion à MMEDIA : une idée, un défaut, une remarque")
+                onClicked: fenetre.envoyerSuggestion()
+                Layout.alignment: Qt.AlignVCenter
+                Layout.leftMargin: 4
+            }
         }
     }
 

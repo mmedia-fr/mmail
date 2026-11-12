@@ -992,11 +992,21 @@ QtObject {
         attente.start()
     }
 
-    /// Scénario d'essai « suggestion » : sans connexion, l'entrée du menu « ? »
-    /// ouvre une rédaction adressée à `adresseSuggestions`, version et système
-    /// dans l'objet.
+    /// Scénario d'essai « suggestion » : sans connexion, le bouton
+    /// « Suggestion » de la barre du haut (au bureau ; au doigt, l'entrée du
+    /// menu « ? ») ouvre une rédaction adressée à `adresseSuggestions`,
+    /// version et système dans l'objet.
     function etapeScenarioSuggestion() {
-        var r = envoyerSuggestion()
+        var bouton = objetNomme(fenetre.menuBar, "boutonSuggestion")
+        console.log("scenario: bouton « Suggestion »", tactile ? "absent au doigt" : "dans la barre du haut",
+                    !!bouton && bouton.visible === !tactile ? "OK" : "ECHEC")
+        var r = null
+        if (!tactile && bouton && bouton.visible) {
+            bouton.clicked()
+            r = redactions[redactionActive] || null
+        } else {
+            r = envoyerSuggestion()
+        }
         var a = r ? r.contenu().a : ""
         var objet = r ? r.contenu().objet : ""
         console.log("scenario: suggestion,", a, "|", objet,

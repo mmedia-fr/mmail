@@ -185,7 +185,8 @@ de projet interne.
 - **menu « ? »** : aide (F1), « Envoyer une suggestion… » (rédaction adressée
   à l'équipe de MMail, version et système dans l'objet ; sans compte, par la
   messagerie du poste) et « À propos » — versions de MMail, du noyau et
-  de Qt ;
+  de Qt. Sur ordinateur, le bouton « Suggestion », tout à droite de la barre
+  du haut, fait la même chose que « Envoyer une suggestion… » ;
 - **ascenseurs toujours visibles** dès qu'une colonne a de quoi défiler ;
 - **trombone** dans la liste pour un message à pièces jointes : supposé
   d'après les en-têtes (`multipart/mixed`, ou corps entier qui n'est pas du

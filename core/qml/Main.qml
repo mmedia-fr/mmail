@@ -373,6 +373,9 @@ ApplicationWindow {
     // Recherche en cours dans une seule boîte, tous ses dossiers (0.8.3) : son
     // compte ; 0 pour toutes les boîtes. Non lus seulement (0.8.2).
     property int rechercheCompte: 0
+    // … et le dossier d'où l'on part, qui dit quelle boîte du compte : la
+    // personnelle, ou la boîte partagée qui le contient (0.6.45).
+    property string rechercheChemin: ""
     property bool rechercheNonLus: false
     // « Non lus » coché, champ vide : la liste ne garde que les non-lus de la
     // portée choisie, sans texte à chercher. Cocher la case sans rien taper ne
@@ -4757,6 +4760,7 @@ ApplicationWindow {
             // « Cette boîte » : celle du dossier d'où l'on part.
             rechercheCompte = colonneListe.porteeRecherche.boiteSeule
                     ? (dossierAvantRecherche ? dossierAvantRecherche.compte : boite.compteCourant) : 0
+            rechercheChemin = dossierAvantRecherche ? dossierAvantRecherche.chemin : boite.dossierCourant
             if (colonneListe.porteeRecherche.boiteSeule && rechercheCompte <= 0) {
                 messageEtat.texte = qsTr("Ouvrez d'abord un dossier de la boîte où chercher.")
                 return
@@ -4772,10 +4776,12 @@ ApplicationWindow {
             // L'index répond tout de suite ; le serveur suit, dossier par
             // dossier, dans le texte des messages — ou leur objet et leur
             // expéditeur seulement — et jusque dans les dossiers jamais
-            // ouverts sur ce poste. Les non-lus seuls : l'index seulement.
-            dossiersPartout = nonLusSeuls ? 0 : rechercheCompte > 0
-                    ? boite.chercherDansLeCompteSurLeServeur(texte, rechercheCompte, rechercheObjetSeul)
-                    : boite.chercherPartoutSurLeServeur(texte, rechercheObjetSeul)
+            // ouverts sur ce poste. Les non-lus seuls aussi (0.6.45) : ceux
+            // de l'index seul laissaient de côté ces dossiers-là.
+            dossiersPartout = rechercheCompte > 0
+                    ? boite.chercherDansLeCompteSurLeServeur(texte, rechercheCompte, rechercheChemin,
+                                                             rechercheObjetSeul, nonLusSeuls)
+                    : boite.chercherPartoutSurLeServeur(texte, rechercheObjetSeul, nonLusSeuls)
             messageEtat.texte = (boite.rechercheApprochee() ? qsTr("Rien d'exact sur le poste : fautes de frappe tolérées. ") : "")
                     + etatRecherchePartout()
             return
@@ -4794,11 +4800,14 @@ ApplicationWindow {
         recherche = texte
         uidsServeur = []
         poserResultats()
-        // Les non-lus du dossier : son index suffit, tenu à jour par la
-        // synchronisation.
+        // Les non-lus du dossier : l'index tout de suite, puis le serveur
+        // (0.6.45), qui connaît aussi ceux que l'index n'a pas encore.
         if (nonLusSeuls) {
-            messageEtat.texte = qsTr("Non lus seulement : %1.")
-                    .arg(accord(modeleMessages.count, qsTr("message"), qsTr("messages")))
+            messageEtat.texte = boite.chercherSurLeServeur("", false, true)
+                    ? qsTr("Non lus seulement : %1 sur le poste — le serveur cherche aussi…")
+                      .arg(accord(modeleMessages.count, qsTr("message"), qsTr("messages")))
+                    : qsTr("Non lus seulement : %1 (messages déjà sur le poste, compte hors ligne).")
+                      .arg(accord(modeleMessages.count, qsTr("message"), qsTr("messages")))
             return
         }
         // Rien d'exact dans l'index : les résultats tolèrent des fautes de
@@ -4807,7 +4816,7 @@ ApplicationWindow {
         // Ce que le serveur parcourt, pour la barre d'état.
         var ouCherche = rechercheObjetSeul ? qsTr("dans l'objet et l'expéditeur des messages")
                                            : qsTr("dans le texte des messages")
-        if (!boite.chercherSurLeServeur(texte, rechercheObjetSeul))
+        if (!boite.chercherSurLeServeur(texte, rechercheObjetSeul, false))
             messageEtat.texte = approchee
                     ? qsTr("Recherche « %1 » : rien d'exact ; %2 en tolérant des fautes de frappe (index seulement, compte hors ligne).")
                       .arg(texte).arg(accord(modeleMessages.count, qsTr("résultat"), qsTr("résultats")))
@@ -4826,7 +4835,7 @@ ApplicationWindow {
     function poserResultats() {
         if (rechercheGlobale) {
             var trouves = JSON.parse(boite.chercherSelon(recherche, rechercheCompte > 0 ? 1 : 2, rechercheCompte,
-                                                         rechercheNonLus))
+                                                         rechercheChemin, rechercheNonLus))
             var connus = {}
             for (var j = 0; j < trouves.length; ++j)
                 connus[trouves[j].compte + "\n" + trouves[j].chemin + "\n" + trouves[j].uid] = true
@@ -4870,7 +4879,7 @@ ApplicationWindow {
             })))
             return
         }
-        var lignes = JSON.parse(boite.chercherSelon(recherche, 0, 0, rechercheNonLus))
+        var lignes = JSON.parse(boite.chercherSelon(recherche, 0, 0, "", rechercheNonLus))
         var vus = {}
         for (var i = 0; i < lignes.length; ++i)
             vus[lignes[i].uid] = true
@@ -4920,6 +4929,7 @@ ApplicationWindow {
 
     function sortirRechercheGlobale() {
         rechercheCompte = 0
+        rechercheChemin = ""
         rechercheGlobale = false
         rechercheNonLusSeuls = false
         cleChoisie = ""
@@ -4934,7 +4944,7 @@ ApplicationWindow {
     /// encore : les dossiers qui restaient ne sont pas interrogés.
     function arreterRecherchePartout() {
         if (dossiersFaits < dossiersPartout)
-            boite.chercherPartoutSurLeServeur("", false)
+            boite.chercherPartoutSurLeServeur("", false, false)
         trouvesPartout = ({})
         dossiersPartout = 0
         dossiersFaits = 0
@@ -4947,11 +4957,11 @@ ApplicationWindow {
         var nombre = accord(modeleMessages.count, qsTr("résultat"), qsTr("résultats"))
         if (resultatsTronques)
             nombre = qsTr("les %1 plus récents").arg(modeleMessages.count)
+        var debut = qsTr("Recherche « %1 » dans toutes les boîtes : %2").arg(recherche).arg(nombre)
         if (rechercheNonLusSeuls)
-            return qsTr("Non lus, %1 : %2 (messages déjà sur le poste).")
+            debut = qsTr("Non lus, %1 : %2")
                     .arg(rechercheCompte > 0 ? qsTr("tous les dossiers de la boîte") : qsTr("toutes les boîtes"))
                     .arg(accord(modeleMessages.count, qsTr("message"), qsTr("messages")))
-        var debut = qsTr("Recherche « %1 » dans toutes les boîtes : %2").arg(recherche).arg(nombre)
         if (dossiersPartout === 0)
             return debut + qsTr(" (messages déjà sur le poste seulement : aucun compte connecté).")
         if (dossiersFaits < dossiersPartout)
@@ -7200,6 +7210,9 @@ ApplicationWindow {
             // Scénario « recherche-portee » (0.8.2, 0.8.3 ; banc LOT1=1).
             if (essai.scenario === "recherche-portee")
                 scenarios.lancerScenarioRecherchePortee()
+            // « recherche-boite » (0.6.45 ; banc PARTAGE=1 LOT1=1).
+            if (essai.scenario === "recherche-boite")
+                scenarios.lancerScenarioRechercheBoite()
             // « non-lus-seuls » : demande d'une utilisatrice du 06/11/2026.
             if (essai.scenario === "non-lus-seuls")
                 scenarios.lancerScenarioNonLusSeuls()

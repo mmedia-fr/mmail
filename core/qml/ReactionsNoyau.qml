@@ -706,9 +706,13 @@ Connections {
             return
         fenetre.uidsServeur = uids.length > 0 ? uids.split(",").map(Number) : []
         fenetre.poserResultats()
-        messageEtat.texte = qsTr("Recherche « %1 » : %2%3.").arg(texte)
-                .arg(fenetre.accord(modeleMessages.count, qsTr("résultat"), qsTr("résultats")))
-                .arg(boite.rechercheApprochee() ? qsTr(", fautes de frappe tolérées sur le poste") : "")
+        if (fenetre.rechercheNonLusSeuls)
+            messageEtat.texte = qsTr("Non lus seulement : %1.")
+                    .arg(fenetre.accord(modeleMessages.count, qsTr("message"), qsTr("messages")))
+        else
+            messageEtat.texte = qsTr("Recherche « %1 » : %2%3.").arg(texte)
+                    .arg(fenetre.accord(modeleMessages.count, qsTr("résultat"), qsTr("résultats")))
+                    .arg(boite.rechercheApprochee() ? qsTr(", fautes de frappe tolérées sur le poste") : "")
         if (fenetre.essai && fenetre.essai.scenario === "recherche-lente" && !fenetre.essai.partout) {
             // `rechercheInachevee`, s'il vient, suit ce signal : le bilan
             // attend qu'il soit passé.

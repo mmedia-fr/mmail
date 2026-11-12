@@ -5519,6 +5519,110 @@ QtObject {
     /// le message, pas les boutons. « Devis joint » (banc PIECE=1) affiché, le
     /// zoom passe à 1,5 : le corps et l'objet grossissent d'autant ; le bouton
     /// « Répondre » et le bandeau des pièces jointes gardent leur taille.
+    // Scénario « recherche-boite » (0.6.45), banc PARTAGE=1 LOT1=1, un seul
+    // compte : « Cette boîte » depuis la boîte de réception ne rend rien de la
+    // boîte partagée de deux@, et depuis celle-ci rien d'autre qu'elle ; « Non
+    // lus » sans texte interroge le serveur, dossiers jamais ouverts compris.
+    function lancerScenarioRechercheBoite(essais) {
+        var n = essais || 0
+        var partagee = ""
+        for (var a = 0; a < modeleArborescence.count; ++a) {
+            var d = modeleArborescence.get(a)
+            // « Shared/deux@essai.test » (Dovecot du banc), ou sa boîte de
+            // réception « …/INBOX » quand le serveur la montre ainsi (Mailcow).
+            if (d.genre === "dossier" && d.chemin.indexOf("Shared/") === 0
+                    && (partagee.length === 0 || /\/INBOX$/.test(d.chemin)))
+                partagee = d.chemin
+        }
+        var trouve = false
+        for (var j = 0; j < modeleMessages.count; ++j)
+            if (modeleMessages.get(j).sujet === "Essai 1")
+                trouve = true
+        if ((!trouve || partagee.length === 0) && n < 40) {
+            plusTard(1000, function() { lancerScenarioRechercheBoite(n + 1) })
+            return
+        }
+        var echecs = 0
+        var bilan = function(texte, bon) {
+            if (!bon)
+                echecs += 1
+            console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
+        }
+        bilan("boîte partagée vue : " + partagee, partagee.length > 0)
+        var un = boite.compteCourant
+        var lignes = function() {
+            var l = []
+            for (var k = 0; k < modeleMessages.count; ++k)
+                l.push(modeleMessages.get(k))
+            return l
+        }
+        var resume = function(l) {
+            return l.map(function(r) { return r.sujet + "@" + (r.chemin || boite.dossierCourant) + (r.lu ? "(lu)" : "") }).join(" | ")
+        }
+        var partage = function(r) { return (r.chemin || "").indexOf("Shared/") === 0 }
+        // Fin de la recherche sur le serveur, dossier par dossier.
+        var apresServeur = function(suite, k) {
+            k = k || 0
+            if (fenetre.dossiersFaits < fenetre.dossiersPartout && k < 90) {
+                plusTard(500, function() { apresServeur(suite, k + 1) })
+                return
+            }
+            plusTard(800, suite)
+        }
+        colonneListe.porteeRecherche.currentIndex = 1
+        colonneListe.nonLusRecherche.checked = false
+        fenetre.lancerRecherche("essai")
+        apresServeur(function() {
+            var l = lignes()
+            bilan("boîte personnelle, " + fenetre.dossiersPartout + " dossier(s) interrogé(s) : " + resume(l),
+                  l.length > 0 && !l.some(partage) && fenetre.dossiersPartout > 0)
+            fenetre.quitterRecherche()
+            fenetre.ouvrirDossier(un, partagee)
+            plusTard(3000, function() {
+                colonneListe.porteeRecherche.currentIndex = 1
+                fenetre.lancerRecherche("essai")
+                apresServeur(function() {
+                    var l2 = lignes()
+                    var prefixe = partagee.replace(/\/INBOX$/, "")
+                    bilan("boîte partagée seule, " + fenetre.dossiersPartout + " dossier(s) : " + resume(l2),
+                          l2.length > 0 && l2.every(function(r) { return (r.chemin || "").indexOf(prefixe) === 0 }))
+                    fenetre.quitterRecherche()
+                    fenetre.ouvrirDossier(un, "INBOX")
+                    plusTard(3000, function() {
+                        colonneListe.porteeRecherche.currentIndex = 1
+                        colonneListe.nonLusRecherche.checked = true
+                        fenetre.lancerRecherche("")
+                        apresServeur(function() {
+                            var l3 = lignes()
+                            var chemins = {}
+                            l3.forEach(function(r) { chemins[r.chemin] = true })
+                            bilan("non lus, cette boîte, " + fenetre.dossiersPartout + " dossier(s) au serveur : " + resume(l3),
+                                  fenetre.dossiersPartout > 0 && l3.length > 0 && !l3.some(partage)
+                                  && l3.every(function(r) { return !r.lu }) && Object.keys(chemins).length >= 2)
+                            bilan("état : " + messageEtat.texte, messageEtat.texte.indexOf("Non lus") === 0)
+                            fenetre.quitterRecherche()
+                            plusTard(2000, function() {
+                                // Le dossier actif : l'index, puis le serveur.
+                                colonneListe.porteeRecherche.currentIndex = 0
+                                colonneListe.nonLusRecherche.checked = true
+                                fenetre.lancerRecherche("")
+                                plusTard(6000, function() {
+                                    var l4 = lignes()
+                                    bilan("non lus du dossier actif : " + resume(l4) + " | " + messageEtat.texte,
+                                          l4.length > 0 && l4.every(function(r) { return !r.lu })
+                                          && messageEtat.texte.indexOf("Non lus seulement : ") === 0
+                                          && messageEtat.texte.indexOf("serveur") < 0)
+                                    console.log("scenario: recherche-boite " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
+                                    Qt.quit()
+                                })
+                            })
+                        })
+                    })
+                })
+            })
+        })
+    }
+
     // Scénario « recherche-portee » (0.8.2, 0.8.3), banc LOT1=1 : la portée
     // « Cette boîte (tous dossiers) » ne rend que les messages du compte, de
     // plusieurs dossiers ; « Toutes les boîtes » ajoute ceux de l'autre

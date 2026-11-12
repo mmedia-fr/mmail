@@ -220,6 +220,32 @@ Pane {
                  "NEEDS-ACTION": qsTr("en attente") }[statut] || statut
     }
 
+    // Service de visio du compte de cet agenda, vide sans service ou sur un
+    // agenda Microsoft 365 (cf. Boite::agendas) : pas de bouton « Visio ».
+    function serviceVisio(idAgenda) {
+        var a = agendas.find(function(x) { return x.id === idAgenda })
+        return a && a.visio ? a.visio : ""
+    }
+
+    // La boîte de l'agenda organise-t-elle cet événement ? Sans participants,
+    // c'est le sien ; sinon, elle en est l'organisatrice déclarée.
+    function organiseParLaBoite(f) {
+        if (!f.participants || f.participants.length === 0)
+            return true
+        var a = agendas.find(function(x) { return x.id === f.agenda })
+        var o = f.organisateur || {}
+        return !!a && (o.adresse || "").toLowerCase() === (a.boite || "").toLowerCase()
+    }
+
+    // Lien à ouvrir pour la visio d'un événement : en organisateur, après
+    // connexion avec le compte de messagerie, ou en invité ; vide sans lien du
+    // service dans le lieu.
+    function lienVisio(f) {
+        if (!f || !f.agenda)
+            return ""
+        return boite.lienVisio(f.agenda, f.lieu || "", organiseParLaBoite(f))
+    }
+
     // Le serveur d'agenda de la boîte de cet agenda distribue-t-il les
     // invitations ?
     function invitationsPossibles(idAgenda) {
@@ -1181,6 +1207,19 @@ Pane {
             }
             RowLayout {
                 Layout.alignment: Qt.AlignRight
+                // La réunion de visio du lieu (0.7.0) : en organisateur pour
+                // la boîte qui l'organise, en invité sinon.
+                Button {
+                    id: boutonOuvrirVisio
+                    objectName: "boutonOuvrirVisio"
+                    readonly property string lien: agenda.lienVisio(popupFiche.f)
+                    visible: lien.length > 0
+                    text: qsTr("Ouvrir la visio")
+                    onClicked: {
+                        Qt.openUrlExternally(lien)
+                        popupFiche.close()
+                    }
+                }
                 Button {
                     visible: popupFiche.f.modifiable || false
                     text: qsTr("Modifier")
@@ -1288,10 +1327,30 @@ Pane {
         closePolicy: Popup.CloseOnEscape
         padding: 16
 
+        // L'agenda où l'événement s'écrit : celui choisi pour un nouvel
+        // événement, le sien sinon.
+        readonly property int agendaChoisi: nouveau ? ((agenda.agendasModifiables()[choixAgenda.currentIndex] || {}).id || 0)
+                                                    : (s.agenda || 0)
         // Participants proposés : le serveur de la boîte de l'agenda doit
         // distribuer les invitations, et une occurrence seule n'en change pas.
-        readonly property bool reunionPossible: !occurrence && agenda.invitationsPossibles(
-            nouveau ? (agenda.agendasModifiables()[choixAgenda.currentIndex] || {}).id : s.agenda)
+        readonly property bool reunionPossible: !occurrence && agenda.invitationsPossibles(agendaChoisi)
+        // Bouton « Visio » : le compte de l'agenda a un service de visio.
+        readonly property string serviceVisio: agenda.serviceVisio(agendaChoisi)
+
+        // « Visio » : le lien d'une réunion dans « Lieu », et « Rejoindre la
+        // visio » en tête de la description. Un lien du service déjà posé
+        // reste : celui d'une réunion envoyée ne doit pas changer.
+        function poserVisio() {
+            var r = agenda.boite.visioEvenement(agendaChoisi, champLieu.text, champDescription.text)
+            if (r.length === 0) {
+                erreur = qsTr("Lien de visio impossible : l'adresse du compte n'a pas de domaine utilisable.")
+                return
+            }
+            var o = JSON.parse(r)
+            champLieu.text = o.lieu
+            champDescription.text = o.description
+            erreur = ""
+        }
 
         function ouvrir(saisie) {
             s = saisie
@@ -1425,10 +1484,24 @@ Pane {
                         onAccepted: popupSaisie.enregistrer()
                     }
                     Label { text: qsTr("Lieu") }
-                    TextField {
-                        id: champLieu
-                        MenuSaisie {}
+                    RowLayout {
+                        spacing: 6
                         Layout.fillWidth: true
+                        TextField {
+                            id: champLieu
+                            MenuSaisie {}
+                            Layout.fillWidth: true
+                        }
+                        // Réunion sur le service de visio du compte (0.7.0).
+                        Button {
+                            objectName: "boutonVisio"
+                            visible: popupSaisie.serviceVisio.length > 0
+                            text: qsTr("Visio")
+                            ToolTip.visible: hovered
+                            ToolTip.delay: 500
+                            ToolTip.text: qsTr("Ajouter un lien de réunion sur %1").arg(popupSaisie.serviceVisio)
+                            onClicked: popupSaisie.poserVisio()
+                        }
                     }
                     Item {
                         visible: !agenda.compact

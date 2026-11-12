@@ -26,6 +26,7 @@ Dialog {
     property alias champHoteEnvoi: champHoteEnvoi
     property alias champMotDePasse: champMotDePasse
     property alias champAdressesEnvoi: champAdressesEnvoi
+    property alias champVisio: champVisio
     property alias caseMemoriser: caseMemoriser
     property alias boutonReconnexion: boutonReconnexion
     property int compteId: 0
@@ -42,6 +43,7 @@ Dialog {
     // Serveurs du compte à l'ouverture : ce qui a changé se compare à eux.
     property string ancienHote: ""
     property string ancienHoteEnvoi: ""
+    property string ancienVisio: ""
     title: modification ? qsTr("Modifier le compte")
                         : compteId > 0 ? qsTr("Mot de passe du compte") : qsTr("Ajouter un compte")
     modal: true
@@ -155,6 +157,22 @@ Dialog {
                    ? qsTr("Boîtes partagées, proposées d'office : %1.").arg(dlgCompte.partagees.join(", ")) + " "
                    : "")
                   + qsTr("Proposées dans le champ « De » d'un message, en plus de l'adresse du compte et des boîtes partagées que le serveur lui montre : alias, autres boîtes. Le serveur doit autoriser ce compte à envoyer en leur nom ; la copie va dans les éléments envoyés du compte.")
+        }
+        // Service de visio du compte (0.7.0) : vide, pas de bouton « Visio »
+        // dans les événements de ses agendas.
+        Label {
+            text: qsTr("Service de visio :")
+            visible: dlgCompte.compteId === 0 || dlgCompte.modification
+        }
+        TextField {
+            id: champVisio
+            objectName: "champVisio"
+            MenuSaisie {}
+            visible: dlgCompte.compteId === 0 || dlgCompte.modification
+            placeholderText: qsTr("aucun ; par exemple https://visio.exemple.fr")
+            inputMethodHints: Qt.ImhUrlCharactersOnly | Qt.ImhNoAutoUppercase
+            Layout.fillWidth: true
+            onAccepted: dlgCompte.accept()
         }
         // Office 365 n'accepte plus de mot de passe : la connexion se fait
         // chez Microsoft, dans le navigateur.

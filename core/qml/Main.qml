@@ -3717,6 +3717,8 @@ ApplicationWindow {
         dlgCompte.champAdresse.text = compte ? compte.adresse : ""
         dlgCompte.champHote.text = compte ? compte.hote : ""
         dlgCompte.champHoteEnvoi.text = compte && compte.hoteEnvoi ? compte.hoteEnvoi : ""
+        dlgCompte.ancienVisio = compte && compte.visio ? compte.visio : ""
+        dlgCompte.champVisio.text = dlgCompte.ancienVisio
         dlgCompte.champAdressesEnvoi.text = compte ? adressesEnvoi(compte.adresse).join(" ; ") : ""
         var ligne = compteConnu(dlgCompte.compteId)
         dlgCompte.partagees = ligne ? partageesProposees(ligne) : []
@@ -3766,7 +3768,7 @@ ApplicationWindow {
     }
 
     /// Document d'un lien de configuration (cf. README) :
-    /// `{"mmail": 1, "comptes": [{"adresse", "hote", "motDePasse", "hoteEnvoi"?}]}`.
+    /// `{"mmail": 1, "comptes": [{"adresse", "hote", "motDePasse", "hoteEnvoi"?, "visio"?}]}`.
     function appliquerLien(contenu) {
         var lien = lienEnCours
         lienEnCours = ""
@@ -3788,12 +3790,14 @@ ApplicationWindow {
                     && typeof c.motDePasse === "string" && c.motDePasse.length > 0
                     && (c.port === undefined || c.port === 993)
                     && (c.hoteEnvoi === undefined || typeof c.hoteEnvoi === "string")
+                    && (c.visio === undefined || typeof c.visio === "string")
             if (!valide) {
                 ecartes.push(c && typeof c.adresse === "string" ? c.adresse : "?")
                 continue
             }
             retenus.push({ adresse: c.adresse.trim(), hote: c.hote.trim().toLowerCase(),
                            hoteEnvoi: c.hoteEnvoi === undefined ? null : c.hoteEnvoi.trim().toLowerCase(),
+                           visio: c.visio === undefined ? null : c.visio.trim(),
                            motDePasse: c.motDePasse })
         }
         if (retenus.length === 0) {
@@ -3810,8 +3814,13 @@ ApplicationWindow {
             secretsAConserver[r.adresse] = { cle: cle(r.adresse, r.hote), motDePasse: r.motDePasse }
             // Absent du document : le serveur d'envoi d'un compte déjà connu
             // reste tel qu'il est.
-            if (boite.connecter(r.hote, r.adresse, r.motDePasse) && r.hoteEnvoi !== null)
-                boite.poserServeurEnvoi(r.adresse, r.hoteEnvoi)
+            if (boite.connecter(r.hote, r.adresse, r.motDePasse)) {
+                if (r.hoteEnvoi !== null)
+                    boite.poserServeurEnvoi(r.adresse, r.hoteEnvoi)
+                // Absent : le service de visio d'un compte déjà connu reste.
+                if (r.visio !== null && !boite.poserVisio(r.adresse, r.visio))
+                    ecartes.push(r.adresse + " (" + qsTr("service de visio refusé") + ")")
+            }
         }
         var texte = qsTr("Lien de configuration : connexion de %1.")
                 .arg(retenus.map(function(r) { return r.adresse }).join(", "))
@@ -3834,8 +3843,12 @@ ApplicationWindow {
         var nouveau = dlgCompte.compteId === 0
         var motDePasse = dlgCompte.champMotDePasse.text
         dlgCompte.champMotDePasse.text = ""
-        if (dlgCompte.modification)
+        var visio = dlgCompte.champVisio.text.trim()
+        if (dlgCompte.modification) {
             appliquerAdressesEnvoi(adresse, dlgCompte.champAdressesEnvoi.text)
+            if (visio !== dlgCompte.ancienVisio)
+                appliquerVisio(adresse, visio)
+        }
         if (dlgCompte.oauth) {
             // Rien à appliquer ici : la reconnexion passe par son bouton.
             demandeSuivante()
@@ -3855,10 +3868,27 @@ ApplicationWindow {
         else
             coffre.effacer(cle(adresse, hote))
         messageEtat.texte = qsTr("Connexion de %1…").arg(adresse)
-        // Le compte est enregistré dès l'appel : son serveur d'envoi suit.
-        if (boite.connecter(hote, adresse, motDePasse) && nouveau)
+        // Le compte est enregistré dès l'appel : son serveur d'envoi et son
+        // service de visio suivent.
+        if (boite.connecter(hote, adresse, motDePasse) && nouveau) {
             boite.poserServeurEnvoi(adresse, hoteEnvoi)
+            if (visio.length > 0)
+                appliquerVisio(adresse, visio)
+        }
         demandeSuivante()
+    }
+
+    /// Service de visio d'un compte (0.7.0) : le bouton « Visio » des
+    /// événements de ses agendas y crée les réunions.
+    function appliquerVisio(adresse, visio) {
+        if (!boite.poserVisio(adresse, visio))
+            messageEtat.texte = qsTr("Service de visio refusé : %1").arg(boite.erreur)
+        else
+            messageEtat.texte = visio.length > 0
+                    ? qsTr("Réunions de %1 sur %2.").arg(adresse).arg(visio)
+                    : qsTr("%1 n'a plus de service de visio.").arg(adresse)
+        // Les agendas portent le service de leur compte : le bouton suit.
+        vueAgenda.agendas = JSON.parse(boite.agendas())
     }
 
     /// Autres adresses d'envoi saisies dans « Modifier le compte… » : MMail ne

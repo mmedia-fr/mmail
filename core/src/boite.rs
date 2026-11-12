@@ -116,6 +116,29 @@ pub mod qobject {
         #[cxx_name = "poserServeurEnvoi"]
         fn poser_serveur_envoi(self: Pin<&mut Boite>, adresse: &QString, hote: &QString) -> bool;
 
+        /// Pose le service de visio d'un compte déjà enregistré : une adresse
+        /// HTTPS (`https://visio.exemple.fr`), vide pour aucun service. Faux,
+        /// avec `erreur`, pour une adresse refusée ou un compte inconnu.
+        #[qinvokable]
+        #[cxx_name = "poserVisio"]
+        fn poser_visio(self: Pin<&mut Boite>, adresse: &QString, service: &QString) -> bool;
+
+        /// Lieu et description d'un événement de l'agenda `agenda` une fois
+        /// la visio posée : `{"lieu", "description"}` en JSON, vide si son
+        /// compte n'a pas de service ou qu'aucun nom de réunion ne peut être
+        /// tiré. Un lien déjà posé n'est pas régénéré (cf. `visio::poser`).
+        #[qinvokable]
+        #[cxx_name = "visioEvenement"]
+        fn visio_evenement(&self, agenda: i32, lieu: &QString, description: &QString) -> QString;
+
+        /// Lien à ouvrir pour la réunion dont le lien figure dans `lieu`, un
+        /// événement de l'agenda `agenda` : celui de l'organisateur si
+        /// `organisateur`, sinon celui de la réunion ; vide s'il n'y a pas de
+        /// lien du service du compte.
+        #[qinvokable]
+        #[cxx_name = "lienVisio"]
+        fn lien_visio(&self, agenda: i32, lieu: &QString, organisateur: bool) -> QString;
+
         /// Vrai si MMail a un identifiant d'application Microsoft : sans lui,
         /// pas de compte Microsoft.
         #[qinvokable]
@@ -2132,6 +2155,11 @@ impl qobject::Boite {
                     "invitations": crate::microsoft::agenda::est_graph(&a.adresse)
                         || magasin.planification(a.compte).ok().flatten().unwrap_or(false),
                     "microsoft": crate::microsoft::agenda::est_graph(&a.adresse),
+                    // Le service de visio du compte ; jamais pour un agenda
+                    // Microsoft 365, dont les réunions passent par Teams.
+                    "visio": crate::visio::service_de_l_agenda(
+                        comptes.iter().find(|c| c.id == a.compte).map(|c| c.visio.as_str()).unwrap_or(""),
+                        crate::microsoft::agenda::est_graph(&a.adresse)),
                 })
             })
             .collect();
@@ -2924,12 +2952,13 @@ impl qobject::Boite {
             .iter()
             .map(|c| {
                 format!(
-                    r#"{{"id":{},"adresse":{},"hote":{},"hoteEnvoi":{},"auth":{},"etat":{}}}"#,
+                    r#"{{"id":{},"adresse":{},"hote":{},"hoteEnvoi":{},"auth":{},"visio":{},"etat":{}}}"#,
                     c.id,
                     texte_json(&c.adresse),
                     texte_json(&c.hote),
                     texte_json(&c.hote_envoi),
                     texte_json(&c.auth),
+                    texte_json(&c.visio),
                     texte_json(self.etat(c.id).code())
                 )
             })
@@ -3345,6 +3374,67 @@ impl qobject::Boite {
             .collect();
         for (adresse, hote, jeton) in renouveles {
             self.as_mut().jeton_renouvele(&QString::from(&adresse), &QString::from(&hote), &QString::from(&jeton));
+        }
+    }
+
+    pub fn poser_visio(mut self: Pin<&mut Self>, adresse: &QString, service: &QString) -> bool {
+        let adresse = adresse.to_string().trim().to_string();
+        let Some(service) = crate::visio::normaliser_service(&service.to_string()) else {
+            self.as_mut().set_erreur(QString::from(&format!(
+                "service de visio refusé : {service} (une adresse https://, sans paramètres)"
+            )));
+            return false;
+        };
+        let pose = match self.magasin.as_ref() {
+            Some(magasin) => magasin.poser_visio(&adresse, &service),
+            None => {
+                self.as_mut().set_erreur(QString::from("le profil n'est pas ouvert"));
+                return false;
+            }
+        };
+        match pose {
+            Ok(true) => true,
+            Ok(false) => {
+                self.as_mut().set_erreur(QString::from(&format!("compte inconnu : {adresse}")));
+                false
+            }
+            Err(e) => {
+                self.as_mut().set_erreur(QString::from(&format!("index local : {e}")));
+                false
+            }
+        }
+    }
+
+    /// Adresse de la boîte et service de visio de l'agenda `agenda` (cf.
+    /// `visio::service_de_l_agenda`), si son compte en a un.
+    fn visio_de_l_agenda(&self, agenda: i32) -> Option<(String, String)> {
+        let magasin = self.magasin.as_ref()?;
+        let a = magasin.agendas().ok()?.into_iter().find(|a| a.id == agenda as i64)?;
+        let c = magasin.compte_par_id(a.compte).ok()??;
+        let service = crate::visio::service_de_l_agenda(&c.visio, crate::microsoft::agenda::est_graph(&a.adresse));
+        (!service.is_empty()).then(|| (c.adresse.clone(), service.to_string()))
+    }
+
+    pub fn visio_evenement(&self, agenda: i32, lieu: &QString, description: &QString) -> QString {
+        let Some((adresse, service)) = self.visio_de_l_agenda(agenda) else {
+            return QString::default();
+        };
+        match crate::visio::poser(&lieu.to_string(), &description.to_string(), &service, &adresse) {
+            Some((lieu, description)) => {
+                QString::from(&serde_json::json!({ "lieu": lieu, "description": description }).to_string())
+            }
+            None => QString::default(),
+        }
+    }
+
+    pub fn lien_visio(&self, agenda: i32, lieu: &QString, organisateur: bool) -> QString {
+        let Some((_, service)) = self.visio_de_l_agenda(agenda) else {
+            return QString::default();
+        };
+        match crate::visio::reunion_dans(&lieu.to_string(), &service) {
+            Some(nom) if organisateur => QString::from(&crate::visio::lien_organisateur(&service, &nom)),
+            Some(nom) => QString::from(&crate::visio::lien(&service, &nom)),
+            None => QString::default(),
         }
     }
 

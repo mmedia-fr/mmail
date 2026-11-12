@@ -1544,9 +1544,16 @@ QtObject {
             function() { choisir(0, 0) },
             function() {
                 var r = objetNomme(colonneLecture, "boutonRepondre")
+                var j = objetNomme(colonneLecture, "boutonIndesirable")
+                var d = objetNomme(colonneLecture, "boutonSupprimer")
                 var s = objetNomme(colonneLecture, "boutonSource")
-                bilan("barre du volet sur une ligne (Répondre y " + (r ? r.y : "?") + ", Source y " + (s ? s.y : "?") + ")",
-                      !!r && !!s && r.visible && s.visible && r.y === s.y && s.text === qsTr("Source"))
+                bilan("barre du volet sur une ligne (Répondre y " + (r ? r.y : "?") + ", Indésirable y " + (j ? j.y : "?")
+                      + ", Supprimer y " + (d ? d.y : "?") + ")",
+                      !!r && !!j && !!d && r.visible && j.visible && d.visible && r.y === j.y && j.y === d.y)
+                bilan("« Indésirable » juste avant « Supprimer »", !!j && !!d && j.x < d.x && d.x - (j.x + j.width) <= 8)
+                // Au doigt, « Source » est dans « … » (12/11).
+                bilan(tactile ? "« Source » hors de la barre au doigt" : "« Source » en toutes lettres",
+                      !!s && (tactile ? !s.visible : s.visible && r.y === s.y && s.text === qsTr("Source")))
                 saisir("volet")
             },
             function() {

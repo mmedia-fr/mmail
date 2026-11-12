@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Épreuves de la barre d'actions du message (BarreMessage.qml, barre compacte
 // du 10/11), au bureau puis au doigt : une seule ligne, des pictogrammes au nom
-// complet et au raccourci en infobulle, « Source » en toutes lettres,
-// « Indésirable » absent au doigt, « … » au doigt seulement ; chaque bouton
-// fait ce que faisait le bouton à libellé.
+// complet et au raccourci en infobulle, « Source » en toutes lettres au bureau
+// et dans « … » au doigt, « Indésirable » juste avant « Supprimer » partout
+// (12/11), « … » au doigt seulement ; chaque bouton fait ce que faisait le
+// bouton à libellé.
 import QtQuick
 import QtQuick.Controls
 import QtTest
@@ -50,7 +51,7 @@ Item {
 
         function test_bureau_une_ligne() {
             var noms = ["boutonRepondre", "boutonRepondreTous", "boutonTransferer", "boutonDeplacer",
-                        "boutonIndesirable", "boutonMarquerLu", "boutonSupprimer", "boutonSource"]
+                        "boutonMarquerLu", "boutonIndesirable", "boutonSupprimer", "boutonSource"]
             var y = -1
             for (var i = 0; i < noms.length; ++i) {
                 var b = enfant(noms[i])
@@ -63,6 +64,15 @@ Item {
             verify(!enfant("boutonAutresActions").visible, "« … » seulement au doigt")
             verify(!enfant("boutonReprendre").visible)
             verify(barre.implicitWidth < 420, "barre compacte : " + barre.implicitWidth + " px")
+            voisinDeSupprimer()
+        }
+
+        // « Indésirable » juste avant « Supprimer », sans rien entre eux.
+        function voisinDeSupprimer() {
+            var j = enfant("boutonIndesirable")
+            var d = enfant("boutonSupprimer")
+            compare(j.y, d.y, "même ligne")
+            compare(d.x, j.x + j.width + barre.spacing, "« Indésirable » à gauche de « Supprimer »")
         }
 
         function test_infobulles_et_noms() {
@@ -115,15 +125,23 @@ Item {
             fenetre.tactile = true
             racine.width = 392
             wait(50)
-            verify(!enfant("boutonIndesirable").visible, "pas d'« Indésirable » dans la barre au doigt")
+            var j = enfant("boutonIndesirable")
+            verify(j.visible, "« Indésirable » dans la barre au doigt")
+            verify(!!j.dessin, "« Indésirable » en pictogramme")
+            voisinDeSupprimer()
+            verify(!enfant("boutonSource").visible, "« Source » dans « … » au doigt")
             var autres = enfant("boutonAutresActions")
             verify(autres.visible)
             compare(autres.text, "Autres actions")
             var r = enfant("boutonRepondre")
             verify(r.width >= 40 && r.height >= 40, "cible du doigt : " + r.width + " × " + r.height)
-            compare(enfant("boutonSource").y, r.y, "sur une ligne")
+            compare(j.y, r.y, "sur une ligne")
+            compare(autres.y, r.y, "sur une ligne")
             verify(autres.x + autres.width <= 392, "« … » dans l'écran : " + (autres.x + autres.width))
-            verify(barre.implicitWidth <= 376, "tient sur un téléphone : " + barre.implicitWidth + " px")
+            // Téléphone de 360 points, moins les 16 de marge du volet.
+            verify(barre.implicitWidth <= 344, "tient sur un téléphone : " + barre.implicitWidth + " px")
+            mouseClick(j)
+            compare(fenetre.appels, ["indesirable"], "« Indésirable » au doigt")
             mouseClick(autres)
             compare(menuMessage.ouvert, autres, "« … » ouvre le menu du message")
         }

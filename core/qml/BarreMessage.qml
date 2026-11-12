@@ -55,19 +55,6 @@ RowLayout {
         dessin: fenetre.dessinerDeplacer
         onClicked: fenetre.ouvrirDeplacer()
     }
-    // Sous Android, pas ici (10/11) : à côté des actions fréquentes, un
-    // appui malheureux classait le message — il est dans « … », et attend
-    // derrière « Annuler ».
-    BoutonPictogramme {
-        objectName: "boutonIndesirable"
-        visible: !fenetre.dossierDeReprise && !fenetre.tactile
-        text: fenetre.roleCourant === "Junk" ? qsTr("Pas indésirable") : qsTr("Indésirable")
-        infobulle: fenetre.roleCourant === "Junk"
-                   ? qsTr("Pas indésirable : remettre en boîte de réception ; le filtre du serveur l'apprend (Ctrl+Alt+J)")
-                   : qsTr("Courrier indésirable ; le filtre du serveur l'apprend (Ctrl+Alt+J)")
-        dessin: fenetre.dessinerIndesirable
-        onClicked: fenetre.signalerIndesirable()
-    }
     // 0.8.1 : lu ou non lu, à côté du message ; Ctrl+Q, Ctrl+U.
     BoutonPictogramme {
         objectName: "boutonMarquerLu"
@@ -75,6 +62,21 @@ RowLayout {
         infobulle: fenetre.etatChoix.nonLu ? qsTr("Marquer comme lu (Ctrl+Q)") : qsTr("Marquer comme non lu (Ctrl+U)")
         dessin: fenetre.etatChoix.nonLu ? fenetre.dessinerLu : fenetre.dessinerNonLu
         onClicked: fenetre.marquerSelection(fenetre.etatChoix.nonLu)
+    }
+    // À côté de « Supprimer », au bureau comme sous Android (choix du
+    // mainteneur, 12/11) : relégué dans « … » sous Android le 10/11, il n'y
+    // était plus qu'une ligne sans dessin. Au doigt, un appui malheureux se
+    // rattrape : le message attend 5 s derrière « Annuler »
+    // (Main.signalerIndesirable).
+    BoutonPictogramme {
+        objectName: "boutonIndesirable"
+        visible: !fenetre.dossierDeReprise
+        text: fenetre.roleCourant === "Junk" ? qsTr("Pas indésirable") : qsTr("Indésirable")
+        infobulle: fenetre.roleCourant === "Junk"
+                   ? qsTr("Pas indésirable : remettre en boîte de réception ; le filtre du serveur l'apprend (Ctrl+Alt+J)")
+                   : qsTr("Courrier indésirable ; le filtre du serveur l'apprend (Ctrl+Alt+J)")
+        dessin: fenetre.dessinerIndesirable
+        onClicked: fenetre.signalerIndesirable()
     }
     BoutonPictogramme {
         objectName: "boutonSupprimer"
@@ -85,17 +87,20 @@ RowLayout {
     }
     ToolSeparator { visible: !fenetre.tactile }
     // Décision 6 : voir le message brut, en-têtes compris, en un geste.
-    // Propre à MMail : un nom court plutôt qu'un dessin.
+    // Propre à MMail : un nom court plutôt qu'un dessin. Au doigt, dans
+    // « … › Autres » (choix du mainteneur, 12/11) : la place va à
+    // « Indésirable », et la barre tient sur un téléphone de 360 points.
     BoutonPictogramme {
         objectName: "boutonSource"
+        visible: !fenetre.tactile
         text: fenetre.sourceVisible ? qsTr("Message") : qsTr("Source")
         court: text
         infobulle: fenetre.sourceVisible ? qsTr("Revenir au message") : qsTr("Afficher la source, en-têtes compris")
         onClicked: fenetre.basculerSource()
     }
     Item { Layout.fillWidth: true }
-    // Vue tactile : le reste des actions du message — « Indésirable »
-    // compris —, le menu de l'appui long sur la ligne.
+    // Vue tactile : le reste des actions du message, le menu de l'appui long
+    // sur la ligne.
     BoutonPictogramme {
         id: boutonAutresActions
         objectName: "boutonAutresActions"

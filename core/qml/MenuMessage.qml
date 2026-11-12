@@ -194,11 +194,16 @@ Menu {
             enabled: fenetre.uidCourant > 0
             onTriggered: fenetre.enregistrerPdf()
         }
+        // Au doigt, le seul chemin vers la source (12/11, le bouton « Source »
+        // n'est plus dans la barre) : l'entrée ramène aussi au message.
         EntreeMenu {
-            text: qsTr("Afficher la source")
+            objectName: "entreeSource"
+            readonly property bool retour: fenetre.tactile && fenetre.sourceVisible
+            text: retour ? qsTr("Afficher le message") : qsTr("Afficher la source")
             enabled: Object.keys(fenetre.selection).length === 1
             onTriggered: {
-                fenetre.sourceVisible = false
+                if (!retour)
+                    fenetre.sourceVisible = false
                 fenetre.basculerSource()
             }
         }

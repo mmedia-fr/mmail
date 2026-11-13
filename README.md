@@ -323,7 +323,7 @@ de projet interne.
   complet et le raccourci en infobulle, à l'appui long au doigt. La barre du
   message range ses boutons en quatre groupes : répondre, répondre à tous,
   transférer ; marquer lu ou non lu, déplacer ; indésirable, supprimer ;
-  source. Le menu d'un message tient en sept lignes, la barre du message en
+  imprimer (au bureau), source. Le menu d'un message tient en sept lignes, la barre du message en
   une, avec les pictogrammes seuls. Au bureau, « Affichage › Boutons des barres › Pictogrammes et texte »
   met le nom à côté de chaque pictogramme, dans la barre du message (qui passe
   alors à la ligne si le volet est étroit) et dans la barre du haut (sur une
@@ -420,6 +420,29 @@ réunion. C'est le serveur d'agenda qui envoie les courriels d'invitation, de
 mise à jour, d'annulation et de réponse (SOGo le fait ; un serveur qui ne le
 fait pas laisse ces boutons inactifs).
 
+**Visio** (0.7.0) : pour un compte qui a un **service de visio** (« Modifier
+le compte… », ou le lien de configuration), la fiche d'un événement porte un
+bouton « Visio » à côté du lieu. Il y met le lien d'une nouvelle réunion
+(`https://visio.exemple.fr/exemple-fr-k3mz-8qhw-tp2a`) — le texte déjà saisi
+suit le lien — et ajoute « Rejoindre la visio : <lien> » en tête de la
+description, qui part avec l'invitation. Un lieu qui porte déjà un lien du
+service le garde : le lien d'une réunion envoyée ne change pas. La fiche d'un
+événement dont le lieu porte ce lien propose « Ouvrir la visio » : en
+organisateur pour la boîte qui organise la réunion (ou un événement sans
+participants), après connexion avec le compte de messagerie, en invité sinon.
+Le nom de la réunion commence par le domaine du compte, points changés en
+tirets, suivi de trois groupes de quatre signes tirés au hasard (sans `l`, `o`,
+`0` ni `1`) : le service n'accepte en organisateur que la boîte de ce domaine.
+Une boîte hébergée par MMEDIA a d'office le service de MMEDIA,
+`https://visio.mmedia.fr`. Elle se reconnaît à son serveur : `mail.mmedia.fr`,
+ou un nom qui a une adresse IP en commun avec lui, comme `mail.<domaine du
+client>`. La vérification se fait une fois par compte et par lancement, avec la
+synchronisation des agendas ; hors connexion, la boîte n'est pas reconnue. Pour un compte sans service — autre
+hébergeur, ou agenda Microsoft 365 —, « Visio » explique que la visio est
+comprise dans les boîtes hébergées par MMEDIA et propose « Faire la demande à
+MMEDIA » : un message depuis ce compte, adressé à `contact@mmedia.fr`, que la
+personne relit et envoie elle-même.
+
 **Rappels** : ceux des agendas affichés, posés depuis MMail ou ailleurs,
 s'affichent à l'heure dite tant que MMail est ouvert, avec « Ignorer » et
 « Répéter dans… » ; la fenêtre clignote dans la barre des tâches.
@@ -464,8 +487,10 @@ de la configuration.
 
 « Comptes › Modifier un compte », ou « Modifier ce compte… » au clic droit sur
 le compte, rouvre la fenêtre de l'ajout pour un compte présent : serveur de
-lecture, serveur d'envoi, mot de passe (laissé vide, il ne change pas), et de
-là « Nom et signature… ». L'adresse ne change pas : c'est elle qui désigne le
+lecture, serveur d'envoi, mot de passe (laissé vide, il ne change pas),
+service de visio (une adresse `https://` ; vide, celui de MMEDIA pour une boîte
+MMEDIA, aucun sinon ; cf. « L'agenda »),
+et de là « Nom et signature… ». L'adresse ne change pas : c'est elle qui désigne le
 compte, son index et ses réglages. Un nouveau serveur de lecture reprend le
 mot de passe mémorisé, qui change de clé dans le coffre avec lui ; s'il est
 injoignable, la fenêtre revient avec le motif.
@@ -613,12 +638,16 @@ Ce que MMail attend du serveur qui sert le lien :
   "mmail": 1,
   "comptes": [
     { "adresse": "nom@exemple.fr", "hote": "mail.exemple.fr", "motDePasse": "…" },
-    { "adresse": "nom@orange.fr", "hote": "imap.orange.fr", "hoteEnvoi": "smtp.orange.fr", "motDePasse": "…" }
+    { "adresse": "nom@orange.fr", "hote": "imap.orange.fr", "hoteEnvoi": "smtp.orange.fr", "motDePasse": "…" },
+    { "adresse": "nom@exemple.fr", "hote": "mail.exemple.fr", "visio": "https://visio.exemple.fr", "motDePasse": "…" }
   ]
 }
 ```
 
-`port`, facultatif, ne peut valoir que 993. `hoteEnvoi`, facultatif, désigne le
+`visio`, facultatif, est le service de visio du compte (0.7.0) : une adresse
+`https://` sans paramètres ; absent, celui d'un compte déjà présent est
+conservé ; vide, il est retiré. Une adresse refusée est signalée, le compte
+est tout de même ajouté. `port`, facultatif, ne peut valoir que 993. `hoteEnvoi`, facultatif, désigne le
 serveur d'envoi (port 465) ; absent, celui d'un compte déjà présent est
 conservé, celui d'un compte nouveau est le serveur de lecture. Un compte incomplet est écarté, et
 signalé ; les autres sont ajoutés. Comme pour une saisie à la main, un mot de

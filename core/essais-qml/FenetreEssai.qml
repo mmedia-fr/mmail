@@ -61,6 +61,7 @@ QtObject {
     function dessinerTransferer() {}
     function dessinerDeplacer() {}
     function dessinerIndesirable() {}
+    function dessinerImprimer() {}
     function dessinerLu() {}
     function dessinerNonLu() {}
     function dessinerCorbeille() {}
@@ -75,11 +76,11 @@ QtObject {
     function marquerSelection(lu) { noter("marquer", lu) }
     function supprimerSelection() { noter("supprimer") }
     function basculerSource() { noter("source") }
+    function imprimerMessage() { noter("imprimer") }
     function basculerSuivi(uids, suivi) { noter("suivi", suivi) }
     function annuler() { noter("annuler") }
     function creerFiltre() { noter("filtre") }
     function copierChamp(champ) { noter("copier", champ) }
-    function imprimerMessage() {}
     function enregistrerPdf() {}
     function toutChoisir() {}
     function inverserSelection() {}

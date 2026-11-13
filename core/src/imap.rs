@@ -107,6 +107,14 @@ impl std::fmt::Display for Erreur {
 
 impl From<std::io::Error> for Erreur {
     fn from(e: std::io::Error) -> Self {
+        // Une lecture restée sans réponse (`DELAI`) : le texte du système
+        // (« Resource temporarily unavailable (os error 11) » sous Linux) ne
+        // disait rien à personne. Exchange Online acceptait la connexion sans
+        // jamais saluer pendant la panne du 13/11/2026. Toujours `Reseau` :
+        // la session est perdue, et se rouvre comme avant.
+        if tranche_ecoulee(&e) {
+            return Erreur::Reseau("le serveur ne répond pas".into());
+        }
         Erreur::Reseau(e.to_string())
     }
 }
@@ -1189,6 +1197,41 @@ fn trouver(foin: &[u8], aiguille: &[u8]) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn serveur_muet_dit_en_clair() {
+        for genre in [std::io::ErrorKind::WouldBlock, std::io::ErrorKind::TimedOut] {
+            let e: Erreur = std::io::Error::from(genre).into();
+            assert!(matches!(&e, Erreur::Reseau(m) if m == "le serveur ne répond pas"), "{genre:?} : {e:?}");
+            assert_eq!(e.to_string(), "réseau : le serveur ne répond pas");
+        }
+        // Les autres erreurs du système gardent leur texte.
+        let e: Erreur = std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "refusée").into();
+        assert!(matches!(&e, Erreur::Reseau(m) if m == "refusée"), "{e:?}");
+    }
+
+    #[test]
+    fn salut_jamais_venu() {
+        // Un serveur qui accepte la connexion sans saluer : la lecture du
+        // salut rend l'erreur de délai du système, en clair et en `Reseau`.
+        struct Muet;
+        impl Read for Muet {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::ErrorKind::WouldBlock.into())
+            }
+        }
+        impl Write for Muet {
+            fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+                Ok(b.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        impl Flux for Muet {}
+        let e = Client::sur(Box::new(Muet)).err().expect("pas de session sans salut");
+        assert!(matches!(&e, Erreur::Reseau(m) if m == "le serveur ne répond pas"), "{e:?}");
+    }
 
     #[test]
     fn litteral_demesure_coupe_la_session() {

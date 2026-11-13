@@ -7454,6 +7454,10 @@ ApplicationWindow {
             // Scénario « m365-reel » (0.9.0) : une vraie boîte Microsoft 365 ;
             // les comptes du profil se reconnectent par le coffre, comme
             // d'ordinaire, sans les comptes d'essai de l'environnement.
+            // Scénario « connexion-muette » (13/11/2026) : le compte d'essai
+            // se connecte à un serveur qui ne salue jamais.
+            if (essai.scenario === "connexion-muette")
+                scenarios.lancerScenarioConnexionMuette()
             if (essai.scenario === "m365-reel") {
                 scenarios.lancerScenarioM365Reel()
                 var connus = listeComptes()

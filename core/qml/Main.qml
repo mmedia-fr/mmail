@@ -631,10 +631,11 @@ ApplicationWindow {
     readonly property bool enteteEtroite: !deuxEtages && width < 940
     // Pictogrammes et texte dans les barres (reglages.libellesBoutons) : au
     // bureau seulement, un téléphone n'a pas la place. Sur une seule ligne,
-    // la barre du haut ne garde les noms qu'à partir de 1 180 points, le seuil
-    // qui valait pour ses libellés jusqu'à la 0.6.43.
+    // la barre du haut ne garde les noms qu'à partir de 1 380 points : 1 180
+    // jusqu'à la 0.6.44, mais le bouton « Suggestion » de la 0.6.45 sortait
+    // alors de la fenêtre de 1 280 points (vu au banc le 13/11).
     readonly property bool libellesBarres: !tactile && reglages.libellesBoutons
-    readonly property bool enteteSerree: !deuxEtages && width < 1180
+    readonly property bool enteteSerree: !deuxEtages && width < 1380
 
     readonly property var jeuxApparence: avecApparenceOrganisation(avecApparencePerso(jeuxDeBase, reglagesApparence.perso),
                                                                    personnalisation)

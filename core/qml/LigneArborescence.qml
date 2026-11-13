@@ -80,7 +80,7 @@ ItemDelegate {
     /// centre du chevron : le chevron d'un dossier déplié est tourné
     /// d'un quart de tour autour de ce centre, et son coin supérieur
     /// gauche, lui, se déplace — le clic sur un dossier déplié tombait à
-    /// côté de la zone (retour de Manu, 01/10).
+    /// côté de la zone (retour du mainteneur, 01/10).
     function surChevron(x) {
         if (!chevronDossier.visible || !model.enfants)
             return false
@@ -236,7 +236,7 @@ ItemDelegate {
                                  : model.genre === "favori" || model.genre === "favori-vide" ? 14 : 0
         }
         // Chevron d'un dossier qui a des sous-dossiers : un clic les
-        // replie ou les déplie (retour de Manu, 01/10). La place est
+        // replie ou les déplie (retour du mainteneur, 01/10). La place est
         // gardée pour les autres, pour que les noms restent alignés.
         Label {
             id: chevronDossier

@@ -132,10 +132,49 @@ Dialog {
         choixNouveaux.currentIndex = indexChoix(t.sigNouveaux || "")
         choixReponses.currentIndex = indexChoix(t.sigReponses || "")
     }
+    /// Images distantes de l'éditeur — une signature collée depuis un
+    /// message, une image copiée sur une page — téléchargées dans le dossier
+    /// de la signature (0.6.42) : affichées, animées (GIF), et intégrées au
+    /// message comme les autres. Elles restaient des liens, ni montrées ni
+    /// animées.
+    property string dernierRapatriement: ""
+    function rapatrierCollees() {
+        var html = mefSignature.html()
+        // Une image qui n'est pas venue n'est redemandée qu'après un
+        // changement : pas d'attente à chaque enregistrement.
+        if (html.indexOf("https://") < 0 || html === dernierRapatriement)
+            return
+        dernierRapatriement = html
+        var local = boite.rapatrierImagesSignature(cleSignature(), html)
+        if (local === html)
+            return
+        var position = champSignature.cursorPosition
+        mefSignature.poserHtml(local)
+        champSignature.cursorPosition = Math.min(position, champSignature.length)
+    }
+    /// Ctrl+V dans la signature : une image seule du presse-papier — capture,
+    /// image copiée ; un GIF reste un GIF — entre dans le dossier de la
+    /// signature ; sinon le collage ordinaire, puis ses images distantes
+    /// rapatriées. Rend vrai si le collage est fait ici.
+    function collerDansSignature() {
+        var collee = pressePapier.enregistrerImage(boite.dossierImagesCollees())
+        if (collee.length > 0) {
+            var copie = boite.imageSignature(cleSignature(), collee)
+            if (copie.length > 0) {
+                mefSignature.insererImage(copie, 640)
+                note = ""
+                return true
+            }
+        }
+        Qt.callLater(rapatrierCollees)
+        return false
+    }
     /// Garde le contenu de l'éditeur dans la signature qu'il montre.
     function garderSignature() {
         if (choisie < 0 || choisie >= biblio.length)
             return
+        // Collée par le menu contextuel : ses images distantes aussi.
+        rapatrierCollees()
         var s = biblio[choisie]
         if (mefSignature.texte() !== texteCharge || mefSignature.html() !== htmlCharge) {
             s.signature = mefSignature.texte()
@@ -415,6 +454,10 @@ Dialog {
                 placeholderText: qsTr("Prénom Nom\nFonction — Société\nTéléphone")
                 color: "#1f1f1f"
                 background: Rectangle { color: "#ffffff"; border.color: fenetre.palette.mid }
+                Keys.onPressed: function(ev) {
+                    if (ev.matches(StandardKey.Paste) && dlgIdentite.collerDansSignature())
+                        ev.accepted = true
+                }
                 ImagesAnimees {
                     id: animationsSignature
                     zone: champSignature

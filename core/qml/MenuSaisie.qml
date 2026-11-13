@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Menu du clic droit d'un champ de saisie : Annuler, Couper, Copier, Coller,
-// Tout sélectionner, comme dans les champs de Windows (0.6.14, demande de
-// Manu du 22/10 : coller à la souris dans la recherche). Qt 6.8 n'en donne
+// Tout sélectionner, comme dans les champs de Windows (0.6.14, demande du
+// mainteneur du 22/10 : coller à la souris dans la recherche). Qt 6.8 n'en donne
 // aucun d'office.
 //
 // Se déclare dans le champ lui-même — « MenuSaisie {} » — : le champ est

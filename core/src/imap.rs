@@ -140,6 +140,17 @@ pub enum Champs {
     /// L'objet ou l'expéditeur (`SUBJECT`, `FROM`) : ni le corps, ni les
     /// pièces jointes.
     ObjetExpediteur,
+    /// Comme `Texte`, et aussi dans le nom des pièces jointes, mot pour mot
+    /// où qu'il y soit (`MIMEPART FILENAME CONTAINS`, Dovecot). L'index plein
+    /// texte prend « BonCommande12345678.pdf » pour un seul mot : « 12345678 »
+    /// ne l'y retrouve pas. Le serveur lit alors la structure de chaque
+    /// message, ce qui peut prendre une minute sur un grand dossier la
+    /// première fois : seconde passe, après `Texte`.
+    TexteEtNomsDePieces,
+    /// Les messages non lus, sans texte (`UNSEEN`) : « Non lus » cochée, champ
+    /// vide (0.6.45). Les dossiers jamais ouverts sur le poste n'étaient pas
+    /// dans l'index, et leurs non-lus manquaient.
+    NonLus,
 }
 
 /// Attente d'une commande qui peut durer (0.6.16, recherche sur le
@@ -751,6 +762,10 @@ impl Client {
         categories: &[Vec<String>],
         champs: Champs,
     ) -> Resultat<Option<String>> {
+        // Les non-lus seuls : ni texte ni catégorie (0.6.45).
+        if champs == Champs::NonLus {
+            return Ok(Some("UID SEARCH UNSEEN".into()));
+        }
         let mots: Vec<&str> = texte.split_whitespace().collect();
         if mots.is_empty() && categories.is_empty() {
             return Ok(None);
@@ -782,6 +797,10 @@ impl Client {
                 // L'objet ou l'expéditeur, nom ou adresse : chaque mot dans
                 // l'un des deux, comme l'index du poste.
                 Champs::ObjetExpediteur => criteres.push_str(&format!(" OR SUBJECT {valeur} FROM {valeur}")),
+                Champs::TexteEtNomsDePieces => {
+                    criteres.push_str(&format!(" OR TEXT {valeur} MIMEPART FILENAME CONTAINS {valeur}"))
+                }
+                Champs::NonLus => unreachable!("traité plus haut"),
             }
         }
         Ok(Some(format!("UID SEARCH CHARSET UTF-8{criteres}")))
@@ -1398,6 +1417,15 @@ mod tests {
             session(DOVECOT, vec![echange("UID SEARCH CHARSET UTF-8 OR SUBJECT", "* SEARCH\r\n", "OK fait")]);
         assert!(client.chercher_patiemment("devis", &[], Champs::ObjetExpediteur, attente(5_000, false, true)).unwrap().is_empty());
         assert_eq!(journal.lock().unwrap()[0], "UID SEARCH CHARSET UTF-8 OR SUBJECT \"devis\" FROM \"devis\"");
+    }
+
+    #[test]
+    fn recherche_des_non_lus_seuls() {
+        // « Non lus » cochée, champ vide (0.6.45) : `UNSEEN`, sans texte.
+        let (mut client, journal) =
+            session(DOVECOT, vec![echange("UID SEARCH UNSEEN", "* SEARCH 2 11\r\n", "OK fait")]);
+        assert_eq!(client.chercher_patiemment("", &[], Champs::NonLus, attente(5_000, false, true)).unwrap(), vec![2, 11]);
+        assert_eq!(journal.lock().unwrap()[0], "UID SEARCH UNSEEN");
     }
 
     #[test]

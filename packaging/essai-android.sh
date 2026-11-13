@@ -102,7 +102,7 @@ fi
 
 echo "MMail tourne (pid $pid)"
 
-# Veille puis réveil (0.6.10). Le 21/10, Manu retrouve MMail sur un écran blanc
+# Veille puis réveil (0.6.10). Le 21/10, le mainteneur retrouve MMail sur un écran blanc
 # après une mise en veille du téléphone, sans autre issue que de le fermer.
 # MMail doit d'abord être affiché : tant que son interface se charge, la fenêtre
 # est d'une seule couleur, et Android peut le dire « ne répond plus » sans que
@@ -297,7 +297,7 @@ else
   echo "Connexion Microsoft : page ouverte, puis abandonnée par Retour"
 fi
 
-# Touche Retour (0.6.11). Le 21/10, Manu retrouve MMail sur un écran blanc après
+# Touche Retour (0.6.11). Le 21/10, le mainteneur retrouve MMail sur un écran blanc après
 # un appui sur Retour, sans autre issue que de le fermer. Chaque appui ferme ce
 # qui est ouvert (clavier, fenêtre d'ajout de compte, tiroir) ; sur la liste, la
 # fenêtre se ferme et MMail doit quitter : main() rendu, processus fini, retour

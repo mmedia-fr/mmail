@@ -47,10 +47,10 @@ Page {
     // Joindre…, le menu « ⋮ » et Fermer, en icônes. Enregistrer, Coller en
     // pièce jointe et Cc / Cci passent dans le menu. Sept boutons sur une ligne de
     // téléphone se chevauchaient : plus moyen d'envoyer ni de fermer (retour
-    // de Manu du 03/11, sous Android).
+    // du mainteneur du 03/11, sous Android).
     readonly property bool barreCompacte: fenetre.tactile || width < 680
 
-    // Bouton à icône de la barre resserrée (demande de Manu du 03/11 : des
+    // Bouton à icône de la barre resserrée (demande du mainteneur du 03/11 : des
     // icônes plutôt que du texte sous Android) : le dessin seul ; le libellé
     // reste pour l'info-bulle et la synthèse vocale.
     component BoutonIcone: ToolButton {
@@ -137,7 +137,7 @@ Page {
         ctx.stroke()
     }
     // Tout message se rédige et part mis en forme (HTML, avec sa version en
-    // texte brut) : la case « Mise en forme » est retirée en 0.8.7 (Manu,
+    // texte brut) : la case « Mise en forme » est retirée en 0.8.7 (le mainteneur,
     // 04/11 : le texte seul date des débits d'autrefois ; décochée puis
     // recochée, elle laissait d'ailleurs le message en texte brut).
     readonly property bool miseEnForme: true
@@ -450,7 +450,7 @@ Page {
     }
 
     /// Images dans le corps — collées, ou glissées sur le corps (demande
-    /// de Manu, 08/10). Elles exigent la mise en forme ; l'envoi les
+    /// du mainteneur, 08/10). Elles exigent la mise en forme ; l'envoi les
     /// intègre au message (`cid:`), copiées parmi les images collées du
     /// profil. Larges, elles s'affichent sur 800 pixels.
     function insererImages(urls) {
@@ -508,7 +508,7 @@ Page {
         return true
     }
 
-    /// Majuscule en début de phrase (0.6.12, demande de Fabienne) : la
+    /// Majuscule en début de phrase (0.6.12, demande d'une utilisatrice) : la
     /// minuscule frappée au début d'une phrase passe en capitale (cf.
     /// MiseEnForme.debutDePhrase) ; Ctrl+Z aussitôt après la rend minuscule,
     /// comme dans Outlook. Pas sous Android, où le clavier s'en charge. Rend
@@ -542,9 +542,18 @@ Page {
     }
 
     /// Ouvre une pièce jointe avant l'envoi, pour la vérifier (0.6.9, demande
-    /// de Gwenaëlle) : comme à la lecture, avec le logiciel retenu pour son
+    /// d'une utilisatrice) : comme à la lecture, avec le logiciel retenu pour son
     /// type, à défaut celui du système. Un programme ou un script ne s'ouvre
     /// pas.
+    /// Copie une pièce de la rédaction (0.6.45) : collée (Ctrl+V) dans une
+    /// autre rédaction, ou dans l'explorateur.
+    function copierPiece(p) {
+        if (pressePapier.deposerFichiers([p.chemin]))
+            signaler(qsTr("%1 copiée : collez-la (Ctrl+V) dans un autre message.").arg(p.nom), false)
+        else
+            signaler(qsTr("%1 n'a pas pu être copiée.").arg(p.nom), true)
+    }
+
     function ouvrirPiece(p) {
         if (p.risquee) {
             signaler(qsTr("Programme ou script : %1 ne s'ouvre pas depuis MMail.").arg(p.nom), true)
@@ -587,8 +596,8 @@ Page {
             envoiDiffere = 0
         occupe = true
         signaler(envoiDiffere > 0 ? qsTr("Mise en attente…") : qsTr("Envoi…"), false)
-        // La fenêtre se ferme tout de suite (0.6.22, remarque de Guillaume
-        // LUDGER) : on peut écrire le message suivant pendant que celui-ci
+        // La fenêtre se ferme tout de suite (0.6.22, remarque d'un
+        // utilisateur) : on peut écrire le message suivant pendant que celui-ci
         // part. Rien ne se perd — la rédaction reste en mémoire, et sur le
         // poste si MMail se ferme avant l'issue — et rien ne repart seul :
         // en échec, la fenêtre revient avec le motif, et c'est l'utilisateur
@@ -1268,6 +1277,7 @@ Page {
             Repeater {
                 model: redac.pieces
                 delegate: Rectangle {
+                    id: puce
                     required property var modelData
                     required property int index
                     radius: 4
@@ -1275,6 +1285,43 @@ Page {
                     border.color: fenetre.palette.mid
                     width: lignePiece.implicitWidth + 8
                     height: lignePiece.implicitHeight + 4
+                    // Glissée vers une autre rédaction, ou l'explorateur ;
+                    // copiée par Ctrl+C ou par son menu (0.6.45).
+                    Drag.dragType: Drag.Automatic
+                    Drag.supportedActions: Qt.CopyAction
+                    Drag.mimeData: ({ "text/uri-list": pressePapier.adresseFichier(puce.modelData.chemin) })
+                    Drag.active: glisserPuce.active
+                    DragHandler {
+                        id: glisserPuce
+                        target: null
+                        enabled: Qt.platform.os !== "android"
+                        acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad | PointerDevice.Stylus
+                    }
+                    TapHandler {
+                        acceptedButtons: Qt.RightButton
+                        acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad | PointerDevice.Stylus
+                        enabled: Qt.platform.os !== "android"
+                        onTapped: menuPuce.popup()
+                    }
+                    Menu {
+                        id: menuPuce
+                        onAboutToShow: width = fenetre.largeurMenu(menuPuce)
+                        EntreeMenu {
+                            text: qsTr("Ouvrir")
+                            enabled: !puce.modelData.risquee
+                            onTriggered: redac.ouvrirPiece(puce.modelData)
+                        }
+                        EntreeMenu {
+                            text: qsTr("Copier")
+                            raccourci: qsTr("Ctrl+C")
+                            onTriggered: redac.copierPiece(puce.modelData)
+                        }
+                        EntreeMenu {
+                            text: qsTr("Retirer")
+                            enabled: !redac.occupe
+                            onTriggered: redac.retirerPiece(puce.index)
+                        }
+                    }
                     RowLayout {
                         id: lignePiece
                         anchors.centerIn: parent
@@ -1283,6 +1330,12 @@ Page {
                         ToolButton {
                             text: modelData.nom + "  (" + fenetre.tailleLisible(modelData.taille) + ")"
                             Layout.leftMargin: 2
+                            Keys.onPressed: function(ev) {
+                                if (ev.matches(StandardKey.Copy)) {
+                                    redac.copierPiece(puce.modelData)
+                                    ev.accepted = true
+                                }
+                            }
                             onClicked: redac.ouvrirPiece(modelData)
                             ToolTip.visible: hovered
                             ToolTip.delay: 500
@@ -1306,7 +1359,7 @@ Page {
             Layout.fillHeight: true
             ScrollBar.vertical.policy: ScrollBar.vertical.size < 1 ? ScrollBar.AlwaysOn : ScrollBar.AsNeeded
             rightPadding: ScrollBar.vertical.width
-            // Au doigt (retour de Manu du 18/10 : « l'affichage bouge, impossible
+            // Au doigt (retour du mainteneur du 18/10 : « l'affichage bouge, impossible
             // de sélectionner correctement un mot ») : tant qu'un choix de texte
             // est en cours, le corps ne défile plus — tirer les poignées d'Android
             // étend le choix au lieu de faire défiler.
@@ -1378,7 +1431,13 @@ Page {
                 // le défilement.
                 selectByMouse: !fenetre.tactile
                 persistentSelection: true
-                font.pointSize: fenetre.tailleColonne("message")
+                // Ce qui n'est pas mis en forme s'affiche dans la police et la
+                // taille où il partira (0.6.43, cf. Main.policeRedaction), au
+                // zoom de la colonne du message ; jusque-là dans celles de
+                // l'apparence, et un brouillon repris changeait de police à
+                // l'envoi.
+                font.family: fenetre.policeRedaction
+                font.pointSize: fenetre.tailleRedaction * fenetre.zoomDe("message")
                 enabled: !redac.chargement
                 placeholderText: qsTr("Votre message")
                 // Sous une apparence sombre, la page reste blanche, comme à la
@@ -1408,7 +1467,7 @@ Page {
                         ev.accepted = true
                 }
                 // Au doigt, l'appui long choisit le mot touché ; Android pose
-                // ensuite ses poignées pour étendre le choix (retour de Manu du
+                // ensuite ses poignées pour étendre le choix (retour du mainteneur du
                 // 18/10 : le texte ne se sélectionnait pas).
                 TapHandler {
                     enabled: fenetre.tactile
@@ -1422,7 +1481,7 @@ Page {
                     }
                 }
             }
-            // Zoom au pincement, celui du corps des messages (retour de Manu
+            // Zoom au pincement, celui du corps des messages (retour du mainteneur
             // du 18/10) — comme le volet de lecture.
             PinchHandler {
                 target: null
@@ -1434,7 +1493,7 @@ Page {
 
         // Vue tactile (décision 32, point 6) : la mise en forme au bas de la
         // rédaction — donc juste au-dessus du clavier, qui réduit la fenêtre —,
-        // en boutons classiques, lisibles (retour de Manu du 18/10, plutôt
+        // en boutons classiques, lisibles (retour du mainteneur du 18/10, plutôt
         // que des pastilles) ; enfoncés quand l'option est active.
         Flow {
             visible: fenetre.tactile && redac.miseEnForme

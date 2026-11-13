@@ -46,7 +46,7 @@ SwipeDelegate {
     Accessible.selected: choisi
     padding: 0
 
-    // Vue tactile : glisser la ligne (demande de Manu du 14/10) — vers la
+    // Vue tactile : glisser la ligne (demande du mainteneur du 14/10) — vers la
     // gauche, la corbeille ; vers la droite, les indésirables (« Pas
     // indésirable » depuis ce dossier). Le fond qui se découvre a les deux
     // tiers de la largeur : lâchée passé le tiers, la ligne part. L'action
@@ -58,17 +58,38 @@ SwipeDelegate {
                                                        fenetre.listeMulti ? model.chemin : boite.dossierCourant,
                                                        model.motsCles || "", boite.revisionCategories)
     // Éléments envoyés : les destinataires, comme Outlook, plutôt que
-    // l'expéditeur, partout soi-même (demande de Fabienne, 18/10). Tant que
+    // l'expéditeur, partout soi-même (demande d'une utilisatrice, 18/10). Tant que
     // le dossier n'a pas été relu, ou sans « À » ni « Cc », l'expéditeur.
     readonly property string auteurLigne: roleLigne === "Sent" && (model.destinataires || "") !== ""
                                           ? qsTr("À : %1").arg(model.destinataires) : model.expediteur
     swipe.enabled: fenetre.tactile
     swipe.left: roleLigne === "Trash" ? null : fondIndesirable
     swipe.right: roleLigne === "Trash" ? null : fondCorbeille
-    swipe.onCompleted: fenetre.glisserLigne(index, swipe.position > 0 ? "indesirable" : "corbeille")
+    // Seul compte le chemin du doigt (10/11). Qt complète aussi un glissement
+    // LANCÉ : plus de 300 px/s vers un côté au lâcher, quelle que soit la
+    // distance parcourue — 16 px en 40 ms suffisaient. Un pouce qui dérapait en
+    // faisant défiler la liste envoyait ainsi le message aux indésirables, cinq
+    // secondes plus tard, sans que la personne l'ait voulu. La ligne ne part
+    // donc que lâchée passé le tiers de sa largeur (position 0,5 : le fond
+    // découvert en a les deux tiers), du côté où elle a été portée ; un coup
+    // bref la ramène.
+    property real positionAuDoigt: 0
+    swipe.onPositionChanged: if (ligne.pressed) ligne.positionAuDoigt = ligne.swipe.position
+    swipe.onCompleted: {
+        if (!ligne.glissementVoulu(ligne.positionAuDoigt, ligne.swipe.position)) {
+            ligne.swipe.close()
+            return
+        }
+        fenetre.glisserLigne(index, ligne.swipe.position > 0 ? "indesirable" : "corbeille")
+    }
+    function glissementVoulu(auDoigt, position) {
+        return Math.abs(auDoigt) >= 0.5 && (auDoigt > 0) === (position > 0)
+    }
+    // Chaque geste part de zéro.
+    onPressed: positionAuDoigt = 0
     // La liste recycle ses lignes (reuseItems) : une ligne glissée, rangée
     // puis reprise pour un autre message, gardait son décalage — d'autres
-    // messages paraissaient glissés (retour de Manu du 18/10).
+    // messages paraissaient glissés (retour du mainteneur du 18/10).
     ListView.onPooled: swipe.close()
     ListView.onReused: swipe.close()
     Component {
@@ -153,7 +174,7 @@ SwipeDelegate {
         }
     }
 
-    // Des lignes plus aérées, séparées d'un trait (retour de Fabienne,
+    // Des lignes plus aérées, séparées d'un trait (retour d'une utilisatrice,
     // 29/09 : les messages se distinguaient mal les uns des autres).
     topPadding: 7
     bottomPadding: 7
@@ -217,7 +238,7 @@ SwipeDelegate {
             // Répondu, répondu à tous, transféré — par MMail ou par un
             // autre logiciel, le serveur porte les drapeaux : des
             // pastilles devant l'objet, aux préfixes d'Outlook (forme A,
-            // choisie par Manu le 10/10 ; les flèches de la 0.5.4 et les
+            // choisie par le mainteneur le 10/10 ; les flèches de la 0.5.4 et les
             // mots en bout de ligne de la 0.5.5 ne lui convenaient pas).
             MarqueSuite {
                 visible: model.repondu === true
@@ -262,7 +283,7 @@ SwipeDelegate {
         }
         // Recherche dans toutes les boîtes : le dossier du message, sur
         // sa ligne, coupé au milieu au besoin — le compte et le dossier
-        // restent lisibles (demande de Manu, 08/10).
+        // restent lisibles (demande du mainteneur, 08/10).
         Label {
             visible: fenetre.listeMulti
             Layout.fillWidth: true
@@ -315,7 +336,7 @@ SwipeDelegate {
         // la liste : pas de glisser-déposer (le tri passe par l'appui
         // long et le menu), et pas de choix à l'appui. Choisir à l'appui
         // ouvrait le message au premier contact, avant que la liste ait
-        // reconnu le geste : elle ne défilait plus (APK, retour de Manu
+        // reconnu le geste : elle ne défilait plus (APK, retour du mainteneur
         // du 05/10). Au doigt, un message s'ouvre au toucher bref.
         property bool auDoigt: fenetre.compact
         drag.target: auDoigt ? null : etiquette
@@ -346,7 +367,7 @@ SwipeDelegate {
         }
         // Le menu s'ouvre au point d'appui : sans position, Qt le place sous
         // le pointeur, que le doigt ne déplace pas (au milieu de l'écran sous
-        // Android, retour de Manu du 12/10).
+        // Android, retour du mainteneur du 12/10).
         onPressAndHold: function(souris) {
             if (!ligne.choisi)
                 fenetre.choisir(index, 0)
@@ -359,8 +380,13 @@ SwipeDelegate {
                 fenetre.doubleClicMessage(index)
         }
         drag.onActiveChanged: fenetre.glisse = drag.active ? etiquette : null
-        onReleased: {
-            if (drag.active)
+        // Lâchés sur une fenêtre de rédaction, hors de la fenêtre principale :
+        // les messages y sont joints (cf. Main.deposerSurRedaction) ; sinon,
+        // le dépôt sur un dossier, comme avant.
+        onReleased: function(souris) {
+            if (!drag.active)
+                return
+            if (!fenetre.deposerSurRedaction(zone.mapToGlobal(souris.x, souris.y)))
                 etiquette.Drag.drop()
         }
     }
@@ -402,7 +428,7 @@ SwipeDelegate {
         }
     }
 
-    // Corbeille en bout de première ligne, au survol (demande de Manu
+    // Corbeille en bout de première ligne, au survol (demande du mainteneur
     // du 15/10) : le message part à la corbeille sans être ouvert.
     // Rien dans la corbeille elle-même.
     Canvas {

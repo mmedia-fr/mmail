@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # MMail — noyau Rust (core/), interface Qt 6 / QML, coffre des mots de passe natif.
 cmake_minimum_required(VERSION 3.24)
-project(mmail VERSION 0.6.39 LANGUAGES CXX)
+project(mmail VERSION 0.6.45 LANGUAGES CXX)
 
 # Ni macOS ni iOS (décision du 2026-11-02, motif au README).
 if(APPLE)

@@ -26,7 +26,13 @@ de projet interne.
   Objet » — cité en HTML quand il l'est, tableaux et images intégrées compris
   (ses images distantes et ses feuilles de style sont écartées) ; Cc et Cci ; pièces jointes par « Joindre… » ou glisser-déposer,
   celles d'un message transféré reprises d'office, et qu'un clic ouvre pour
-  les vérifier avant l'envoi (0.6.9 ; jamais un programme ni un script) ; une capture d'écran se
+  les vérifier avant l'envoi (0.6.9 ; jamais un programme ni un script) ;
+  **un courriel en pièce jointe**, quel qu'il soit : « Autres actions ›
+  Joindre à un nouveau message » (ou « … au message en cours ») au clic droit
+  sur un message de la liste, ou les messages glissés de la liste sur la fenêtre de rédaction
+  (Windows, Linux sous X11) — chacun joint entier, en `.eml` (message/rfc822)
+  nommé d'après son objet, comme « Transférer en tant que pièce jointe »
+  d'Outlook ; une capture d'écran se
   colle dans le corps (Ctrl+V) et une image glissée sur le corps s'y insère,
   intégrée au message à l'envoi ; envoi par la soumission
   SMTP (port 465) — celle du serveur de lecture, ou un **serveur d'envoi**
@@ -48,7 +54,10 @@ de projet interne.
   l'orthographe en tapant » le coupe ;
 - **mise en forme** à la rédaction — gras, italique, souligné, listes à
   puces ou numérotées, liens — envoyée en HTML avec sa version en texte brut ;
-  « Mise en forme » décochée, le message part en texte brut ;
+  « Mise en forme » décochée, le message part en texte brut. Le texte sans
+  police ni taille part en Arial 11 : la rédaction l'affiche ainsi, au zoom de
+  la colonne du message près, et la lecture d'un brouillon aussi, qui garde la
+  même apparence avant et après sa reprise (0.6.43) ;
 - **envoi hors connexion** (0.6.34) : un message qui n'a pas pu partir faute
   de réseau — serveur injoignable, connexion coupée avant que son texte ne
   parte — reste dans la boîte d'envoi, sa fenêtre fermée, et repart seul au
@@ -176,7 +185,9 @@ de projet interne.
 - **menu « ? »** : aide (F1), « Envoyer une suggestion… » (rédaction adressée
   à l'équipe de MMail, version et système dans l'objet ; sans compte, par la
   messagerie du poste) et « À propos » — versions de MMail, du noyau et
-  de Qt ;
+  de Qt. Sur ordinateur, le bouton « Suggestion », tout à droite de la barre
+  du haut (fenêtre d'au moins 1 024 points, ou disposition « Deux étages »),
+  fait la même chose que « Envoyer une suggestion… » ;
 - **ascenseurs toujours visibles** dès qu'une colonne a de quoi défiler ;
 - **trombone** dans la liste pour un message à pièces jointes : supposé
   d'après les en-têtes (`multipart/mixed`, ou corps entier qui n'est pas du
@@ -273,7 +284,10 @@ de projet interne.
   repérées : numéro et type de voie (« 12 rue… », « 3 bis avenue… », ou sans
   numéro « ZA des… », « Lieu-dit… »), puis code postal et commune sur la même
   ligne ou la suivante, boîte postale et CEDEX compris. Les liens d'appel
-  posés par l'expéditeur (`tel:`) restent cliquables ;
+  posés par l'expéditeur (`tel:`) restent cliquables. Un brouillon, ou un
+  message en attente d'envoi différé, s'affiche sans ces liens ajoutés
+  (0.6.43) : tel qu'il se reprendra et partira ; le message cité d'une
+  réponse ou d'un transfert ne les emporte pas non plus ;
 - **se désabonner** (0.6.30) : une lettre d'information ou un message de liste
   de diffusion qui offre le moyen de s'en retirer porte un bandeau « Se
   désabonner… », dans le volet de lecture comme dans la fenêtre d'un message.
@@ -298,7 +312,22 @@ de projet interne.
   MMail se propose aussi pour les liens « mailto: », dans les applications par
   défaut de Windows ;
 - **masquage local** des dossiers peu utilisés, réaffichage en un clic ;
-- affichage du **message brut** (bouton « Source ») ;
+- affichage du **message brut** (bouton « Source » ; sous Android, « … ›
+  Autres › Afficher la source », qui ramène aussi au message) ;
+- **barres d'actions compactes** : au-dessus du message affiché (bureau comme
+  téléphone), dans la barre du haut du bureau et en tête du menu d'un message,
+  des pictogrammes encadrés pour répondre, répondre à tous, transférer,
+  déplacer, classer indésirable, marquer lu ou non lu, poser un drapeau,
+  supprimer, écrire un nouveau message, actualiser ; un nom court pour ce qui
+  est propre à MMail (« Source », « BàL », « Masqués », « Autres ») ; le nom
+  complet et le raccourci en infobulle, à l'appui long au doigt. La barre du
+  message range ses boutons en quatre groupes : répondre, répondre à tous,
+  transférer ; marquer lu ou non lu, déplacer ; indésirable, supprimer ;
+  source. Le menu d'un message tient en sept lignes, la barre du message en
+  une, avec les pictogrammes seuls. Au bureau, « Affichage › Boutons des barres › Pictogrammes et texte »
+  met le nom à côté de chaque pictogramme, dans la barre du message (qui passe
+  alors à la ligne si le volet est étroit) et dans la barre du haut (sur une
+  seule ligne, à partir de 1 180 points de large) ;
 - **copie automatique de la sélection**, comme dans MMdedit : un texte
   sélectionné dans un message part au presse-papier, sauf ce qu'un autre
   logiciel vient d'y déposer, protégé une minute ; clic droit sur le message :
@@ -798,6 +827,14 @@ cargo test --manifest-path core/Cargo.toml -- --ignored --test-threads=1
 L'intégration continue les passe sous Linux contre un Dovecot monté pour
 l'occasion — deux comptes jetables, certificat signé par une autorité d'essai
 posée dans le magasin du système —, hors envoi SMTP, agenda et carnet d’adresses.
+
+Épreuves de l'interface : des composants de `core/qml` éprouvés seuls, sans
+serveur ni noyau (`core/essais-qml/tst_*.qml` ; les noms qu'ils empruntent à
+`Main.qml` y sont posés). L'intégration continue les passe sous Linux :
+
+```sh
+QT_QPA_PLATFORM=offscreen qmltestrunner -input core/essais-qml -import core/essais-qml/modules
+```
 
 ## Licence
 

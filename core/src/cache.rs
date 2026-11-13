@@ -2,7 +2,7 @@
 //! Messages gardés sur le poste (décision 17) : de quoi lire, hors connexion,
 //! ce qui est arrivé récemment.
 //!
-//! Un message de moins d'un mois — arbitrage de Manu du 2026-10-01 ; durée et
+//! Un message de moins d'un mois — arbitrage du mainteneur du 2026-10-01 ; durée et
 //! taille réglables pour la machine (`jours`, `taille_max`) — est gardé entier,
 //! tel que le serveur le conserve, dans un fichier `.eml` nommé par son
 //! identifiant dans l'index (décision 14) : l'affichage, la source et les

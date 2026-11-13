@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Dialogue « Expéditeurs de confiance » (0.6.24, demande de Guillaume LUDGER
-// du 26/10, ordre de Manu du 27/10) : les adresses dont les images distantes
+// Dialogue « Expéditeurs de confiance » (0.6.24, demande d'un utilisateur
+// du 26/10, ordre du mainteneur du 27/10) : les adresses dont les images distantes
 // se téléchargent d'office, posées par « Toujours pour cet expéditeur » ;
 // « Retirer » rend l'expéditeur au téléchargement à la demande.
 //

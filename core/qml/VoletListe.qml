@@ -40,7 +40,7 @@ ColumnLayout {
     // temps de la session : { cleVue: { intitulé: true } }.
     property var replis: ({})
     readonly property string cleVue: (fenetre.listeMulti ? "multi" : boite.compteCourant + "|" + boite.dossierCourant)
-                                     + (fenetre.recherche.length > 0 ? "|recherche" : "")
+                                     + (fenetre.enRecherche ? "|recherche" : "")
     readonly property var replisVue: replis[cleVue] || ({})
     readonly property bool replisActifs: fenetre.groupesVisibles && Object.keys(replisVue).length > 0
     onReplisActifsChanged: appliquerReplis(0)
@@ -275,7 +275,7 @@ ColumnLayout {
                 Layout.fillWidth: true
                 placeholderText: fenetre.tactile ? qsTr("Rechercher") : qsTr("Rechercher (Ctrl+E)")
                 selectByMouse: true
-                // Mis en valeur (demande de Manu, 08/10) : une loupe, un
+                // Mis en valeur (demande du mainteneur, 08/10) : une loupe, un
                 // cadre de la couleur d'accent sur un fond teinté ; le cadre
                 // s'épaissit quand le champ a la main.
                 leftPadding: loupe.width + 13
@@ -301,7 +301,7 @@ ColumnLayout {
                 }
                 // La frappe ne cherche plus : elle propose les dernières
                 // recherches, que l'on choisit ; Entrée lance la recherche
-                // (demande de Manu, 09/10).
+                // (demande du mainteneur, 09/10).
                 onActiveFocusChanged: {
                     if (activeFocus)
                         fenetre.proposerHistorique()
@@ -309,10 +309,11 @@ ColumnLayout {
                         colonneListe.rechercheOuverte = false
                 }
                 // Le mot effacé au clavier, la liste de départ revient, comme par
-                // ✕ (0.6.12, demande de Fabienne : elle restait filtrée).
+                // ✕ (0.6.12, demande d'une utilisatrice : elle restait filtrée) — ou
+                // les non-lus seuls, si « Non lus » est cochée.
                 onTextEdited: {
                     if (text.length === 0 && fenetre.recherche.length > 0)
-                        fenetre.quitterRecherche()
+                        fenetre.lancerRecherche()
                     else
                         fenetre.proposerHistorique()
                 }
@@ -371,7 +372,7 @@ ColumnLayout {
             }
             ToolButton {
                 text: "✕"
-                visible: champRecherche.text.length > 0 || fenetre.recherche.length > 0
+                visible: champRecherche.text.length > 0 || fenetre.enRecherche
                 onClicked: fenetre.quitterRecherche()
                 ToolTip.visible: hovered
                 ToolTip.text: qsTr("Effacer la recherche (Échap)")
@@ -393,7 +394,10 @@ ColumnLayout {
                 id: nonLusRecherche
                 objectName: "nonLusRecherche"
                 text: qsTr("Non lus")
-                onToggled: if (champRecherche.text.trim().length > 0) fenetre.lancerRecherche()
+                // Champ vide : la liste ne garde que les non-lus, ou revient
+                // entière quand on décoche.
+                onToggled: if (checked || champRecherche.text.trim().length > 0 || fenetre.enRecherche)
+                               fenetre.lancerRecherche()
                 ToolTip.visible: hovered
                 ToolTip.delay: 600
                 ToolTip.text: qsTr("Ne garder que les messages non lus")
@@ -436,7 +440,8 @@ ColumnLayout {
                 Layout.fillWidth: blocRecherche.deuxLignes
                 // Seule sur sa ligne, sous les deux cases : toute la largeur.
                 Layout.columnSpan: blocRecherche.colonnesOptions === 2 ? 2 : 1
-                onActivated: if (champRecherche.text.trim().length > 0) fenetre.lancerRecherche()
+                onActivated: if (champRecherche.text.trim().length > 0 || fenetre.rechercheNonLusSeuls)
+                                 fenetre.lancerRecherche()
             }
         }
     }
@@ -447,7 +452,7 @@ ColumnLayout {
         Layout.rightMargin: 4
         Layout.bottomMargin: 4
         spacing: 6
-        visible: fenetre.recherche.length > 0
+        visible: fenetre.enRecherche
         Label { text: qsTr("Trier par") }
         ComboBox {
             id: choixTri

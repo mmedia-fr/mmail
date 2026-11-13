@@ -311,6 +311,8 @@ Connections {
         }
         if (fenetre.essai && fenetre.essai.scenario)
             scenarios.etapeScenario()
+        if (fenetre.essai && fenetre.essai.scenario === "brouillon-police")
+            scenarios.etapeScenarioBrouillonPolice()
         if (fenetre.essai && fenetre.essai.scenario === "glisser")
             scenarios.etapeScenarioGlisser()
         if (fenetre.essai && fenetre.essai.scenario === "corbeille-ligne")
@@ -598,6 +600,13 @@ Connections {
     }
 
     function onPieceAJoindre(url) {
+        // Copiée ou glissée (0.6.45) : rien à ouvrir.
+        if (fenetre.pieceCible === "copier" || fenetre.pieceCible === "glisser") {
+            fenetre.pieceDisponible(url)
+            if (fenetre.essai && fenetre.essai.scenario === "copier-piece")
+                console.log("scenario: piece prete", url)
+            return
+        }
         var r = fenetre.redactions[fenetre.pieceCible]
         if (!r) {
             r = fenetre.ouvrirRedaction(boite.compteCourant > 0 ? boite.compteCourant
@@ -617,6 +626,26 @@ Connections {
             r.conteneur.requestActivate()
         }
         messageEtat.texte = qsTr("Pièce jointe ajoutée au message « %1 ».").arg(r.objetActuel())
+    }
+
+    // Courriels joints en .eml (cf. Main.joindreMessages) : la rédaction est
+    // déjà ouverte ; fermée entre-temps, rien ne se fait.
+    function onMessagesAJoindre(jeton, urls, erreurs) {
+        var r = fenetre.redactions[jeton]
+        if (!r)
+            return
+        var liste = []
+        try { liste = JSON.parse(urls) } catch (e) { liste = [] }
+        if (liste.length > 0)
+            r.ajouterFichiers(liste)
+        if (erreurs.length > 0)
+            r.signaler(liste.length > 0 ? qsTr("Certains messages n'ont pas pu être joints : %1").arg(erreurs)
+                                        : qsTr("Message non joint : %1").arg(erreurs), true)
+        else
+            r.signaler(liste.length > 1 ? qsTr("%1 messages joints.").arg(liste.length) : qsTr("Message joint."), false)
+        if (fenetre.essai && fenetre.essai.scenario === "joindre-message")
+            console.log("scenario: messages joints :", JSON.stringify(r.pieces.map(function(p) { return p.nom })),
+                        "| erreurs :", erreurs)
     }
 
     function onPieceEcrite(url, chemin, ouvrir) {
@@ -691,9 +720,13 @@ Connections {
             return
         fenetre.uidsServeur = uids.length > 0 ? uids.split(",").map(Number) : []
         fenetre.poserResultats()
-        messageEtat.texte = qsTr("Recherche « %1 » : %2%3.").arg(texte)
-                .arg(fenetre.accord(modeleMessages.count, qsTr("résultat"), qsTr("résultats")))
-                .arg(boite.rechercheApprochee() ? qsTr(", fautes de frappe tolérées sur le poste") : "")
+        if (fenetre.rechercheNonLusSeuls)
+            messageEtat.texte = qsTr("Non lus seulement : %1.")
+                    .arg(fenetre.accord(modeleMessages.count, qsTr("message"), qsTr("messages")))
+        else
+            messageEtat.texte = qsTr("Recherche « %1 » : %2%3.").arg(texte)
+                    .arg(fenetre.accord(modeleMessages.count, qsTr("résultat"), qsTr("résultats")))
+                    .arg(boite.rechercheApprochee() ? qsTr(", fautes de frappe tolérées sur le poste") : "")
         if (fenetre.essai && fenetre.essai.scenario === "recherche-lente" && !fenetre.essai.partout) {
             // `rechercheInachevee`, s'il vient, suit ce signal : le bilan
             // attend qu'il soit passé.

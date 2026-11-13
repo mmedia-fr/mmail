@@ -3,7 +3,7 @@
 // GIF qui fait défiler en boucle le logo de la société, la photo de la
 // personne, puis d'autres logos, et l'insère dans la signature en cours
 // d'édition comme toute autre image. Moteur : core/src/badge.rs, repris du
-// générateur de signature de Guillaume LUDGER (Double Clic).
+// générateur de signature d'un client.
 //
 // L'aperçu est le badge lui-même, fabriqué par le même code que celui inséré.
 // La composition (images, cadrages, forme, réglages) est gardée par adresse :

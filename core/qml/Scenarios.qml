@@ -519,6 +519,45 @@ QtObject {
         r.enregistrer(false)
     }
 
+    // Scénario « collage-signature » (banc : images distantes servies sur
+    // https://localhost/, dossier de sortie avec signature-distante.htm et
+    // anime.gif) : l'image distante d'une signature importée ou collée est
+    // téléchargée, en GIF ; un GIF du presse-papier reste un GIF, dans
+    // l'éditeur de signature aussi.
+    function lancerScenarioSignatureCollee(essais) {
+        var n = essais || 0
+        if (comptesConnus.length === 0 && n < 40) {
+            plusTard(1000, function() { lancerScenarioSignatureCollee(n + 1) })
+            return
+        }
+        var echecs = 0
+        var bilan = function(texte, bon) {
+            if (!bon)
+                echecs += 1
+            console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
+        }
+        var images = function(h) { return (h.match(/<img[^>]*>/g) || []).join(" ") }
+        var gifLocal = /src="file:[^"]*\.gif"/
+        var a = comptesConnus[0]
+        var importee = boite.importerSignature(a.adresse, identifiantsEssai.sortie + "/signature-distante.htm")
+        bilan("import : " + images(importee), gifLocal.test(importee) && importee.indexOf("https://localhost") < 0)
+        var collee = boite.rapatrierImagesSignature(a.adresse, '<p>Nom</p><img src="https://localhost/anime.gif" width="80" />')
+        bilan("collée : " + images(collee), gifLocal.test(collee))
+        pressePapier.deposerGif(identifiantsEssai.sortie + "/anime.gif")
+        var gif = pressePapier.enregistrerImage(boite.dossierImagesCollees())
+        bilan("GIF du presse-papier : " + gif, /\.gif$/.test(gif))
+        dlgIdentite.ouvrir(a.compte)
+        plusTard(1500, function() {
+            pressePapier.deposerGif(identifiantsEssai.sortie + "/anime.gif")
+            var fait = dlgIdentite.collerDansSignature()
+            dlgIdentite.garderSignature()
+            var sig = dlgIdentite.biblio[dlgIdentite.choisie] || {}
+            bilan("éditeur, GIF collé : " + fait + " " + images(sig.html || ""), fait && gifLocal.test(sig.html || ""))
+            console.log("scenario: collage-signature " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
+            Qt.quit()
+        })
+    }
+
     /// Scénario « coller-piece » (0.8.4), MMAIL_DOSSIER=<image PNG> : l'image
     /// du presse-papier devient pièce jointe par « Coller en pièce jointe »,
     /// sans entrer dans le corps ; rien à coller, le motif s'affiche.
@@ -546,6 +585,85 @@ QtObject {
         bilan("rien à joindre : « " + r.note + " »", r.pieces.length === 1 && r.note.indexOf("Rien à joindre") === 0)
         console.log("scenario: coller-piece " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
         Qt.quit()
+    }
+
+    /// Scénario « joindre-message » (banc SMTP=1) : un message de la liste joint
+    /// à un nouveau message par le menu (« Joindre à un nouveau message »), un
+    /// second déposé sur la fenêtre de rédaction, hors de la fenêtre principale ;
+    /// un dépôt dans la fenêtre principale ne joint rien. Puis l'envoi : le banc
+    /// relit le message reçu par son faux serveur (deux parties message/rfc822).
+    function etapeScenarioJoindreMessage() {
+        var echecs = 0
+        var bilan = function(texte, bon) {
+            if (!bon)
+                echecs += 1
+            console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
+        }
+        var attendre = function(condition, ensuite) {
+            var essais = 40
+            var t = Qt.createQmlObject('import QtQuick; Timer { interval: 500; repeat: true }', fenetre)
+            t.triggered.connect(function() {
+                if (condition() || --essais <= 0) {
+                    t.stop()
+                    ensuite()
+                }
+            })
+            t.start()
+        }
+        var finir = function() {
+            console.log("scenario: joindre-message " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
+            Qt.quit()
+        }
+        if (boite.dossierCourant !== "INBOX" || modeleMessages.count < 2) {
+            bilan("boîte de réception d'au moins deux messages", false)
+            finir()
+            return
+        }
+        var premier = modeleMessages.get(0).sujet
+        var second = modeleMessages.get(1).sujet
+        choisir(0, 0)
+        var r = joindreMessages("nouveau")
+        bilan("rédaction ouverte", r !== null && !!redactions[r.jeton])
+        attendre(function() { return r.pieces.length >= 1 }, function() {
+            var noms = r.pieces.map(function(p) { return p.nom })
+            bilan("premier message joint : " + JSON.stringify(noms) + " | « " + r.note + " »",
+                  noms.length === 1 && noms[0] === premier + ".eml" && r.pieces[0].taille > 0)
+            // Deux fenêtres l'une sous l'autre (l'écran du banc fait 800 × 600) :
+            // la principale en haut, assez large pour ne pas passer en vue
+            // compacte, la rédaction en dessous.
+            fenetre.visibility = Window.Windowed
+            fenetre.x = 0
+            fenetre.y = 0
+            fenetre.width = 760
+            fenetre.height = 300
+            var f = r.conteneur
+            f.x = 0
+            f.y = 320
+            var dans = function(g, x, y) { return x >= g.x && x < g.x + g.width && y >= g.y && y < g.y + g.height }
+            var cadre = function(g) { return g.x + "," + g.y + " " + g.width + "x" + g.height }
+            var px = f.x + 40
+            var py = Math.max(f.y, fenetre.y + fenetre.height) + 20
+            console.log("scenario: principale", cadre(fenetre), "| rédaction", cadre(f), "| point", px, py,
+                        "| compacte", compact)
+            choisir(1, 0)
+            bilan("lâché dans la fenêtre principale : rien",
+                  !deposerSurRedaction(Qt.point(fenetre.x + 100, fenetre.y + 100)))
+            bilan("point de dépôt sur la rédaction seule", dans(f, px, py) && !dans(fenetre, px, py))
+            bilan("lâché sur la rédaction : joint", deposerSurRedaction(Qt.point(px, py)))
+            attendre(function() { return r.pieces.length >= 2 }, function() {
+                var noms2 = r.pieces.map(function(p) { return p.nom })
+                bilan("second message joint : " + JSON.stringify(noms2), noms2.length === 2 && noms2[1] === second + ".eml")
+                r.remplir({ a: "deux@essai.test", objet: "Deux messages joints", mode: "nouveau", texte: "Voici les deux.",
+                            pieces: r.pieces.map(function(p) { return p.chemin }) })
+                bilan("pièces gardées : " + r.pieces.length, r.pieces.length === 2)
+                var jeton = r.jeton
+                r.envoyer(false)
+                attendre(function() { return !redactions[jeton] }, function() {
+                    bilan("message parti", !redactions[jeton])
+                    finir()
+                })
+            })
+        })
     }
 
     /// Scénario « brouillon-auto » : un message neuf que l'on ne touche pas ne
@@ -874,11 +992,30 @@ QtObject {
         attente.start()
     }
 
-    /// Scénario d'essai « suggestion » : sans connexion, l'entrée du menu « ? »
-    /// ouvre une rédaction adressée à `adresseSuggestions`, version et système
-    /// dans l'objet.
+    /// Scénario d'essai « suggestion » : sans connexion, le bouton
+    /// « Suggestion » de la barre du haut (au bureau ; au doigt, l'entrée du
+    /// menu « ? ») ouvre une rédaction adressée à `adresseSuggestions`,
+    /// version et système dans l'objet — ou, sans aucun compte dans le
+    /// profil (banc neuf), passe la main à la messagerie du poste.
     function etapeScenarioSuggestion() {
-        var r = envoyerSuggestion()
+        var bouton = objetNomme(fenetre.menuBar, "boutonSuggestion")
+        // Au bureau, à partir de 1 024 points sur une seule ligne.
+        var attendu = !tactile && !compact && (deuxEtages || fenetre.width >= 1024)
+        console.log("scenario: bouton « Suggestion »", attendu ? "dans la barre du haut" : "absent",
+                    "| largeur", fenetre.width, !!bouton && bouton.visible === attendu ? "OK" : "ECHEC")
+        var sansCompte = comptesConnus.length === 0
+        var avant = redactionActive
+        var r = null
+        if (!tactile && bouton && bouton.visible) {
+            bouton.clicked()
+            r = redactionActive !== avant ? redactions[redactionActive] || null : null
+        } else {
+            r = envoyerSuggestion()
+        }
+        if (sansCompte) {
+            console.log("scenario: suggestion sans compte : messagerie du poste", r === null ? "OK" : "ECHEC")
+            return
+        }
         var a = r ? r.contenu().a : ""
         var objet = r ? r.contenu().objet : ""
         console.log("scenario: suggestion,", a, "|", objet,
@@ -1392,6 +1529,111 @@ QtObject {
 
     // Scénario « tactile » : la vue du téléphone en images, sans téléphone
     // (MMAIL_TACTILE=1, MMAIL_TAILLE=412x915) — liste, tiroir, menu ⋮, message.
+    /// Scénario « captures-barres » (barre compacte, 11/11 ; MMAIL_SORTIE=<dossier>) :
+    /// la fenêtre avec le message affiché, puis le menu d'un message — au doigt
+    /// (MMAIL_TACTILE=1), celui de « … » —, en images <bureau|android>-<volet|menu>.png ;
+    /// et ce qui fait la barre compacte : une seule ligne de boutons dans le
+    /// volet, sept lignes au plus dans le menu. L'ordre du 12/11 (répondre,
+    /// répondre à tous, transférer | lu, déplacer | indésirable, supprimer |
+    /// source) ; au bureau, « Pictogrammes et texte » en image bureau-volet-texte.
+    function etapeScenarioCapturesBarres() {
+        var echecs = 0
+        var bilan = function(texte, bon) {
+            if (!bon)
+                echecs += 1
+            console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
+        }
+        var racine = fenetre.contentItem
+        while (racine.parent)
+            racine = racine.parent
+        var prefixe = tactile ? "android-" : "bureau-"
+        var saisir = function(nom) {
+            var chemin = lanceur.chemin(identifiantsEssai.sortie + "/" + prefixe + nom + ".png")
+            racine.grabToImage(function(r) { r.saveToFile(chemin) })
+            console.log("scenario: image", prefixe + nom, "| vue", vue, "| largeur", fenetre.width)
+        }
+        var lignesDuMenu = function() {
+            var n = 0
+            for (var i = 0; i < menuMessage.count; ++i) {
+                var e = menuMessage.itemAt(i)
+                if (e && e.visible && e.height > 0 && !(e instanceof MenuSeparator))
+                    n += 1
+            }
+            return n
+        }
+        var etapes = [
+            function() { choisir(0, 0) },
+            function() {
+                var r = objetNomme(colonneLecture, "boutonRepondre")
+                var j = objetNomme(colonneLecture, "boutonIndesirable")
+                var d = objetNomme(colonneLecture, "boutonSupprimer")
+                var s = objetNomme(colonneLecture, "boutonSource")
+                // Positions dans la fenêtre : les groupes sont des rangées.
+                var y = function(e) { return e ? Math.round(e.mapToItem(null, 0, 0).y) : -1 }
+                var x = function(e) { return e ? e.mapToItem(null, 0, 0).x : -1 }
+                bilan("barre du volet sur une ligne (Répondre y " + y(r) + ", Indésirable y " + y(j)
+                      + ", Supprimer y " + y(d) + ")",
+                      !!r && !!j && !!d && r.visible && j.visible && d.visible && y(r) === y(j) && y(j) === y(d))
+                bilan("« Indésirable » juste avant « Supprimer »", !!j && !!d && x(j) < x(d) && x(d) - (x(j) + j.width) <= 8)
+                var ordre = ["boutonRepondre", "boutonRepondreTous", "boutonTransferer", "boutonMarquerLu",
+                             "boutonDeplacer", "boutonIndesirable", "boutonSupprimer"]
+                var xs = ordre.map(function(nom) { return x(objetNomme(colonneLecture, nom)) })
+                var range = xs.every(function(v, k) { return v >= 0 && (k === 0 || v > xs[k - 1]) })
+                bilan("ordre de la barre (" + xs.map(Math.round).join(", ") + ")", range)
+                // Au doigt, « Source » est dans « … » (12/11).
+                bilan(tactile ? "« Source » hors de la barre au doigt" : "« Source » en toutes lettres",
+                      !!s && (tactile ? !s.visible : s.visible && y(r) === y(s) && s.text === qsTr("Source")))
+                saisir("volet")
+            },
+            function() {
+                if (tactile) {
+                    var autres = objetNomme(colonneLecture, "boutonAutresActions")
+                    if (autres)
+                        menuMessage.popup(autres, 0, autres.height)
+                } else {
+                    var l = colonneListe.vueMessages.itemAtIndex(0)
+                    if (l)
+                        menuMessage.popup(l, 80, l.height / 2)
+                }
+            },
+            function() {
+                bilan("menu d'un message : " + lignesDuMenu() + " lignes", menuMessage.opened && lignesDuMenu() <= 7)
+                saisir("menu")
+            },
+            function() {
+                menuMessage.close()
+                // Au bureau : le nom à côté des pictogrammes (12/11).
+                if (!tactile)
+                    reglages.libellesBoutons = true
+            },
+            function() {
+                if (!tactile) {
+                    var d = objetNomme(colonneLecture, "boutonSupprimer")
+                    var n = objetNomme(entete, "boutonNouveau")
+                    bilan("« Supprimer » avec son nom (" + (d ? d.width : "?") + " px)", !!d && d.libelleVisible && d.width > 60)
+                    bilan("« Nouveau message » avec son nom, fenêtre de " + fenetre.width + " px",
+                          !!n && (fenetre.enteteSerree ? n.iconeSeule : !n.iconeSeule))
+                    // L'image se prend à l'image suivante : le réglage se
+                    // rend à l'étape d'après.
+                    saisir("volet-texte")
+                }
+            },
+            function() {
+                if (!tactile)
+                    reglages.libellesBoutons = false
+                console.log("scenario: captures-barres " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
+                Qt.quit()
+            }
+        ]
+        var i = 0
+        var t = Qt.createQmlObject("import QtQuick; Timer { interval: 1200; repeat: true }", fenetre)
+        t.triggered.connect(function() {
+            if (i < etapes.length)
+                etapes[i++]()
+        })
+        t.start()
+    }
+
     function etapeScenarioTactile() {
         var a = listeComptes()[0]
         if (!a || a.etat !== "pret" || essai.etape || boite.dossierCourant !== "INBOX" || modeleMessages.count < 1)
@@ -1463,7 +1705,7 @@ QtObject {
             console.log(revenue >= 0 && modeleMessages.count === avant && !bandeauGlissement.opened
                         ? "scenario: OK annulée, ligne revenue au rang " + revenue
                         : "scenario: ECHEC annulation " + modeleMessages.count + " / " + avant)
-            // Retour de Manu du 18/10 : après un glisser, d'autres lignes
+            // Retour du mainteneur du 18/10 : après un glisser, d'autres lignes
             // restaient décalées. Une fois la liste redessinée, aucune ligne
             // affichée ne doit l'être.
             essai.etape = 5  // en attente du contrôle : les autres étapes se taisent
@@ -1531,6 +1773,81 @@ QtObject {
             console.log("scenario: message ramene en boite de reception")
             Qt.quit()
         }
+    }
+
+    /// Scénario « indesirable-differe » (vue tactile : MMAIL_TACTILE=1,
+    /// MMAIL_TAILLE=392x800) : le volet de lecture n'a plus de bouton
+    /// « Indésirable », mais « … » ; « Courrier indésirable » retire le message
+    /// de la liste derrière le bandeau « Annuler », sans rien envoyer au
+    /// serveur ; annulé, il revient ; laissé, il part après 5 s.
+    function etapeScenarioIndesirableDiffere() {
+        var echecs = 0
+        var bilan = function(texte, bon) {
+            if (!bon)
+                echecs += 1
+            console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
+        }
+        var attendre = function(condition, ensuite) {
+            var essais = 40
+            var t = Qt.createQmlObject('import QtQuick; Timer { interval: 500; repeat: true }', fenetre)
+            t.triggered.connect(function() {
+                if (condition() || --essais <= 0) {
+                    t.stop()
+                    ensuite()
+                }
+            })
+            t.start()
+        }
+        var finir = function() {
+            console.log("scenario: indesirable-differe " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
+            Qt.quit()
+        }
+        var present = function(sujet) {
+            for (var i = 0; i < modeleMessages.count; ++i) {
+                if (modeleMessages.get(i).sujet === sujet)
+                    return true
+            }
+            return false
+        }
+        if (!tactile || boite.dossierCourant !== "INBOX" || modeleMessages.count < 2) {
+            bilan("vue tactile, boîte de réception d'au moins deux messages", false)
+            finir()
+            return
+        }
+        var avant = modeleMessages.count
+        var sujet = modeleMessages.get(0).sujet
+        choisir(0, 0)
+        attendre(function() { return vue === 2 }, function() {
+            var indesirable = objetNomme(colonneLecture, "boutonIndesirable")
+            var autres = objetNomme(colonneLecture, "boutonAutresActions")
+            bilan("volet de lecture sans « Indésirable »", !!indesirable && !indesirable.visible)
+            bilan("« … » présent", !!autres && autres.visible)
+            signalerIndesirable()
+            bilan("bandeau « " + bandeauGlissement.texte + " »", bandeauGlissement.opened
+                  && bandeauGlissement.texte === qsTr("Message classé indésirable."))
+            bilan("retour à la liste, message retiré, rien d'envoyé",
+                  vue === 1 && modeleMessages.count === avant - 1 && !present(sujet) && deplacementsEnVol === 0)
+            annulerGlissement()
+            attendre(function() { return present(sujet) }, function() {
+                bilan("annulé : le message revient", present(sujet) && deplacementsEnVol === 0)
+                var rang = -1
+                for (var i = 0; i < modeleMessages.count; ++i) {
+                    if (modeleMessages.get(i).sujet === sujet)
+                        rang = i
+                }
+                choisir(rang, 0)
+                signalerIndesirable()
+                var t0 = Date.now()
+                attendre(function() { return glissement === null }, function() {
+                    var ecoule = Date.now() - t0
+                    bilan("parti après " + ecoule + " ms", ecoule >= 4500)
+                    attendre(function() { return deplacementsEnVol === 0 }, function() {
+                        bilan("déplacement fait : « " + messageEtat.texte + " »", !present(sujet))
+                        finir()
+                    })
+                })
+            })
+        })
     }
 
     // Scénario « vider-dossier » (0.6.19) : un message de la boîte de
@@ -1842,7 +2159,7 @@ QtObject {
     }
 
 
-    /// Scénario « non-lu » (0.6.7, demande de Gwenaëlle du 19/10) : un
+    /// Scénario « non-lu » (0.6.7, demande d'une utilisatrice du 19/10) : un
     /// « Marquer comme non lu » doit tenir, sur la ligne, dans l'index et sur le
     /// serveur. A : message affiché puis marqué lu à l'affichage, puis non lu
     /// avant toute veille — la 0.6.6 laissait la ligne en « lu ». B : non lu
@@ -1981,7 +2298,7 @@ QtObject {
         tic.start()
     }
 
-    /// Scénario « recherche-effacee » (0.6.12, demande de Fabienne) : le mot
+    /// Scénario « recherche-effacee » (0.6.12, demande d'une utilisatrice) : le mot
     /// effacé au clavier (champ vidé, textEdited) met fin à la recherche et
     /// rend la liste de départ — dans le dossier, puis dans toutes les boîtes.
     function lancerScenarioRechercheEffacee() {
@@ -2041,7 +2358,7 @@ QtObject {
         tic.start()
     }
 
-    /// Scénario « majuscule » (0.6.12, demande de Fabienne) : frappe simulée
+    /// Scénario « majuscule » (0.6.12, demande d'une utilisatrice) : frappe simulée
     /// dans le corps d'une rédaction, par Redaction.majuscule comme le fait
     /// Keys.onPressed — capitale en début de paragraphe et après « . », « ! »,
     /// « ? » ; rien au fil de la phrase, après « etc. », une initiale, des
@@ -2126,7 +2443,7 @@ QtObject {
         tic.start()
     }
 
-    /// Scénario « inverser-selection » (0.6.14, demande de Manu du 22/10) :
+    /// Scénario « inverser-selection » (0.6.14, demande du mainteneur du 22/10) :
     /// dans la boîte de réception (trois messages au moins), un message
     /// choisi, la sélection inversée, puis rétablie ; tout, puis rien ; le
     /// menu d'un message en dix lignes, « Marquer comme lu » s'il y a un non
@@ -2232,7 +2549,52 @@ QtObject {
         return null
     }
 
-    /// Scénario « menu-champ » (0.6.14, demande de Manu du 22/10) : le menu
+    /// Scénario « fenetres » (demande d'un utilisateur, 06/11) : la place et la
+    /// taille de la fenêtre principale gardées puis rendues ; une place hors
+    /// des écrans refusée, la taille rendue ; une taille nouvelle notée ;
+    /// l'agrandissement noté sans perdre la taille d'avant. Les réglages
+    /// d'avant sont remis à la fin.
+    function lancerScenarioFenetres() {
+        var echecs = 0
+        var bilan = function(texte, bon) {
+            if (!bon)
+                echecs += 1
+            console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
+        }
+        var avant = reglagesFenetres.principale
+        fenetre.geometriesGardees = true
+        var e = Qt.application.screens[0]
+        console.log("scenario: écran " + e.virtualX + "," + e.virtualY + " " + e.width + "x" + e.height
+                    + " | visibilité " + fenetre.visibility)
+        reglagesFenetres.principale = JSON.stringify({ x: e.virtualX + 40, y: e.virtualY + 30, l: 900, h: 650, max: false })
+        fenetre.poserGeometrie(fenetre, "principale")
+        bilan("taille rendue : " + fenetre.width + "x" + fenetre.height, fenetre.width === 900 && fenetre.height === 650)
+        bilan("place rendue : " + fenetre.x + "," + fenetre.y, fenetre.x === e.virtualX + 40 && fenetre.y === e.virtualY + 30)
+        reglagesFenetres.principale = JSON.stringify({ x: -20000, y: -20000, l: 800, h: 600, max: false })
+        fenetre.poserGeometrie(fenetre, "principale")
+        bilan("place hors des écrans refusée, taille rendue : " + fenetre.x + "," + fenetre.y + " " + fenetre.width + "x" + fenetre.height,
+              fenetre.x > -20000 && fenetre.y > -20000 && fenetre.width === 800 && fenetre.height === 600)
+        fenetre.width = 1010
+        fenetre.height = 700
+        fenetre.noterGeometrie(fenetre, "principale")
+        var g = fenetre.geometrieConnue("principale")
+        bilan("taille nouvelle notée : " + JSON.stringify(g), g.l === 1010 && g.h === 700 && g.max === false)
+        fenetre.visibility = Window.Maximized
+        if (fenetre.visibility === Window.Maximized) {
+            fenetre.noterGeometrie(fenetre, "principale")
+            g = fenetre.geometrieConnue("principale")
+            bilan("agrandissement noté, taille d'avant gardée : " + JSON.stringify(g), g.max === true && g.l === 1010)
+            fenetre.visibility = Window.Windowed
+        } else {
+            console.log("scenario: agrandissement sans effet sur cette plateforme (" + fenetre.visibility + ")")
+        }
+        fenetre.geometriesGardees = false
+        reglagesFenetres.principale = avant
+        console.log("scenario: fenetres " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
+        Qt.quit()
+    }
+
+    /// Scénario « menu-champ » (0.6.14, demande du mainteneur du 22/10) : le menu
     /// du clic droit du champ de recherche — Coller ce qu'un autre champ a
     /// copié, puis Tout sélectionner, Couper, Annuler ; Couper et Copier
     /// grisés sans sélection.
@@ -2689,7 +3051,7 @@ QtObject {
         tic.start()
     }
 
-    /// Scénario « categories » (0.6.15, demande de Manu du 22/10) : dans la
+    /// Scénario « categories » (0.6.15, demande du mainteneur du 22/10) : dans la
     /// boîte de réception (deux messages au moins), une catégorie d'origine
     /// et une catégorie créée posées ; l'état du sous-menu « Catégoriser » ;
     /// la recherche « catégorie: » dans l'index et sur le serveur (KEYWORD :
@@ -2889,7 +3251,7 @@ QtObject {
         t.start()
     }
 
-    /// Scénario « lu-differe » (0.6.9, demande de Gwenaëlle du 20/10) : le
+    /// Scénario « lu-differe » (0.6.9, demande d'une utilisatrice du 20/10) : le
     /// marquage « lu » attend le délai réglé, ne vise pas un message quitté
     /// avant, et n'a jamais lieu sur « Jamais ». La boîte de réception doit
     /// compter deux messages.
@@ -4367,6 +4729,69 @@ QtObject {
         })
     }
 
+    /// Scénario « brouillon-police » (0.6.43 ; banc : un brouillon HTML sans
+    /// police, déposé par un autre logiciel, dans « Drafts » de un@) : le
+    /// brouillon se lit, puis se reprend, dans la même police et la même
+    /// taille, celles où il partira ; le HTML de l'envoi les porte. Relève
+    /// aussi les liens que la lecture ajoute (cartes, numéros). MMAIL_DOSSIER
+    /// « lecture » : MMail reste sur le volet de lecture, pour une capture ;
+    /// « garder » : sur la rédaction reprise.
+    function etapeScenarioBrouillonPolice() {
+        if (essai.etape === 0 && comptesConnus.length > 0 && boite.compteCourant > 0) {
+            essai.etape = 1
+            console.log("scenario: brouillon-police, ouverture des brouillons")
+            ouvrirDossier(comptesConnus[0].compte, "Drafts")
+            return
+        }
+        if (essai.etape !== 1 || !fenetre.dossierDeReprise || modeleMessages.count === 0)
+            return
+        essai.etape = 2
+        choisir(0, 0)
+        plusTard(3000, function() {
+            var echecs = 0
+            var bilan = function(texte, bon) {
+                if (!bon)
+                    ++echecs
+                console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
+            }
+            var vue = colonneLecture.vueCorps
+            var attendue = fenetre.tailleRedaction * fenetre.zoomDe("message")
+            var lecture = { famille: vue.font.family, taille: vue.font.pointSize }
+            console.log("scenario: lecture | rôle", fenetre.roleCourant, "| police", lecture.famille, lecture.taille,
+                        "| liens vers la carte", (fenetre.htmlAffiche.match(/openstreetmap\.org/g) || []).length,
+                        "| liens d'appel", (fenetre.htmlAffiche.match(/href="tel:/g) || []).length)
+            bilan("lecture dans la police de l'envoi : " + lecture.famille + " " + lecture.taille,
+                  lecture.famille === fenetre.policeRedaction && Math.abs(lecture.taille - attendue) < 0.01)
+            if (identifiantsEssai.dossier === "lecture") {
+                console.log("scenario: brouillon-police " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
+                return
+            }
+            rediger("brouillon")
+            plusTard(4000, function() {
+                var r = null
+                var jetons = Object.keys(fenetre.redactions)
+                for (var k = 0; k < jetons.length; ++k)
+                    if (fenetre.redactions[jetons[k]].brouillonUid > 0)
+                        r = fenetre.redactions[jetons[k]]
+                if (!r) {
+                    bilan("brouillon repris", false)
+                } else {
+                    var reprise = { famille: r.corps.font.family, taille: r.corps.font.pointSize }
+                    console.log("scenario: reprise | police", reprise.famille, reprise.taille, "| note", r.note)
+                    bilan("même police à la lecture et à la reprise : " + lecture.famille + " " + lecture.taille
+                          + " / " + reprise.famille + " " + reprise.taille,
+                          reprise.famille === lecture.famille && Math.abs(reprise.taille - lecture.taille) < 0.01)
+                    var corps = /<body[^>]*>/.exec(r.mefCorps.html())
+                    bilan("l'envoi les porte : " + (corps ? corps[0] : "(pas de body)"),
+                          !!corps && corps[0].indexOf("font-family:'Arial'") > 0 && corps[0].indexOf("font-size:11pt") > 0)
+                }
+                console.log("scenario: brouillon-police " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
+                if (identifiantsEssai.dossier !== "garder")
+                    Qt.quit()
+            })
+        })
+    }
+
     /// Scénario « editeur-paragraphe » (0.8.7) : police, taille, alignement
     /// et retrait se posent, se relisent sous le curseur, et partent dans le
     /// HTML en CSS ordinaire (pas de `-qt-block-indent`) ; la barre du bureau
@@ -5138,6 +5563,110 @@ QtObject {
     /// le message, pas les boutons. « Devis joint » (banc PIECE=1) affiché, le
     /// zoom passe à 1,5 : le corps et l'objet grossissent d'autant ; le bouton
     /// « Répondre » et le bandeau des pièces jointes gardent leur taille.
+    // Scénario « recherche-boite » (0.6.45), banc PARTAGE=1 LOT1=1, un seul
+    // compte : « Cette boîte » depuis la boîte de réception ne rend rien de la
+    // boîte partagée de deux@, et depuis celle-ci rien d'autre qu'elle ; « Non
+    // lus » sans texte interroge le serveur, dossiers jamais ouverts compris.
+    function lancerScenarioRechercheBoite(essais) {
+        var n = essais || 0
+        var partagee = ""
+        for (var a = 0; a < modeleArborescence.count; ++a) {
+            var d = modeleArborescence.get(a)
+            // « Shared/deux@essai.test » (Dovecot du banc), ou sa boîte de
+            // réception « …/INBOX » quand le serveur la montre ainsi (Mailcow).
+            if (d.genre === "dossier" && d.chemin.indexOf("Shared/") === 0
+                    && (partagee.length === 0 || /\/INBOX$/.test(d.chemin)))
+                partagee = d.chemin
+        }
+        var trouve = false
+        for (var j = 0; j < modeleMessages.count; ++j)
+            if (modeleMessages.get(j).sujet === "Essai 1")
+                trouve = true
+        if ((!trouve || partagee.length === 0) && n < 40) {
+            plusTard(1000, function() { lancerScenarioRechercheBoite(n + 1) })
+            return
+        }
+        var echecs = 0
+        var bilan = function(texte, bon) {
+            if (!bon)
+                echecs += 1
+            console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
+        }
+        bilan("boîte partagée vue : " + partagee, partagee.length > 0)
+        var un = boite.compteCourant
+        var lignes = function() {
+            var l = []
+            for (var k = 0; k < modeleMessages.count; ++k)
+                l.push(modeleMessages.get(k))
+            return l
+        }
+        var resume = function(l) {
+            return l.map(function(r) { return r.sujet + "@" + (r.chemin || boite.dossierCourant) + (r.lu ? "(lu)" : "") }).join(" | ")
+        }
+        var partage = function(r) { return (r.chemin || "").indexOf("Shared/") === 0 }
+        // Fin de la recherche sur le serveur, dossier par dossier.
+        var apresServeur = function(suite, k) {
+            k = k || 0
+            if (fenetre.dossiersFaits < fenetre.dossiersPartout && k < 90) {
+                plusTard(500, function() { apresServeur(suite, k + 1) })
+                return
+            }
+            plusTard(800, suite)
+        }
+        colonneListe.porteeRecherche.currentIndex = 1
+        colonneListe.nonLusRecherche.checked = false
+        fenetre.lancerRecherche("essai")
+        apresServeur(function() {
+            var l = lignes()
+            bilan("boîte personnelle, " + fenetre.dossiersPartout + " dossier(s) interrogé(s) : " + resume(l),
+                  l.length > 0 && !l.some(partage) && fenetre.dossiersPartout > 0)
+            fenetre.quitterRecherche()
+            fenetre.ouvrirDossier(un, partagee)
+            plusTard(3000, function() {
+                colonneListe.porteeRecherche.currentIndex = 1
+                fenetre.lancerRecherche("essai")
+                apresServeur(function() {
+                    var l2 = lignes()
+                    var prefixe = partagee.replace(/\/INBOX$/, "")
+                    bilan("boîte partagée seule, " + fenetre.dossiersPartout + " dossier(s) : " + resume(l2),
+                          l2.length > 0 && l2.every(function(r) { return (r.chemin || "").indexOf(prefixe) === 0 }))
+                    fenetre.quitterRecherche()
+                    fenetre.ouvrirDossier(un, "INBOX")
+                    plusTard(3000, function() {
+                        colonneListe.porteeRecherche.currentIndex = 1
+                        colonneListe.nonLusRecherche.checked = true
+                        fenetre.lancerRecherche("")
+                        apresServeur(function() {
+                            var l3 = lignes()
+                            var chemins = {}
+                            l3.forEach(function(r) { chemins[r.chemin] = true })
+                            bilan("non lus, cette boîte, " + fenetre.dossiersPartout + " dossier(s) au serveur : " + resume(l3),
+                                  fenetre.dossiersPartout > 0 && l3.length > 0 && !l3.some(partage)
+                                  && l3.every(function(r) { return !r.lu }) && Object.keys(chemins).length >= 2)
+                            bilan("état : " + messageEtat.texte, messageEtat.texte.indexOf("Non lus") === 0)
+                            fenetre.quitterRecherche()
+                            plusTard(2000, function() {
+                                // Le dossier actif : l'index, puis le serveur.
+                                colonneListe.porteeRecherche.currentIndex = 0
+                                colonneListe.nonLusRecherche.checked = true
+                                fenetre.lancerRecherche("")
+                                plusTard(6000, function() {
+                                    var l4 = lignes()
+                                    bilan("non lus du dossier actif : " + resume(l4) + " | " + messageEtat.texte,
+                                          l4.length > 0 && l4.every(function(r) { return !r.lu })
+                                          && messageEtat.texte.indexOf("Non lus seulement : ") === 0
+                                          && messageEtat.texte.indexOf("serveur") < 0)
+                                    console.log("scenario: recherche-boite " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
+                                    Qt.quit()
+                                })
+                            })
+                        })
+                    })
+                })
+            })
+        })
+    }
+
     // Scénario « recherche-portee » (0.8.2, 0.8.3), banc LOT1=1 : la portée
     // « Cette boîte (tous dossiers) » ne rend que les messages du compte, de
     // plusieurs dossiers ; « Toutes les boîtes » ajoute ceux de l'autre
@@ -5206,6 +5735,80 @@ QtObject {
         })
     }
 
+    // Scénario « non-lus-seuls » : « Non lus » cochée, champ vide — la liste
+    // ne garde que les non-lus du dossier ; ceux que l'on ouvre restent, lus,
+    // même après un rafraîchissement ; décocher rend la liste entière ; cocher
+    // de nouveau ne montre plus les lus.
+    function lancerScenarioNonLusSeuls(essais) {
+        var n = essais || 0
+        var rang = function(sujet) {
+            for (var k = 0; k < modeleMessages.count; ++k)
+                if (modeleMessages.get(k).sujet === sujet)
+                    return k
+            return -1
+        }
+        if (rang("Essai 1") < 0 && n < 40) {
+            plusTard(1000, function() { lancerScenarioNonLusSeuls(n + 1) })
+            return
+        }
+        var echecs = 0
+        var bilan = function(texte, bon) {
+            if (!bon)
+                echecs += 1
+            console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
+        }
+        var resume = function() {
+            var l = []
+            for (var k = 0; k < modeleMessages.count; ++k) {
+                var r = modeleMessages.get(k)
+                if (r.sujet)
+                    l.push(r.sujet + (r.lu ? "(lu)" : ""))
+            }
+            return l.join(" | ")
+        }
+        var cocher = function(oui) {
+            colonneListe.nonLusRecherche.checked = oui
+            colonneListe.nonLusRecherche.toggled()
+        }
+        // « Essai 1 » affiché : il est lu.
+        choisir(rang("Essai 1"), 0)
+        plusTard(2500, function() {
+            colonneListe.porteeRecherche.currentIndex = 0
+            colonneListe.champRecherche.text = ""
+            cocher(true)
+            plusTard(3000, function() {
+                bilan("non lus seuls : " + resume() + " | " + fenetre.infoDossier,
+                      fenetre.enRecherche && rang("Essai 1") < 0 && rang("Essai 2") >= 0
+                      && !modeleMessages.get(rang("Essai 2")).lu
+                      && fenetre.infoDossier.indexOf("non lus seulement") >= 0)
+                choisir(rang("Essai 2"), 0)
+                plusTard(3000, function() {
+                    var i2 = rang("Essai 2")
+                    bilan("Essai 2 ouvert, il reste : " + resume(), i2 >= 0 && modeleMessages.get(i2).lu)
+                    choisir(rang("Essai 3"), 0)
+                    plusTard(3000, function() {
+                        // La liste reconstruite, comme à l'arrivée d'un message.
+                        fenetre.rafraichirListe(true)
+                        bilan("Essai 3 ouvert, rafraîchie, les deux restent : " + resume(),
+                              rang("Essai 2") >= 0 && rang("Essai 3") >= 0 && rang("Essai 1") < 0)
+                        cocher(false)
+                        plusTard(3000, function() {
+                            bilan("décochée, liste entière : " + resume(),
+                                  !fenetre.enRecherche && rang("Essai 1") >= 0 && rang("Essai 2") >= 0)
+                            cocher(true)
+                            plusTard(3000, function() {
+                                bilan("recochée, plus de lus : " + resume() + " | " + fenetre.infoDossier,
+                                      fenetre.enRecherche && rang("Essai 2") < 0 && rang("Essai 3") < 0)
+                                console.log("scenario: non-lus-seuls " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
+                                Qt.quit()
+                            })
+                        })
+                    })
+                })
+            })
+        })
+    }
+
     function lancerScenarioZoomLecture() {
         var suivi = { echecs: 0 }
         var bilan = function(texte, bon) {
@@ -5258,7 +5861,7 @@ QtObject {
         })
     }
 
-    /// Scénario « barre-redaction » (retour de Manu du 03/11 sous Android :
+    /// Scénario « barre-redaction » (retour du mainteneur du 03/11 sous Android :
     /// boutons de la rédaction chevauchés, plus moyen d'envoyer ni de fermer) :
     /// les boutons visibles de la barre du haut ne se chevauchent pas, gardent
     /// leur largeur et restent dans la barre ; resserrée, elle montre Envoyer,
@@ -5699,5 +6302,76 @@ QtObject {
             }
         })
         tic.start()
+    }
+
+    // Scénario « copier-piece » (0.6.45), banc PIECE=1 : la pièce de « Devis
+    // joint » copiée du volet de lecture se colle dans une rédaction ; copiée
+    // de cette rédaction, elle se colle dans une autre ; préparée pour un
+    // glisser, elle est prête sans rien ouvrir.
+    function lancerScenarioCopierPiece(essais, etat) {
+        var n = essais || 0
+        var e = etat || { echecs: 0 }
+        var bilan = function(texte, bon) {
+            if (!bon)
+                e.echecs += 1
+            console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
+        }
+        var fin = function() {
+            console.log("scenario: copier-piece " + (e.echecs === 0 ? "OK" : "ECHEC (" + e.echecs + ")"))
+            Qt.quit()
+        }
+        var attendre = function(condition, suite, k) {
+            k = k || 0
+            if (!condition() && k < 40) {
+                plusTard(500, function() { attendre(condition, suite, k + 1) })
+                return
+            }
+            suite(condition())
+        }
+        var indice = -1
+        for (var j = 0; j < modeleMessages.count; ++j)
+            if (modeleMessages.get(j).sujet === "Devis joint")
+                indice = j
+        if (indice < 0 && n < 40) {
+            plusTard(1000, function() { lancerScenarioCopierPiece(n + 1, e) })
+            return
+        }
+        fenetre.choisir(indice, 0)
+        attendre(function() { return fenetre.pieces.length > 0 }, function(vu) {
+            bilan("pièces affichées : " + fenetre.pieces.length, vu)
+            if (!vu)
+                return fin()
+            var piece = fenetre.pieces[0]
+            fenetre.copierPiece(piece)
+            attendre(function() { return pressePapier.fichiers().length > 0 }, function(copie) {
+                var f = pressePapier.fichiers()
+                bilan("presse-papier : " + f.join(", ") + " | " + messageEtat.texte,
+                      copie && f.length === 1 && /devis\.pdf$/.test(f[0]) && messageEtat.texte.indexOf("copiée") >= 0)
+                var r = fenetre.ouvrirRedaction(boite.compteCourant)
+                r.pret()
+                plusTard(1500, function() {
+                    bilan("collée en pièce jointe", r.collerPieces() && r.pieces.length === 1 && r.pieces[0].nom === "devis.pdf")
+                    // De la rédaction vers une autre.
+                    pressePapier.deposer("")
+                    r.copierPiece(r.pieces[0])
+                    var f2 = pressePapier.fichiers()
+                    var r2 = fenetre.ouvrirRedaction(boite.compteCourant)
+                    r2.pret()
+                    plusTard(1500, function() {
+                        bilan("de rédaction à rédaction : " + f2.join(", "),
+                              f2.length === 1 && r2.collerPieces() && r2.pieces.length === 1 && r2.pieces[0].nom === "devis.pdf")
+                        // Un glisser : la pièce s'écrit, sans rédaction ouverte.
+                        fenetre.piecesPretes = ({})
+                        var avant = Object.keys(fenetre.redactions).length
+                        fenetre.preparerGlisser(piece)
+                        attendre(function() { return (fenetre.piecesPretes[fenetre.clePiece(piece)] || "").length > 0 }, function(prete) {
+                            bilan("prête à glisser : " + (fenetre.piecesPretes[fenetre.clePiece(piece)] || "—") + " | " + messageEtat.texte,
+                                  prete && Object.keys(fenetre.redactions).length === avant && fenetre.pieceCible === "")
+                            fin()
+                        })
+                    })
+                })
+            })
+        })
     }
 }

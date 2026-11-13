@@ -72,7 +72,7 @@ pub const REDIRECTION_ANDROID: &str = "http://localhost";
 /// Domaines des comptes personnels de Microsoft (Outlook.com).
 const PARTICULIERS: [&str; 5] = ["outlook", "hotmail", "live", "msn", "passport"];
 
-/// Point d'entrée de la connexion pour une adresse. Retour de Manu du
+/// Point d'entrée de la connexion pour une adresse. Retour du mainteneur du
 /// 18/10 : avec le point d'entrée commun, un téléphone déjà connecté à un
 /// compte Microsoft personnel partait sur la connexion des particuliers
 /// (login.live.com) pour une adresse d'entreprise. Une adresse d'Outlook.com,
@@ -113,7 +113,7 @@ const PORTEE_CODE: &str = "offline_access openid email https://outlook.office.co
 /// Réglages de la boîte (0.9.0) : la liste des catégories d'Outlook
 /// (`masterCategories`), lue pour leurs couleurs, écrite quand une catégorie
 /// est créée, recolorée ou renommée dans MMail. Demandé à part, quand on
-/// relie les catégories à Outlook (décision de Manu du 04/11 : chaque
+/// relie les catégories à Outlook (décision du mainteneur du 04/11 : chaque
 /// autorisation nouvelle à part) : la connexion d'un compte n'en dépend pas,
 /// et un refus n'éteint que cette fonction.
 pub const PORTEE_REGLAGES: &str = "offline_access https://graph.microsoft.com/MailboxSettings.ReadWrite";
@@ -960,8 +960,10 @@ fn liste_outlook_par(t: &mut Transport, jeton: &str) -> Result<Vec<CategorieOutl
 /// recolorée dans MMail, elle est créée ou recolorée dans Outlook. Renommée :
 /// Graph ne renomme pas une catégorie de la liste, la nouvelle y est donc
 /// créée et l'ancienne retirée (les messages, eux, se renomment à part,
-/// `renommer_categorie`). Retirée de MMail, elle reste dans Outlook, dont la
-/// liste sert aussi aux autres postes. Rend le nombre d'écritures faites.
+/// `renommer_categorie`). Retirée de MMail, elle est retirée de la liste
+/// d'Outlook, comme Outlook le fait quand on y supprime une catégorie : les
+/// messages gardent son nom (décision du mainteneur du 06/11). Rend le nombre
+/// d'écritures faites.
 pub fn reporter_categorie(jeton: &str, avant: Option<(&str, Option<&str>)>, apres: Option<(&str, Option<&str>)>) -> Result<usize, ErreurOAuth> {
     reporter_categorie_par(&mut |d: &Demande| http::envoyer(d), jeton, avant, apres)
 }
@@ -973,7 +975,21 @@ fn reporter_categorie_par(
     apres: Option<(&str, Option<&str>)>,
 ) -> Result<usize, ErreurOAuth> {
     let Some((nom, couleur)) = apres else {
-        return Ok(0);
+        // Retirée de MMail : retirée aussi de la liste d'Outlook, comme
+        // Outlook le fait quand on y supprime une catégorie ; les messages
+        // gardent son nom.
+        let Some((ancien, _)) = avant else {
+            return Ok(0);
+        };
+        let liste = liste_outlook_par(t, jeton)?;
+        return match liste.iter().find(|c| c.nom.trim().eq_ignore_ascii_case(ancien.trim())) {
+            Some(c) => {
+                let url = format!("{GRAPH}/outlook/masterCategories/{}", encoder(&c.id));
+                succes(&appeler(t, jeton, "DELETE", &url, "", b"", REPONSE_MAX)?)?;
+                Ok(1)
+            }
+            None => Ok(0),
+        };
     };
     let nom = nom.trim();
     if nom.is_empty() {
@@ -1893,8 +1909,14 @@ mod tests {
         assert_eq!(n, 2);
         assert_eq!((vu[1].0.as_str(), vu[2].0.as_str(), vu[2].1.as_str()), ("POST", "DELETE", "/id-ancien"));
         assert_eq!(corps(&vu[1].2), serde_json::json!({"displayName": "Nouveau", "color": "preset1"}));
-        // Retirée de MMail : rien dans Outlook, pas même la lecture.
-        let (n, vu) = jouer(Some(("Devis", Some("#0078D4"))), None);
+        // Retirée de MMail : retirée de la liste d'Outlook ; absente de la
+        // liste, rien d'écrit ; ni avant ni après, rien du tout.
+        let (n, vu) = jouer(Some(("devis", Some("#0078D4"))), None);
+        assert_eq!((n, vu.len()), (1, 2));
+        assert_eq!((vu[1].0.as_str(), vu[1].1.as_str()), ("DELETE", "/id-devis"));
+        let (n, vu) = jouer(Some(("Absente", None)), None);
+        assert_eq!((n, vu.len()), (0, 1));
+        let (n, vu) = jouer(None, None);
         assert_eq!((n, vu.len()), (0, 0));
         // Refus de Graph : l'erreur remonte.
         let refus = [("GET", LISTE, 403, r#"{"error":{"code":"ErrorAccessDenied","message":"Access is denied."}}"#)];

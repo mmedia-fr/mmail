@@ -63,6 +63,16 @@ jobs:
         run: cmake --build _build --config Release
       - name: Tests du noyau
         run: cargo test --manifest-path core/Cargo.toml
+      # ---- Linux : épreuves de l'interface (QML) ------------------------------
+      - name: Épreuves de l'interface
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          # Composants de core/qml éprouvés seuls, sous le Qt de la construction
+          # (cf. core/essais-qml/tst_*.qml) : gestes sur une ligne de la liste,
+          # barres d'actions (message, menu d'un message, barre du haut).
+          QT_QPA_PLATFORM=offscreen "$QT_ROOT_DIR/bin/qmltestrunner" \
+            -input core/essais-qml -import core/essais-qml/modules
       # ---- Linux : le client contre un vrai Dovecot ---------------------------
       - name: Épreuves contre un Dovecot
         if: runner.os == 'Linux'

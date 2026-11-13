@@ -644,7 +644,7 @@ impl Magasin {
             )?;
         }
         // Version 16 : les destinataires, que la liste des éléments envoyés
-        // montre à la place de l'expéditeur (demande de Fabienne, 18/10). Les
+        // montre à la place de l'expéditeur (demande d'une utilisatrice, 18/10). Les
         // dossiers d'envoyés sont relus à leur prochaine ouverture, en-têtes
         // seulement ; reconnus à leur rôle ou, faute de SPECIAL-USE (OVH), à
         // leur nom — un dossier pris à tort n'y perd qu'une relecture.
@@ -1805,7 +1805,7 @@ impl Magasin {
         limite: usize,
     ) -> Resultat<(Vec<Trouve>, bool)> {
         let exacts = self.chercher_selon(filtre, texte, categories, limite, false)?;
-        let tolerable = texte.split_whitespace().any(|m| tolerance(replie(m).chars().count()) > 0);
+        let tolerable = texte.split_whitespace().any(|m| tolerance_du_mot(&replie(m)) > 0);
         if !exacts.is_empty() || !tolerable {
             return Ok((exacts, false));
         }
@@ -1823,7 +1823,9 @@ impl Magasin {
         approche: bool,
     ) -> Resultat<Vec<Trouve>> {
         let replies: Vec<String> = texte.split_whitespace().map(replie).collect();
-        if replies.is_empty() && categories.is_empty() {
+        // Sans texte ni catégorie, les non-lus seuls se cherchent encore
+        // (« Non lus » cochée, champ vide) ; sinon, rien à chercher.
+        if replies.is_empty() && categories.is_empty() && !filtre.non_lus {
             return Ok(Vec::new());
         }
         let dossier = filtre.dossier;
@@ -1861,6 +1863,11 @@ impl Magasin {
         if let Some(compte) = filtre.compte {
             valeurs.push(compte.into());
             conditions.push(format!("f.account_id = ?{}", valeurs.len()));
+        }
+        if let Some(parmi) = &filtre.parmi {
+            // Des identifiants entiers, écrits tels quels.
+            let ids: Vec<String> = parmi.iter().map(i64::to_string).collect();
+            conditions.push(if ids.is_empty() { "0".into() } else { format!("m.folder_id IN ({})", ids.join(",")) });
         }
         if filtre.non_lus {
             conditions.push("m.lu = 0".into());
@@ -2630,6 +2637,18 @@ pub(crate) fn tolerance(longueur: usize) -> usize {
     }
 }
 
+/// Fautes tolérées dans `mot` : aucune s'il contient un chiffre (0.6.45). Une
+/// référence, un numéro de commande ou de téléphone se cherche exactement :
+/// un numéro absent de l'index ramenait ceux qui en diffèrent de deux
+/// chiffres (capture du 12/11). Sinon, selon sa longueur (`tolerance`).
+pub(crate) fn tolerance_du_mot(mot: &str) -> usize {
+    if mot.chars().any(char::is_numeric) {
+        0
+    } else {
+        tolerance(mot.chars().count())
+    }
+}
+
 /// Distance d'édition entre `mot` et le début de `cible` qui lui ressemble le
 /// plus : lettre en trop, en moins, changée, ou deux lettres voisines
 /// interverties, comptent chacune une faute. « reunoin » est à une faute de
@@ -2659,8 +2678,8 @@ pub(crate) fn distance_debut(mot: &[char], cible: &[char]) -> usize {
 /// Vrai si `mot` (replié) commence l'un des mots de `texte` (replié), aux
 /// fautes tolérées près (cf. `tolerance`).
 pub(crate) fn approche(texte: &str, mot: &str) -> bool {
+    let tolere = tolerance_du_mot(mot);
     let mot: Vec<char> = mot.chars().collect();
-    let tolere = tolerance(mot.len());
     if tolere == 0 {
         return false;
     }
@@ -2703,10 +2722,14 @@ pub(crate) fn replie(texte: &str) -> String {
 /// Portée d'une recherche dans l'index : un dossier, ou tous les dossiers
 /// d'un compte (0.8.3), ou tous les comptes (aucun des deux) ; les non-lus
 /// seulement (0.8.2).
-#[derive(Debug, Default, Clone, Copy, PartialEq)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct Filtre {
     pub dossier: Option<i64>,
     pub compte: Option<i64>,
+    /// Ces dossiers seulement (0.6.45) : ceux d'une boîte, la personnelle ou
+    /// une boîte partagée, quand « Cette boîte » ne doit pas comprendre les
+    /// boîtes partagées que le compte voit (cf. `boite::dossiers_de_la_boite`).
+    pub parmi: Option<Vec<i64>>,
     pub non_lus: bool,
 }
 
@@ -3802,6 +3825,22 @@ mod tests {
         assert_eq!(sujets(Filtre { non_lus: true, ..Default::default() }), vec!["Devis B", "Devis A", "Devis 2025"]);
         let archives = m.dossier_id(a, "Archives").unwrap();
         assert!(sujets(Filtre { dossier: Some(archives), non_lus: true, ..Default::default() }).is_empty());
+        // Certains dossiers du compte seulement : ceux d'une boîte (0.6.45).
+        let a_inbox = m.dossier_id(a, "INBOX").unwrap();
+        let a_2025 = m.dossier_id(a, "Archives/2025").unwrap();
+        let parmi = Some(vec![a_inbox, a_2025]);
+        assert_eq!(sujets(Filtre { compte: Some(a), parmi, ..Default::default() }), vec!["Devis A", "Devis 2025"]);
+        assert!(sujets(Filtre { compte: Some(a), parmi: Some(Vec::new()), ..Default::default() }).is_empty());
+        // « Non lus » cochée, champ vide : les non-lus seuls, sans texte.
+        let seuls = |f: Filtre| {
+            m.chercher_tolerant_selon(&f, "", &[], 50).unwrap().0.iter().map(|t| t.message.sujet.clone()).collect::<Vec<_>>()
+        };
+        let inbox = m.dossier_id(a, "INBOX").unwrap();
+        assert_eq!(seuls(Filtre { dossier: Some(inbox), non_lus: true, ..Default::default() }), vec!["Devis A"]);
+        assert_eq!(seuls(Filtre { compte: Some(a), non_lus: true, ..Default::default() }), vec!["Devis A", "Devis 2025"]);
+        assert!(seuls(Filtre { dossier: Some(archives), non_lus: true, ..Default::default() }).is_empty());
+        // Sans la case, un champ vide ne cherche toujours rien.
+        assert!(seuls(Filtre { dossier: Some(inbox), ..Default::default() }).is_empty());
     }
 
     /// Recherche tolérante aux fautes de frappe (0.6.22) : seulement quand la
@@ -3819,6 +3858,11 @@ mod tests {
         assert!(!approche("facture de mars", "mers"), "mot court : aucune faute");
         assert!(!approche("facture de mars", "fracas"));
         assert!(approche("durand@exemple.fr", "durnad"));
+        // Un mot qui contient un chiffre se cherche exactement (0.6.45).
+        assert!(!approche("RE: commande AB1234598", "ab1234567"));
+        assert!(!approche("relance AB1204567", "ab1234567"));
+        assert!(!approche("appel du 0123456789", "0123456798"));
+        assert!(approche("commande de mars", "comande"), "sans chiffre, toujours tolérée");
 
         let m = Magasin::en_memoire().unwrap();
         let compte = m.compte("a@exemple.fr", "h", 993, "a@exemple.fr").unwrap();
@@ -3849,6 +3893,11 @@ mod tests {
         // Un mot court ne se corrige pas ; rien de proche : rien.
         assert_eq!(m.chercher_tolerant(Some(inbox), "mers", &[], 50).unwrap(), (Vec::new(), false));
         assert_eq!(m.chercher_tolerant(Some(inbox), "kangourou", &[], 50).unwrap(), (Vec::new(), false));
+        // Un numéro absent de l'index ne ramène pas ses voisins (0.6.45).
+        m.poser_messages(inbox, &[recu(4, 40, "Martin", "Livraison AB1234598")]).unwrap();
+        assert_eq!(m.chercher_tolerant(Some(inbox), "AB1234567", &[], 50).unwrap(), (Vec::new(), false));
+        let (t, approchee) = m.chercher_tolerant(Some(inbox), "AB1234598", &[], 50).unwrap();
+        assert_eq!((sujets(&t), approchee), (vec!["Livraison AB1234598".to_string()], false));
     }
 
     #[test]

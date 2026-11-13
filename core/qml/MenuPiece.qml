@@ -34,6 +34,15 @@ Menu {
         enabled: menuPiece.piece !== null && !menuPiece.piece.risquee
         onTriggered: dlgChoisirLogiciel.choisir(menuPiece.piece, false)
     }
+    // Copier (0.6.45) : collée ensuite (Ctrl+V) dans une rédaction, ou dans
+    // l'explorateur.
+    EntreeMenu {
+        text: qsTr("Copier")
+        raccourci: qsTr("Ctrl+C")
+        visible: Qt.platform.os !== "android"
+        height: visible ? implicitHeight : 0
+        onTriggered: fenetre.copierPiece(menuPiece.piece)
+    }
     MenuItem {
         text: qsTr("Enregistrer sous…")
         // Sous Android, le dialogue rend une adresse « content:// » que le
@@ -43,7 +52,7 @@ Menu {
         onTriggered: fenetre.enregistrerPiece(menuPiece.piece)
     }
     MenuSeparator {}
-    // Reprendre une pièce reçue dans un autre courrier (demande de Manu,
+    // Reprendre une pièce reçue dans un autre courrier (demande du mainteneur,
     // 01/10) : la rédaction ouverte en dernier, ou une nouvelle.
     MenuItem {
         readonly property var cible: fenetre.redactions[fenetre.redactionActive] || null

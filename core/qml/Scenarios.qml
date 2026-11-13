@@ -5333,6 +5333,277 @@ QtObject {
     // Scénario « marquer-lu » (0.8.1) : les boutons « Marquer comme lu / non
     // lu » du volet de lecture et de la barre du haut suivent l'état du
     // message choisi, et le basculent.
+    /// Scénario « visio » (0.7.0, banc AGENDA=1 : un agenda CalDAV sur
+    /// https://localhost/) : service de visio du compte, bouton « Visio » de la
+    /// saisie d'un événement (lien dans « Lieu », ligne en tête de la
+    /// description, lien gardé au second clic), « Ouvrir la visio » de sa
+    /// fiche en organisateur ; sans service, « Visio » invite à demander une
+    /// boîte MMEDIA et prépare le message. Images visio-saisie, visio-fiche et
+    /// visio-demande dans MMAIL_SORTIE.
+    function lancerScenarioVisio(essais) {
+        var n = essais || 0
+        if (boite.compteCourant <= 0 && n < 40) {
+            plusTard(1000, function() { lancerScenarioVisio(n + 1) })
+            return
+        }
+        var echecs = 0
+        var bilan = function(texte, bon) {
+            if (!bon)
+                echecs += 1
+            console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
+        }
+        var racine = fenetre.contentItem
+        while (racine.parent)
+            racine = racine.parent
+        var saisir = function(nom) {
+            if (!identifiantsEssai.sortie)
+                return
+            var chemin = lanceur.chemin(identifiantsEssai.sortie + "/" + nom + ".png")
+            racine.grabToImage(function(r) { r.saveToFile(chemin) })
+        }
+        // Dans la saisie ou la fiche d'un événement, ouvertes.
+        var dans = function(nom) {
+            return objetNomme(vueAgenda.saisieEvenement.contentItem, nom)
+                || objetNomme(vueAgenda.ficheEvenement.contentItem, nom)
+                || objetNomme(vueAgenda.demandeVisio.contentItem, nom)
+        }
+        var fin = function() {
+            console.log("scenario: visio " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
+            Qt.quit()
+        }
+        var adresse = identifiantsEssai.utilisateur
+        var service = "https://visio.essai.test"
+        bilan("service d'office des boîtes MMEDIA (" + boite.visioDOffice(0, "mail.mmedia.fr") + "), aucun ailleurs",
+              boite.visioDOffice(0, "mail.mmedia.fr") === "https://visio.mmedia.fr" && boite.visioDOffice(0, "localhost") === "")
+        bilan("adresse http refusée", !boite.poserVisio(adresse, "http://visio.essai.test"))
+        bilan("service posé", boite.poserVisio(adresse, service + "/"))
+        bilan("service du compte, sans barre finale",
+              listeComptes().some(function(c) { return c.adresse === adresse && c.visio === service }))
+        fenetre.module = "agenda"
+        boite.synchroniserAgendas(true)
+        var attendreAgenda = function(k) {
+            vueAgenda.agendas = JSON.parse(boite.agendas())
+            if (vueAgenda.agendasModifiables().length === 0) {
+                if (k < 40) {
+                    plusTard(1000, function() { attendreAgenda(k + 1) })
+                    return
+                }
+                bilan("un agenda modifiable", false)
+                fin()
+                return
+            }
+            var a = vueAgenda.agendasModifiables()[0]
+            bilan("l'agenda porte le service (" + a.visio + ")", a.visio === service && !a.microsoft)
+            var jour = vueAgenda.isoJour(new Date())
+            vueAgenda.nouvelEvenement(jour, 10 * 60, false, 60)
+            plusTard(1500, function() {
+                var bouton = dans("boutonVisio")
+                var lieu = dans("champLieu")
+                var description = dans("champDescription")
+                bilan("saisie ouverte, bouton « Visio » visible", vueAgenda.saisieEvenement.opened && !!bouton && bouton.visible)
+                if (!bouton || !lieu || !description) {
+                    fin()
+                    return
+                }
+                dans("champTitre").text = "Réunion visio"
+                lieu.text = "Salle B"
+                description.text = "Ordre du jour"
+                bouton.clicked()
+                var forme = /^https:\/\/visio\.essai\.test\/(essai-test-[a-kmnp-z2-9]{4}-[a-kmnp-z2-9]{4}-[a-kmnp-z2-9]{4}) — Salle B$/
+                var m = forme.exec(lieu.text)
+                bilan("lieu : " + lieu.text, !!m)
+                var lien = m ? service + "/" + m[1] : ""
+                bilan("description : " + JSON.stringify(description.text),
+                      description.text === "Rejoindre la visio : " + lien + "\n\nOrdre du jour")
+                var avant = lieu.text
+                bouton.clicked()
+                bilan("second clic : lien gardé", lieu.text === avant
+                      && description.text.split("Rejoindre la visio").length === 2)
+                saisir("visio-saisie")
+                plusTard(800, function() {
+                    dans("boutonEnregistrerEvenement").clicked()
+                    var attendreFiche = function(k) {
+                        var fiches = vueAgenda.donnees.fiches || []
+                        var i = fiches.findIndex(function(f) { return f.titre === "Réunion visio" })
+                        if (i < 0) {
+                            if (k < 20) {
+                                plusTard(1000, function() { attendreFiche(k + 1) })
+                                return
+                            }
+                            bilan("événement enregistré", false)
+                            fin()
+                            return
+                        }
+                        bilan("événement enregistré, lieu gardé", fiches[i].lieu === avant)
+                        vueAgenda.montrerFiche(i)
+                        plusTard(1000, function() {
+                            var ouvrir = dans("boutonOuvrirVisio")
+                            bilan("« Ouvrir la visio » en organisateur : " + (ouvrir ? ouvrir.lien : "?"),
+                                  !!ouvrir && ouvrir.visible && m
+                                  && ouvrir.lien === service + "/organiser/mailcow?salle=" + m[1])
+                            saisir("visio-fiche")
+                            plusTard(800, function() {
+                                // Sans service : plus de bouton.
+                                bilan("service retiré", boite.poserVisio(adresse, ""))
+                                vueAgenda.agendas = JSON.parse(boite.agendas())
+                                bilan("« Ouvrir la visio » absent sans service",
+                                      vueAgenda.lienVisio(fiches[i]) === "")
+                                vueAgenda.ficheEvenement.close()
+                                vueAgenda.nouvelEvenement(jour, 14 * 60, false, 60)
+                                plusTard(1500, function() {
+                                    var b = dans("boutonVisio")
+                                    var l = dans("champLieu")
+                                    bilan("sans service : bouton « Visio » présent", !!b && b.visible)
+                                    if (!b) {
+                                        fin()
+                                        return
+                                    }
+                                    b.clicked()
+                                    plusTard(800, function() {
+                                        var t = dans("texteDemandeVisio")
+                                        bilan("invitation à demander une boîte MMEDIA, lieu inchangé",
+                                              vueAgenda.demandeVisio.opened && !!t && t.text.indexOf(adresse) > 0
+                                              && l.text === "")
+                                        saisir("visio-demande")
+                                        plusTard(800, function() {
+                                            dans("boutonDemanderVisio").clicked()
+                                            plusTard(1500, function() {
+                                                var r = redactions[redactionActive]
+                                                var c = r ? r.contenu() : {}
+                                                bilan("demande préparée : de " + c.de + " à " + c.a + ", « " + c.objet + " »",
+                                                      !vueAgenda.demandeVisio.opened && c.de === adresse
+                                                      && c.a === adresseDemandeVisio
+                                                      && c.objet === qsTr("Demande de messagerie MMEDIA avec visio")
+                                                      && (c.texte || "").indexOf("Bonjour,") === 0
+                                                      && (c.texte || "").indexOf(adresse) > 0)
+                                                fin()
+                                            })
+                                        })
+                                    })
+                                })
+                            })
+                        })
+                    }
+                    plusTard(2000, function() { attendreFiche(0) })
+                })
+            })
+        }
+        attendreAgenda(0)
+    }
+
+    // Scénario « visio-reel » : contre une vraie boîte hébergée par MMEDIA
+    // (MMAIL_HOTE = son serveur, ou un autre nom de la même adresse IP), sans
+    // banc. Aucun service n'est réglé : il doit venir d'office. Un événement
+    // « Essai visio MMail » est enregistré dans le premier agenda modifiable,
+    // et y reste : le lien de la réunion et celui de l'organisateur sont
+    // écrits dans le journal (« scenario: lien-… »), pour les ouvrir dans un
+    // navigateur ; l'événement se retire ensuite, à la main ou par CalDAV.
+    function lancerScenarioVisioReel(essais) {
+        var n = essais || 0
+        if (boite.compteCourant <= 0 && n < 40) {
+            plusTard(1000, function() { lancerScenarioVisioReel(n + 1) })
+            return
+        }
+        var echecs = 0
+        var bilan = function(texte, bon) {
+            if (!bon)
+                echecs += 1
+            console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
+        }
+        var dans = function(nom) {
+            return objetNomme(vueAgenda.saisieEvenement.contentItem, nom)
+                || objetNomme(vueAgenda.ficheEvenement.contentItem, nom)
+        }
+        var fin = function() {
+            console.log("scenario: visio-reel " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
+            Qt.quit()
+        }
+        var adresse = identifiantsEssai.utilisateur
+        var hote = identifiantsEssai.hote
+        var service = "https://visio.mmedia.fr"
+        var prefixe = adresse.split("@")[1].toLowerCase().replace(/\./g, "-")
+        var compte = listeComptes().filter(function(c) { return c.adresse === adresse })[0]
+        bilan("compte " + adresse + " sur " + hote + ", aucun service réglé", !!compte && compte.visio === "")
+        fenetre.module = "agenda"
+        boite.synchroniserAgendas(true)
+        // La reconnaissance du serveur (recherche DNS) se fait pendant la
+        // synchronisation des agendas : attendre qu'elle ait donné le service.
+        var attendreAgenda = function(k) {
+            vueAgenda.agendas = JSON.parse(boite.agendas())
+            var modifiables = vueAgenda.agendasModifiables()
+            if ((modifiables.length === 0 || modifiables[0].visio === "") && k < 60) {
+                plusTard(1000, function() { attendreAgenda(k + 1) })
+                return
+            }
+            if (modifiables.length === 0) {
+                bilan("un agenda modifiable", false)
+                fin()
+                return
+            }
+            var a = modifiables[0]
+            bilan("serveur reconnu, agenda « " + a.nom + " » : service d'office « " + a.visio + " »", a.visio === service)
+            bilan("dialogue du compte : service d'office « " + boite.visioDOffice(compte.id, hote) + " »",
+                  boite.visioDOffice(compte.id, hote) === service)
+            var jour = vueAgenda.isoJour(new Date())
+            vueAgenda.nouvelEvenement(jour, 19 * 60, false, 60)
+            plusTard(1500, function() {
+                var bouton = dans("boutonVisio")
+                var lieu = dans("champLieu")
+                var description = dans("champDescription")
+                bilan("saisie ouverte, bouton « Visio » visible", vueAgenda.saisieEvenement.opened && !!bouton && bouton.visible)
+                if (!bouton || !lieu || !description) {
+                    fin()
+                    return
+                }
+                dans("champTitre").text = "Essai visio MMail"
+                bouton.clicked()
+                var forme = new RegExp("^https://visio\\.mmedia\\.fr/(" + prefixe
+                                       + "-[a-kmnp-z2-9]{4}-[a-kmnp-z2-9]{4}-[a-kmnp-z2-9]{4})$")
+                var m = forme.exec(lieu.text)
+                bilan("lieu : " + lieu.text, !!m)
+                if (!m) {
+                    fin()
+                    return
+                }
+                var lien = service + "/" + m[1]
+                bilan("description : " + JSON.stringify(description.text),
+                      description.text === "Rejoindre la visio : " + lien)
+                plusTard(800, function() {
+                    dans("boutonEnregistrerEvenement").clicked()
+                    var attendreFiche = function(k) {
+                        var fiches = vueAgenda.donnees.fiches || []
+                        var i = fiches.findIndex(function(f) { return f.titre === "Essai visio MMail" && f.lieu === lien })
+                        if (i < 0) {
+                            if (k < 30) {
+                                plusTard(1000, function() { attendreFiche(k + 1) })
+                                return
+                            }
+                            bilan("événement enregistré", false)
+                            fin()
+                            return
+                        }
+                        bilan("événement enregistré", true)
+                        vueAgenda.montrerFiche(i)
+                        plusTard(1000, function() {
+                            var ouvrir = dans("boutonOuvrirVisio")
+                            var organisateur = ouvrir ? ouvrir.lien : ""
+                            bilan("« Ouvrir la visio » en organisateur : " + organisateur,
+                                  !!ouvrir && ouvrir.visible
+                                  && organisateur === service + "/organiser/mailcow?salle=" + m[1])
+                            console.log("scenario: lien-reunion " + lien)
+                            console.log("scenario: lien-organisateur " + organisateur)
+                            vueAgenda.ficheEvenement.close()
+                            // Le temps que l'écriture CalDAV aboutisse.
+                            plusTard(5000, fin)
+                        })
+                    }
+                    plusTard(2000, function() { attendreFiche(0) })
+                })
+            })
+        }
+        attendreAgenda(0)
+    }
+
     function lancerScenarioMarquerLu(essais) {
         var n = essais || 0
         // Le compte connecté et sa boîte de réception rouverte : cette

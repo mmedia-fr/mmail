@@ -41,6 +41,7 @@ pub mod smtp;
 pub mod socle;
 pub mod protocole;
 pub mod synchro;
+pub mod visio;
 
 // Épreuves contre un vrai serveur : ignorées par défaut, elles exigent un
 // compte fourni par l'environnement (cf. le module).

@@ -212,6 +212,10 @@ pub struct CompteSauve {
     /// à Microsoft sur le poste où la configuration est remise.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub auth: String,
+    /// Service de visio du compte (cf. `crate::visio`) ; absent sans service,
+    /// et dans les sauvegardes antérieures à la 0.7.0.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub visio: String,
     pub port: u16,
     pub utilisateur: String,
     /// Absent quand l'utilisateur ne garde pas ses mots de passe, ou que le
@@ -310,6 +314,7 @@ pub fn composer(
             hote: c.hote,
             hote_envoi: c.hote_envoi,
             auth: c.auth,
+            visio: c.visio,
             port: c.port,
             utilisateur: c.utilisateur,
             replie: c.replie,
@@ -373,6 +378,11 @@ pub fn appliquer(magasin: &Magasin, document: &Document) -> Resultat<()> {
                 id
             }
         };
+        // Le service de visio revient aussi à un compte déjà là — le premier
+        // compte d'un poste neuf l'est toujours —, s'il n'en a pas d'autre.
+        if !c.visio.is_empty() && magasin.compte_par_id(id).map_err(local)?.is_some_and(|l| l.visio.is_empty()) {
+            magasin.poser_visio(&c.adresse, &c.visio).map_err(local)?;
+        }
         magasin.replier_compte(id, c.replie).map_err(local)?;
         for d in &c.dossiers {
             let dossier = crate::magasin::DossierLocal {
@@ -576,6 +586,7 @@ mod tests {
             hote: "mail.exemple.fr".into(),
             hote_envoi: String::new(),
             auth: String::new(),
+            visio: String::new(),
             port: 993,
             utilisateur: adresse.into(),
             mot_de_passe: mot.map(Into::into),
@@ -702,6 +713,7 @@ mod tests {
         .to_string();
 
         magasin.poser_serveur_envoi("nom@exemple.fr", "smtp.exemple.fr").unwrap();
+        magasin.poser_visio("nom@exemple.fr", "https://visio.exemple.fr").unwrap();
         let mut mots = HashMap::new();
         mots.insert("nom@exemple.fr".to_string(), "secret".to_string());
         let doc = composer(&magasin, &signatures, &mots, &reglages, "POSTE", "0.5.10", 100).unwrap();
@@ -714,6 +726,8 @@ mod tests {
         let json = serde_json::to_value(&doc.comptes[1]).unwrap();
         assert!(json.get("hoteEnvoi").is_none(), "absent quand c'est le serveur de lecture");
         assert!(json.get("auth").is_none(), "absent pour un mot de passe");
+        assert!(json.get("visio").is_none(), "absent sans service de visio");
+        assert_eq!(doc.comptes[0].visio, "https://visio.exemple.fr");
         let chemins: Vec<&str> = doc.comptes[0].dossiers.iter().map(|d| d.chemin.as_str()).collect();
         assert_eq!(chemins, ["Archives", "Spam"], "seuls les dossiers à l'état local");
         assert_eq!(doc.images.keys().collect::<Vec<_>>(), ["nom_exemple.fr/logo.png"], "l'image désignée seule");
@@ -751,6 +765,8 @@ mod tests {
         assert!(comptes[2].microsoft() && !comptes[0].microsoft(), "le mode d'authentification revient");
         assert_eq!(comptes[1].hote, "ailleurs.exemple.fr");
         assert_eq!(comptes[0].serveur_envoi(), "smtp.exemple.fr", "le serveur d'envoi revient");
+        assert_eq!(comptes[0].visio, "https://visio.exemple.fr", "le service de visio revient");
+        assert_eq!(comptes[1].visio, "", "rien pour un compte qui n'en avait pas");
         let restaures = neuf.dossiers(comptes[0].id).unwrap();
         let archives = restaures.iter().find(|d| d.chemin == "Archives").unwrap();
         assert!(archives.favori.is_some() && !archives.masque);
@@ -760,6 +776,16 @@ mod tests {
         let apres = neuf.dossiers(comptes[0].id).unwrap();
         assert!(apres.iter().find(|d| d.chemin == "Archives").unwrap().favori.is_some());
         assert!(!apres.iter().any(|d| d.chemin == "Spam"));
+        // Un compte déjà là reçoit le service sauvegardé s'il n'en a pas, et
+        // garde le sien sinon.
+        let deja = Magasin::ouvrir(racine.join("deja.sqlite").to_str().unwrap()).unwrap();
+        deja.compte("nom@exemple.fr", "mail.exemple.fr", 993, "nom@exemple.fr").unwrap();
+        appliquer(&deja, &doc).unwrap();
+        assert_eq!(deja.comptes().unwrap()[0].visio, "https://visio.exemple.fr", "premier compte d'un poste neuf");
+        deja.poser_visio("nom@exemple.fr", "https://autre.exemple.fr").unwrap();
+        appliquer(&deja, &doc).unwrap();
+        assert_eq!(deja.comptes().unwrap()[0].visio, "https://autre.exemple.fr", "le service du poste reste");
+        drop(deja);
         // Les index fermés d'abord : Windows refuse d'effacer un fichier ouvert.
         drop(neuf);
         drop(magasin);

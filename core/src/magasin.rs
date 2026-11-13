@@ -72,7 +72,7 @@ pub const AUTH_MICROSOFT: &str = "microsoft";
 pub const AUTH_GOOGLE: &str = "google";
 
 /// Version du schéma, portée par `PRAGMA user_version`.
-const VERSION_SCHEMA: i32 = 21;
+const VERSION_SCHEMA: i32 = 22;
 
 #[derive(Debug)]
 pub struct Erreur(pub String);
@@ -148,6 +148,9 @@ pub struct CompteLocal {
     /// (0.6.8, cf. `protocole::adresses_partagees`), relevées avec son
     /// arborescence.
     pub partagees: Vec<String>,
+    /// Service de visio du compte (`https://…`, cf. `crate::visio`), vide
+    /// sans service : le bouton « Visio » des événements n'apparaît pas.
+    pub visio: String,
 }
 
 impl CompteLocal {
@@ -710,6 +713,11 @@ impl Magasin {
                  );",
             )?;
         }
+        // Version 22 : le service de visio de chaque compte (cf. `crate::visio`),
+        // vide jusqu'à ce qu'on le règle.
+        if version < 22 {
+            self.ajouter_colonne("accounts", "visio", "TEXT NOT NULL DEFAULT ''")?;
+        }
         self.base.pragma_update(None, "user_version", VERSION_SCHEMA)?;
         Ok(())
     }
@@ -885,6 +893,14 @@ impl Magasin {
         Ok(n > 0)
     }
 
+    /// Pose le service de visio d'un compte, désigné par son adresse : une
+    /// adresse déjà normalisée (cf. `visio::normaliser_service`), vide pour
+    /// aucun service. Faux si le compte est inconnu.
+    pub fn poser_visio(&self, adresse: &str, service: &str) -> Resultat<bool> {
+        let n = self.base.execute("UPDATE accounts SET visio = ?2 WHERE adresse = ?1", params![adresse, service])?;
+        Ok(n > 0)
+    }
+
     /// Pose les adresses des boîtes partagées d'un compte. Vrai si elles ont
     /// changé.
     pub fn poser_partagees(&self, compte: i64, adresses: &[String]) -> Resultat<bool> {
@@ -907,7 +923,7 @@ impl Magasin {
     /// celui où ils ont été ajoutés.
     pub fn comptes(&self) -> Resultat<Vec<CompteLocal>> {
         let mut requete = self.base.prepare(
-            "SELECT id, adresse, hote, port, utilisateur, replie, hote_envoi, auth, partagees FROM accounts
+            "SELECT id, adresse, hote, port, utilisateur, replie, hote_envoi, auth, partagees, visio FROM accounts
              ORDER BY rang IS NULL, rang, id",
         )?;
         let comptes = requete
@@ -927,6 +943,7 @@ impl Magasin {
                         .filter(|a| !a.is_empty())
                         .map(str::to_string)
                         .collect(),
+                    visio: l.get(9)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -3474,6 +3491,31 @@ mod tests {
         assert!(comptes.iter().find(|c| c.id == b).unwrap().partagees.is_empty());
         assert!(m.poser_partagees(a, &[]).unwrap(), "partage retiré");
         assert!(m.compte_par_id(a).unwrap().unwrap().partagees.is_empty());
+    }
+
+    #[test]
+    fn service_de_visio_d_un_compte() {
+        let m = Magasin::en_memoire().unwrap();
+        let a = m.compte("a@b.fr", "h", 993, "a@b.fr").unwrap();
+        let b = m.compte("b@b.fr", "h", 993, "b@b.fr").unwrap();
+        assert_eq!(m.compte_par_id(a).unwrap().unwrap().visio, "", "aucun service d'office");
+        assert!(m.poser_visio("a@b.fr", "https://visio.exemple.fr").unwrap());
+        assert_eq!(m.compte_par_id(a).unwrap().unwrap().visio, "https://visio.exemple.fr");
+        assert_eq!(m.compte_par_id(b).unwrap().unwrap().visio, "");
+        assert!(m.poser_visio("a@b.fr", "").unwrap(), "service retiré");
+        assert_eq!(m.compte_par_id(a).unwrap().unwrap().visio, "");
+        assert!(!m.poser_visio("inconnu@b.fr", "https://visio.exemple.fr").unwrap());
+    }
+
+    #[test]
+    fn migration_version_22_visio_vide() {
+        let m = Magasin::en_memoire().unwrap();
+        m.compte("a@b.fr", "h", 993, "a@b.fr").unwrap();
+        m.base.execute_batch("ALTER TABLE accounts DROP COLUMN visio; PRAGMA user_version = 21;").unwrap();
+        m.migrer().unwrap();
+        assert_eq!(m.comptes().unwrap()[0].visio, "");
+        let version: i32 = m.base.pragma_query_value(None, "user_version", |l| l.get(0)).unwrap();
+        assert_eq!(version, 22);
     }
 
     #[test]

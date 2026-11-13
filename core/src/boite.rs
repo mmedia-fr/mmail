@@ -116,6 +116,36 @@ pub mod qobject {
         #[cxx_name = "poserServeurEnvoi"]
         fn poser_serveur_envoi(self: Pin<&mut Boite>, adresse: &QString, hote: &QString) -> bool;
 
+        /// Pose le service de visio d'un compte déjà enregistré : une adresse
+        /// HTTPS (`https://visio.exemple.fr`), vide pour aucun service. Faux,
+        /// avec `erreur`, pour une adresse refusée ou un compte inconnu.
+        #[qinvokable]
+        #[cxx_name = "poserVisio"]
+        fn poser_visio(self: Pin<&mut Boite>, adresse: &QString, service: &QString) -> bool;
+
+        /// Service de visio d'office du compte `compte` (0 pour un nouveau)
+        /// sur le serveur `hote` : celui de MMEDIA pour ses boîtes, vide
+        /// sinon ; l'indication du champ « Service de visio » laissé vide.
+        #[qinvokable]
+        #[cxx_name = "visioDOffice"]
+        fn visio_d_office(&self, compte: i32, hote: &QString) -> QString;
+
+        /// Lieu et description d'un événement de l'agenda `agenda` une fois
+        /// la visio posée : `{"lieu", "description"}` en JSON, vide si son
+        /// compte n'a pas de service ou qu'aucun nom de réunion ne peut être
+        /// tiré. Un lien déjà posé n'est pas régénéré (cf. `visio::poser`).
+        #[qinvokable]
+        #[cxx_name = "visioEvenement"]
+        fn visio_evenement(&self, agenda: i32, lieu: &QString, description: &QString) -> QString;
+
+        /// Lien à ouvrir pour la réunion dont le lien figure dans `lieu`, un
+        /// événement de l'agenda `agenda` : celui de l'organisateur si
+        /// `organisateur`, sinon celui de la réunion ; vide s'il n'y a pas de
+        /// lien du service du compte.
+        #[qinvokable]
+        #[cxx_name = "lienVisio"]
+        fn lien_visio(&self, agenda: i32, lieu: &QString, organisateur: bool) -> QString;
+
         /// Vrai si MMail a un identifiant d'application Microsoft : sans lui,
         /// pas de compte Microsoft.
         #[qinvokable]
@@ -984,6 +1014,18 @@ pub mod qobject {
         #[cxx_name = "autoriserAgendasMicrosoft"]
         fn autoriser_agendas_microsoft(self: Pin<&mut Boite>, compte: i32) -> QString;
 
+        /// Comptes Microsoft 365 connectés, pour le carnet d'adresses (0.9.0),
+        /// en JSON : `[{compte, adresse, etat}]`, comme `agendasMicrosoft`.
+        #[qinvokable]
+        #[cxx_name = "contactsMicrosoft"]
+        fn contacts_microsoft(&self) -> QString;
+
+        /// Contacts Microsoft 365 (0.9.0) : comme `autoriserAgendasMicrosoft`.
+        /// Issue : `contactsMicrosoftAutorises`.
+        #[qinvokable]
+        #[cxx_name = "autoriserContactsMicrosoft"]
+        fn autoriser_contacts_microsoft(self: Pin<&mut Boite>, compte: i32) -> QString;
+
         /// Formulaire prérempli d'un événement de l'index (cf.
         /// `saisie::Saisie`, en JSON) : toute la série si `serie`, sinon
         /// l'occurrence dont `occurrence` est le début d'origine. Vide si
@@ -1314,6 +1356,11 @@ pub mod qobject {
         #[qsignal]
         #[cxx_name = "agendasMicrosoftAutorises"]
         fn agendas_microsoft_autorises(self: Pin<&mut Boite>, compte: i32, message: &QString);
+
+        /// Issue de `autoriserContactsMicrosoft`, comme pour les agendas.
+        #[qsignal]
+        #[cxx_name = "contactsMicrosoftAutorises"]
+        fn contacts_microsoft_autorises(self: Pin<&mut Boite>, compte: i32, message: &QString);
 
         /// Écriture dans l'agenda terminée : `message` dit pourquoi elle a
         /// échoué.
@@ -1939,6 +1986,12 @@ pub struct BoiteRust {
     /// Lecture des agendas Microsoft 365 (0.9.0), par compte : autorisée, ou
     /// refusée — elle n'est alors redemandée qu'à la demande de l'utilisateur.
     agendas_microsoft: HashMap<i64, bool>,
+    /// De même pour la lecture des contacts Microsoft 365 (0.9.0).
+    contacts_microsoft: HashMap<i64, bool>,
+    /// Comptes dont le serveur est (ou n'est pas) celui de MMEDIA, vérifié
+    /// une fois par lancement avec la synchronisation des agendas (cf.
+    /// `visio::meme_serveur`) : service de visio d'office.
+    serveurs_mmedia: HashMap<i64, bool>,
     /// Une synchronisation des agendas demandée pendant qu'une autre tournait
     /// (après une autorisation) : relancée à la fin de celle-ci.
     agendas_a_relire: bool,
@@ -2059,6 +2112,8 @@ impl Default for BoiteRust {
             marquages: HashMap::new(),
             agenda_occupe: false,
             agendas_microsoft: HashMap::new(),
+            contacts_microsoft: HashMap::new(),
+            serveurs_mmedia: HashMap::new(),
             agendas_a_relire: false,
             contacts_occupe: false,
             delai_lu: 0,
@@ -2149,6 +2204,11 @@ impl qobject::Boite {
                     "invitations": crate::microsoft::agenda::est_graph(&a.adresse)
                         || magasin.planification(a.compte).ok().flatten().unwrap_or(false),
                     "microsoft": crate::microsoft::agenda::est_graph(&a.adresse),
+                    // Le service de visio du compte ; jamais pour un agenda
+                    // Microsoft 365, dont les réunions passent par Teams.
+                    "visio": comptes.iter().find(|c| c.id == a.compte).map(|c| crate::visio::service_de_l_agenda(
+                        crate::visio::service_du_compte(&c.visio, &c.hote, self.serveurs_mmedia.get(&c.id) == Some(&true)),
+                        crate::microsoft::agenda::est_graph(&a.adresse))).unwrap_or(""),
                 })
             })
             .collect();
@@ -2180,14 +2240,18 @@ impl qobject::Boite {
         // les siens par Graph (0.9.0), une fois leur lecture autorisée — un
         // refus de la session n'est redemandé qu'à la demande.
         let mut comptes: Vec<(i64, String, Identifiants)> = Vec::new();
-        let mut microsoft: Vec<(i64, String, crate::oauth::Partage)> = Vec::new();
+        // Par compte Microsoft 365 : ses agendas, ses contacts (0.9.0), chacun
+        // selon son autorisation.
+        let mut microsoft: Vec<(i64, String, crate::oauth::Partage, bool, bool)> = Vec::new();
         for c in magasin.comptes().unwrap_or_default() {
             let Some(id) = self.identites.get(&c.id) else { continue };
             match &id.oauth {
                 None => comptes.push((c.id, c.adresse, id.clone())),
                 Some(j) if crate::oauth::fournisseur(j) == crate::oauth::Fournisseur::Microsoft => {
-                    if insister || self.agendas_microsoft.get(&c.id) != Some(&false) {
-                        microsoft.push((c.id, c.adresse, j.clone()));
+                    let agenda = insister || self.agendas_microsoft.get(&c.id) != Some(&false);
+                    let contacts = insister || self.contacts_microsoft.get(&c.id) != Some(&false);
+                    if agenda || contacts {
+                        microsoft.push((c.id, c.adresse, j.clone(), agenda, contacts));
                     }
                 }
                 Some(_) => {}
@@ -2196,16 +2260,54 @@ impl qobject::Boite {
         if comptes.is_empty() && microsoft.is_empty() {
             return;
         }
+        // Serveur de MMEDIA ou non : une fois par compte et par lancement,
+        // hors de l'interface (recherche DNS), pour le service de visio
+        // d'office.
+        let a_verifier: Vec<(i64, String)> = comptes
+            .iter()
+            .filter(|(compte, _, _)| !self.serveurs_mmedia.contains_key(compte))
+            .map(|(compte, _, id)| (*compte, id.hote.clone()))
+            .collect();
         let profil = self.profil.clone();
         let fil = self.qt_thread();
         self.as_mut().set_agenda_occupe(true);
         let lance = thread::Builder::new().name("mmail-agenda".into()).spawn(move || {
-            let mut change = false;
+            let verifies: Vec<(i64, bool)> = a_verifier
+                .iter()
+                .filter_map(|(compte, hote)| {
+                    crate::visio::meme_serveur(hote, crate::visio::HOTE_MMEDIA).map(|oui| (*compte, oui))
+                })
+                .collect();
+            // Une boîte MMEDIA reconnue : ses agendas reçoivent le service.
+            let mut change = verifies.iter().any(|(_, oui)| *oui);
             let mut erreurs = Vec::new();
             let (mut autorises, mut refuses) = (Vec::new(), Vec::new());
+            let (mut contacts_autorises, mut contacts_refuses) = (Vec::new(), Vec::new());
             match Magasin::ouvrir(&profil) {
                 Ok(magasin) => {
-                    for (compte, adresse, jetons) in &microsoft {
+                    for (compte, adresse, jetons, _, contacts) in &microsoft {
+                        if !*contacts {
+                            continue;
+                        }
+                        match crate::microsoft::jeton_acces(jetons, crate::microsoft::PORTEE_CONTACTS) {
+                            Ok(jeton) => {
+                                contacts_autorises.push(*compte);
+                                match crate::microsoft::contacts::synchroniser(&magasin, *compte, &jeton) {
+                                    Ok(bilan) => {
+                                        change |= bilan.change;
+                                        erreurs.extend(bilan.erreurs.into_iter().map(|e| format!("{adresse} : {e}")));
+                                    }
+                                    Err(e) => erreurs.push(format!("{adresse} (contacts) : {e}")),
+                                }
+                            }
+                            Err(crate::microsoft::ErreurOAuth::Reseau(m)) => erreurs.push(format!("{adresse} (contacts) : {m}")),
+                            Err(_) => contacts_refuses.push(*compte),
+                        }
+                    }
+                    for (compte, adresse, jetons, agenda, _) in &microsoft {
+                        if !*agenda {
+                            continue;
+                        }
                         match crate::microsoft::jeton_acces(jetons, crate::microsoft::PORTEE_AGENDA) {
                             Ok(jeton) => {
                                 autorises.push(*compte);
@@ -2238,11 +2340,20 @@ impl qobject::Boite {
                 Err(e) => erreurs.push(format!("index local : {e}")),
             }
             let _ = fil.queue(move |mut boite: Pin<&mut qobject::Boite>| {
+                for (compte, oui) in verifies {
+                    boite.as_mut().rust_mut().serveurs_mmedia.insert(compte, oui);
+                }
                 for compte in autorises {
                     boite.as_mut().rust_mut().agendas_microsoft.insert(compte, true);
                 }
                 for compte in refuses {
                     boite.as_mut().rust_mut().agendas_microsoft.insert(compte, false);
+                }
+                for compte in contacts_autorises {
+                    boite.as_mut().rust_mut().contacts_microsoft.insert(compte, true);
+                }
+                for compte in contacts_refuses {
+                    boite.as_mut().rust_mut().contacts_microsoft.insert(compte, false);
                 }
                 boite.as_mut().set_agenda_occupe(false);
                 boite.as_mut().agendas_synchronises(change, &QString::from(&erreurs.join("\n")));
@@ -2257,6 +2368,16 @@ impl qobject::Boite {
     }
 
     pub fn agendas_microsoft(&self) -> QString {
+        self.etats_microsoft(&self.agendas_microsoft)
+    }
+
+    pub fn contacts_microsoft(&self) -> QString {
+        self.etats_microsoft(&self.contacts_microsoft)
+    }
+
+    /// Comptes Microsoft 365 connectés et l'état d'une autorisation à part
+    /// (`carte` : agendas ou contacts), en JSON.
+    fn etats_microsoft(&self, carte: &HashMap<i64, bool>) -> QString {
         let Some(magasin) = self.magasin.as_ref() else {
             return QString::from("[]");
         };
@@ -2271,7 +2392,7 @@ impl qobject::Boite {
                     .is_some_and(|j| crate::oauth::fournisseur(j) == crate::oauth::Fournisseur::Microsoft)
             })
             .map(|c| {
-                let etat = match self.agendas_microsoft.get(&c.id) {
+                let etat = match carte.get(&c.id) {
                     Some(true) => "autorise",
                     Some(false) => "a_autoriser",
                     None => "inconnu",
@@ -2941,12 +3062,13 @@ impl qobject::Boite {
             .iter()
             .map(|c| {
                 format!(
-                    r#"{{"id":{},"adresse":{},"hote":{},"hoteEnvoi":{},"auth":{},"etat":{}}}"#,
+                    r#"{{"id":{},"adresse":{},"hote":{},"hoteEnvoi":{},"auth":{},"visio":{},"etat":{}}}"#,
                     c.id,
                     texte_json(&c.adresse),
                     texte_json(&c.hote),
                     texte_json(&c.hote_envoi),
                     texte_json(&c.auth),
+                    texte_json(&c.visio),
                     texte_json(self.etat(c.id).code())
                 )
             })
@@ -3118,9 +3240,19 @@ impl qobject::Boite {
         }
     }
 
-    pub fn autoriser_agendas_microsoft(mut self: Pin<&mut Self>, compte: i32) -> QString {
+    pub fn autoriser_agendas_microsoft(self: Pin<&mut Self>, compte: i32) -> QString {
+        self.autoriser_graph(compte as i64, AutorisationGraph::Agendas)
+    }
+
+    pub fn autoriser_contacts_microsoft(self: Pin<&mut Self>, compte: i32) -> QString {
+        self.autoriser_graph(compte as i64, AutorisationGraph::Contacts)
+    }
+
+    /// Demande à part une autorisation de Microsoft 365 (agendas, contacts)
+    /// pour un compte déjà connecté : l'adresse de la page de Microsoft, à
+    /// ouvrir dans le navigateur ; l'issue revient par le signal du volet.
+    fn autoriser_graph(mut self: Pin<&mut Self>, compte: i64, quoi: AutorisationGraph) -> QString {
         use crate::microsoft as ms;
-        let compte = compte as i64;
         let refus = |mut boite: Pin<&mut Self>, message: &str| {
             boite.as_mut().set_erreur(QString::from(message));
             QString::default()
@@ -3134,7 +3266,7 @@ impl qobject::Boite {
         // Comme pour les couleurs d'Outlook : l'autorisation vaut pour la
         // personne, donnée depuis un ordinateur elle sert aussi sous Android.
         if cfg!(target_os = "android") {
-            return refus(self, "autorisez depuis MMail sur un ordinateur : les agendas viendront ensuite ici d'eux-mêmes");
+            return refus(self, &format!("autorisez depuis MMail sur un ordinateur : {} viendront ensuite ici d'eux-mêmes", quoi.nom()));
         }
         let client = ms::client_du_compte(&jetons.lock().map(|j| j.client.clone()).unwrap_or_default());
         let adresse = id.utilisateur.clone();
@@ -3146,14 +3278,22 @@ impl qobject::Boite {
             Ok(e) => e,
             Err(e) => return refus(self, &format!("écoute locale : {e}")),
         };
-        let url = ms::url_autorisation_agenda(&client, &ecoute.redirection, &pkce.defi, &etat, &adresse);
+        let url = match quoi {
+            AutorisationGraph::Agendas => ms::url_autorisation_agenda(&client, &ecoute.redirection, &pkce.defi, &etat, &adresse),
+            AutorisationGraph::Contacts => ms::url_autorisation_contacts(&client, &ecoute.redirection, &pkce.defi, &etat, &adresse),
+        };
         let fil = self.qt_thread();
         let lance = thread::Builder::new().name("mmail-microsoft".into()).spawn(move || {
             let issue = ms::attendre_code(&ecoute, &etat, ms::DELAI_CONNEXION)
-                .and_then(|code| ms::echanger_code_agenda(&client, &code, &pkce.verificateur, &ecoute.redirection, &adresse))
-                .map(|r| crate::oauth::retenir(&jetons, ms::PORTEE_AGENDA, &r.acces, r.duree))
+                .and_then(|code| match quoi {
+                    AutorisationGraph::Agendas => ms::echanger_code_agenda(&client, &code, &pkce.verificateur, &ecoute.redirection, &adresse),
+                    AutorisationGraph::Contacts => {
+                        ms::echanger_code_contacts(&client, &code, &pkce.verificateur, &ecoute.redirection, &adresse)
+                    }
+                })
+                .map(|r| crate::oauth::retenir(&jetons, quoi.portee(), &r.acces, r.duree))
                 .map_err(|x| x.to_string());
-            let _ = fil.queue(move |boite: Pin<&mut qobject::Boite>| boite.accueillir_agendas_microsoft(compte, issue));
+            let _ = fil.queue(move |boite: Pin<&mut qobject::Boite>| boite.accueillir_graph(compte, quoi, issue));
         });
         if let Err(e) = lance {
             return refus(self, &format!("autorisation Microsoft : {e}"));
@@ -3162,21 +3302,26 @@ impl qobject::Boite {
         QString::from(&url)
     }
 
-    /// Issue de l'autorisation de lire les agendas, sur le fil Qt : les
-    /// agendas du compte sont lus aussitôt — ou dès la fin de la
-    /// synchronisation en cours.
-    fn accueillir_agendas_microsoft(mut self: Pin<&mut Self>, compte: i64, issue: Result<(), String>) {
-        match issue {
-            Ok(()) => {
-                self.as_mut().rust_mut().agendas_microsoft.insert(compte, true);
-                self.as_mut().agendas_microsoft_autorises(compte as i32, &QString::default());
-                if self.agenda_occupe {
-                    self.as_mut().rust_mut().agendas_a_relire = true;
-                } else {
-                    self.as_mut().synchroniser_agendas(true);
-                }
+    /// Issue d'une autorisation à part, sur le fil Qt : ce qu'elle ouvre est
+    /// lu aussitôt — ou dès la fin de la synchronisation en cours.
+    fn accueillir_graph(mut self: Pin<&mut Self>, compte: i64, quoi: AutorisationGraph, issue: Result<(), String>) {
+        let message = issue.as_ref().err().cloned().unwrap_or_default();
+        if issue.is_ok() {
+            match quoi {
+                AutorisationGraph::Agendas => self.as_mut().rust_mut().agendas_microsoft.insert(compte, true),
+                AutorisationGraph::Contacts => self.as_mut().rust_mut().contacts_microsoft.insert(compte, true),
+            };
+        }
+        match quoi {
+            AutorisationGraph::Agendas => self.as_mut().agendas_microsoft_autorises(compte as i32, &QString::from(&message)),
+            AutorisationGraph::Contacts => self.as_mut().contacts_microsoft_autorises(compte as i32, &QString::from(&message)),
+        }
+        if issue.is_ok() {
+            if self.agenda_occupe {
+                self.as_mut().rust_mut().agendas_a_relire = true;
+            } else {
+                self.as_mut().synchroniser_agendas(true);
             }
-            Err(message) => self.as_mut().agendas_microsoft_autorises(compte as i32, &QString::from(&message)),
         }
     }
 
@@ -3362,6 +3507,75 @@ impl qobject::Boite {
             .collect();
         for (adresse, hote, jeton) in renouveles {
             self.as_mut().jeton_renouvele(&QString::from(&adresse), &QString::from(&hote), &QString::from(&jeton));
+        }
+    }
+
+    pub fn poser_visio(mut self: Pin<&mut Self>, adresse: &QString, service: &QString) -> bool {
+        let adresse = adresse.to_string().trim().to_string();
+        let Some(service) = crate::visio::normaliser_service(&service.to_string()) else {
+            self.as_mut().set_erreur(QString::from(&format!(
+                "service de visio refusé : {service} (une adresse https://, sans paramètres)"
+            )));
+            return false;
+        };
+        let pose = match self.magasin.as_ref() {
+            Some(magasin) => magasin.poser_visio(&adresse, &service),
+            None => {
+                self.as_mut().set_erreur(QString::from("le profil n'est pas ouvert"));
+                return false;
+            }
+        };
+        match pose {
+            Ok(true) => true,
+            Ok(false) => {
+                self.as_mut().set_erreur(QString::from(&format!("compte inconnu : {adresse}")));
+                false
+            }
+            Err(e) => {
+                self.as_mut().set_erreur(QString::from(&format!("index local : {e}")));
+                false
+            }
+        }
+    }
+
+    /// Adresse de la boîte et service de visio de l'agenda `agenda` (cf.
+    /// `visio::service_de_l_agenda`), si son compte en a un.
+    fn visio_de_l_agenda(&self, agenda: i32) -> Option<(String, String)> {
+        let magasin = self.magasin.as_ref()?;
+        let a = magasin.agendas().ok()?.into_iter().find(|a| a.id == agenda as i64)?;
+        let c = magasin.compte_par_id(a.compte).ok()??;
+        let service = crate::visio::service_de_l_agenda(
+            crate::visio::service_du_compte(&c.visio, &c.hote, self.serveurs_mmedia.get(&c.id) == Some(&true)),
+            crate::microsoft::agenda::est_graph(&a.adresse),
+        );
+        (!service.is_empty()).then(|| (c.adresse.clone(), service.to_string()))
+    }
+
+    pub fn visio_d_office(&self, compte: i32, hote: &QString) -> QString {
+        let reconnu = self.serveurs_mmedia.get(&(compte as i64)) == Some(&true);
+        QString::from(crate::visio::service_du_compte("", &hote.to_string(), reconnu))
+    }
+
+    pub fn visio_evenement(&self, agenda: i32, lieu: &QString, description: &QString) -> QString {
+        let Some((adresse, service)) = self.visio_de_l_agenda(agenda) else {
+            return QString::default();
+        };
+        match crate::visio::poser(&lieu.to_string(), &description.to_string(), &service, &adresse) {
+            Some((lieu, description)) => {
+                QString::from(&serde_json::json!({ "lieu": lieu, "description": description }).to_string())
+            }
+            None => QString::default(),
+        }
+    }
+
+    pub fn lien_visio(&self, agenda: i32, lieu: &QString, organisateur: bool) -> QString {
+        let Some((_, service)) = self.visio_de_l_agenda(agenda) else {
+            return QString::default();
+        };
+        match crate::visio::reunion_dans(&lieu.to_string(), &service) {
+            Some(nom) if organisateur => QString::from(&crate::visio::lien_organisateur(&service, &nom)),
+            Some(nom) => QString::from(&crate::visio::lien(&service, &nom)),
+            None => QString::default(),
         }
     }
 
@@ -6431,6 +6645,30 @@ type TravailContacts = Box<dyn FnOnce(&Magasin, &HashMap<i64, Identifiants>) -> 
 fn erreur_contacts(e: Erreur) -> (String, bool) {
     let conflit = matches!(&e, Erreur::Refuse(m) if m == crate::carddav::CONFLIT);
     (e.to_string(), conflit)
+}
+
+/// Une autorisation de Microsoft 365 demandée à part (0.9.0), après la
+/// connexion : les agendas, ou les contacts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AutorisationGraph {
+    Agendas,
+    Contacts,
+}
+
+impl AutorisationGraph {
+    fn portee(self) -> &'static str {
+        match self {
+            AutorisationGraph::Agendas => crate::microsoft::PORTEE_AGENDA,
+            AutorisationGraph::Contacts => crate::microsoft::PORTEE_CONTACTS,
+        }
+    }
+
+    fn nom(self) -> &'static str {
+        match self {
+            AutorisationGraph::Agendas => "les agendas",
+            AutorisationGraph::Contacts => "les contacts",
+        }
+    }
 }
 
 fn acces_contacts(identites: &HashMap<i64, Identifiants>, compte: i64) -> Result<crate::caldav::Acces<'_>, (String, bool)> {

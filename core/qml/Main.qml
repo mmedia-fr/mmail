@@ -407,6 +407,8 @@ ApplicationWindow {
     property string pageVersion: ""
     // Destinataire de « Envoyer une suggestion… » (menu « ? »).
     readonly property string adresseSuggestions: "suggestions.mmail@mmedia.fr"
+    // Destinataire d'une demande de boîte MMEDIA, pour la visio (0.7.0).
+    readonly property string adresseDemandeVisio: "contact@mmedia.fr"
     // Bandeau de mise à jour : "" (caché), "proposee", "telechargement",
     // "prete" ou "echec".
     property string etatMiseAJour: ""
@@ -1761,6 +1763,7 @@ ApplicationWindow {
         accent: fenetre.accent
         texteAccent: fenetre.texteAccent
         onAnnoncer: function(texte, erreur) { fenetre.annoncer(texte, erreur) }
+        onDemanderVisio: function(adresse) { fenetre.demanderVisio(adresse) }
     }
 
     // Rappels de l'agenda : contrôlés toutes les 30 secondes, quel que soit
@@ -3749,6 +3752,8 @@ ApplicationWindow {
         dlgCompte.champAdresse.text = compte ? compte.adresse : ""
         dlgCompte.champHote.text = compte ? compte.hote : ""
         dlgCompte.champHoteEnvoi.text = compte && compte.hoteEnvoi ? compte.hoteEnvoi : ""
+        dlgCompte.ancienVisio = compte && compte.visio ? compte.visio : ""
+        dlgCompte.champVisio.text = dlgCompte.ancienVisio
         dlgCompte.champAdressesEnvoi.text = compte ? adressesEnvoi(compte.adresse).join(" ; ") : ""
         var ligne = compteConnu(dlgCompte.compteId)
         dlgCompte.partagees = ligne ? partageesProposees(ligne) : []
@@ -3798,7 +3803,7 @@ ApplicationWindow {
     }
 
     /// Document d'un lien de configuration (cf. README) :
-    /// `{"mmail": 1, "comptes": [{"adresse", "hote", "motDePasse", "hoteEnvoi"?}]}`.
+    /// `{"mmail": 1, "comptes": [{"adresse", "hote", "motDePasse", "hoteEnvoi"?, "visio"?}]}`.
     function appliquerLien(contenu) {
         var lien = lienEnCours
         lienEnCours = ""
@@ -3820,12 +3825,14 @@ ApplicationWindow {
                     && typeof c.motDePasse === "string" && c.motDePasse.length > 0
                     && (c.port === undefined || c.port === 993)
                     && (c.hoteEnvoi === undefined || typeof c.hoteEnvoi === "string")
+                    && (c.visio === undefined || typeof c.visio === "string")
             if (!valide) {
                 ecartes.push(c && typeof c.adresse === "string" ? c.adresse : "?")
                 continue
             }
             retenus.push({ adresse: c.adresse.trim(), hote: c.hote.trim().toLowerCase(),
                            hoteEnvoi: c.hoteEnvoi === undefined ? null : c.hoteEnvoi.trim().toLowerCase(),
+                           visio: c.visio === undefined ? null : c.visio.trim(),
                            motDePasse: c.motDePasse })
         }
         if (retenus.length === 0) {
@@ -3842,8 +3849,13 @@ ApplicationWindow {
             secretsAConserver[r.adresse] = { cle: cle(r.adresse, r.hote), motDePasse: r.motDePasse }
             // Absent du document : le serveur d'envoi d'un compte déjà connu
             // reste tel qu'il est.
-            if (boite.connecter(r.hote, r.adresse, r.motDePasse) && r.hoteEnvoi !== null)
-                boite.poserServeurEnvoi(r.adresse, r.hoteEnvoi)
+            if (boite.connecter(r.hote, r.adresse, r.motDePasse)) {
+                if (r.hoteEnvoi !== null)
+                    boite.poserServeurEnvoi(r.adresse, r.hoteEnvoi)
+                // Absent : le service de visio d'un compte déjà connu reste.
+                if (r.visio !== null && !boite.poserVisio(r.adresse, r.visio))
+                    ecartes.push(r.adresse + " (" + qsTr("service de visio refusé") + ")")
+            }
         }
         var texte = qsTr("Lien de configuration : connexion de %1.")
                 .arg(retenus.map(function(r) { return r.adresse }).join(", "))
@@ -3866,8 +3878,12 @@ ApplicationWindow {
         var nouveau = dlgCompte.compteId === 0
         var motDePasse = dlgCompte.champMotDePasse.text
         dlgCompte.champMotDePasse.text = ""
-        if (dlgCompte.modification)
+        var visio = dlgCompte.champVisio.text.trim()
+        if (dlgCompte.modification) {
             appliquerAdressesEnvoi(adresse, dlgCompte.champAdressesEnvoi.text)
+            if (visio !== dlgCompte.ancienVisio)
+                appliquerVisio(adresse, visio)
+        }
         if (dlgCompte.oauth) {
             // Rien à appliquer ici : la reconnexion passe par son bouton.
             demandeSuivante()
@@ -3887,10 +3903,27 @@ ApplicationWindow {
         else
             coffre.effacer(cle(adresse, hote))
         messageEtat.texte = qsTr("Connexion de %1…").arg(adresse)
-        // Le compte est enregistré dès l'appel : son serveur d'envoi suit.
-        if (boite.connecter(hote, adresse, motDePasse) && nouveau)
+        // Le compte est enregistré dès l'appel : son serveur d'envoi et son
+        // service de visio suivent.
+        if (boite.connecter(hote, adresse, motDePasse) && nouveau) {
             boite.poserServeurEnvoi(adresse, hoteEnvoi)
+            if (visio.length > 0)
+                appliquerVisio(adresse, visio)
+        }
         demandeSuivante()
+    }
+
+    /// Service de visio d'un compte (0.7.0) : le bouton « Visio » des
+    /// événements de ses agendas y crée les réunions.
+    function appliquerVisio(adresse, visio) {
+        if (!boite.poserVisio(adresse, visio))
+            messageEtat.texte = qsTr("Service de visio refusé : %1").arg(boite.erreur)
+        else
+            messageEtat.texte = visio.length > 0
+                    ? qsTr("Réunions de %1 sur %2.").arg(adresse).arg(visio)
+                    : qsTr("%1 n'a plus de service de visio.").arg(adresse)
+        // Les agendas portent le service de leur compte : le bouton suit.
+        vueAgenda.agendas = JSON.parse(boite.agendas())
     }
 
     /// Autres adresses d'envoi saisies dans « Modifier le compte… » : MMail ne
@@ -5953,6 +5986,25 @@ ApplicationWindow {
         return r
     }
 
+    /// « Visio » d'un compte sans service (0.7.0) : une rédaction depuis ce
+    /// compte, adressée à MMEDIA, que la personne relit et envoie elle-même.
+    function demanderVisio(adresse) {
+        var c = listeComptes().find(function(x) { return x.adresse === adresse })
+        var compte = c ? c.id : (boite.compteCourant > 0 ? boite.compteCourant : 0)
+        if (compte === 0) {
+            Qt.openUrlExternally("mailto:" + adresseDemandeVisio + "?subject="
+                                 + encodeURIComponent(qsTr("Demande de messagerie MMEDIA avec visio")))
+            return null
+        }
+        var r = ouvrirRedaction(compte)
+        r.remplir({ a: adresseDemandeVisio, objet: qsTr("Demande de messagerie MMEDIA avec visio"), mode: "nouveau" })
+        // Le texte avant la signature.
+        r.mefCorps.inserer(0, qsTr("Bonjour,") + "\n\n"
+                              + qsTr("Je souhaite que ma messagerie %1 soit hébergée par MMEDIA, pour organiser mes réunions en visio depuis MMail.").arg(adresse)
+                              + "\n\n" + qsTr("Merci de me recontacter."))
+        return r
+    }
+
     /// Signale la sélection comme indésirable — ou, depuis le dossier des
     /// indésirables, comme légitime. Le filtre du serveur l'apprend au
     /// déplacement (Mailcow : Rspamd, par IMAPSieve).
@@ -7258,6 +7310,12 @@ ApplicationWindow {
             // Scénario « marquer-lu » (0.8.1).
             if (essai.scenario === "marquer-lu")
                 scenarios.lancerScenarioMarquerLu()
+            // Scénario « visio » (0.7.0, banc AGENDA=1).
+            if (essai.scenario === "visio")
+                scenarios.lancerScenarioVisio()
+            // Scénario « visio-reel » : une vraie boîte hébergée par MMEDIA.
+            if (essai.scenario === "visio-reel")
+                scenarios.lancerScenarioVisioReel()
             // Scénario « zoom-lecture » (0.6.29) : le zoom du volet de lecture
             // laisse les boutons à leur taille (banc PIECE=1).
             if (essai.scenario === "zoom-lecture")

@@ -29,6 +29,39 @@ Dialog {
     property bool creationPossible: false
     // Vrai entre un import lancé d'ici et la fin de son écriture (0.6.35).
     property bool attenteImport: false
+    // Comptes Microsoft 365 dont les contacts restent à autoriser (0.9.0).
+    property var contactsMicrosoft: []
+
+    function relireMicrosoft() {
+        try {
+            contactsMicrosoft = JSON.parse(boite.contactsMicrosoft()).filter(function(c) { return c.etat === "a_autoriser" })
+        } catch (e) {
+            contactsMicrosoft = []
+        }
+    }
+
+    // L'autorisation se donne dans le navigateur ; la suite revient par
+    // `contactsMicrosoftAutorises`, puis par la synchronisation.
+    function autoriserMicrosoft(compte) {
+        var url = boite.autoriserContactsMicrosoft(compte)
+        if (url.length === 0) {
+            messageEtat.texte = qsTr("Contacts Microsoft 365 : %1").arg(boite.erreur)
+            return
+        }
+        Qt.openUrlExternally(url)
+        messageEtat.texte = qsTr("Autorisation dans votre navigateur : MMail attend son retour…")
+    }
+
+    Connections {
+        target: boite
+        function onContactsMicrosoftAutorises(compte, message) {
+            dlgCarnet.relireMicrosoft()
+        }
+        // Les contacts se relisent avec les agendas : un refus s'y apprend.
+        function onAgendasSynchronises(change, erreurs) {
+            dlgCarnet.relireMicrosoft()
+        }
+    }
 
     /// Ouvre le carnet sur une recherche (une adresse, depuis un message).
     function ouvrirSur(texte) {
@@ -181,6 +214,7 @@ Dialog {
     onOpened: {
         champRecherche.text = ""
         chercher()
+        relireMicrosoft()
         creationPossible = JSON.parse(boite.carnetsModifiables()).length > 0
         champRecherche.forceActiveFocus()
     }
@@ -205,6 +239,20 @@ Dialog {
                 ToolTip.delay: 400
                 ToolTip.text: qsTr("Aucun carnet modifiable : il faut une boîte connectée dont le serveur a un carnet d'adresses (le webmail, pour les boîtes de MMEDIA).")
                 onClicked: dlgFiche.ouvrirNouveau({})
+            }
+        }
+        // Contacts Microsoft 365 à autoriser, un bouton par boîte.
+        Repeater {
+            model: dlgCarnet.contactsMicrosoft
+            delegate: Button {
+                id: boutonMicrosoft
+                required property var modelData
+                Layout.fillWidth: true
+                text: qsTr("Contacts Microsoft 365 de %1…").arg(modelData.adresse)
+                ToolTip.visible: hovered
+                ToolTip.delay: 400
+                ToolTip.text: qsTr("Autoriser MMail à lire les contacts de cette boîte Microsoft 365")
+                onClicked: dlgCarnet.autoriserMicrosoft(modelData.compte)
             }
         }
         ListView {

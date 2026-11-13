@@ -879,6 +879,36 @@ QtObject {
         })
     }
 
+    /// Scénario « connexion-muette » (13/11/2026) : le serveur accepte la
+    /// connexion sans jamais saluer, comme Exchange Online pendant sa panne
+    /// (banc : relais-muet.py). Le compte nouveau n'est pas gardé, et la barre
+    /// d'état le dit en clair, au lieu de laisser « Connexion de … ».
+    function lancerScenarioConnexionMuette() {
+        var debut = Date.now()
+        var t = Qt.createQmlObject("import QtQuick; Timer { interval: 1000; repeat: true }", fenetre)
+        t.triggered.connect(function() {
+            var texte = messageEtat.texte
+            var ecoule = Math.round((Date.now() - debut) / 1000)
+            var dit = texte.indexOf(qsTr("Compte non ajouté")) === 0
+            if (!dit && ecoule < 90)
+                return
+            t.stop()
+            var echecs = 0
+            var bilan = function(libelle, bon) {
+                if (!bon)
+                    echecs += 1
+                console.log("scenario: " + (bon ? "OK " : "ECHEC ") + libelle)
+            }
+            bilan("barre d'état après " + ecoule + " s : « " + texte + " »", dit)
+            bilan("motif en clair", texte.indexOf("le serveur ne répond pas") >= 0)
+            bilan("plus de « Connexion de … »", texte.indexOf(qsTr("Connexion de")) !== 0)
+            bilan("compte non gardé (" + fenetre.comptesConnus.length + " compte)", fenetre.comptesConnus.length === 0)
+            console.log("scenario: connexion-muette " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
+            Qt.quit()
+        })
+        t.start()
+    }
+
     /// Scénario « recherche-entree » (0.6.37) : demande d'un utilisateur du
     /// 04/11/2026 — deux recherches passées contiennent le mot tapé ; Entrée
     /// doit chercher le texte tapé, et non la première suggestion. Les flèches

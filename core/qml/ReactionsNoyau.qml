@@ -1002,6 +1002,14 @@ Connections {
             // Premier essai d'un compte nouveau : il n'a pas été conservé,
             // on rouvre le dialogue tel qu'il était.
             fenetre.demanderCompte(fenetre.dernierDemande, message)
+        } else if (etape === "connexion" && !fenetre.compteParId(compte)) {
+            // Premier essai d'un compte sans fenêtre à rouvrir (Microsoft
+            // 365, Google) : il n'a pas été conservé. Rien ne le disait, et
+            // « Connexion de … » restait affiché (13/11/2026, Exchange Online
+            // muet pendant une panne).
+            messageEtat.texte = qsTr("Compte non ajouté : %1. Réessayez plus tard par le menu « Comptes ».").arg(message)
+            if (fenetre.essai && fenetre.essai.scenario)
+                console.log("scenario: compte non ajouté |", messageEtat.texte)
         } else if (etape === "message") {
             fenetre.afficherTexte("")
         }

@@ -323,7 +323,7 @@ de projet interne.
   complet et le raccourci en infobulle, à l'appui long au doigt. La barre du
   message range ses boutons en quatre groupes : répondre, répondre à tous,
   transférer ; marquer lu ou non lu, déplacer ; indésirable, supprimer ;
-  source. Le menu d'un message tient en sept lignes, la barre du message en
+  imprimer (au bureau), source. Le menu d'un message tient en sept lignes, la barre du message en
   une, avec les pictogrammes seuls. Au bureau, « Affichage › Boutons des barres › Pictogrammes et texte »
   met le nom à côté de chaque pictogramme, dans la barre du message (qui passe
   alors à la ligne si le volet est étroit) et dans la barre du haut (sur une

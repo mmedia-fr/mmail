@@ -7,7 +7,8 @@
 // une à trois lignes de boutons à libellés.
 //
 // Ordre (choix du mainteneur, 12/11) : répondre, répondre à tous, transférer |
-// lu ou non lu, déplacer | indésirable, supprimer | source.
+// lu ou non lu, déplacer | indésirable, supprimer | imprimer, source.
+// « Imprimer… » : demande du mainteneur du 13/11, au bureau seulement.
 //
 // Au bureau, « Affichage › Boutons des barres › Pictogrammes et texte » met le
 // nom à côté de chaque dessin (fenetre.libellesBarres) : d'où un Flow, qui
@@ -145,17 +146,37 @@ Flow {
         visible: !fenetre.tactile
         height: boutonSupprimer.height
     }
-    // Décision 6 : voir le message brut, en-têtes compris, en un geste.
-    // Propre à MMail : un nom court plutôt qu'un dessin. Au doigt, dans
-    // « … › Autres » (choix du mainteneur, 12/11) : la place va à
-    // « Indésirable », et la barre tient sur un téléphone de 360 points.
-    BoutonPictogramme {
-        objectName: "boutonSource"
+    // Sortir le message de l'écran : l'imprimer, voir sa source. Au bureau
+    // seulement : sous Android, l'impression n'existe pas
+    // (Impression.disponible) et « Source » est dans « … › Autres ».
+    Row {
+        objectName: "groupeSource"
         visible: !fenetre.tactile
-        text: fenetre.sourceVisible ? qsTr("Message") : qsTr("Source")
-        court: text
-        infobulle: fenetre.sourceVisible ? qsTr("Revenir au message") : qsTr("Afficher la source, en-têtes compris")
-        onClicked: fenetre.basculerSource()
+        spacing: barre.spacing
+        // Demande du mainteneur (13/11) : un pictogramme, comme dans les
+        // autres logiciels de messagerie ; la même chose que « … ›
+        // Imprimer… » et Ctrl+P.
+        BoutonPictogramme {
+            objectName: "boutonImprimer"
+            visible: impression.disponible
+            avecLibelle: barre.libelles
+            text: qsTr("Imprimer…")
+            infobulle: qsTr("Imprimer le message… (Ctrl+P)")
+            dessin: fenetre.dessinerImprimer
+            onClicked: fenetre.imprimerMessage()
+        }
+        // Décision 6 : voir le message brut, en-têtes compris, en un geste.
+        // Propre à MMail : un nom court plutôt qu'un dessin. Au doigt, dans
+        // « … › Autres » (choix du mainteneur, 12/11) : la place va à
+        // « Indésirable », et la barre tient sur un téléphone de 360 points.
+        BoutonPictogramme {
+            objectName: "boutonSource"
+            visible: !fenetre.tactile
+            text: fenetre.sourceVisible ? qsTr("Message") : qsTr("Source")
+            court: text
+            infobulle: fenetre.sourceVisible ? qsTr("Revenir au message") : qsTr("Afficher la source, en-têtes compris")
+            onClicked: fenetre.basculerSource()
+        }
     }
     // Au doigt, le ressort pousse « … » au bord droit, comme le faisait
     // l'espace extensible de la barre en ligne.

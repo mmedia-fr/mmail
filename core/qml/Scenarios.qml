@@ -1583,6 +1583,12 @@ QtObject {
                 // Au doigt, « Source » est dans « … » (12/11).
                 bilan(tactile ? "« Source » hors de la barre au doigt" : "« Source » en toutes lettres",
                       !!s && (tactile ? !s.visible : s.visible && y(r) === y(s) && s.text === qsTr("Source")))
+                // « Imprimer… » (13/11) : au bureau, entre « Supprimer » et « Source ».
+                var im = objetNomme(colonneLecture, "boutonImprimer")
+                bilan(tactile ? "« Imprimer… » hors de la barre au doigt"
+                              : "« Imprimer… » entre « Supprimer » et « Source » (x " + Math.round(x(im)) + ")",
+                      !!im && (tactile ? !im.visible
+                                       : im.visible && y(im) === y(r) && x(d) < x(im) && x(im) < x(s)))
                 saisir("volet")
             },
             function() {

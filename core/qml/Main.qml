@@ -3349,6 +3349,39 @@ ApplicationWindow {
         ctx.lineTo(w / 2 + r * 0.7, h / 2 + r * 0.7)
         ctx.stroke()
     }
+    /// « Imprimer… » : la feuille qui entre, le corps de l'imprimante et son
+    /// voyant, la feuille imprimée qui sort, deux lignes de texte.
+    function dessinerImprimer(ctx, w, h, encre) {
+        traitPictogramme(ctx, w, encre)
+        ctx.beginPath()
+        // Feuille qui entre.
+        ctx.moveTo(w * 0.28, h * 0.3)
+        ctx.lineTo(w * 0.28, h * 0.08)
+        ctx.lineTo(w * 0.72, h * 0.08)
+        ctx.lineTo(w * 0.72, h * 0.3)
+        // Corps, ouvert en bas là où sort la feuille.
+        ctx.moveTo(w * 0.24, h * 0.72)
+        ctx.lineTo(w * 0.06, h * 0.72)
+        ctx.lineTo(w * 0.06, h * 0.3)
+        ctx.lineTo(w * 0.94, h * 0.3)
+        ctx.lineTo(w * 0.94, h * 0.72)
+        ctx.lineTo(w * 0.76, h * 0.72)
+        // Feuille imprimée et ses deux lignes.
+        ctx.moveTo(w * 0.28, h * 0.56)
+        ctx.lineTo(w * 0.28, h * 0.94)
+        ctx.lineTo(w * 0.72, h * 0.94)
+        ctx.lineTo(w * 0.72, h * 0.56)
+        ctx.closePath()
+        ctx.moveTo(w * 0.4, h * 0.7)
+        ctx.lineTo(w * 0.6, h * 0.7)
+        ctx.moveTo(w * 0.4, h * 0.8)
+        ctx.lineTo(w * 0.6, h * 0.8)
+        ctx.stroke()
+        // Voyant.
+        ctx.beginPath()
+        ctx.arc(w * 0.8, h * 0.44, w * 0.06, 0, 2 * Math.PI, false)
+        ctx.fill()
+    }
     /// « Marquer comme non lu » : l'enveloppe et le point des non-lus.
     function dessinerNonLu(ctx, w, h, encre) {
         dessinerLu(ctx, w, h, encre)

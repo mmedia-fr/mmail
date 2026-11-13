@@ -366,6 +366,15 @@ ApplicationWindow {
                     onClicked: fenetreMessage.supprimer()
                 }
                 ToolSeparator { height: boutonDeplacerFenetre.height }
+                // Comme dans la barre du volet (demande du mainteneur, 13/11) :
+                // la même chose que « Autres actions › Imprimer… » et Ctrl+P.
+                BoutonAction {
+                    objectName: "boutonImprimerFenetre"
+                    visible: impression.disponible
+                    enabled: fenetreMessage.charge && !fenetreMessage.source
+                    text: qsTr("Imprimer…")
+                    onClicked: fenetreMessage.imprimer()
+                }
                 BoutonMenu {
                     text: qsTr("Autres actions") + "    "
                     menu: menuAutresFenetre

@@ -7,6 +7,7 @@
 // bouton à libellé. Ordre du 12/11 : répondre, répondre à tous, transférer |
 // lu ou non lu, déplacer | indésirable, supprimer | source ; le nom à côté
 // du pictogramme avec « Pictogrammes et texte », à la ligne s'il le faut.
+// « Imprimer… » (13/11) avant « Source », au bureau là où l'impression existe.
 import QtQuick
 import QtQuick.Controls
 import QtTest
@@ -18,6 +19,10 @@ Item {
     height: 200
 
     FenetreEssai { id: fenetre }
+    QtObject {
+        id: impression
+        property bool disponible: true
+    }
     QtObject {
         id: menuMessage
         property var ouvert: null
@@ -57,6 +62,7 @@ Item {
             fenetre.etatChoix = { nonLu: false, nombre: 1, sansDrapeau: true }
             fenetre.libellesBarres = false
             fenetre.appels = []
+            impression.disponible = true
             menuMessage.ouvert = null
             racine.width = 900
             wait(50)
@@ -76,7 +82,7 @@ Item {
 
         function test_bureau_une_ligne() {
             var noms = ["boutonRepondre", "boutonRepondreTous", "boutonTransferer", "boutonMarquerLu",
-                        "boutonDeplacer", "boutonIndesirable", "boutonSupprimer", "boutonSource"]
+                        "boutonDeplacer", "boutonIndesirable", "boutonSupprimer", "boutonImprimer", "boutonSource"]
             var y = -1
             for (var i = 0; i < noms.length; ++i) {
                 var b = enfant(noms[i])
@@ -88,16 +94,18 @@ Item {
             }
             verify(!enfant("boutonAutresActions").visible, "« … » seulement au doigt")
             verify(!enfant("boutonReprendre").visible)
-            verify(barre.largeurBoutons < 420, "barre compacte : " + barre.largeurBoutons + " px")
+            // 420 px jusqu'au 12/11 ; un pictogramme de plus le 13/11.
+            verify(barre.largeurBoutons < 460, "barre compacte : " + barre.largeurBoutons + " px")
             compare(barre.implicitHeight, enfant("boutonSupprimer").height, "une seule ligne")
             voisinDeSupprimer()
         }
 
-        // Ordre du mainteneur (12/11), en quatre groupes séparés d'un trait.
+        // Ordre du mainteneur (12/11), en quatre groupes séparés d'un trait ;
+        // « Imprimer… » en tête du dernier (13/11).
         function test_ordre_bureau() {
             dansLOrdre(["boutonRepondre", "boutonRepondreTous", "boutonTransferer", "separateurRepondre",
                         "boutonMarquerLu", "boutonDeplacer", "separateurRanger",
-                        "boutonIndesirable", "boutonSupprimer", "separateurSource", "boutonSource"])
+                        "boutonIndesirable", "boutonSupprimer", "separateurSource", "boutonImprimer", "boutonSource"])
             // Le trait est à la hauteur des boutons : la ligne n'en grandit pas.
             compare(enfant("separateurRanger").height, enfant("boutonSupprimer").height)
         }
@@ -117,7 +125,7 @@ Item {
         // reste un nom court.
         function test_pictogrammes_et_texte() {
             var noms = ["boutonRepondre", "boutonRepondreTous", "boutonTransferer", "boutonMarquerLu",
-                        "boutonDeplacer", "boutonIndesirable", "boutonSupprimer"]
+                        "boutonDeplacer", "boutonIndesirable", "boutonSupprimer", "boutonImprimer"]
             var largeurs = []
             for (var i = 0; i < noms.length; ++i) {
                 verify(!enfant(noms[i]).libelleVisible, noms[i] + " : pictogramme seul d'office")
@@ -135,7 +143,7 @@ Item {
             compare(enfant("boutonSource").court, "Source")
             dansLOrdre(["boutonRepondre", "boutonRepondreTous", "boutonTransferer", "separateurRepondre",
                         "boutonMarquerLu", "boutonDeplacer", "separateurRanger",
-                        "boutonIndesirable", "boutonSupprimer", "separateurSource", "boutonSource"])
+                        "boutonIndesirable", "boutonSupprimer", "separateurSource", "boutonImprimer", "boutonSource"])
             mouseClick(enfant("boutonDeplacer"))
             compare(fenetre.appels, ["deplacer"], "« Déplacer… » avec son nom")
         }
@@ -147,7 +155,7 @@ Item {
             racine.width = 420
             wait(50)
             var noms = ["boutonRepondre", "boutonRepondreTous", "boutonTransferer", "boutonMarquerLu",
-                        "boutonDeplacer", "boutonIndesirable", "boutonSupprimer", "boutonSource"]
+                        "boutonDeplacer", "boutonIndesirable", "boutonSupprimer", "boutonImprimer", "boutonSource"]
             var lignes = {}
             for (var i = 0; i < noms.length; ++i) {
                 var b = enfant(noms[i])
@@ -158,10 +166,20 @@ Item {
             verify(Object.keys(lignes).length > 1, "sur plusieurs lignes")
             // Jamais au milieu d'un groupe.
             var groupes = [["boutonRepondre", "boutonRepondreTous", "boutonTransferer"],
-                           ["boutonMarquerLu", "boutonDeplacer"], ["boutonIndesirable", "boutonSupprimer"]]
+                           ["boutonMarquerLu", "boutonDeplacer"], ["boutonIndesirable", "boutonSupprimer"],
+                           ["boutonImprimer", "boutonSource"]]
             for (var g = 0; g < groupes.length; ++g)
                 dansLOrdre(groupes[g])
             verify(barre.implicitHeight > enfant("boutonSupprimer").height, "la barre grandit : " + barre.implicitHeight)
+        }
+
+        // Sans impression possible (Impression.disponible faux) : pas de
+        // bouton, « Source » garde sa place après le trait.
+        function test_sans_impression() {
+            impression.disponible = false
+            wait(50)
+            verify(!enfant("boutonImprimer").visible, "pas de bouton sans impression")
+            dansLOrdre(["boutonSupprimer", "separateurSource", "boutonSource"])
         }
 
         // « Indésirable » juste avant « Supprimer », sans rien entre eux.
@@ -180,6 +198,9 @@ Item {
             compare(enfant("boutonRepondreTous").infobulle, "Répondre à tous (Ctrl+Maj+R)")
             compare(enfant("boutonTransferer").infobulle, "Transférer (Ctrl+F)")
             compare(enfant("boutonSupprimer").infobulle, "Supprimer (Suppr)")
+            compare(enfant("boutonImprimer").text, "Imprimer…")
+            compare(enfant("boutonImprimer").infobulle, "Imprimer le message… (Ctrl+P)")
+            verify(!!enfant("boutonImprimer").dessin, "« Imprimer… » en pictogramme")
             compare(enfant("boutonMarquerLu").text, "Marquer comme non lu")
             compare(enfant("boutonMarquerLu").infobulle, "Marquer comme non lu (Ctrl+U)")
             fenetre.etatChoix = { nonLu: true, nombre: 1, sansDrapeau: true }
@@ -201,7 +222,8 @@ Item {
             var attendu = [["boutonRepondre", "rediger:repondre"], ["boutonRepondreTous", "rediger:repondre_tous"],
                            ["boutonTransferer", "rediger:transferer"], ["boutonDeplacer", "deplacer"],
                            ["boutonIndesirable", "indesirable"], ["boutonMarquerLu", "marquer:false"],
-                           ["boutonSupprimer", "supprimer"], ["boutonSource", "source"]]
+                           ["boutonSupprimer", "supprimer"], ["boutonImprimer", "imprimer"],
+                           ["boutonSource", "source"]]
             for (var i = 0; i < attendu.length; ++i) {
                 fenetre.appels = []
                 mouseClick(enfant(attendu[i][0]))
@@ -227,6 +249,7 @@ Item {
             verify(!!j.dessin, "« Indésirable » en pictogramme")
             voisinDeSupprimer()
             verify(!enfant("boutonSource").visible, "« Source » dans « … » au doigt")
+            verify(!enfant("boutonImprimer").visible, "pas d'impression au doigt")
             var autres = enfant("boutonAutresActions")
             verify(autres.visible)
             compare(autres.text, "Autres actions")

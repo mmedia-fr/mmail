@@ -1552,6 +1552,16 @@ QtObject {
             racine.grabToImage(function(r) { r.saveToFile(chemin) })
             console.log("scenario: image", prefixe + nom, "| vue", vue, "| largeur", fenetre.width)
         }
+        // Au bureau, « Suggestion » (0.6.45) entier dans la fenêtre, avec ou
+        // sans les noms (13/11 : il en sortait avec les noms, à 1 280 points).
+        var suggestionDansLaFenetre = function(quand) {
+            if (tactile || fenetre.width < 1024)
+                return
+            var sg = objetNomme(entete, "boutonSuggestion")
+            var bord = sg ? Math.round(sg.mapToItem(null, 0, 0).x + sg.width) : -1
+            bilan("« Suggestion » dans la fenêtre, " + quand + " (bord droit " + bord + " / " + fenetre.width + ")",
+                  !!sg && sg.visible && bord <= fenetre.width)
+        }
         var lignesDuMenu = function() {
             var n = 0
             for (var i = 0; i < menuMessage.count; ++i) {
@@ -1580,9 +1590,16 @@ QtObject {
                 var xs = ordre.map(function(nom) { return x(objetNomme(colonneLecture, nom)) })
                 var range = xs.every(function(v, k) { return v >= 0 && (k === 0 || v > xs[k - 1]) })
                 bilan("ordre de la barre (" + xs.map(Math.round).join(", ") + ")", range)
+                suggestionDansLaFenetre("pictogrammes seuls")
                 // Au doigt, « Source » est dans « … » (12/11).
                 bilan(tactile ? "« Source » hors de la barre au doigt" : "« Source » en toutes lettres",
                       !!s && (tactile ? !s.visible : s.visible && y(r) === y(s) && s.text === qsTr("Source")))
+                // « Imprimer… » (13/11) : au bureau, entre « Supprimer » et « Source ».
+                var im = objetNomme(colonneLecture, "boutonImprimer")
+                bilan(tactile ? "« Imprimer… » hors de la barre au doigt"
+                              : "« Imprimer… » entre « Supprimer » et « Source » (x " + Math.round(x(im)) + ")",
+                      !!im && (tactile ? !im.visible
+                                       : im.visible && y(im) === y(r) && x(d) < x(im) && x(im) < x(s)))
                 saisir("volet")
             },
             function() {
@@ -1613,6 +1630,7 @@ QtObject {
                     bilan("« Supprimer » avec son nom (" + (d ? d.width : "?") + " px)", !!d && d.libelleVisible && d.width > 60)
                     bilan("« Nouveau message » avec son nom, fenêtre de " + fenetre.width + " px",
                           !!n && (fenetre.enteteSerree ? n.iconeSeule : !n.iconeSeule))
+                    suggestionDansLaFenetre("pictogrammes et texte")
                     // L'image se prend à l'image suivante : le réglage se
                     // rend à l'étape d'après.
                     saisir("volet-texte")

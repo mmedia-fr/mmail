@@ -500,7 +500,7 @@ mod essais {
             br#"{"lien": "https://visio.exemple.fr/exemple-fr-k3mz-8qhw-tp2a?jwt="}"#,
             br#"{"lien": "https://visio.exemple.fr/exemple-fr-k3mz-8qhw-tp2a?jwt=abc&x=javascript:1"}"#,
             br#"{"lien": "https://visio.exemple.fr/exemple-fr-k3mz-8qhw-tp2a"}"#,
-            br#"{"erreur": "identifiants refusés"}"#,
+            br#"{"erreur": "refus"}"#,
             b"pas du json",
         ] {
             assert_eq!(lien_rendu(refuse, SERVICE, nom), None, "{}", String::from_utf8_lossy(refuse));

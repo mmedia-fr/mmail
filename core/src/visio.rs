@@ -198,6 +198,135 @@ pub fn poser(lieu: &str, description: &str, service: &str, adresse: &str) -> Opt
     Some((lieu, description))
 }
 
+/// Point d'entrée du service qui rend directement le lien d'organisateur
+/// d'une réunion, sur présentation des identifiants de la boîte (mmail#172) :
+/// ni page de connexion, ni salle d'attente.
+pub fn adresse_organisateur_direct(service: &str) -> String {
+    format!("{service}/organiser/mmail")
+}
+
+/// Corps de la demande d'un lien d'organisateur.
+pub fn demande_organisateur(nom: &str, nom_affiche: &str) -> String {
+    serde_json::json!({ "salle": nom, "nom": nom_affiche }).to_string()
+}
+
+/// Lien rendu par le service, s'il est bien celui de la réunion `nom` sur
+/// `service`, suivi d'un jeton : MMail n'ouvre rien d'autre que ce qu'il a
+/// demandé.
+pub fn lien_rendu(corps: &[u8], service: &str, nom: &str) -> Option<String> {
+    let valeur: serde_json::Value = serde_json::from_slice(corps).ok()?;
+    let rendu = valeur.get("lien")?.as_str()?;
+    let jeton = rendu.strip_prefix(&format!("{}?jwt=", lien(service, nom)))?;
+    let forme = jeton.bytes().all(|o| o.is_ascii_alphanumeric() || matches!(o, b'-' | b'_' | b'.'));
+    (!jeton.is_empty() && forme).then(|| rendu.to_string())
+}
+
+/// Motif d'un refus du service, pour la barre d'état.
+pub fn motif_refus(statut: u16) -> String {
+    match statut {
+        401 => "le service de visio refuse les identifiants de la boîte".to_string(),
+        403 => "la réunion n'appartient pas au domaine de la boîte".to_string(),
+        404 => "le service de visio n'ouvre pas encore les réunions depuis MMail".to_string(),
+        429 => "trop d'essais récents, réessayez dans un quart d'heure".to_string(),
+        502 => "la messagerie n'a pas répondu au service de visio".to_string(),
+        s => format!("le service de visio a répondu HTTP {s}"),
+    }
+}
+
+/// Demande au service le lien d'organisateur de la réunion `nom`, avec les
+/// identifiants de la boîte, envoyés en HTTPS à la seule adresse du réglage
+/// du compte. Bloquant : hors du fil de l'interface. L'erreur porte le statut
+/// HTTP du refus (0 sans réponse lisible) et son motif.
+pub fn demander_lien_organisateur(service: &str, nom: &str, utilisateur: &str, mot_de_passe: &str) -> Result<String, (u16, String)> {
+    let url = adresse_organisateur_direct(service);
+    let jeton = crate::smtp::base64(format!("{utilisateur}:{mot_de_passe}").as_bytes());
+    let entetes = [("Authorization", format!("Basic {jeton}")), ("Content-Type", "application/json".to_string())];
+    let corps = demande_organisateur(nom, "");
+    let reponse = crate::http::envoyer(&crate::http::Demande {
+        methode: "POST",
+        url: &url,
+        accepte: "application/json",
+        entetes: &entetes,
+        corps: corps.as_bytes(),
+        taille_max: 16 * 1024,
+    })
+    .map_err(|e| (0, format!("service de visio injoignable ({e})")))?;
+    match reponse.statut {
+        200 => lien_rendu(&reponse.corps, service, nom).ok_or_else(|| (0, "réponse du service de visio illisible".to_string())),
+        statut => Err((statut, motif_refus(statut))),
+    }
+}
+
+/// Navigateur qui ouvre une page en fenêtre d'application (`--app=`), sans
+/// onglets ni barre d'adresse : Edge sous Windows, présent sur tous les postes.
+#[cfg(target_os = "windows")]
+pub fn navigateur_application() -> Option<std::path::PathBuf> {
+    for variable in ["ProgramFiles(x86)", "ProgramFiles", "LOCALAPPDATA"] {
+        if let Some(dossier) = std::env::var_os(variable) {
+            let candidat = std::path::PathBuf::from(dossier).join(r"Microsoft\Edge\Application\msedge.exe");
+            if candidat.is_file() {
+                return Some(candidat);
+            }
+        }
+    }
+    None
+}
+
+/// Sous Linux : Chromium, Chrome ou Edge, s'il est dans le `PATH`.
+#[cfg(all(unix, not(target_os = "android")))]
+pub fn navigateur_application() -> Option<std::path::PathBuf> {
+    let dossiers: Vec<std::path::PathBuf> = std::env::split_paths(&std::env::var_os("PATH")?).collect();
+    for nom in ["chromium", "chromium-browser", "google-chrome", "google-chrome-stable", "microsoft-edge"] {
+        for dossier in &dossiers {
+            let candidat = dossier.join(nom);
+            if candidat.is_file() {
+                return Some(candidat);
+            }
+        }
+    }
+    None
+}
+
+/// Ailleurs (Android) : aucun, le lien part au navigateur par défaut.
+#[cfg(not(any(target_os = "windows", all(unix, not(target_os = "android")))))]
+pub fn navigateur_application() -> Option<std::path::PathBuf> {
+    None
+}
+
+/// Ouvre `lien` dans une fenêtre d'application du navigateur ; faux s'il n'y
+/// en a pas, et le lien s'ouvre alors dans le navigateur par défaut.
+///
+/// Dans une AppImage, les variables qui désignent ses bibliothèques et
+/// greffons Qt (valeurs sous `$APPDIR`) sont retirées : le navigateur
+/// chargerait sinon ceux de MMail.
+pub fn ouvrir_en_fenetre(lien: &str) -> bool {
+    let Some(programme) = navigateur_application() else { return false };
+    let mut commande = std::process::Command::new(programme);
+    commande
+        .arg(format!("--app={lien}"))
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    if let Some(appdir) = std::env::var_os("APPDIR").filter(|d| !d.is_empty()) {
+        let appdir = appdir.to_string_lossy().into_owned();
+        for (cle, valeur) in std::env::vars_os() {
+            if valeur.to_string_lossy().contains(&appdir) {
+                commande.env_remove(cle);
+            }
+        }
+    }
+    match commande.spawn() {
+        Ok(mut enfant) => {
+            // Attendre la fin du navigateur ailleurs : pas de processus zombie.
+            let _ = std::thread::Builder::new().name("mmail-visio-fenetre".into()).spawn(move || {
+                let _ = enfant.wait();
+            });
+            true
+        }
+        Err(_) => false,
+    }
+}
+
 #[cfg(test)]
 mod essais {
     use super::*;
@@ -351,5 +480,39 @@ mod essais {
     fn poser_sans_service_ou_sans_domaine() {
         assert_eq!(poser("", "", "", "nom@exemple.fr"), None);
         assert_eq!(poser("", "", SERVICE, "sans-domaine"), None);
+    }
+
+    #[test]
+    fn organisateur_direct() {
+        assert_eq!(adresse_organisateur_direct(SERVICE), "https://visio.exemple.fr/organiser/mmail");
+        let corps: serde_json::Value = serde_json::from_str(&demande_organisateur("exemple-fr-k3mz-8qhw-tp2a", "")).unwrap();
+        assert_eq!(corps["salle"], "exemple-fr-k3mz-8qhw-tp2a");
+        let nom = "exemple-fr-k3mz-8qhw-tp2a";
+        let bon = br#"{"lien": "https://visio.exemple.fr/exemple-fr-k3mz-8qhw-tp2a?jwt=eyJ0.eXAi-OiJ_KV1Q"}"#;
+        assert_eq!(
+            lien_rendu(bon, SERVICE, nom).as_deref(),
+            Some("https://visio.exemple.fr/exemple-fr-k3mz-8qhw-tp2a?jwt=eyJ0.eXAi-OiJ_KV1Q")
+        );
+        // Rien d'autre que la réunion demandée, sur le service du compte.
+        for refuse in [
+            &br#"{"lien": "https://ailleurs.exemple/exemple-fr-k3mz-8qhw-tp2a?jwt=abc"}"#[..],
+            br#"{"lien": "https://visio.exemple.fr/exemple-fr-aaaa-bbbb-cccc?jwt=abc"}"#,
+            br#"{"lien": "https://visio.exemple.fr/exemple-fr-k3mz-8qhw-tp2a?jwt="}"#,
+            br#"{"lien": "https://visio.exemple.fr/exemple-fr-k3mz-8qhw-tp2a?jwt=abc&x=javascript:1"}"#,
+            br#"{"lien": "https://visio.exemple.fr/exemple-fr-k3mz-8qhw-tp2a"}"#,
+            br#"{"erreur": "identifiants refusés"}"#,
+            b"pas du json",
+        ] {
+            assert_eq!(lien_rendu(refuse, SERVICE, nom), None, "{}", String::from_utf8_lossy(refuse));
+        }
+    }
+
+    #[test]
+    fn motifs_de_refus() {
+        assert!(motif_refus(401).contains("identifiants"));
+        assert!(motif_refus(403).contains("domaine"));
+        assert!(motif_refus(404).contains("pas encore"));
+        assert!(motif_refus(429).contains("quart d'heure"));
+        assert!(motif_refus(500).contains("HTTP 500"));
     }
 }

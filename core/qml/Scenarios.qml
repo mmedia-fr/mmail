@@ -5467,6 +5467,9 @@ QtObject {
                 bouton.clicked()
                 bilan("second clic : lien gardé", lieu.text === avant
                       && description.text.split("Rejoindre la visio").length === 2)
+                var rejoindre = dans("boutonRejoindre")
+                bilan("« Rejoindre maintenant » visible (mmail#172)", !!rejoindre && rejoindre.visible)
+                bilan("hôte de la nouvelle réunion", vueAgenda.saisieEvenement.organiseeParLaBoite)
                 saisir("visio-saisie")
                 plusTard(800, function() {
                     dans("boutonEnregistrerEvenement").clicked()

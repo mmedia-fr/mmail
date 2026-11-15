@@ -261,6 +261,13 @@ Pane {
         return boite.lienVisio(f.agenda, f.lieu || "", organiseParLaBoite(f))
     }
 
+    // Ouvre la réunion d'un événement (mmail#172) : en hôte quand la boîte
+    // l'organise, sans page de connexion ; le lien arrive par `visioPrete`.
+    function ouvrirVisio(idAgenda, lieu, organisateur) {
+        annoncer(qsTr("Ouverture de la visio…"), false)
+        boite.ouvrirVisio(idAgenda, lieu || "", organisateur)
+    }
+
     // Le serveur d'agenda de la boîte de cet agenda distribue-t-il les
     // invitations ?
     function invitationsPossibles(idAgenda) {
@@ -318,14 +325,30 @@ Pane {
         function onAgendasMicrosoftAutorises(compte, message) {
             agenda.relire()
         }
+        function onVisioPrete(lien, message) {
+            if (lien.length > 0 && !agenda.boite.ouvrirFenetreVisio(lien))
+                Qt.openUrlExternally(lien)
+            if (message.length > 0)
+                agenda.annoncer(lien.length > 0 ? qsTr("Visio ouverte sans accès direct d'hôte : %1.").arg(message)
+                                                : qsTr("Visio impossible : %1.").arg(message), true)
+            else
+                agenda.annoncer(qsTr("Visio ouverte."), false)
+        }
         function onEvenementEnregistre(ok, message) {
             var enCours = agenda.ecritureEnCours
             agenda.ecritureEnCours = ""
             if (enCours === "saisie" && popupSaisie.opened) {
                 popupSaisie.enCours = false
+                var rejoindre = popupSaisie.rejoindreApres
+                popupSaisie.rejoindreApres = false
                 if (ok) {
+                    var idAgenda = popupSaisie.agendaChoisi
+                    var lieu = popupSaisie.lieuEnregistre
+                    var hote = popupSaisie.organiseeParLaBoite
                     popupSaisie.close()
                     agenda.annoncer(qsTr("Événement enregistré."), false)
+                    if (rejoindre)
+                        agenda.ouvrirVisio(idAgenda, lieu, hote)
                 } else {
                     popupSaisie.erreur = message
                 }
@@ -1231,7 +1254,7 @@ Pane {
                     visible: lien.length > 0
                     text: qsTr("Ouvrir la visio")
                     onClicked: {
-                        Qt.openUrlExternally(lien)
+                        agenda.ouvrirVisio(popupFiche.f.agenda, popupFiche.f.lieu, agenda.organiseParLaBoite(popupFiche.f))
                         popupFiche.close()
                     }
                 }
@@ -1400,6 +1423,26 @@ Pane {
         // Participants proposés : le serveur de la boîte de l'agenda doit
         // distribuer les invitations, et une occurrence seule n'en change pas.
         readonly property bool reunionPossible: !occurrence && agenda.invitationsPossibles(agendaChoisi)
+        // « Rejoindre maintenant » : enregistrer, puis ouvrir la réunion
+        // (mmail#172).
+        property bool rejoindreApres: false
+        property string lieuEnregistre: ""
+        // Une nouvelle réunion, ou celle que la boîte organise : la boîte en
+        // est l'hôte.
+        readonly property bool organiseeParLaBoite: nouveau || !s.organisateur
+                                                    || s.organisateur.toLowerCase() === agenda.boiteDe(agendaChoisi).toLowerCase()
+        // Lien de réunion du service dans « Lieu ».
+        readonly property bool reunionDansLieu: serviceVisio.length > 0
+                                                && agenda.boite.lienVisio(agendaChoisi, champLieu.text, false).length > 0
+        // Rappel des participants après « Visio », tant que le champ est vide.
+        property bool conseilParticipants: false
+        // Le serveur n'envoie pas d'invitation pour un événement passé (SOGo).
+        readonly property bool passeAvecParticipants: {
+            if (!reunionPossible || champParticipants.text.trim().length === 0)
+                return false
+            var fin = lireFin()
+            return fin !== null && fin.getTime() < Date.now()
+        }
         // Service de visio du compte de l'agenda ; sans lui, « Visio » invite
         // à en faire la demande.
         readonly property string serviceVisio: agenda.serviceVisio(agendaChoisi)
@@ -1422,10 +1465,26 @@ Pane {
             champLieu.text = o.lieu
             champDescription.text = o.description
             erreur = ""
+            if (reunionPossible && champParticipants.text.trim().length === 0) {
+                conseilParticipants = true
+                champParticipants.forceActiveFocus()
+            }
+        }
+
+        // Enregistre l'événement, puis ouvre sa réunion (cf.
+        // `onEvenementEnregistre`).
+        function rejoindreMaintenant() {
+            lieuEnregistre = champLieu.text
+            rejoindreApres = true
+            enregistrer()
+            if (!enCours)
+                rejoindreApres = false
         }
 
         function ouvrir(saisie) {
             s = saisie
+            rejoindreApres = false
+            conseilParticipants = false
             champParticipants.text = (s.participants || []).join(", ")
             erreur = ""
             enCours = false
@@ -1580,6 +1639,18 @@ Pane {
                                           : qsTr("Visio : comprise avec les boîtes de messagerie MMEDIA")
                             onClicked: popupSaisie.poserVisio()
                         }
+                        Button {
+                            objectName: "boutonRejoindre"
+                            visible: popupSaisie.reunionDansLieu
+                            enabled: !popupSaisie.enCours
+                            text: qsTr("Rejoindre maintenant")
+                            ToolTip.visible: hovered
+                            ToolTip.delay: 500
+                            ToolTip.text: popupSaisie.organiseeParLaBoite
+                                          ? qsTr("Enregistrer l'événement, puis ouvrir la réunion en hôte")
+                                          : qsTr("Enregistrer l'événement, puis ouvrir la réunion")
+                            onClicked: popupSaisie.rejoindreMaintenant()
+                        }
                     }
                     Item {
                         visible: !agenda.compact
@@ -1720,11 +1791,28 @@ Pane {
                         }
                         Label {
                             Layout.fillWidth: true
-                            visible: champParticipants.text.trim().length > 0
+                            visible: champParticipants.text.trim().length > 0 && !popupSaisie.passeAvecParticipants
                             wrapMode: Text.Wrap
                             font.pixelSize: 11
                             opacity: 0.7
                             text: qsTr("Le serveur envoie les invitations, et leurs mises à jour, à l'enregistrement.")
+                        }
+                        Label {
+                            objectName: "avertissementPasse"
+                            Layout.fillWidth: true
+                            visible: popupSaisie.passeAvecParticipants
+                            wrapMode: Text.Wrap
+                            font.pixelSize: 11
+                            color: "#c62828"
+                            text: qsTr("Événement passé : le serveur n'enverra pas d'invitation.")
+                        }
+                        Label {
+                            objectName: "conseilParticipants"
+                            Layout.fillWidth: true
+                            visible: popupSaisie.conseilParticipants && champParticipants.text.trim().length === 0
+                            wrapMode: Text.Wrap
+                            font.pixelSize: 11
+                            text: qsTr("Ajoutez les participants : ils recevront l'invitation avec le lien.")
                         }
                     }
                     Label { text: qsTr("Rappel") }

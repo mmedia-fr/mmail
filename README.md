@@ -429,7 +429,21 @@ description, qui part avec l'invitation. Un lieu qui porte déjà un lien du
 service le garde : le lien d'une réunion envoyée ne change pas. La fiche d'un
 événement dont le lieu porte ce lien propose « Ouvrir la visio » : en
 organisateur pour la boîte qui organise la réunion (ou un événement sans
-participants), après connexion avec le compte de messagerie, en invité sinon.
+participants), en invité sinon. Depuis la 0.7.1, l'organisateur entre
+directement en hôte, sans page de connexion ni salle d'attente : MMail
+présente l'adresse et le mot de passe de la boîte au service
+(`POST <service>/organiser/mmail`, en HTTPS, à la seule adresse du réglage du
+compte), qui les vérifie auprès du serveur de messagerie et rend le lien de la
+réunion avec un jeton de deux minutes. Si le service refuse ou ne connaît pas
+encore ce point d'entrée, c'est la page de connexion du service qui s'ouvre,
+comme avant ; pour un compte à jetons (Microsoft, Google), aussi. Dans la
+fenêtre de l'événement, « Rejoindre maintenant » enregistre l'événement puis
+ouvre la réunion. Sous Windows, la réunion s'ouvre dans une fenêtre
+d'application d'Edge (`--app`), sans onglets ni barre d'adresse ; sous Linux,
+dans celle de Chromium ou de Chrome s'ils sont installés ; sinon, et sous
+Android, dans le navigateur par défaut. Après « Visio », un rappel invite à
+remplir « Participants » ; un événement passé qui a des participants est
+signalé, car le serveur n'envoie pas d'invitation pour un événement passé.
 Le nom de la réunion commence par le domaine du compte, points changés en
 tirets, suivi de trois groupes de quatre signes tirés au hasard (sans `l`, `o`,
 `0` ni `1`) : le service n'accepte en organisateur que la boîte de ce domaine.

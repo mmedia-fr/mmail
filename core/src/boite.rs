@@ -146,6 +146,21 @@ pub mod qobject {
         #[cxx_name = "lienVisio"]
         fn lien_visio(&self, agenda: i32, lieu: &QString, organisateur: bool) -> QString;
 
+        /// Ouvre la réunion dont le lien figure dans `lieu`, un événement de
+        /// l'agenda `agenda` (mmail#172). En organisateur, pour une boîte à
+        /// mot de passe, le service rend le lien d'hôte sur présentation de
+        /// ses identifiants : ni page de connexion, ni salle d'attente. Le
+        /// lien arrive par `visio_prete`.
+        #[qinvokable]
+        #[cxx_name = "ouvrirVisio"]
+        fn ouvrir_visio(self: Pin<&mut Boite>, agenda: i32, lieu: &QString, organisateur: bool);
+
+        /// Ouvre `lien` (HTTPS) dans une fenêtre d'application du navigateur ;
+        /// faux s'il n'y en a pas, et l'interface l'ouvre alors normalement.
+        #[qinvokable]
+        #[cxx_name = "ouvrirFenetreVisio"]
+        fn ouvrir_fenetre_visio(&self, lien: &QString) -> bool;
+
         /// Vrai si MMail a un identifiant d'application Microsoft : sans lui,
         /// pas de compte Microsoft.
         #[qinvokable]
@@ -1367,6 +1382,12 @@ pub mod qobject {
         #[qsignal]
         #[cxx_name = "evenementEnregistre"]
         fn evenement_enregistre(self: Pin<&mut Boite>, ok: bool, message: &QString);
+
+        /// Lien de la réunion à ouvrir (cf. `ouvrir_visio`), vide s'il n'y en
+        /// a pas ; `message` dit pourquoi ce n'est pas le lien direct d'hôte.
+        #[qsignal]
+        #[cxx_name = "visioPrete"]
+        fn visio_prete(self: Pin<&mut Boite>, lien: &QString, message: &QString);
 
         /// Écriture dans les carnets d'adresses terminée, index relu (0.6.20) :
         /// `message` en rend compte ; `conflit` : une fiche avait changé
@@ -3577,6 +3598,56 @@ impl qobject::Boite {
             Some(nom) => QString::from(&crate::visio::lien(&service, &nom)),
             None => QString::default(),
         }
+    }
+
+    pub fn ouvrir_visio(mut self: Pin<&mut Self>, agenda: i32, lieu: &QString, organisateur: bool) {
+        let reunion = self
+            .visio_de_l_agenda(agenda)
+            .and_then(|(_, service)| crate::visio::reunion_dans(&lieu.to_string(), &service).map(|nom| (service, nom)));
+        let Some((service, nom)) = reunion else {
+            self.as_mut().visio_prete(&QString::default(), &QString::from("pas de lien de réunion du service de visio"));
+            return;
+        };
+        let invite = crate::visio::lien(&service, &nom);
+        let page_hote = crate::visio::lien_organisateur(&service, &nom);
+        if !organisateur {
+            self.as_mut().visio_prete(&QString::from(&invite), &QString::default());
+            return;
+        }
+        let compte = self
+            .magasin
+            .as_ref()
+            .and_then(|m| m.agendas().ok())
+            .and_then(|liste| liste.into_iter().find(|a| a.id == agenda as i64))
+            .map(|a| a.compte);
+        // Compte à jetons, ou boîte non connectée : la page de connexion du
+        // service, comme avant.
+        let Some(id) = compte.and_then(|c| self.identites.get(&c).cloned()).filter(|i| i.oauth.is_none() && !i.mot_de_passe.is_empty())
+        else {
+            self.as_mut().visio_prete(&QString::from(&page_hote), &QString::default());
+            return;
+        };
+        let fil = self.qt_thread();
+        let (invite_fil, page_fil) = (invite.clone(), page_hote.clone());
+        let lance = thread::Builder::new().name("mmail-visio-organisateur".into()).spawn(move || {
+            let issue = crate::visio::demander_lien_organisateur(&service, &nom, &id.utilisateur, &id.mot_de_passe);
+            let _ = fil.queue(move |mut boite: Pin<&mut qobject::Boite>| match issue {
+                Ok(lien) => boite.as_mut().visio_prete(&QString::from(&lien), &QString::default()),
+                // Une réunion d'un autre domaine ne s'ouvre qu'en invité ;
+                // pour tout autre refus, la page de connexion du service
+                // garde l'accès d'hôte.
+                Err((403, motif)) => boite.as_mut().visio_prete(&QString::from(&invite_fil), &QString::from(&motif)),
+                Err((_, motif)) => boite.as_mut().visio_prete(&QString::from(&page_fil), &QString::from(&motif)),
+            });
+        });
+        if lance.is_err() {
+            self.as_mut().visio_prete(&QString::from(&page_hote), &QString::from("demande au service de visio impossible"));
+        }
+    }
+
+    pub fn ouvrir_fenetre_visio(&self, lien: &QString) -> bool {
+        let lien = lien.to_string();
+        lien.starts_with("https://") && crate::visio::ouvrir_en_fenetre(&lien)
     }
 
     pub fn poser_serveur_envoi(mut self: Pin<&mut Self>, adresse: &QString, hote: &QString) -> bool {

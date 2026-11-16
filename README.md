@@ -219,7 +219,17 @@ de projet interne.
   texte d'un serveur Mailcow parcourt. Les résultats se **trient** — plus
   récents, plus anciens, expéditeur, objet (sans ses « RE : »), plus gros,
   dossier dans toutes les boîtes — sur le poste : le tri n'est jamais demandé
-  au serveur, pour qui il coûte cher sur un gros dossier ;
+  au serveur, pour qui il coûte cher sur un gros dossier. Sur un **compte
+  Microsoft 365**, la part du serveur passe par Microsoft Graph (`$search`) et
+  non par la recherche IMAP, qu'Exchange Online applique selon ses propres
+  règles : les résultats sont ceux d'Outlook. Chaque mot doit se trouver dans
+  l'objet, l'expéditeur, le texte ou le nom d'une pièce jointe — l'objet ou
+  l'expéditeur seulement avec la case ci-dessus. Un dossier se cherche en
+  lui-même, toute la boîte d'une seule requête ; chaque résultat est rattaché
+  au message de l'index par son `Message-ID`, et celui que le poste n'a pas
+  encore est relu sur le serveur IMAP puis rangé. Les boîtes partagées vues
+  par IMAP, les catégories et les non-lus seuls restent à la recherche IMAP,
+  comme tout le reste si Graph ne répond pas ;
 - **Supprimer** envoie à la corbeille de la boîte (touche Suppr) ; dans la
   corbeille et les indésirables, d'où un message n'a plus de corbeille où aller,
   il l'efface pour de bon, après confirmation (0.6.24). Dans une **boîte
@@ -410,6 +420,16 @@ modifié ailleurs entre-temps n'est pas écrasé : l'agenda est relu et la
 modification est à refaire. Les propriétés que MMail ne gère pas (celles d'un
 autre logiciel) sont conservées.
 
+**Dates et heures** (mmail#175) : elles se tapent librement et se remettent en
+forme en sortant du champ — `1356`, `13h56`, `13,56` ou `13 56` donnent
+`13:56`, `9h` donne `09:00` ; `171126`, `17/11/26`, `17-11-2026` ou `1711`
+donnent `17/11/2026`. Sans année, c'est l'année en cours, ou la suivante si la
+date est passée de plus de six mois ; sans mois, le mois en cours. À la souris,
+la molette et les flèches haut et bas avancent ou reculent d'un quart d'heure
+(sur le quart d'heure rond) ou d'un jour ; « ▾ » propose les heures de la
+journée par quart d'heure, et le pictogramme de calendrier ouvre le petit
+calendrier. La fin suit le début, durée gardée.
+
 **Invitations** : un courriel d'invitation affiche un bandeau — objet, horaire,
 lieu, organisateur — avec « Accepter », « Provisoire », « Refuser » ; la réunion
 entre dans l'agenda (un refus l'en retire) et l'organisateur reçoit la réponse.
@@ -419,6 +439,18 @@ est invité se répond depuis sa fiche ; « Participants » fait d'un événemen
 réunion. C'est le serveur d'agenda qui envoie les courriels d'invitation, de
 mise à jour, d'annulation et de réponse (SOGo le fait ; un serveur qui ne le
 fait pas laisse ces boutons inactifs).
+
+**Déplacer et retailler** (mmail#175) : dans les vues Jour et Semaine, un
+événement se glisse à une autre heure ou un autre jour, et sa poignée du bas
+(curseur en double flèche) change l'heure de fin ; de quart d'heure en quart
+d'heure, une case fantôme montrant les nouvelles heures. À la souris, on glisse
+directement, un clic ouvrant toujours la fiche ; au doigt, un appui long
+d'abord, un glissement simple faisant défiler la grille. La grille défile
+d'elle-même quand le pointeur touche son bord. Dans une série, seule
+l'occurrence change ; une réunion qui a des participants demande confirmation,
+car ils reçoivent la nouvelle heure. Un événement non modifiable depuis MMail
+(invitation reçue, agenda en lecture seule) ou sur plusieurs jours ne bouge
+pas, et la barre d'état dit pourquoi.
 
 **Visio** (0.7.0) : pour un compte qui a un **service de visio** (« Modifier
 le compte… », ou le lien de configuration), la fiche d'un événement porte un
@@ -442,8 +474,11 @@ ouvre la réunion. Sous Windows, la réunion s'ouvre dans une fenêtre
 d'application d'Edge (`--app`), sans onglets ni barre d'adresse ; sous Linux,
 dans celle de Chromium ou de Chrome s'ils sont installés ; sinon, et sous
 Android, dans le navigateur par défaut. Après « Visio », un rappel invite à
-remplir « Participants » ; un événement passé qui a des participants est
-signalé, car le serveur n'envoie pas d'invitation pour un événement passé.
+remplir « Participants ». Une visio ajoutée sans participant n'est pas
+enregistrée au premier clic : MMail avertit que personne ne recevra
+l'invitation et place le curseur dans « Participants » ; un second clic
+enregistre quand même (mmail#175). Un événement passé qui a des participants
+est signalé, car le serveur n'envoie pas d'invitation pour un événement passé.
 Le nom de la réunion commence par le domaine du compte, points changés en
 tirets, suivi de trois groupes de quatre signes tirés au hasard (sans `l`, `o`,
 `0` ni `1`) : le service n'accepte en organisateur que la boîte de ce domaine.
@@ -717,11 +752,28 @@ pièce jointe le plus souvent, reste sur le serveur.
 La boîte de réception et chaque dossier ouvert se préchargent en arrière-plan ;
 au-delà de la fenêtre, un message est relu sur le serveur.
 
+Le préchargement passe après ce que l'on demande : un message cliqué ou un
+dossier ouvert l'interrompt entre deux messages, et il reprend ensuite. Un
+message relu sur le serveur, et de plus de 512 Kio, s'affiche **sans ses
+grosses pièces jointes** : MMail lit sa structure, puis ses en-têtes, ses
+textes et ses images intégrées. La liste des pièces jointes est complète, avec
+leur taille ; ouvrir ou enregistrer une pièce, répondre ou transférer relisent
+le message entier. Sur Microsoft 365, qui transmet un message bien plus
+lentement qu'un serveur Dovecot, l'affichage ne dépend plus de la taille des
+pièces jointes (#179).
+
 Un message en cours de rédaction est gardé sur le poste toutes les 10 secondes
 et à la fermeture de MMail, et enregistré en brouillon sur le serveur 30
 secondes après la première frappe, puis chaque minute tant qu'il change : le
 brouillon paraît dans son dossier pendant la rédaction. Si MMail se ferme avant son envoi (mise à
 jour, arrêt du poste), il est proposé à la reprise au démarrage suivant.
+Pendant un enregistrement, un indicateur tourne à côté de « Enregistrement du
+brouillon… ». « Envoyer » reste cliquable : le bouton passe à « Envoi en
+attente… », et le message part dès la fin de l'enregistrement, même s'il
+échoue. Le brouillon compte pour enregistré dès son dépôt sur le serveur ; le
+retrait de sa version précédente vient ensuite, sans retenir la rédaction.
+Les images du corps d'un brouillon repris, y compris celles d'un brouillon
+préparé par un autre logiciel, repartent intégrées au message.
 
 | | Windows | Linux |
 |---|---|---|

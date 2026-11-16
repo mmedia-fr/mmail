@@ -161,6 +161,15 @@ Page {
     property string etatGarde: ""
     property string empreinteEnregistree: ""
     property bool enregistrementAuto: false
+    // Un enregistrement du brouillon en cours, et « Envoyer » cliqué pendant
+    // celui-ci (#178) : l'envoi part dès la fin de l'enregistrement. Le clic
+    // restait sans effet, sans rien dire, tant que le serveur n'avait pas
+    // répondu.
+    property bool enregistrementEnCours: false
+    property bool envoiApresEnregistrement: false
+    readonly property bool envoiPossible: !occupe || (enregistrementEnCours && !envoiApresEnregistrement)
+    readonly property string libelleEnvoi: envoiApresEnregistrement ? qsTr("Envoi en attente…")
+                                         : envoiDiffere > 0 ? qsTr("Programmer") : qsTr("Envoyer")
     // Options d'envoi (menu « Options ») : importance 1 / 0 / -1,
     // accusés, heure d'envoi (secondes Unix, 0 : tout de suite).
     property int importance: 0
@@ -576,7 +585,9 @@ Page {
     }
 
     function envoyer(sansObjet) {
-        if (occupe)
+        // Occupé à enregistrer le brouillon : l'envoi attendra la fin (#178).
+        // Occupé à autre chose (préparation, envoi déjà lancé) : rien.
+        if (occupe && (!enregistrementEnCours || envoiApresEnregistrement))
             return
         var c = compteChoisi()
         if (!c) {
@@ -590,6 +601,11 @@ Page {
         }
         if (champObjet.text.trim().length === 0 && !sansObjet) {
             dlgSansObjet.open()
+            return
+        }
+        if (occupe) {
+            envoiApresEnregistrement = true
+            signaler(qsTr("Envoi dès la fin de l'enregistrement du brouillon…"), false)
             return
         }
         if (envoiDiffere > 0 && envoiDiffere * 1000 <= Date.now())
@@ -659,6 +675,7 @@ Page {
         if (!c)
             return
         occupe = true
+        enregistrementEnCours = true
         enregistrementAuto = auto === true
         empreinteEnregistree = empreinte()
         signaler(qsTr("Enregistrement du brouillon…"), false)
@@ -680,11 +697,21 @@ Page {
         brouillonCompte = compte
         brouillonChemin = chemin
         occupe = false
+        enregistrementEnCours = false
         enregistrementAuto = false
         // Ce qui a été tapé pendant l'enregistrement reste à enregistrer.
         modifie = empreinte() !== empreinteEnregistree
         if (!modifie)
             oublierGarde()
+        if (envoiApresEnregistrement) {
+            // « Envoyer » cliqué pendant l'enregistrement (#178) : le message
+            // part tel qu'il est maintenant, et remplace le brouillon tout juste
+            // enregistré.
+            envoiApresEnregistrement = false
+            fermerApresEnregistrement = false
+            envoyer(true)
+            return
+        }
         signaler(qsTr("Brouillon enregistré à %1.").arg(Qt.formatTime(new Date(), "hh:mm")), false)
         if (fermerApresEnregistrement) {
             // Du texte tapé pendant l'enregistrement serait perdu à la
@@ -700,6 +727,17 @@ Page {
         occupe = false
         chargement = false
         fermerApresEnregistrement = false
+        enregistrementEnCours = false
+        if (envoiApresEnregistrement && !enEnvoi) {
+            // L'enregistrement a échoué, l'envoi demandé pendant celui-ci part
+            // quand même (#178) : s'il ne peut pas partir, il le dira lui-même.
+            envoiApresEnregistrement = false
+            enregistrementAuto = false
+            garder()
+            envoyer(true)
+            return
+        }
+        envoiApresEnregistrement = false
         if (enEnvoi) {
             // Pas parti : la rédaction revient telle qu'envoyée, et MMail
             // ne se ferme pas sans elle.
@@ -868,21 +906,23 @@ Page {
             anchors.rightMargin: 6
             // Un bouton ne se comprime pas sous sa largeur : c'est le texte de
             // la note qui cède la place.
+            // Pendant l'enregistrement du brouillon, « Envoyer » reste
+            // cliquable : l'envoi attend la fin, le bouton le dit (#178).
             ToolButton {
                 objectName: "boutonEnvoyer"
                 visible: !redac.barreCompacte
-                text: redac.envoiDiffere > 0 ? qsTr("Programmer") : qsTr("Envoyer")
+                text: redac.libelleEnvoi
                 font.bold: true
-                enabled: !redac.occupe
+                enabled: redac.envoiPossible
                 Layout.minimumWidth: implicitWidth
                 onClicked: redac.envoyer(false)
             }
             BoutonIcone {
                 objectName: "boutonEnvoyer"
                 visible: redac.barreCompacte
-                text: redac.envoiDiffere > 0 ? qsTr("Programmer") : qsTr("Envoyer")
+                text: redac.libelleEnvoi
                 dessin: redac.envoiDiffere > 0 ? redac.dessinerHorloge : redac.dessinerEnvoi
-                enabled: !redac.occupe
+                enabled: redac.envoiPossible
                 Layout.minimumWidth: implicitWidth
                 onClicked: redac.envoyer(false)
             }
@@ -946,10 +986,22 @@ Page {
                 Layout.minimumWidth: implicitWidth
                 onClicked: menuOptions.popup(boutonOptionsIcone, 0, boutonOptionsIcone.height)
             }
+            // Un enregistrement en cours se voit (#178) : l'indicateur tourne,
+            // la note passe en plein.
+            BusyIndicator {
+                objectName: "indicateurEnregistrement"
+                running: redac.enregistrementEnCours
+                visible: running
+                implicitWidth: 20
+                implicitHeight: 20
+                Layout.preferredWidth: 20
+                Layout.preferredHeight: 20
+            }
             Label {
+                objectName: "noteRedaction"
                 text: redac.note
                 color: redac.noteErreur ? "#b00020" : fenetre.palette.windowText
-                opacity: redac.noteErreur ? 1 : 0.75
+                opacity: redac.noteErreur || redac.enregistrementEnCours ? 1 : 0.75
                 elide: Text.ElideRight
                 Layout.fillWidth: true
                 // Sa largeur est ce qui reste : un message long ne pousse pas

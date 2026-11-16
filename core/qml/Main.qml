@@ -7347,6 +7347,10 @@ ApplicationWindow {
             // Scénario « visio » (0.7.0, banc AGENDA=1).
             if (essai.scenario === "visio")
                 scenarios.lancerScenarioVisio()
+            // Scénario « agenda-deplacer » (mmail#175) : glisser et retailler
+            // un événement à la souris.
+            if (essai.scenario === "agenda-deplacer")
+                scenarios.lancerScenarioAgendaDeplacer()
             // Scénario « visio-reel » : une vraie boîte hébergée par MMEDIA.
             if (essai.scenario === "visio-reel")
                 scenarios.lancerScenarioVisioReel()

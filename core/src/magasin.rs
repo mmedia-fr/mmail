@@ -1777,6 +1777,34 @@ impl Magasin {
         Ok(uids)
     }
 
+    /// UID des messages d'un dossier qui portent l'un des `Message-ID` de
+    /// `ids` (chevrons ou non, de part et d'autre), en ordre croissant, et les
+    /// identifiants qu'aucun message de l'index ne porte (#179 : résultats de
+    /// la recherche de Graph).
+    pub fn uids_par_message_id(&self, dossier: i64, ids: &[String]) -> Resultat<(Vec<u32>, Vec<String>)> {
+        // Le dossier lu une fois : aucun index ne porte sur `message_id`.
+        let mut par_id: std::collections::HashMap<String, Vec<u32>> = std::collections::HashMap::new();
+        let mut lire = self.base.prepare_cached("SELECT uid, message_id FROM messages WHERE folder_id = ?1 AND message_id <> ''")?;
+        let lignes = lire.query_map(params![dossier], |l| Ok((l.get::<_, u32>(0)?, l.get::<_, String>(1)?)))?;
+        for ligne in lignes {
+            let (uid, message_id) = ligne?;
+            par_id.entry(crate::microsoft::sans_chevrons(&message_id).to_string()).or_default().push(uid);
+        }
+        let mut uids = Vec::new();
+        let mut absents: Vec<String> = Vec::new();
+        for id in ids {
+            let id = crate::microsoft::sans_chevrons(id);
+            match par_id.get(id) {
+                Some(trouves) => uids.extend(trouves),
+                None if !id.is_empty() && !absents.iter().any(|a| a == id) => absents.push(id.to_string()),
+                None => {}
+            }
+        }
+        uids.sort_unstable();
+        uids.dedup();
+        Ok((uids, absents))
+    }
+
     /// Messages dont chaque mot de `texte` figure dans l'objet, le nom ou
     /// l'adresse de l'expéditeur : d'un dossier, ou de tous les comptes
     /// (`dossier` absent), les plus récents d'abord, `limite` au plus.
@@ -3834,6 +3862,27 @@ mod tests {
         m.poser_lien_delta(compte, "INBOX", "https://graph/delta?1").unwrap();
         m.poser_lien_delta(compte, "INBOX", "https://graph/delta?2").unwrap();
         assert_eq!(m.lien_delta(compte, "INBOX").unwrap(), "https://graph/delta?2");
+    }
+
+    /// Résultats de la recherche de Graph (#179) : rattachés aux messages du
+    /// dossier par leur Message-ID, chevrons ou non ; deux exemplaires du même
+    /// message donnent leurs deux UID ; les absents sont rendus une fois.
+    #[test]
+    fn uids_d_apres_le_message_id() {
+        let m = Magasin::en_memoire().unwrap();
+        let compte = m.compte("a@exemple.fr", "h", 993, "a@exemple.fr").unwrap();
+        m.poser_dossiers(compte, &[dossier("INBOX", &[]), dossier("Archives", &[])]).unwrap();
+        let inbox = m.dossier_id(compte, "INBOX").unwrap();
+        let archives = m.dossier_id(compte, "Archives").unwrap();
+        let recu = |uid, mid: &str| MessageLocal { uid, message_id: mid.into(), ..Default::default() };
+        m.poser_messages(inbox, &[recu(7, "a@x"), recu(3, "<b@x>"), recu(9, "a@x"), recu(4, "")]).unwrap();
+        m.poser_messages(archives, &[recu(1, "c@x")]).unwrap();
+        let ids: Vec<String> = ["<a@x>", "b@x", "c@x", "z@x", "<z@x>", ""].iter().map(|s| s.to_string()).collect();
+        let (uids, absents) = m.uids_par_message_id(inbox, &ids).unwrap();
+        assert_eq!(uids, vec![3, 7, 9]);
+        // « c@x » est aux archives, pas dans ce dossier.
+        assert_eq!(absents, vec!["c@x".to_string(), "z@x".to_string()]);
+        assert_eq!(m.uids_par_message_id(archives, &ids).unwrap().0, vec![1]);
     }
 
     /// Portée « cette boîte, tous dossiers » (0.8.3) et non-lus seulement

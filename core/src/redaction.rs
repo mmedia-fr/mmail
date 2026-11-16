@@ -418,6 +418,26 @@ pub fn integrer_images(html: &str, lire: impl Fn(&str) -> Option<(String, Vec<u8
     (sortie, images)
 }
 
+/// Remplace dans `html` chaque référence `cid:<cid>` par `adresse` : la
+/// référence entière seulement, « cid:image1 » laissant « cid:image10 » tel
+/// quel — un brouillon venu d'un autre logiciel (#178) numérote ainsi ses
+/// images.
+pub fn remplacer_cid(html: &str, cid: &str, adresse: &str) -> String {
+    let motif = format!("cid:{cid}");
+    let mut sortie = String::with_capacity(html.len());
+    let mut reste = html;
+    while let Some(i) = reste.find(&motif) {
+        let apres = &reste[i + motif.len()..];
+        let entiere =
+            apres.chars().next().is_none_or(|c| matches!(c, '"' | '\'' | ')' | '>') || c.is_whitespace());
+        sortie.push_str(&reste[..i]);
+        sortie.push_str(if entiere { adresse } else { &motif });
+        reste = apres;
+    }
+    sortie.push_str(reste);
+    sortie
+}
+
 /// Images qu'un brouillon enregistré porte dans son corps (`cid:`) : de quoi
 /// les remettre dans la fenêtre de rédaction quand on le reprend.
 pub fn images_du_brouillon(brut: &[u8]) -> Vec<(String, String, Vec<u8>)> {
@@ -1264,6 +1284,91 @@ mod tests {
         assert_eq!(reprises.len(), 1);
         assert_eq!(&reprises[0].0, cid);
         assert_eq!(reprises[0].2, b"\x89PNG");
+    }
+
+    #[test]
+    fn reference_cid_entiere_seulement() {
+        let html = "<img src=\"cid:image1\"><img src='cid:image10'><img src=cid:image1>(cid:image1)";
+        assert_eq!(
+            remplacer_cid(html, "image1", "file:///p/i0.png"),
+            "<img src=\"file:///p/i0.png\"><img src='cid:image10'><img src=file:///p/i0.png>(file:///p/i0.png)"
+        );
+        assert_eq!(remplacer_cid("x cid:a", "a", "Y"), "x Y");
+        assert_eq!(remplacer_cid("cid:ab", "a", "Y"), "cid:ab");
+    }
+
+    /// #178 : un brouillon déposé par un autre logiciel — HTML seul dans un
+    /// `multipart/related`, deux images de signature `inline` désignées par
+    /// des Content-ID courts — repris, enregistré puis envoyé : ses deux images
+    /// restent dans le corps, à leur place, et aucune ne devient pièce jointe.
+    #[test]
+    fn brouillon_venu_d_ailleurs_garde_ses_images() {
+        let brut = "From: Moi <moi@exemple.fr>\r\n\
+            To: toi@exemple.fr\r\n\
+            Subject: RE: Essai\r\n\
+            Message-ID: <depose@exemple.fr>\r\n\
+            MIME-Version: 1.0\r\n\
+            Content-Type: multipart/related; type=\"text/html\"; boundary=\"--b\"\r\n\
+            \r\n\
+            ----b\r\n\
+            Content-Type: text/html; charset=utf-8\r\n\
+            Content-Transfer-Encoding: quoted-printable\r\n\
+            \r\n\
+            <p>Bonjour</p><p><img src=3D\"cid:logo\" width=3D\"344\"></p><p><img src=3D\"cid:logo-2\"></p>\r\n\
+            ----b\r\n\
+            Content-Type: image/png; name=logo.png\r\n\
+            Content-ID: <logo>\r\n\
+            Content-Disposition: inline; filename=logo.png\r\n\
+            Content-Transfer-Encoding: base64\r\n\
+            \r\n\
+            iVBORw0K\r\n\
+            ----b\r\n\
+            Content-Type: image/jpeg; name=partenaires.jpg\r\n\
+            Content-ID: <logo-2>\r\n\
+            Content-Disposition: inline; filename=partenaires.jpg\r\n\
+            Content-Transfer-Encoding: base64\r\n\
+            \r\n\
+            /9j/4AAQ\r\n\
+            ----b--\r\n";
+        let brut = brut.as_bytes();
+        assert!(crate::index::pieces_jointes(brut).is_empty(), "les images du corps ne sont pas des pièces jointes");
+        // La reprise, comme `Boite::preparer` : chaque image en fichier, le
+        // HTML la désignant par son adresse `file:`.
+        let mut p = preparer(brut, "brouillon", &[]);
+        let images = images_du_brouillon(brut);
+        assert_eq!(images.len(), 2);
+        let mut fichiers = Vec::new();
+        for (rang, (cid, type_mime, contenu)) in images.into_iter().enumerate() {
+            let adresse = format!("file:///profil/images-redaction/1-7-x/i{rang}");
+            p.html = remplacer_cid(&p.html, &cid, &adresse);
+            fichiers.push((adresse, type_mime, contenu));
+        }
+        assert!(!p.html.contains("cid:"), "{}", p.html);
+        // L'enregistrement ou l'envoi les réintègre.
+        let (html, integrees) = integrer_images(&p.html, |adresse| {
+            fichiers.iter().find(|(a, _, _)| a == adresse).map(|(_, t, c)| (t.clone(), c.clone()))
+        });
+        assert_eq!(integrees.len(), 2);
+        let r = Redaction {
+            de: p.de.clone(),
+            a: p.a.clone(),
+            objet: p.objet.clone(),
+            texte: p.texte.clone(),
+            html,
+            ..Default::default()
+        };
+        let f = fabriquer_avec_images(&r, 1_790_000_000, &[], &integrees).unwrap();
+        for octets in [&f.envoi, &f.copie] {
+            assert!(crate::index::pieces_jointes(octets).is_empty(), "aucune pièce jointe ajoutée");
+            let reprises = images_du_brouillon(octets);
+            assert_eq!(reprises.len(), 2, "les deux images partent, et restent dans la copie");
+            let m = MessageParser::default().parse(octets.as_slice()).unwrap();
+            let corps = m.body_html(0).unwrap();
+            for (cid, _, _) in &reprises {
+                assert!(corps.contains(&format!("cid:{cid}")), "{corps}");
+            }
+        }
+        assert_eq!(images_du_brouillon(&f.copie)[1].1, "image/jpeg");
     }
 
     #[test]

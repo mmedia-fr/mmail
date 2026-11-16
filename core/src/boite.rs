@@ -8013,10 +8013,20 @@ impl Travail {
             }
             Commande::Brouillon { redaction } => {
                 let jeton = redaction.jeton.clone();
-                Some(match self.enregistrer_brouillon(e, &redaction) {
-                    Ok((uid, chemin)) => Issue::BrouillonEnregistre { jeton, uid, compte: self.compte, chemin },
-                    Err(message) => Issue::EchecRedaction { jeton, message },
-                })
+                match self.deposer_brouillon(e, &redaction) {
+                    // Enregistré dès qu'il est déposé (#178) : la fenêtre de
+                    // rédaction le sait aussitôt, et un « Envoyer » qui
+                    // attendait peut partir. Le retrait de la version
+                    // précédente vient après ; il peut faire attendre le
+                    // serveur longtemps — son index plein texte occupé, une
+                    // minute puis la session coupée, le 16/11 —, sans plus
+                    // retenir la rédaction.
+                    Ok((uid, chemin)) => {
+                        self.remettre(Issue::BrouillonEnregistre { jeton, uid, compte: self.compte, chemin });
+                        self.apres_brouillon(e, &redaction)
+                    }
+                    Err(message) => Some(Issue::EchecRedaction { jeton, message }),
+                }
             }
             Commande::Signale => {
                 let chemin = dossier_surveille(e);
@@ -8902,7 +8912,7 @@ impl Travail {
             for (rang, (cid, type_mime, contenu)) in redaction::images_du_brouillon(&octets).into_iter().enumerate() {
                 let fichier = dossier.join(format!("i{rang}.{}", crate::rendu::extension_image(&type_mime)));
                 if std::fs::create_dir_all(&dossier).and_then(|_| std::fs::write(&fichier, contenu)).is_ok() {
-                    p.html = p.html.replace(&format!("cid:{cid}"), &crate::rendu::url_fichier(&fichier));
+                    p.html = redaction::remplacer_cid(&p.html, &cid, &crate::rendu::url_fichier(&fichier));
                 }
             }
         }
@@ -9050,7 +9060,9 @@ impl Travail {
         avertissements.join(" ; ")
     }
 
-    fn enregistrer_brouillon(&self, e: &mut Etabli, r: &Redaction) -> Result<(u32, String), String> {
+    /// Dépose le brouillon dans son dossier : son UID et ce dossier. La version
+    /// précédente reste en place, `apres_brouillon` la retire.
+    fn deposer_brouillon(&self, e: &mut Etabli, r: &Redaction) -> Result<(u32, String), String> {
         let fichiers = lire_fichiers(&r.pieces)?;
         let (r_images, images) = self.avec_images(r);
         let f = redaction::fabriquer_avec_images(&r_images, maintenant(), &fichiers, &images)?;
@@ -9060,10 +9072,43 @@ impl Travail {
             .client
             .deposer(&brouillons, &["\\Draft".into(), "\\Seen".into()], "", &f.copie)
             .map_err(|x| format!("enregistrement du brouillon : {x}"))?;
-        // La version précédente s'efface une fois la nouvelle en place.
-        let _ = self.effacer_repris(e, r);
-        let _ = synchro::arborescence(&mut e.client, &e.magasin, self.compte);
         Ok((uid.unwrap_or(0), brouillons))
+    }
+
+    /// Ce qui suit le dépôt d'un brouillon : la version précédente retirée,
+    /// les compteurs relus. Un échec n'y est qu'un ménage manqué, sauf une
+    /// session perdue entre-temps, qui se dit pour que le fil se reconnecte :
+    /// le 16/11, le serveur a coupé la session au bout d'une minute d'attente
+    /// sur ce retrait, et elle restait tenue pour vivante.
+    fn apres_brouillon(&self, e: &mut Etabli, r: &Redaction) -> Option<Issue> {
+        let perdue = |resultat: Result<(), Echec>| resultat.err().filter(Echec::reseau);
+        let err = match perdue(self.retirer_repris(e, r)) {
+            Some(err) => err,
+            None => perdue(synchro::arborescence(&mut e.client, &e.magasin, self.compte).map(|_| ()))?,
+        };
+        Some(echec("reseau", format!("après l'enregistrement du brouillon : {err}"), &err))
+    }
+
+    /// Comme `effacer_repris`, l'erreur gardée telle quelle : une session
+    /// perdue doit pouvoir se dire.
+    fn retirer_repris(&self, e: &mut Etabli, r: &Redaction) -> Result<(), Echec> {
+        if !brouillon_du_compte(r, self.compte) {
+            return Ok(());
+        }
+        let chemin = match (r.brouillon_chemin.is_empty(), self.dossier_de_role(e, "Drafts")) {
+            (false, _) => r.brouillon_chemin.clone(),
+            (true, Some(chemin)) => chemin,
+            (true, None) => return Ok(()),
+        };
+        let avant = e.client.selection().map(str::to_string);
+        let resultat = assurer_selection(&mut e.client, &chemin)
+            .and_then(|()| e.client.supprimer(&[r.brouillon_uid]).map_err(Echec::from));
+        if let Some(avant) = avant {
+            if !resultat.as_ref().is_err_and(Echec::reseau) {
+                let _ = assurer_selection(&mut e.client, &avant);
+            }
+        }
+        resultat
     }
 
 }
@@ -11215,6 +11260,62 @@ mod tests {
         // Ni LOGOUT sur une connexion morte, ni commande après la coupure.
         assert_eq!(journal.lock().unwrap().as_slice(), ["SELECT \"INBOX\""]);
         drop(envoi);
+    }
+
+    /// #178 : un brouillon s'annonce enregistré dès son dépôt, avant le
+    /// retrait de sa version précédente, que le serveur peut faire attendre
+    /// longtemps — le 16/11, son index plein texte occupé, une minute, puis
+    /// la session coupée ; « Envoyer » attendait avec lui. Une session coupée
+    /// pendant ce retrait se dit : le fil se reconnecte au lieu de tenir pour
+    /// vivante une connexion morte.
+    #[test]
+    fn brouillon_annonce_des_son_depot() {
+        use crate::simule::{coupure, echange, session};
+        let (client, journal) = session(
+            "UIDPLUS",
+            vec![
+                echange("APPEND \"Drafts\" (\\Draft \\Seen)", "", "OK [APPENDUID 7 12] fait"),
+                echange("SELECT \"Drafts\"", "* 2 EXISTS\r\n* OK [UIDVALIDITY 7] v\r\n", "OK [READ-WRITE] fait"),
+                echange("UID STORE 11 +FLAGS.SILENT (\\Deleted)", "", "OK fait"),
+                coupure("UID EXPUNGE 11", "* BYE index plein texte indisponible\r\n"),
+            ],
+        );
+        let (travail, mut etabli, issues) = fil_d_essai(client, "brouillon");
+        let dossier = |chemin: &str| crate::protocole::Dossier {
+            chemin: chemin.into(),
+            separateur: "/".into(),
+            attributs: vec![],
+        };
+        etabli.magasin.poser_dossiers(travail.compte, &[dossier("INBOX"), dossier("Drafts")]).unwrap();
+        let redaction = Redaction {
+            jeton: "r1".into(),
+            de: "essai@exemple.fr".into(),
+            a: "destinataire@exemple.fr".into(),
+            objet: "Essai".into(),
+            texte: "Bonjour".into(),
+            brouillon_uid: 11,
+            brouillon_chemin: "Drafts".into(),
+            brouillon_compte: travail.compte,
+            ..Default::default()
+        };
+        let issue = travail.traiter(Commande::Brouillon { redaction }, &mut etabli);
+        match issues.try_recv() {
+            Ok(Issue::BrouillonEnregistre { jeton, uid, chemin, .. }) => {
+                assert_eq!((jeton.as_str(), uid, chemin.as_str()), ("r1", 12, "Drafts"));
+            }
+            _ => panic!("le brouillon s'annonce enregistré dès son dépôt"),
+        }
+        assert!(
+            matches!(issue, Some(Issue::Echec { session_perdue: true, .. })),
+            "la session coupée pendant le retrait de la version précédente se dit"
+        );
+        assert!(issues.try_recv().is_err(), "une seule annonce");
+        let journal = journal.lock().unwrap();
+        let attendues = ["APPEND \"Drafts\" (\\Draft \\Seen) {", "SELECT \"Drafts\"", "UID STORE 11 ", "UID EXPUNGE 11"];
+        assert_eq!(journal.len(), attendues.len(), "rien après la coupure : {journal:?}");
+        for (recue, attendue) in journal.iter().zip(attendues) {
+            assert!(recue.starts_with(attendue), "« {recue} », attendue « {attendue}… »");
+        }
     }
 
     // ---------------------------------------- recherche sur le serveur (0.6.16)

@@ -5388,6 +5388,113 @@ QtObject {
     /// fiche en organisateur ; sans service, « Visio » invite à demander une
     /// boîte MMEDIA et prépare le message. Images visio-saisie, visio-fiche et
     /// visio-demande dans MMAIL_SORTIE.
+    /// Scénario « agenda-deplacer » (mmail#175) : un événement créé demain de
+    /// 10:00 à 11:00 est glissé à la souris d'une heure et demie plus bas
+    /// (11:30 – 12:30), puis retaillé par sa poignée d'une demi-heure (11:30 –
+    /// 13:00) ; chaque fois relu dans l'agenda. Un clic ouvre toujours la
+    /// fiche. L'événement est retiré à la fin. Image agenda-deplacer dans
+    /// MMAIL_SORTIE.
+    function lancerScenarioAgendaDeplacer(essais) {
+        var n = essais || 0
+        if (boite.compteCourant <= 0 && n < 40) {
+            plusTard(1000, function() { lancerScenarioAgendaDeplacer(n + 1) })
+            return
+        }
+        var echecs = 0
+        var bilan = function(texte, bon) {
+            if (!bon)
+                echecs += 1
+            console.log("scenario: " + (bon ? "OK " : "ECHEC ") + texte)
+        }
+        var titre = "Essai déplacer " + Date.now()
+        var fiche = null
+        var fin = function() {
+            if (fiche)
+                boite.supprimerEvenement(fiche.objet, fiche.occurrence, true)
+            plusTard(3000, function() {
+                console.log("scenario: agenda-deplacer " + (echecs === 0 ? "OK" : "ECHEC (" + echecs + ")"))
+                Qt.quit()
+            })
+        }
+        // La case de l'événement d'essai et sa fiche, ou null.
+        var chercher = function() {
+            var fiches = vueAgenda.donnees.fiches || []
+            var i = fiches.findIndex(function(f) { return f.titre === titre })
+            if (i < 0)
+                return null
+            var c = (vueAgenda.donnees.cases || []).find(function(x) { return x.fiche === i })
+            return c ? { fiche: fiches[i], c: c, element: objetNomme(vueAgenda, "caseHeure-" + i) } : null
+        }
+        // Attend que l'événement soit relu de `debut` à `fin` minutes.
+        var attendre = function(debut, fin2, suite, k) {
+            var t = chercher()
+            if (t && t.c.debut === debut && t.c.fin === fin2 && t.element) {
+                suite(t)
+                return
+            }
+            if ((k || 0) < 30) {
+                plusTard(1000, function() { attendre(debut, fin2, suite, (k || 0) + 1) })
+                return
+            }
+            bilan("événement relu de " + vueAgenda.heureMinutes(debut) + " à " + vueAgenda.heureMinutes(fin2)
+                  + (t ? " (vu : " + vueAgenda.heureMinutes(t.c.debut) + " – " + vueAgenda.heureMinutes(t.c.fin) + ")" : " (absent)"), false)
+            fin()
+        }
+        fenetre.module = "agenda"
+        boite.synchroniserAgendas(true)
+        var demain = new Date()
+        demain.setDate(demain.getDate() + 1)
+        var attendreAgenda = function(k) {
+            vueAgenda.agendas = JSON.parse(boite.agendas())
+            if (vueAgenda.agendasModifiables().length === 0) {
+                if (k < 40) {
+                    plusTard(1000, function() { attendreAgenda(k + 1) })
+                    return
+                }
+                bilan("un agenda modifiable", false)
+                fin()
+                return
+            }
+            vueAgenda.genre = "semaine"
+            vueAgenda.jour = demain
+            vueAgenda.nouvelEvenement(vueAgenda.isoJour(demain), 10 * 60, false, 60)
+            plusTard(1500, function() {
+                objetNomme(vueAgenda.saisieEvenement.contentItem, "champTitre").text = titre
+                objetNomme(vueAgenda.saisieEvenement.contentItem, "boutonEnregistrerEvenement").clicked()
+                attendre(600, 660, function(t) {
+                    fiche = t.fiche
+                    bilan("événement créé, 10:00 – 11:00, modifiable", t.fiche.modifiable)
+                    var e = t.element
+                    var hh = vueAgenda.hauteurHeure
+                    // Un clic : la fiche, rien ne bouge.
+                    gestesEssai.clic(e, e.width / 2, 8, Qt.LeftButton)
+                    plusTard(800, function() {
+                        bilan("un clic ouvre la fiche", vueAgenda.ficheEvenement.opened)
+                        vueAgenda.ficheEvenement.close()
+                        gestesEssai.glisser(e, e.width / 2, 8, e.width / 2, 8 + 1.5 * hh, 6)
+                        attendre(690, 750, function(t2) {
+                            bilan("glissé d'une heure et demie : 11:30 – 12:30", true)
+                            fiche = t2.fiche
+                            var e2 = t2.element
+                            gestesEssai.glisser(e2, e2.width / 2, e2.height - 2, e2.width / 2, e2.height - 2 + 0.5 * hh, 4)
+                            attendre(690, 780, function(t3) {
+                                bilan("retaillé d'une demi-heure : 11:30 – 13:00", true)
+                                fiche = t3.fiche
+                                var racine = fenetre.contentItem
+                                while (racine.parent)
+                                    racine = racine.parent
+                                if (identifiantsEssai.sortie)
+                                    racine.grabToImage(function(r) { r.saveToFile(lanceur.chemin(identifiantsEssai.sortie + "/agenda-deplacer.png")) })
+                                plusTard(800, fin)
+                            })
+                        })
+                    })
+                })
+            })
+        }
+        attendreAgenda(0)
+    }
+
     function lancerScenarioVisio(essais) {
         var n = essais || 0
         if (boite.compteCourant <= 0 && n < 40) {

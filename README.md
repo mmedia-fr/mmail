@@ -430,6 +430,18 @@ réunion. C'est le serveur d'agenda qui envoie les courriels d'invitation, de
 mise à jour, d'annulation et de réponse (SOGo le fait ; un serveur qui ne le
 fait pas laisse ces boutons inactifs).
 
+**Déplacer et retailler** (mmail#175) : dans les vues Jour et Semaine, un
+événement se glisse à une autre heure ou un autre jour, et sa poignée du bas
+(curseur en double flèche) change l'heure de fin ; de quart d'heure en quart
+d'heure, une case fantôme montrant les nouvelles heures. À la souris, on glisse
+directement, un clic ouvrant toujours la fiche ; au doigt, un appui long
+d'abord, un glissement simple faisant défiler la grille. La grille défile
+d'elle-même quand le pointeur touche son bord. Dans une série, seule
+l'occurrence change ; une réunion qui a des participants demande confirmation,
+car ils reçoivent la nouvelle heure. Un événement non modifiable depuis MMail
+(invitation reçue, agenda en lecture seule) ou sur plusieurs jours ne bouge
+pas, et la barre d'état dit pourquoi.
+
 **Visio** (0.7.0) : pour un compte qui a un **service de visio** (« Modifier
 le compte… », ou le lien de configuration), la fiche d'un événement porte un
 bouton « Visio » à côté du lieu. Il y met le lien d'une nouvelle réunion

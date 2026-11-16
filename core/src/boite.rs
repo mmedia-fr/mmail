@@ -4115,6 +4115,11 @@ impl qobject::Boite {
             courante: self.recherche.clone(),
             patience: PATIENCE_RECHERCHE,
             delai: delai_recherche(),
+            graph: identifiants
+                .oauth
+                .as_ref()
+                .filter(|j| crate::oauth::fournisseur(j) == crate::oauth::Fournisseur::Microsoft)
+                .cloned(),
         };
         let profil = self.profil.clone();
         let fil = Destinataire::Qt(self.qt_thread());
@@ -4122,8 +4127,10 @@ impl qobject::Boite {
             .name(format!("mmail-recherche-{compte}"))
             .spawn(move || {
                 let mut remettre = |issue: Issue| fil.remettre_recherche(compte, numero, issue);
+                let mut graph = recherche.graph.clone().map(|jetons| GraphDuCompte { jetons });
+                let graph = graph.as_mut().map(|g| g as &mut dyn RechercheGraph);
                 match Magasin::ouvrir(&profil) {
-                    Ok(magasin) => recherche.executer(&mut || ouvrir_imap(&identifiants), &magasin, &mut remettre),
+                    Ok(magasin) => recherche.executer(&mut || ouvrir_imap(&identifiants), graph, &magasin, &mut remettre),
                     Err(e) => recherche.sans_index(&format!("index local : {e}"), &mut remettre),
                 }
             })
@@ -9597,6 +9604,9 @@ struct Recherche {
     patience: Duration,
     /// Attente d'un dossier seul, ou des dossiers reportés (`delai_recherche`).
     delai: Duration,
+    /// Compte Microsoft 365 : ses jetons, pour chercher par Graph (#179) ;
+    /// `None` pour tout autre compte.
+    graph: Option<crate::oauth::Partage>,
 }
 
 /// Ce qu'un dossier a donné.
@@ -9616,22 +9626,33 @@ impl Recherche {
     }
 
     /// Interroge le serveur dossier après dossier et remet une issue pour
-    /// chacun. `ouvrir` ouvre une session authentifiée sur le compte.
+    /// chacun. `ouvrir` ouvre une session authentifiée sur le compte ;
+    /// `graph`, pour un compte Microsoft 365, cherche par Graph les dossiers
+    /// qu'il connaît, les autres passant par IMAP (#179).
     fn executer(
         &self,
         ouvrir: &mut dyn FnMut() -> Result<Client, Erreur>,
+        graph: Option<&mut dyn RechercheGraph>,
         magasin: &Magasin,
         remettre: &mut dyn FnMut(Issue),
     ) {
         let (mots, categories) = criteres_recherche(magasin, &self.texte);
         let mut client = None;
         let mut restants = self.chemins.len();
+        let par_graph = match graph {
+            Some(g) => {
+                let criteres = (mots.as_str(), categories.as_slice());
+                self.par_graph(g, &mut client, ouvrir, magasin, criteres, &mut restants, remettre)
+            }
+            None => Vec::new(),
+        };
+        let chemins: Vec<String> = self.chemins.iter().filter(|c| !par_graph.contains(*c)).cloned().collect();
         // Un dossier seul a toute l'attente d'emblée ; à plusieurs, ceux qui
         // tardent passent après les autres.
-        let seul = self.chemins.len() == 1;
+        let seul = chemins.len() == 1;
         let premiere = if seul { self.delai } else { self.patience };
         let mut reportes = Vec::new();
-        for chemin in &self.chemins {
+        for chemin in &chemins {
             if !self.actuelle() {
                 break;
             }
@@ -9738,12 +9759,144 @@ impl Recherche {
             Etape::Inacheve(motif) => (Vec::new(), Some(motif)),
             Etape::Reporte | Etape::Abandon => (Vec::new(), None),
         };
+        self.issue_de(chemin, uids, inacheve, restants)
+    }
+
+    /// Issue d'un dossier : ce qu'il a donné et, si ce n'est pas tout,
+    /// pourquoi.
+    fn issue_de(&self, chemin: &str, uids: Vec<u32>, inacheve: Option<String>, restants: usize) -> Issue {
         let (chemin, texte) = (chemin.to_string(), self.texte.clone());
         if self.partout {
             Issue::RecherchePartout { chemin, texte, uids, restants, inacheve }
         } else {
             Issue::Recherche { chemin, texte, uids, inacheve }
         }
+    }
+
+    /// Recherche par Graph d'un compte Microsoft 365 (#179), dans ceux de ses
+    /// dossiers que Graph connaît — pas ceux des boîtes partagées vues par
+    /// IMAP —, une issue par dossier ; rend les chemins traités. Un dossier
+    /// seul se cherche en lui-même ; plusieurs, d'une requête dans toute la
+    /// boîte, chaque résultat allant à son dossier (`parentFolderId`). Les
+    /// autres dossiers, et tous si Graph échoue (jeton, réseau, refus),
+    /// passent ensuite par IMAP, comme les catégories et les non-lus seuls.
+    #[allow(clippy::too_many_arguments)]
+    fn par_graph(
+        &self,
+        graph: &mut dyn RechercheGraph,
+        client: &mut Option<Client>,
+        ouvrir: &mut dyn FnMut() -> Result<Client, Erreur>,
+        magasin: &Magasin,
+        (mots, categories): (&str, &[Vec<String>]),
+        restants: &mut usize,
+        remettre: &mut dyn FnMut(Issue),
+    ) -> Vec<String> {
+        if !categories.is_empty() || !self.actuelle() {
+            return Vec::new();
+        }
+        let Some(requete) = crate::microsoft::requete_recherche(mots, self.champs) else {
+            return Vec::new();
+        };
+        let locaux = magasin.dossiers(self.compte).unwrap_or_default();
+        let partagees = magasin
+            .comptes()
+            .unwrap_or_default()
+            .into_iter()
+            .find(|c| c.id == self.compte)
+            .map(|c| c.partagees)
+            .unwrap_or_default();
+        let cibles: Vec<(String, String)> = self
+            .chemins
+            .iter()
+            .map(|c| (c.clone(), locaux.iter().find(|d| d.chemin == *c).map(|d| d.separateur.clone()).unwrap_or_default()))
+            .filter(|(c, s)| crate::protocole::boite_partagee(c, s, &partagees).is_none())
+            .collect();
+        if cibles.is_empty() {
+            return Vec::new();
+        }
+        let ids = match graph.dossiers(&cibles) {
+            Ok(ids) if !ids.is_empty() => ids,
+            _ => return Vec::new(),
+        };
+        let seul = match cibles.as_slice() {
+            [(chemin, _)] => ids.get(chemin).cloned(),
+            _ => None,
+        };
+        let Ok(trouves) = graph.chercher(seul.as_deref(), &requete, RECHERCHE_MAX) else {
+            return Vec::new();
+        };
+        let mut faits = Vec::new();
+        for (chemin, _) in &cibles {
+            if !self.actuelle() {
+                break;
+            }
+            let Some(id_graph) = ids.get(chemin) else {
+                continue;
+            };
+            let mids: Vec<String> = trouves
+                .iter()
+                .filter(|t| seul.is_some() || t.dossier == *id_graph)
+                .map(|t| t.message_id.clone())
+                .collect();
+            let (uids, inacheve) = self.rattacher(client, ouvrir, magasin, chemin, &mids);
+            *restants -= 1;
+            remettre(self.issue_de(chemin, uids, inacheve, *restants));
+            faits.push(chemin.clone());
+        }
+        faits
+    }
+
+    /// UID des messages que Graph a trouvés dans un dossier : ceux de l'index,
+    /// d'après leur `Message-ID` ; les autres — dossier jamais ouvert sur le
+    /// poste, message arrivé depuis sa dernière lecture — retrouvés sur le
+    /// serveur IMAP par leur `Message-ID` et rangés dans l'index, comme
+    /// `dans_le_dossier` range ce qu'il trouve. Ce qui manque encore est dit
+    /// dans le motif.
+    fn rattacher(
+        &self,
+        client: &mut Option<Client>,
+        ouvrir: &mut dyn FnMut() -> Result<Client, Erreur>,
+        magasin: &Magasin,
+        chemin: &str,
+        mids: &[String],
+    ) -> (Vec<u32>, Option<String>) {
+        let Ok(id) = magasin.dossier_id(self.compte, chemin) else {
+            return (Vec::new(), None);
+        };
+        let (uids, mut absents) = magasin.uids_par_message_id(id, mids).unwrap_or_default();
+        if absents.is_empty() || !self.actuelle() {
+            return (uids, None);
+        }
+        absents.truncate(RECHERCHE_MAX);
+        if client.is_none() {
+            if let Ok(c) = ouvrir() {
+                *client = Some(c);
+            }
+        }
+        if let Some(c) = client.as_mut() {
+            let perdue = match c.examiner(chemin) {
+                // Dossier recréé depuis la dernière synchronisation : ses UID
+                // ne désignent plus les messages de l'index.
+                Ok(etat) if magasin.dossier(id).ok().flatten().is_some_and(|d| d.uid_validity != 0 && d.uid_validity != etat.uid_validity) => false,
+                Ok(_) => match c.chercher_messages_id(&absents) {
+                    Ok(retrouves) => synchro::completer(magasin, c, id, &retrouves, RECHERCHE_MAX).is_err_and(|e| e.reseau()),
+                    Err(Erreur::Refuse(_)) => false,
+                    Err(_) => true,
+                },
+                Err(Erreur::Refuse(_)) => false,
+                Err(_) => true,
+            };
+            if perdue {
+                *client = None;
+            }
+        }
+        let (uids, absents) = magasin.uids_par_message_id(id, mids).unwrap_or((uids, absents));
+        let motif = match absents.len() {
+            0 => None,
+            1 => Some("1 message trouvé par Microsoft 365 n'a pas pu être relu sur le serveur".to_string()),
+            n => Some(format!("{n} messages trouvés par Microsoft 365 n'ont pas pu être relus sur le serveur")),
+        };
+        (uids, motif)
     }
 
     /// Cherche dans un dossier, et range dans l'index ceux des messages
@@ -9825,6 +9978,53 @@ impl Recherche {
             }
         }
         Etape::Trouves(uids)
+    }
+}
+
+/// Ce dont la recherche d'un compte Microsoft 365 a besoin de Graph (#179) :
+/// un faux dans les essais.
+trait RechercheGraph {
+    /// Identifiants Graph des dossiers `(chemin, séparateur)` ; un dossier
+    /// introuvable dans Graph n'y est pas. Erreur : Graph n'a pas répondu.
+    fn dossiers(&mut self, cibles: &[(String, String)]) -> Result<HashMap<String, String>, String>;
+    /// Messages trouvés par la requête KQL `requete`, dans le dossier Graph
+    /// `dossier` ou dans toute la boîte, `limite` au plus.
+    fn chercher(&mut self, dossier: Option<&str>, requete: &str, limite: usize)
+        -> Result<Vec<crate::microsoft::TrouveGraph>, String>;
+}
+
+/// Graph d'un compte Microsoft 365, par ses jetons — ceux de la session du
+/// compte, partagés : un jeton renouvelé ici sert aussi là.
+struct GraphDuCompte {
+    jetons: crate::oauth::Partage,
+}
+
+impl GraphDuCompte {
+    fn jeton(&self) -> Result<String, String> {
+        crate::microsoft::jeton_acces(&self.jetons, crate::microsoft::PORTEE_ENVOI).map_err(|e| e.to_string())
+    }
+}
+
+impl RechercheGraph for GraphDuCompte {
+    fn dossiers(&mut self, cibles: &[(String, String)]) -> Result<HashMap<String, String>, String> {
+        let jeton = self.jeton()?;
+        // Un dossier : sa descente suffit ; plusieurs : l'arborescence,
+        // relevée une fois.
+        if let [(chemin, separateur)] = cibles {
+            return match crate::microsoft::dossier_graph(&jeton, chemin, separateur) {
+                Ok(id) => Ok(HashMap::from([(chemin.clone(), id)])),
+                Err(crate::microsoft::ErreurOAuth::Refus { code, .. }) if code == "DossierInconnu" => Ok(HashMap::new()),
+                Err(e) => Err(e.to_string()),
+            };
+        }
+        let arbre = crate::microsoft::arborescence(&jeton).map_err(|e| e.to_string())?;
+        Ok(cibles.iter().filter_map(|(c, s)| arbre.id_du_chemin(c, s).map(|id| (c.clone(), id))).collect())
+    }
+
+    fn chercher(&mut self, dossier: Option<&str>, requete: &str, limite: usize)
+        -> Result<Vec<crate::microsoft::TrouveGraph>, String> {
+        let jeton = self.jeton()?;
+        crate::microsoft::chercher(&jeton, dossier, requete, limite).map_err(|e| e.to_string())
     }
 }
 
@@ -11288,6 +11488,7 @@ mod tests {
             courante: Arc::new(AtomicU64::new(1)),
             patience: Duration::from_millis(patience_ms),
             delai: Duration::from_millis(delai_ms),
+            graph: None,
         }
     }
 
@@ -11302,7 +11503,17 @@ mod tests {
     /// Issues d'une recherche contre des sessions simulées, ouvertes l'une
     /// après l'autre, et le nombre de sessions ouvertes.
     fn issues_de(r: &Recherche, sessions: Vec<Client>) -> (Vec<String>, usize) {
-        let magasin = Magasin::en_memoire().unwrap();
+        issues_avec(r, None, &Magasin::en_memoire().unwrap(), sessions)
+    }
+
+    /// Comme `issues_de`, avec un index et, pour un compte Microsoft 365, un
+    /// Graph (#179).
+    fn issues_avec(
+        r: &Recherche,
+        graph: Option<&mut dyn RechercheGraph>,
+        magasin: &Magasin,
+        sessions: Vec<Client>,
+    ) -> (Vec<String>, usize) {
         let mut sessions = std::collections::VecDeque::from(sessions);
         let mut ouvertes = 0;
         let mut issues = Vec::new();
@@ -11310,7 +11521,7 @@ mod tests {
             ouvertes += 1;
             sessions.pop_front().ok_or_else(|| Erreur::Reseau("serveur injoignable".into()))
         };
-        r.executer(&mut ouvrir, &magasin, &mut |issue| {
+        r.executer(&mut ouvrir, graph, magasin, &mut |issue| {
             issues.push(match issue {
                 Issue::RecherchePartout { chemin, uids, restants, inacheve, .. } => {
                     format!("{chemin} {uids:?} reste {restants} : {}", inacheve.as_deref().unwrap_or("fini"))
@@ -11465,6 +11676,195 @@ mod tests {
         let (issues, ouvertes) = issues_de(&r, vec![]);
         assert!(issues.is_empty());
         assert_eq!(ouvertes, 0);
+    }
+
+    // ------------------------------------------ recherche par Graph (#179)
+
+    /// Un faux Graph : les dossiers qu'il connaît, ce qu'il trouve — ou sa
+    /// panne —, et les appels reçus.
+    struct FauxGraph {
+        connus: HashMap<String, String>,
+        trouves: Result<Vec<crate::microsoft::TrouveGraph>, String>,
+        appels: Vec<String>,
+    }
+
+    impl FauxGraph {
+        fn nouveau(connus: &[(&str, &str)], trouves: &[(&str, &str)]) -> Self {
+            FauxGraph {
+                connus: connus.iter().map(|(c, i)| (c.to_string(), i.to_string())).collect(),
+                trouves: Ok(trouves
+                    .iter()
+                    .map(|(m, d)| crate::microsoft::TrouveGraph { message_id: m.to_string(), dossier: d.to_string() })
+                    .collect()),
+                appels: Vec::new(),
+            }
+        }
+    }
+
+    impl RechercheGraph for FauxGraph {
+        fn dossiers(&mut self, cibles: &[(String, String)]) -> Result<HashMap<String, String>, String> {
+            let noms: Vec<&str> = cibles.iter().map(|(c, _)| c.as_str()).collect();
+            self.appels.push(format!("dossiers {}", noms.join(",")));
+            Ok(cibles.iter().filter_map(|(c, _)| self.connus.get(c).map(|i| (c.clone(), i.clone()))).collect())
+        }
+
+        fn chercher(&mut self, dossier: Option<&str>, requete: &str, limite: usize)
+            -> Result<Vec<crate::microsoft::TrouveGraph>, String> {
+            self.appels.push(format!("chercher {} {requete} {limite}", dossier.unwrap_or("partout")));
+            self.trouves.clone()
+        }
+    }
+
+    /// Index d'un compte Microsoft 365 : boîte de réception (3, 5, 6),
+    /// archives (2), et une boîte partagée vue par IMAP.
+    fn index_microsoft() -> Magasin {
+        let m = Magasin::en_memoire().unwrap();
+        let compte = m.compte("a@exemple.fr", "outlook.office365.com", 993, "a@exemple.fr").unwrap();
+        assert_eq!(compte, 1, "le compte des recherches d'essai");
+        let d = |chemin: &str| crate::protocole::Dossier { chemin: chemin.into(), separateur: "/".into(), attributs: Vec::new() };
+        m.poser_dossiers(compte, &[d("INBOX"), d("Archives"), d("Shared/partage@exemple.fr/INBOX")]).unwrap();
+        m.poser_partagees(compte, &["partage@exemple.fr".to_string()]).unwrap();
+        let recu = |uid, mid: &str| MessageLocal { uid, message_id: mid.into(), ..Default::default() };
+        let inbox = m.dossier_id(compte, "INBOX").unwrap();
+        m.poser_messages(inbox, &[recu(3, "a@x"), recu(5, "<b@x>"), recu(6, "c@x")]).unwrap();
+        let archives = m.dossier_id(compte, "Archives").unwrap();
+        m.poser_messages(archives, &[recu(2, "d@x")]).unwrap();
+        m
+    }
+
+    /// En-tête d'un message rendu par `UID FETCH` : son UID et son
+    /// Message-ID.
+    fn entete_fetch(uid: u32, message_id: &str) -> String {
+        let e = format!("Message-ID: <{message_id}>\r\nSubject: retrouve\r\n\r\n");
+        format!(
+            "* 1 FETCH (UID {uid} FLAGS () INTERNALDATE \"05-Oct-2026 10:00:00 +0200\" RFC822.SIZE 9 \
+             BODY[HEADER.FIELDS (MESSAGE-ID SUBJECT)] {{{}}}\r\n{e})\r\n",
+            e.len()
+        )
+    }
+
+    /// Un dossier seul : Graph y cherche, ses résultats sont rattachés à
+    /// l'index par leur Message-ID, sans ouvrir de session IMAP.
+    #[test]
+    fn recherche_graph_dans_un_dossier() {
+        let magasin = index_microsoft();
+        let mut g = FauxGraph::nouveau(&[("INBOX", "I")], &[("<a@x>", "I"), ("b@x", "I")]);
+        let (issues, ouvertes) = issues_avec(&recherche(&["INBOX"], false, 30, 5_000), Some(&mut g), &magasin, vec![]);
+        assert_eq!(issues, ["INBOX [3, 5] : fini"]);
+        assert_eq!(ouvertes, 0, "rien à demander au serveur IMAP");
+        assert_eq!(g.appels, ["dossiers INBOX", "chercher I (devis OR attachment:devis) 500"]);
+        // Objet et expéditeur seulement.
+        let mut g = FauxGraph::nouveau(&[("INBOX", "I")], &[]);
+        let r = Recherche { champs: Champs::ObjetExpediteur, ..recherche(&["INBOX"], false, 30, 5_000) };
+        let (issues, _) = issues_avec(&r, Some(&mut g), &magasin, vec![]);
+        assert_eq!(issues, ["INBOX [] : fini"]);
+        assert_eq!(g.appels[1], "chercher I (subject:devis OR from:devis) 500");
+    }
+
+    /// Un message trouvé par Graph que l'index n'a pas : retrouvé sur le
+    /// serveur IMAP par son Message-ID et rangé dans l'index ; introuvable,
+    /// il est dit dans le motif.
+    #[test]
+    fn recherche_graph_complete_l_index() {
+        use crate::simule::{echange, session, DOVECOT};
+        let magasin = index_microsoft();
+        let (s, journal) = session(
+            DOVECOT,
+            vec![
+                examen("INBOX"),
+                echange("UID SEARCH HEADER Message-ID \"n@x\"", "* SEARCH 8\r\n", "OK"),
+                echange("UID FETCH 8 (UID FLAGS", &entete_fetch(8, "n@x"), "OK"),
+                echange("LOGOUT", "* BYE\r\n", "OK"),
+            ],
+        );
+        let mut g = FauxGraph::nouveau(&[("INBOX", "I")], &[("a@x", "I"), ("n@x", "I")]);
+        let (issues, ouvertes) = issues_avec(&recherche(&["INBOX"], false, 30, 5_000), Some(&mut g), &magasin, vec![s]);
+        assert_eq!(issues, ["INBOX [3, 8] : fini"]);
+        assert_eq!(ouvertes, 1);
+        assert_eq!(journal.lock().unwrap().last().unwrap(), "LOGOUT");
+        let inbox = magasin.dossier_id(1, "INBOX").unwrap();
+        assert!(magasin.uids(inbox).unwrap().contains(&8), "rangé dans l'index");
+        // Introuvable sur le serveur : le motif le dit, le reste est rendu.
+        let (s, _) = session(
+            DOVECOT,
+            vec![
+                examen("INBOX"),
+                echange("UID SEARCH OR HEADER", "* SEARCH\r\n", "OK"),
+                echange("LOGOUT", "* BYE\r\n", "OK"),
+            ],
+        );
+        let mut g = FauxGraph::nouveau(&[("INBOX", "I")], &[("a@x", "I"), ("y@x", "I"), ("z@x", "I")]);
+        let (issues, _) = issues_avec(&recherche(&["INBOX"], false, 30, 5_000), Some(&mut g), &magasin, vec![s]);
+        assert_eq!(issues, ["INBOX [3] : 2 messages trouvés par Microsoft 365 n'ont pas pu être relus sur le serveur"]);
+    }
+
+    /// Plusieurs dossiers : une requête dans toute la boîte, chaque résultat
+    /// à son dossier ; la boîte partagée, que Graph ne voit pas, passe par
+    /// IMAP ; le décompte des dossiers restants suit les deux.
+    #[test]
+    fn recherche_graph_dans_toute_la_boite() {
+        use crate::simule::{echange, session, DOVECOT};
+        let magasin = index_microsoft();
+        let partagee = "Shared/partage@exemple.fr/INBOX";
+        let (s, journal) = session(
+            DOVECOT,
+            vec![examen(partagee), echange("UID SEARCH", "* SEARCH\r\n", "OK"), echange("LOGOUT", "* BYE\r\n", "OK")],
+        );
+        let mut g = FauxGraph::nouveau(
+            &[("INBOX", "I"), ("Archives", "A")],
+            &[("a@x", "I"), ("d@x", "A"), ("c@x", "Autre"), ("b@x", "")],
+        );
+        let r = recherche(&["INBOX", "Archives", partagee], true, 30, 5_000);
+        let (issues, ouvertes) = issues_avec(&r, Some(&mut g), &magasin, vec![s]);
+        assert_eq!(
+            issues,
+            [
+                "INBOX [3] reste 2 : fini",
+                "Archives [2] reste 1 : fini",
+                "Shared/partage@exemple.fr/INBOX [] reste 0 : fini",
+            ]
+        );
+        assert_eq!(ouvertes, 1);
+        assert_eq!(g.appels, ["dossiers INBOX,Archives", "chercher partout (devis OR attachment:devis) 500"]);
+        assert!(journal.lock().unwrap()[0].starts_with("EXAMINE \"Shared/"));
+    }
+
+    /// Graph en panne, ou qui ne connaît pas le dossier : la recherche passe
+    /// par IMAP comme avant. Les non-lus seuls n'interrogent pas Graph.
+    #[test]
+    fn recherche_graph_repli_sur_imap() {
+        use crate::simule::{echange, session, DOVECOT};
+        let magasin = index_microsoft();
+        let imap = || {
+            session(
+                DOVECOT,
+                vec![
+                    examen("INBOX"),
+                    echange("UID SEARCH CHARSET UTF-8 TEXT", "* SEARCH 5\r\n", "OK"),
+                    echange("UID SEARCH CHARSET UTF-8 OR TEXT", "* SEARCH 5\r\n", "OK"),
+                    echange("LOGOUT", "* BYE\r\n", "OK"),
+                ],
+            )
+            .0
+        };
+        let mut panne = FauxGraph::nouveau(&[("INBOX", "I")], &[]);
+        panne.trouves = Err("HTTP 503".into());
+        let (issues, _) = issues_avec(&recherche(&["INBOX"], false, 30, 5_000), Some(&mut panne), &magasin, vec![imap()]);
+        assert_eq!(issues, ["INBOX [5] : fini"]);
+        assert_eq!(panne.appels.len(), 2);
+        let mut inconnu = FauxGraph::nouveau(&[], &[("a@x", "I")]);
+        let (issues, _) = issues_avec(&recherche(&["INBOX"], false, 30, 5_000), Some(&mut inconnu), &magasin, vec![imap()]);
+        assert_eq!(issues, ["INBOX [5] : fini"]);
+        assert_eq!(inconnu.appels, ["dossiers INBOX"], "rien cherché par Graph");
+        let (s, _) = session(
+            DOVECOT,
+            vec![examen("INBOX"), echange("UID SEARCH UNSEEN", "* SEARCH 6\r\n", "OK"), echange("LOGOUT", "* BYE\r\n", "OK")],
+        );
+        let mut g = FauxGraph::nouveau(&[("INBOX", "I")], &[("a@x", "I")]);
+        let r = Recherche { champs: Champs::NonLus, ..recherche(&["INBOX"], false, 30, 5_000) };
+        let (issues, _) = issues_avec(&r, Some(&mut g), &magasin, vec![s]);
+        assert_eq!(issues, ["INBOX [6] : fini"]);
+        assert!(g.appels.is_empty());
     }
 
     #[test]

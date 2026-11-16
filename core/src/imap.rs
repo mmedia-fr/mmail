@@ -847,6 +847,31 @@ impl Client {
         Ok(protocole::analyser_search(&texte))
     }
 
+    /// UID des messages du dossier sélectionné dont le `Message-ID` est l'un
+    /// de `ids` (sans chevrons) : `OR HEADER Message-ID … HEADER Message-ID …`,
+    /// par paquets. Sert à retrouver les messages que la recherche de Graph a
+    /// trouvés et que l'index du poste n'a pas encore (#179). Un identifiant
+    /// qui n'est pas en ASCII est laissé de côté.
+    pub fn chercher_messages_id(&mut self, ids: &[String]) -> Resultat<Vec<u32>> {
+        const PAQUET: usize = 25;
+        let ids: Vec<&String> = ids.iter().filter(|i| !i.is_empty() && i.is_ascii()).collect();
+        let mut uids = Vec::new();
+        for paquet in ids.chunks(PAQUET) {
+            let mut criteres = String::new();
+            for _ in 1..paquet.len() {
+                criteres.push_str(" OR");
+            }
+            for id in paquet {
+                criteres.push_str(&format!(" HEADER Message-ID {}", citer(id)));
+            }
+            let (texte, _) = self.commande(&format!("UID SEARCH{criteres}"))?;
+            uids.extend(protocole::analyser_search(&texte));
+        }
+        uids.sort_unstable();
+        uids.dedup();
+        Ok(uids)
+    }
+
     /// UID des messages du dossier sélectionné reçus avant un jour (`BEFORE`,
     /// sur la date de réception du serveur, celle du tri de la liste) ; sans
     /// jour, tous. `jour` : au format de la RFC 3501, « 1-Jan-2026 ».
@@ -1492,6 +1517,33 @@ mod tests {
             session(DOVECOT, vec![echange("UID SEARCH UNSEEN", "* SEARCH 2 11\r\n", "OK fait")]);
         assert_eq!(client.chercher_patiemment("", &[], Champs::NonLus, attente(5_000, false, true)).unwrap(), vec![2, 11]);
         assert_eq!(journal.lock().unwrap()[0], "UID SEARCH UNSEEN");
+    }
+
+    #[test]
+    fn recherche_par_message_id_en_paquets() {
+        // Les messages trouvés par Graph que l'index n'a pas (#179) : un
+        // critère par identifiant, liés par OR, 25 par commande ; un
+        // identifiant hors ASCII est laissé de côté.
+        let mut ids: Vec<String> = (1..=26).map(|n| format!("m{n}@exemple.fr")).collect();
+        ids.push("é@exemple.fr".into());
+        let (mut client, journal) = session(
+            DOVECOT,
+            vec![
+                echange("UID SEARCH OR OR", "* SEARCH 9 4\r\n", "OK fait"),
+                echange("UID SEARCH HEADER", "* SEARCH 4 12\r\n", "OK fait"),
+            ],
+        );
+        assert_eq!(client.chercher_messages_id(&ids).unwrap(), vec![4, 9, 12]);
+        let journal = journal.lock().unwrap();
+        assert_eq!(journal.len(), 2);
+        assert!(journal[0].starts_with(&format!("UID SEARCH{} HEADER Message-ID \"m1@exemple.fr\"", " OR".repeat(24))));
+        assert!(journal[0].ends_with("HEADER Message-ID \"m25@exemple.fr\""));
+        assert_eq!(journal[1], "UID SEARCH HEADER Message-ID \"m26@exemple.fr\"");
+        drop(journal);
+        // Rien à chercher : aucune commande.
+        let (mut client, journal) = session(DOVECOT, vec![]);
+        assert!(client.chercher_messages_id(&["é@x".to_string()]).unwrap().is_empty());
+        assert!(journal.lock().unwrap().is_empty());
     }
 
     #[test]

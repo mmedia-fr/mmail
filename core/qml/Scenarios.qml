@@ -5472,7 +5472,16 @@ QtObject {
                 bilan("hôte de la nouvelle réunion", vueAgenda.saisieEvenement.organiseeParLaBoite)
                 saisir("visio-saisie")
                 plusTard(800, function() {
+                    // Visio sans participant (mmail#175) : un premier clic
+                    // avertit sans enregistrer ; le second confirme.
+                    var saisieEv = vueAgenda.saisieEvenement
+                    var avertir = saisieEv.reunionPossible
                     dans("boutonEnregistrerEvenement").clicked()
+                    bilan("visio sans participant : avertissement, rien d'enregistré (mmail#175)",
+                          !avertir || (saisieEv.opened && !saisieEv.enCours
+                                       && saisieEv.erreur.indexOf("Aucun participant") === 0))
+                    if (avertir)
+                        dans("boutonEnregistrerEvenement").clicked()
                     var attendreFiche = function(k) {
                         var fiches = vueAgenda.donnees.fiches || []
                         var i = fiches.findIndex(function(f) { return f.titre === "Réunion visio" })

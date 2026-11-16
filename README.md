@@ -410,6 +410,16 @@ modifié ailleurs entre-temps n'est pas écrasé : l'agenda est relu et la
 modification est à refaire. Les propriétés que MMail ne gère pas (celles d'un
 autre logiciel) sont conservées.
 
+**Dates et heures** (mmail#175) : elles se tapent librement et se remettent en
+forme en sortant du champ — `1356`, `13h56`, `13,56` ou `13 56` donnent
+`13:56`, `9h` donne `09:00` ; `171126`, `17/11/26`, `17-11-2026` ou `1711`
+donnent `17/11/2026`. Sans année, c'est l'année en cours, ou la suivante si la
+date est passée de plus de six mois ; sans mois, le mois en cours. À la souris,
+la molette et les flèches haut et bas avancent ou reculent d'un quart d'heure
+(sur le quart d'heure rond) ou d'un jour ; « ▾ » propose les heures de la
+journée par quart d'heure, et le pictogramme de calendrier ouvre le petit
+calendrier. La fin suit le début, durée gardée.
+
 **Invitations** : un courriel d'invitation affiche un bandeau — objet, horaire,
 lieu, organisateur — avec « Accepter », « Provisoire », « Refuser » ; la réunion
 entre dans l'agenda (un refus l'en retire) et l'organisateur reçoit la réponse.
@@ -442,8 +452,11 @@ ouvre la réunion. Sous Windows, la réunion s'ouvre dans une fenêtre
 d'application d'Edge (`--app`), sans onglets ni barre d'adresse ; sous Linux,
 dans celle de Chromium ou de Chrome s'ils sont installés ; sinon, et sous
 Android, dans le navigateur par défaut. Après « Visio », un rappel invite à
-remplir « Participants » ; un événement passé qui a des participants est
-signalé, car le serveur n'envoie pas d'invitation pour un événement passé.
+remplir « Participants ». Une visio ajoutée sans participant n'est pas
+enregistrée au premier clic : MMail avertit que personne ne recevra
+l'invitation et place le curseur dans « Participants » ; un second clic
+enregistre quand même (mmail#175). Un événement passé qui a des participants
+est signalé, car le serveur n'envoie pas d'invitation pour un événement passé.
 Le nom de la réunion commence par le domaine du compte, points changés en
 tirets, suivi de trois groupes de quatre signes tirés au hasard (sans `l`, `o`,
 `0` ni `1`) : le service n'accepte en organisateur que la boîte de ce domaine.

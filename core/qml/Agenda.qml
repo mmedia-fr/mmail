@@ -33,6 +33,7 @@ Pane {
     property alias saisieEvenement: popupSaisie
     property alias ficheEvenement: popupFiche
     property alias demandeVisio: popupDemandeVisio
+    property alias confirmationDeplacement: popupDeplacement
     // Comptes Microsoft 365 dont la lecture des agendas reste à autoriser
     // (0.9.0).
     property var agendasMicrosoft: []
@@ -156,6 +157,46 @@ Pane {
 
     function agendasModifiables() {
         return agendas.filter(function(a) { return a.ecriture })
+    }
+
+    // Minutes depuis minuit → « hh:mm » ; minuit du soir s'écrit 00:00.
+    function heureMinutes(m) {
+        return deuxChiffres(Math.floor(m / 60) % 24) + ":" + deuxChiffres(m % 60)
+    }
+
+    // « 2026-11-17 » → « mardi 17/11/2026 ».
+    function jourLong(texte) {
+        return texte ? dateDe(texte).toLocaleDateString(Qt.locale("fr_FR"), "dddd dd/MM/yyyy") : ""
+    }
+
+    // Déplacer ou retailler un événement depuis la grille (mmail#175) : sa
+    // saisie relue, l'horaire seul changé — le jour `date` (aaaa-mm-jj), de
+    // `debut` à `fin` minutes depuis minuit —, enregistrée comme depuis la
+    // fenêtre d'événement. Dans une série, l'occurrence seule. Une réunion
+    // avec participants demande d'abord confirmation : ils recevront la
+    // nouvelle heure.
+    function deplacer(f, date, debut, fin, confirme) {
+        if (!confirme && f.participants && f.participants.length > 0) {
+            popupDeplacement.demander(f, date, debut, fin)
+            return
+        }
+        var texte = boite.saisieEvenement(f.objet, f.occurrence, !f.repete)
+        if (texte.length === 0) {
+            annoncer(qsTr("Cet événement ne se lit pas."), true)
+            return
+        }
+        var s = JSON.parse(texte)
+        var jour = dateDe(date)
+        s.journee = false
+        s.debut = isoHeure(new Date(jour.getFullYear(), jour.getMonth(), jour.getDate(), 0, debut))
+        s.fin = isoHeure(new Date(jour.getFullYear(), jour.getMonth(), jour.getDate(), 0, fin))
+        // Comme la fenêtre d'événement : les participants ne s'écrivent que là
+        // où elle les propose.
+        if ((s.occurrence || "").length > 0 || !invitationsPossibles(s.agenda))
+            s.participants = null
+        ecritureEnCours = "deplacement"
+        annoncer(qsTr("Déplacement de « %1 »…").arg(f.titre), false)
+        boite.enregistrerEvenement(JSON.stringify(s))
     }
 
     // Heure d'une demi-heure de la journée (0 à 48), comme la colonne des
@@ -352,6 +393,9 @@ Pane {
                 } else {
                     popupSaisie.erreur = message
                 }
+            } else if (enCours === "deplacement") {
+                agenda.annoncer(ok ? qsTr("Événement déplacé.") : qsTr("Déplacement impossible : %1").arg(message), !ok)
+                agenda.relire()
             } else if (enCours === "suppression") {
                 agenda.annoncer(ok ? qsTr("Événement supprimé.") : qsTr("Suppression impossible : %1").arg(message), !ok)
             } else if (enCours === "reponse") {
@@ -922,7 +966,12 @@ Pane {
                 Component.onCompleted: placer()
                 Connections {
                     target: agenda
-                    function onDonneesChanged() { defilement.placer() }
+                    function onDonneesChanged() {
+                        defilement.placer()
+                        // Les cases sont refaites : un geste en cours n'a plus
+                        // de case.
+                        geste.annuler()
+                    }
                 }
 
                 // Heures et demi-heures.
@@ -1042,12 +1091,165 @@ Pane {
                               + agenda.heureDemi(Math.max(zoneCreneaux.depart, zoneCreneaux.arrivee) + 1)
                     }
                 }
+                // Déplacer ou retailler un événement (mmail#175). À la souris :
+                // glisser la case, ou sa poignée du bas ; au doigt : un appui
+                // long d'abord, un glissement simple faisant toujours défiler
+                // la grille. Par quart d'heure ; la case fantôme montre les
+                // nouvelles heures, l'enregistrement part au lâcher.
+                QtObject {
+                    id: geste
+                    // Fiche saisie (-1 : aucun geste), et sa case de départ.
+                    property int fiche: -1
+                    property bool retailler: false
+                    property int jourDepart: 0
+                    property int debutDepart: 0
+                    property int finDepart: 0
+                    property real yAppui: 0
+                    // Visée : colonne du jour, minutes de début et de fin.
+                    property int jour: 0
+                    property int debut: 0
+                    property int fin: 0
+                    // Pointeur dans la vue, pour le défilement automatique ;
+                    // -1 : aucun.
+                    property real xVue: -1
+                    property real yVue: -1
+                    readonly property bool actif: fiche >= 0
+
+                    // Le geste peut-il partir de cette case ? Sinon, la barre
+                    // d'état dit pourquoi.
+                    function permis(c) {
+                        var f = agenda.donnees.fiches[c.fiche]
+                        if (agenda.ecritureEnCours.length > 0)
+                            return false
+                        if (!f.modifiable) {
+                            agenda.annoncer(qsTr("Non modifiable ici : %1.").arg(f.motif || qsTr("agenda en lecture seule")), true)
+                            return false
+                        }
+                        if ((agenda.donnees.cases || []).filter(function(x) { return x.fiche === c.fiche }).length > 1) {
+                            agenda.annoncer(qsTr("Un événement sur plusieurs jours se modifie dans sa fiche."), true)
+                            return false
+                        }
+                        return true
+                    }
+                    // `p` : position dans le contenu de la grille.
+                    function commencer(c, retaille, p) {
+                        if (!permis(c))
+                            return
+                        retailler = retaille
+                        jourDepart = jour = c.jour
+                        debutDepart = debut = c.debut
+                        finDepart = fin = c.fin
+                        yAppui = p.y
+                        fiche = c.fiche
+                    }
+                    // Le quart d'heure le plus proche ; sans pas franchi,
+                    // l'heure d'origine, même hors du quart d'heure rond.
+                    function caler(depart, minutes) {
+                        return Math.round(minutes / 15) === 0 ? depart : Math.round((depart + minutes) / 15) * 15
+                    }
+                    function suivre(p) {
+                        if (!actif)
+                            return
+                        var minutes = (p.y - yAppui) / grille.hh * 60
+                        if (retailler) {
+                            fin = Math.max(debutDepart + 15, Math.min(24 * 60, caler(finDepart, minutes)))
+                            return
+                        }
+                        var duree = finDepart - debutDepart
+                        debut = Math.max(0, Math.min(24 * 60 - duree, caler(debutDepart, minutes)))
+                        fin = debut + duree
+                        jour = Math.max(0, Math.min(grille.nbJours - 1, Math.floor((p.x - grille.marge) / grille.largeurJour)))
+                    }
+                    function annuler() {
+                        fiche = -1
+                        xVue = yVue = -1
+                    }
+                    function finir() {
+                        if (!actif)
+                            return
+                        var f = agenda.donnees.fiches[fiche]
+                        var change = jour !== jourDepart || debut !== debutDepart || fin !== finDepart
+                        var date = agenda.donnees.jours[jour].date
+                        var de = debut
+                        var a = fin
+                        annuler()
+                        if (change)
+                            agenda.deplacer(f, date, de, a, false)
+                    }
+
+                    // Gestes d'une zone de la case (MouseArea portant `glisse` et
+                    // `appui`) ; `c` : la case, `retaille` : sa poignée du bas.
+                    function vue(zone, souris) {
+                        return zone.mapToItem(defilement, souris.x, souris.y)
+                    }
+                    function presse(zone, souris) {
+                        zone.glisse = false
+                        zone.appui = vue(zone, souris)
+                    }
+                    function bouge(zone, souris, c, retaille) {
+                        var v = vue(zone, souris)
+                        if (!actif && !zone.glisse && !agenda.tactile
+                                && Math.max(Math.abs(v.x - zone.appui.x), Math.abs(v.y - zone.appui.y)) >= Qt.styleHints.startDragDistance) {
+                            zone.glisse = true
+                            commencer(c, retaille, Qt.point(zone.appui.x, zone.appui.y + defilement.contentY))
+                        }
+                        xVue = v.x
+                        yVue = v.y
+                        suivre(Qt.point(v.x, v.y + defilement.contentY))
+                    }
+                    function appuiLong(zone, souris, c, retaille) {
+                        if (!agenda.tactile || actif)
+                            return
+                        zone.glisse = true
+                        var v = vue(zone, souris)
+                        xVue = v.x
+                        yVue = v.y
+                        commencer(c, retaille, Qt.point(v.x, v.y + defilement.contentY))
+                    }
+                }
+                // Pointeur au bord haut ou bas de la vue pendant un geste : la
+                // grille défile, la visée suit.
+                Timer {
+                    interval: 40
+                    repeat: true
+                    running: geste.actif && geste.yVue >= 0
+                             && (geste.yVue < 28 || geste.yVue > defilement.height - 28)
+                    onTriggered: {
+                        var pas = geste.yVue < 28 ? -12 : 12
+                        defilement.contentY = Math.max(0, Math.min(defilement.contentHeight - defilement.height,
+                                                                   defilement.contentY + pas))
+                        geste.suivre(Qt.point(geste.xVue, geste.yVue + defilement.contentY))
+                    }
+                }
+                // Case fantôme : où l'événement ira.
+                Rectangle {
+                    z: 3
+                    visible: geste.actif
+                    x: grille.marge + geste.jour * grille.largeurJour + 2
+                    y: geste.debut / 60 * grille.hh + 1
+                    width: grille.largeurJour - 4
+                    height: Math.max(16, (geste.fin - geste.debut) / 60 * grille.hh - 2)
+                    radius: 4
+                    color: Qt.rgba(agenda.accent.r, agenda.accent.g, agenda.accent.b, 0.25)
+                    border.width: 2
+                    border.color: agenda.accent
+                    Label {
+                        x: 6
+                        y: 2
+                        width: parent.width - 8
+                        font.pixelSize: 12
+                        font.bold: true
+                        elide: Text.ElideRight
+                        text: agenda.heureMinutes(geste.debut) + " – " + agenda.heureMinutes(geste.fin)
+                    }
+                }
                 // Événements.
                 Repeater {
                     model: agenda.donnees.cases || []
                     delegate: Rectangle {
                         id: caseHeure
                         required property var modelData
+                        objectName: "caseHeure-" + modelData.fiche
                         readonly property var f: agenda.donnees.fiches[modelData.fiche]
                         readonly property color teinte: f.couleur
                         readonly property real largeurColonne: (grille.largeurJour - 4) / modelData.colonnes
@@ -1097,10 +1299,41 @@ Pane {
                                 elide: Text.ElideRight
                             }
                         }
+                        opacity: geste.fiche === modelData.fiche ? 0.35 : 1
+                        // Clic : la fiche. Glisser (au doigt, après un appui
+                        // long) : déplacer l'événement (mmail#175).
                         MouseArea {
+                            id: zoneCase
                             anchors.fill: parent
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: agenda.montrerFiche(caseHeure.modelData.fiche)
+                            cursorShape: geste.actif ? Qt.ClosedHandCursor : Qt.PointingHandCursor
+                            preventStealing: !agenda.tactile || geste.actif
+                            property bool glisse: false
+                            property point appui
+                            onPressed: function(souris) { geste.presse(zoneCase, souris) }
+                            onPositionChanged: function(souris) { geste.bouge(zoneCase, souris, caseHeure.modelData, false) }
+                            onPressAndHold: function(souris) { geste.appuiLong(zoneCase, souris, caseHeure.modelData, false) }
+                            onReleased: geste.finir()
+                            onCanceled: geste.annuler()
+                            onClicked: if (!glisse) agenda.montrerFiche(caseHeure.modelData.fiche)
+                        }
+                        // Poignée du bas : retailler, l'heure de fin seule.
+                        MouseArea {
+                            id: poignee
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.bottom: parent.bottom
+                            height: agenda.tactile ? 14 : 6
+                            visible: caseHeure.f.modifiable && caseHeure.height >= 24
+                            cursorShape: Qt.SizeVerCursor
+                            preventStealing: !agenda.tactile || geste.actif
+                            property bool glisse: false
+                            property point appui
+                            onPressed: function(souris) { geste.presse(poignee, souris) }
+                            onPositionChanged: function(souris) { geste.bouge(poignee, souris, caseHeure.modelData, true) }
+                            onPressAndHold: function(souris) { geste.appuiLong(poignee, souris, caseHeure.modelData, true) }
+                            onReleased: geste.finir()
+                            onCanceled: geste.annuler()
+                            onClicked: if (!glisse) agenda.montrerFiche(caseHeure.modelData.fiche)
                         }
                     }
                 }
@@ -1271,6 +1504,63 @@ Pane {
                 Button {
                     text: qsTr("Fermer")
                     onClicked: popupFiche.close()
+                }
+            }
+        }
+    }
+
+    // --- déplacer une réunion depuis la grille : confirmation (mmail#175) ----------
+    Popup {
+        id: popupDeplacement
+        property var f: ({})
+        property string date: ""
+        property int debut: 0
+        property int fin: 0
+        anchors.centerIn: Overlay.overlay
+        width: Math.min(agenda.width - 32, 460)
+        modal: true
+        focus: true
+        padding: 16
+        function demander(fiche, jour, de, a) {
+            f = fiche
+            date = jour
+            debut = de
+            fin = a
+            open()
+        }
+        contentItem: ColumnLayout {
+            spacing: 12
+            Label {
+                objectName: "texteDeplacement"
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                font.bold: true
+                text: qsTr("Déplacer « %1 » au %2, %3 – %4 ?").arg(popupDeplacement.f.titre || "")
+                      .arg(agenda.jourLong(popupDeplacement.date))
+                      .arg(agenda.heureMinutes(popupDeplacement.debut)).arg(agenda.heureMinutes(popupDeplacement.fin))
+            }
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                text: qsTr("Les participants recevront la nouvelle heure.")
+            }
+            Flow {
+                Layout.fillWidth: true
+                layoutDirection: Qt.RightToLeft
+                spacing: 6
+                Button {
+                    text: qsTr("Annuler")
+                    flat: true
+                    onClicked: popupDeplacement.close()
+                }
+                Button {
+                    objectName: "boutonDeplacer"
+                    text: qsTr("Déplacer")
+                    highlighted: true
+                    onClicked: {
+                        popupDeplacement.close()
+                        agenda.deplacer(popupDeplacement.f, popupDeplacement.date, popupDeplacement.debut, popupDeplacement.fin, true)
+                    }
                 }
             }
         }

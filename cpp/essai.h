@@ -53,6 +53,25 @@ class GestesEssai : public QObject {
     QCoreApplication::sendEvent(fenetre, &relache);
   }
 
+  // Glisser au bouton gauche, de (x1, y1) à (x2, y2) de `element` : appui,
+  // `etapes` déplacements réguliers, relâche (mmail#175, déplacer un
+  // événement de l'agenda).
+  Q_INVOKABLE void glisser(QQuickItem* element, qreal x1, qreal y1, qreal x2, qreal y2, int etapes) {
+    if (!element || !element->window())
+      return;
+    QQuickWindow* fenetre = element->window();
+    auto envoyer = [&](QEvent::Type type, qreal x, qreal y, Qt::MouseButton bouton, Qt::MouseButtons boutons) {
+      const QPointF scene = element->mapToScene(QPointF(x, y));
+      const QPointF global = QPointF(fenetre->mapToGlobal(scene.toPoint()));
+      QMouseEvent evenement(type, scene, scene, global, bouton, boutons, Qt::NoModifier);
+      QCoreApplication::sendEvent(fenetre, &evenement);
+    };
+    envoyer(QEvent::MouseButtonPress, x1, y1, Qt::LeftButton, Qt::LeftButton);
+    const int n = etapes > 0 ? etapes : 1;
+    for (int i = 1; i <= n; ++i)
+      envoyer(QEvent::MouseMove, x1 + (x2 - x1) * i / n, y1 + (y2 - y1) * i / n, Qt::NoButton, Qt::LeftButton);
+    envoyer(QEvent::MouseButtonRelease, x2, y2, Qt::LeftButton, Qt::NoButton);
+  }
   // Touche `touche` (Qt.Key_A, Qt.Key_Return…) frappée dans la fenêtre de
   // `element`, avec le texte qu'elle produit (« a », « \r ») : elle va à
   // l'élément qui a la main, comme une frappe au clavier (0.6.37).

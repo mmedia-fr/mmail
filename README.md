@@ -767,6 +767,13 @@ et à la fermeture de MMail, et enregistré en brouillon sur le serveur 30
 secondes après la première frappe, puis chaque minute tant qu'il change : le
 brouillon paraît dans son dossier pendant la rédaction. Si MMail se ferme avant son envoi (mise à
 jour, arrêt du poste), il est proposé à la reprise au démarrage suivant.
+Pendant un enregistrement, un indicateur tourne à côté de « Enregistrement du
+brouillon… ». « Envoyer » reste cliquable : le bouton passe à « Envoi en
+attente… », et le message part dès la fin de l'enregistrement, même s'il
+échoue. Le brouillon compte pour enregistré dès son dépôt sur le serveur ; le
+retrait de sa version précédente vient ensuite, sans retenir la rédaction.
+Les images du corps d'un brouillon repris, y compris celles d'un brouillon
+préparé par un autre logiciel, repartent intégrées au message.
 
 | | Windows | Linux |
 |---|---|---|

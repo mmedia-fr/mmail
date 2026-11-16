@@ -1,2 +1,5 @@
 module fr.mmedia.mmail.natif
 Vide 1.0 Vide.qml
+MiseEnForme 1.0 MiseEnForme.qml
+Correcteur 1.0 Correcteur.qml
+RenduComplet 1.0 RenduComplet.qml

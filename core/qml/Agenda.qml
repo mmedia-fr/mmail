@@ -1436,6 +1436,14 @@ Pane {
                                                 && agenda.boite.lienVisio(agendaChoisi, champLieu.text, false).length > 0
         // Rappel des participants après « Visio », tant que le champ est vide.
         property bool conseilParticipants: false
+        // Visio posée pendant cette saisie (événement nouveau, ou lien ajouté),
+        // sans participant : MMail avertit une fois avant d'enregistrer, le
+        // curseur dans « Participants » ; enregistrer de nouveau confirme
+        // (mmail#175, un oubli du 16/11).
+        readonly property bool visioSansParticipant: reunionPossible && reunionDansLieu && organiseeParLaBoite
+                                                     && champParticipants.text.trim().length === 0
+                                                     && (nouveau || agenda.boite.lienVisio(agendaChoisi, s.lieu || "", false).length === 0)
+        property bool sansParticipantSignale: false
         // Le serveur n'envoie pas d'invitation pour un événement passé (SOGo).
         readonly property bool passeAvecParticipants: {
             if (!reunionPossible || champParticipants.text.trim().length === 0)
@@ -1485,6 +1493,7 @@ Pane {
             s = saisie
             rejoindreApres = false
             conseilParticipants = false
+            sansParticipantSignale = false
             champParticipants.text = (s.participants || []).join(", ")
             erreur = ""
             enCours = false
@@ -1515,12 +1524,19 @@ Pane {
             champTitre.forceActiveFocus()
         }
 
+        // Texte d'un champ de date ou d'heure, remis en forme s'il se lit
+        // (« 1711 », « 13h56 »…, cf. ChampDate et ChampHeure) : la touche
+        // Entrée du titre enregistre sans quitter le champ.
+        function texteDe(champ) {
+            return champ.lire(champ.text) || champ.text
+        }
+
         function lireDebut() {
-            return agenda.lireDate(champDebutJour.text, caseJournee.checked ? "00:00" : champDebutHeure.text)
+            return agenda.lireDate(texteDe(champDebutJour), caseJournee.checked ? "00:00" : texteDe(champDebutHeure))
         }
 
         function lireFin() {
-            return agenda.lireDate(champFinJour.text, caseJournee.checked ? "00:00" : champFinHeure.text)
+            return agenda.lireDate(texteDe(champFinJour), caseJournee.checked ? "00:00" : texteDe(champFinHeure))
         }
 
         // Le début a changé : la fin suit, durée gardée.
@@ -1546,11 +1562,18 @@ Pane {
             }
             var jusqua = null
             if (champJusquAu.visible && champJusquAu.text.trim().length > 0) {
-                jusqua = agenda.lireDate(champJusquAu.text, "00:00")
+                jusqua = agenda.lireDate(texteDe(champJusquAu), "00:00")
                 if (!jusqua) {
                     erreur = qsTr("Dernier jour de la répétition illisible : jj/mm/aaaa.")
                     return
                 }
+            }
+            if (visioSansParticipant && !sansParticipantSignale) {
+                sansParticipantSignale = true
+                conseilParticipants = true
+                erreur = qsTr("Aucun participant : personne ne recevra l'invitation. Ajoutez-les, ou enregistrez de nouveau pour confirmer.")
+                champParticipants.forceActiveFocus()
+                return
             }
             var modifiables = agenda.agendasModifiables()
             var participants = null
@@ -1661,52 +1684,48 @@ Pane {
                         id: caseJournee
                         text: qsTr("Journée entière")
                     }
+                    // Dates et heures : saisie souple, molette, flèches, liste
+                    // des heures et calendrier (mmail#175).
                     Label { text: qsTr("Début") }
                     RowLayout {
-                        spacing: 4
-                        TextField {
+                        spacing: 6
+                        ChampDate {
                             id: champDebutJour
+                            objectName: "champDebutJour"
                             MenuSaisie {}
-                            Layout.preferredWidth: 120
-                            placeholderText: qsTr("jj/mm/aaaa")
-                            onEditingFinished: popupSaisie.debutChange()
+                            tactile: agenda.tactile
+                            Layout.preferredWidth: 140
+                            onValeurChangee: popupSaisie.debutChange()
+                            onCalendrierDemande: popupCalendrier.ouvrirPour(champDebutJour)
                         }
-                        ToolButton {
-                            text: "…"
-                            ToolTip.visible: hovered
-                            ToolTip.text: qsTr("Choisir dans le calendrier")
-                            onClicked: popupCalendrier.ouvrirPour(champDebutJour)
-                        }
-                        TextField {
+                        ChampHeure {
                             id: champDebutHeure
+                            objectName: "champDebutHeure"
                             MenuSaisie {}
+                            tactile: agenda.tactile
                             visible: !caseJournee.checked
-                            Layout.preferredWidth: 70
-                            placeholderText: qsTr("hh:mm")
-                            onEditingFinished: popupSaisie.debutChange()
+                            Layout.preferredWidth: agenda.tactile ? 110 : 96
+                            onValeurChangee: popupSaisie.debutChange()
                         }
                     }
                     Label { text: caseJournee.checked ? qsTr("Dernier jour") : qsTr("Fin") }
                     RowLayout {
-                        spacing: 4
-                        TextField {
+                        spacing: 6
+                        ChampDate {
                             id: champFinJour
+                            objectName: "champFinJour"
                             MenuSaisie {}
-                            Layout.preferredWidth: 120
-                            placeholderText: qsTr("jj/mm/aaaa")
+                            tactile: agenda.tactile
+                            Layout.preferredWidth: 140
+                            onCalendrierDemande: popupCalendrier.ouvrirPour(champFinJour)
                         }
-                        ToolButton {
-                            text: "…"
-                            ToolTip.visible: hovered
-                            ToolTip.text: qsTr("Choisir dans le calendrier")
-                            onClicked: popupCalendrier.ouvrirPour(champFinJour)
-                        }
-                        TextField {
+                        ChampHeure {
                             id: champFinHeure
+                            objectName: "champFinHeure"
                             MenuSaisie {}
+                            tactile: agenda.tactile
                             visible: !caseJournee.checked
-                            Layout.preferredWidth: 70
-                            placeholderText: qsTr("hh:mm")
+                            Layout.preferredWidth: agenda.tactile ? 110 : 96
                         }
                     }
                     Label {
@@ -1735,18 +1754,14 @@ Pane {
                     RowLayout {
                         visible: !popupSaisie.occurrence && choixRepetition.currentIndex > 0
                                  && popupSaisie.choixRepetitions[choixRepetition.currentIndex][0] !== "AUTRE"
-                        spacing: 4
-                        TextField {
+                        spacing: 6
+                        ChampDate {
                             id: champJusquAu
                             MenuSaisie {}
-                            Layout.preferredWidth: 120
+                            tactile: agenda.tactile
+                            Layout.preferredWidth: 140
                             placeholderText: qsTr("sans fin")
-                        }
-                        ToolButton {
-                            text: "…"
-                            ToolTip.visible: hovered
-                            ToolTip.text: qsTr("Choisir dans le calendrier")
-                            onClicked: popupCalendrier.ouvrirPour(champJusquAu)
+                            onCalendrierDemande: popupCalendrier.ouvrirPour(champJusquAu)
                         }
                     }
                     Label {
@@ -1759,6 +1774,7 @@ Pane {
                         spacing: 0
                         TextField {
                             id: champParticipants
+                            objectName: "champParticipants"
                             MenuSaisie {}
                             Layout.fillWidth: true
                             placeholderText: qsTr("adresses, séparées par des virgules")
@@ -1768,6 +1784,10 @@ Pane {
                             onTextEdited: {
                                 var dernier = text.split(/[,;]/).pop().trim()
                                 propositions = dernier.length >= 2 ? JSON.parse(agenda.boite.adressesConnues(dernier)).slice(0, 6) : []
+                                // Avertissement de la visio sans participant : levé
+                                // dès qu'une adresse s'écrit.
+                                if (popupSaisie.sansParticipantSignale && text.trim().length > 0)
+                                    popupSaisie.erreur = ""
                             }
                             onActiveFocusChanged: if (!activeFocus) propositions = []
                         }
@@ -1885,7 +1905,7 @@ Pane {
         focus: true
         function ouvrirPour(champ) {
             cible = champ
-            mois = agenda.lireDate(champ.text, "00:00") || new Date()
+            mois = agenda.lireDate(champ.lire ? champ.lire(champ.text) || champ.text : champ.text, "00:00") || new Date()
             var point = champ.mapToItem(agenda, 0, champ.height)
             x = Math.max(0, Math.min(agenda.width - 260, point.x))
             y = Math.max(0, Math.min(agenda.height - 260, point.y))

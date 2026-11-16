@@ -39,6 +39,7 @@ pub mod sauvegarde;
 pub mod signature;
 pub mod smtp;
 pub mod socle;
+pub mod structure;
 pub mod protocole;
 pub mod synchro;
 pub mod visio;

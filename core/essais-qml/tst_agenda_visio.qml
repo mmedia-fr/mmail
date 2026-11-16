@@ -86,10 +86,16 @@ Item {
         function dans(nom) {
             return chercher(nom, saisie.contentItem)
         }
+        // Clic sur un élément de la fenêtre, une fois placé : sous Qt 6.8, la
+        // fenêtre est dite ouverte avant d'être mise en page.
         function cliquer(nom) {
             var b = dans(nom)
             verify(b !== null, nom)
+            tryVerify(function() { return b.visible && b.width > 0 && b.height > 0 }, 2000, nom)
             mouseClick(b)
+        }
+        function initTestCase() {
+            waitForRendering(vue)
         }
         function init() {
             noyau.enregistre = []
@@ -102,6 +108,8 @@ Item {
         function nouveau() {
             vue.nouvelEvenement("2026-11-17", 600, false, 60)
             tryVerify(function() { return saisie.opened })
+            waitForItemPolished(saisie.contentItem)
+            waitForRendering(saisie.contentItem)
             dans("champTitre").text = "Point"
         }
         function dernier() {
@@ -190,11 +198,13 @@ Item {
             compare(dernier().fin, "2026-11-18T10:45")
         }
 
-        // La fin suit le début, durée gardée, au réglage par la molette.
+        // La fin suit le début, durée gardée, au réglage de l'heure (flèche
+        // haut ; la molette fait le même pas, cf. tst_champs_date_heure).
         function test_fin_suit_le_debut() {
             nouveau()
             var debut = dans("champDebutHeure")
-            mouseWheel(debut, 20, debut.height / 2, 0, 120)
+            debut.forceActiveFocus()
+            keyClick(Qt.Key_Up)
             compare(debut.text, "10:15")
             compare(dans("champFinHeure").text, "11:15")
         }

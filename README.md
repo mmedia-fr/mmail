@@ -717,6 +717,16 @@ pièce jointe le plus souvent, reste sur le serveur.
 La boîte de réception et chaque dossier ouvert se préchargent en arrière-plan ;
 au-delà de la fenêtre, un message est relu sur le serveur.
 
+Le préchargement passe après ce que l'on demande : un message cliqué ou un
+dossier ouvert l'interrompt entre deux messages, et il reprend ensuite. Un
+message relu sur le serveur, et de plus de 512 Kio, s'affiche **sans ses
+grosses pièces jointes** : MMail lit sa structure, puis ses en-têtes, ses
+textes et ses images intégrées. La liste des pièces jointes est complète, avec
+leur taille ; ouvrir ou enregistrer une pièce, répondre ou transférer relisent
+le message entier. Sur Microsoft 365, qui transmet un message bien plus
+lentement qu'un serveur Dovecot, l'affichage ne dépend plus de la taille des
+pièces jointes (#179).
+
 Un message en cours de rédaction est gardé sur le poste toutes les 10 secondes
 et à la fermeture de MMail, et enregistré en brouillon sur le serveur 30
 secondes après la première frappe, puis chaque minute tant qu'il change : le

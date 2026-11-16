@@ -183,10 +183,21 @@ pub fn pieces_jointes(brut: &[u8]) -> Vec<PieceJointe> {
                 risquee: ouverture_risquee(&nom),
                 nom,
                 type_mime,
-                taille: partie.contents().len(),
+                taille: taille_d_origine(partie).unwrap_or_else(|| partie.contents().len()),
             }
         })
         .collect()
+}
+
+/// Taille d'une pièce laissée sur le serveur à l'affichage (#179) : l'en-tête
+/// que pose `structure::recomposer` sur sa partie, au corps vide.
+fn taille_d_origine(partie: &mail_parser::MessagePart<'_>) -> Option<usize> {
+    partie
+        .headers()
+        .iter()
+        .find(|h| h.name().eq_ignore_ascii_case(crate::structure::ENTETE_TAILLE))
+        .and_then(|h| h.value().as_text())
+        .and_then(|v| v.trim().parse().ok())
 }
 
 /// Content-ID des parties que les corps HTML du message affichent.

@@ -536,6 +536,29 @@ impl Client {
             .ok_or_else(|| Erreur::Protocole(format!("aucun corps rendu pour l'UID {uid}")))
     }
 
+    /// Le message recomposé sans ses grosses pièces jointes, et ses drapeaux,
+    /// pour l'afficher (#179) : sa structure, puis les seules sections utiles.
+    /// `None` : il vaut mieux le lire entier (cf. `structure::sections`), ou sa
+    /// réponse ne permet pas de le recomposer.
+    pub fn message_allege(&mut self, uid: u32) -> Resultat<Option<(Vec<u8>, Vec<String>)>> {
+        let (texte, litteraux) = self.commande(&format!("UID FETCH {uid} (UID BODYSTRUCTURE)"))?;
+        let Some(structure) = crate::structure::analyser(&texte, &litteraux) else {
+            return Ok(None);
+        };
+        let Some(sections) = crate::structure::sections(&structure) else {
+            return Ok(None);
+        };
+        let demandes: Vec<String> = sections.iter().map(|s| format!("BODY.PEEK[{s}]")).collect();
+        let (texte, litteraux) = self.commande(&format!("UID FETCH {uid} (UID FLAGS {})", demandes.join(" ")))?;
+        let drapeaux = protocole::analyser_fetch(&texte, &litteraux)
+            .into_iter()
+            .find(|e| e.uid == uid)
+            .map(|e| e.drapeaux)
+            .unwrap_or_default();
+        let contenus = crate::structure::contenus(&texte, &litteraux);
+        Ok(crate::structure::recomposer(&structure, &contenus).map(|octets| (octets, drapeaux)))
+    }
+
     /// Message entier avec ses drapeaux et sa date interne : ce qu'il faut pour
     /// le reposer à l'identique dans une autre boîte. `None` si le message a
     /// disparu entre-temps.

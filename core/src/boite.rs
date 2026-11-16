@@ -7347,6 +7347,13 @@ impl Travail {
         }
     }
 
+    /// Vrai si une commande de l'interface attend son tour. Pendant une tâche
+    /// de fond (préchargement), aucune commande comptée n'est en cours dans ce
+    /// fil : le compteur ne compte alors que celles qui attendent.
+    fn demande_en_attente(&self) -> bool {
+        self.attente.load(Ordering::SeqCst) > 0
+    }
+
     /// Rend l'issue d'une commande qui ne sera jamais traitée (connexion
     /// impossible, session perdue) : une rédaction ne doit pas rester « en
     /// cours d'envoi », ni une ligne masquée par un déplacement qui n'aura pas
@@ -8859,6 +8866,14 @@ impl Travail {
             if octets_lus > OCTETS_PAR_LOT {
                 break;
             }
+            // Une demande de l'interface attend (un message cliqué, un dossier
+            // ouvert) : le lot s'arrête entre deux messages et elle passe
+            // devant ; le reste suit, rangé après elle dans la file (#179).
+            // Sur Exchange Online, un lot de huit messages entiers prend
+            // plusieurs secondes.
+            if self.demande_en_attente() {
+                break;
+            }
         }
         if let Some(avant) = avant {
             if avant != chemin {
@@ -9150,25 +9165,37 @@ fn lire_corps(
         Some((octets, lu)) => (octets, !lu),
         None => {
             assurer_selection(&mut e.client, chemin)?;
-            let complet = e
-                .client
-                .message_complet(uid)?
-                .ok_or_else(|| Echec::Imap(Erreur::Refuse(format!("message {uid} disparu"))))?;
-            if let Some((mid, horodatage, _)) = e.magasin.identite_message(id, uid)? {
-                // Même règle qu'au préchargement : récent, et sous le plafond
-                // de taille.
-                if horodatage >= crate::cache::limite(maintenant())
-                    && complet.octets.len() as i64 <= crate::cache::taille_max()
-                    && cache.ecrire(mid, &complet.octets).is_ok()
-                {
-                    e.magasin.poser_etat_corps(mid, "full")?;
+            match lire_sans_pieces(e, id, uid, brut)? {
+                // Recomposé pour l'affichage seulement : ni gardé sur le poste,
+                // ni retenu comme dernier message lu — une pièce jointe, une
+                // réponse ou un transfert relisent le message entier.
+                Some((octets, drapeaux)) => {
+                    let deja = drapeaux.iter().any(|d| d.eq_ignore_ascii_case("$MDNSent"));
+                    (octets, !deja)
+                }
+                None => {
+                    let complet = e
+                        .client
+                        .message_complet(uid)?
+                        .ok_or_else(|| Echec::Imap(Erreur::Refuse(format!("message {uid} disparu"))))?;
+                    if let Some((mid, horodatage, _)) = e.magasin.identite_message(id, uid)? {
+                        // Même règle qu'au préchargement : récent, et sous le
+                        // plafond de taille.
+                        if horodatage >= crate::cache::limite(maintenant())
+                            && complet.octets.len() as i64 <= crate::cache::taille_max()
+                            && cache.ecrire(mid, &complet.octets).is_ok()
+                        {
+                            e.magasin.poser_etat_corps(mid, "full")?;
+                        }
+                    }
+                    let validite = e.magasin.dossier(id)?.map(|d| d.uid_validity).unwrap_or(0);
+                    e.dernier = Some((chemin.to_string(), validite, uid, complet.octets.clone()));
+                    // Demande de confirmation de lecture, sauf si l'on y a déjà
+                    // répondu.
+                    let deja = complet.drapeaux.iter().any(|d| d.eq_ignore_ascii_case("$MDNSent"));
+                    (complet.octets, !deja)
                 }
             }
-            let validite = e.magasin.dossier(id)?.map(|d| d.uid_validity).unwrap_or(0);
-            e.dernier = Some((chemin.to_string(), validite, uid, complet.octets.clone()));
-            // Demande de confirmation de lecture, sauf si l'on y a déjà répondu.
-            let deja = complet.drapeaux.iter().any(|d| d.eq_ignore_ascii_case("$MDNSent"));
-            (complet.octets, !deja)
         }
     };
     let reprise = dossier_de_reprise(&e.magasin, compte, chemin, id);
@@ -9184,6 +9211,36 @@ fn lire_corps(
     // affiché ne le marquent pas : marqué « non lu », il le reste.
     let non_lu = !brut && !distantes && matches!(e.magasin.message(id, uid)?, Some(m) if !m.lu);
     Ok(Some((lu, non_lu)))
+}
+
+/// Un message que cette lecture ne garderait pas sur le poste — reçu il y a
+/// plus d'un mois, ou au-delà du plafond de taille — et assez gros pour que
+/// cela compte, lu sans ses grosses pièces jointes (#179) : avec ses drapeaux,
+/// ou `None` s'il se lit entier. La source (`brut`) se lit toujours entière.
+/// Un refus du serveur ou une réponse qui ne se recompose pas le font lire
+/// entier ; une session perdue remonte.
+fn lire_sans_pieces(
+    e: &mut Etabli,
+    dossier: i64,
+    uid: u32,
+    brut: bool,
+) -> Result<Option<(Vec<u8>, Vec<String>)>, Echec> {
+    if brut {
+        return Ok(None);
+    }
+    let Some(message) = e.magasin.message(dossier, uid)? else {
+        return Ok(None);
+    };
+    let gardable = message.horodatage >= crate::cache::limite(maintenant())
+        && i64::from(message.taille) <= crate::cache::taille_max();
+    if gardable || message.taille < crate::structure::TAILLE_MIN {
+        return Ok(None);
+    }
+    match e.client.message_allege(uid) {
+        Ok(allege) => Ok(allege),
+        Err(Erreur::Refuse(_) | Erreur::Protocole(_)) => Ok(None),
+        Err(err) => Err(Echec::Imap(err)),
+    }
 }
 
 /// De quoi afficher un message entier : sa source, son HTML assaini et ses
@@ -11455,6 +11512,102 @@ mod tests {
         let a = dossier_message_a_joindre(&travail.profil, 1, 3, 12);
         let b = dossier_message_a_joindre(&travail.profil, 1, 4, 12);
         assert_ne!(a, b);
+        let _ = std::fs::remove_dir_all(Path::new(&travail.profil).parent().unwrap());
+    }
+
+    /// Un lot de préchargement cède la place à une demande de l'interface
+    /// (#179) : il s'arrête après le message en cours, et le reste du dossier
+    /// demeure à garder pour le lot suivant.
+    #[test]
+    fn prechargement_cede_a_une_demande() {
+        use crate::simule::{echange, session};
+        let corps = |n: u32| {
+            let brut = format!("From: a@exemple.fr\r\nSubject: m{n}\r\n\r\nCorps {n}\r\n");
+            echange(
+                &format!("UID FETCH {n} (BODY.PEEK[])"),
+                &format!("* {n} FETCH (UID {n} BODY[] {{{}}}\r\n{brut})\r\n", brut.len()),
+                "OK fait",
+            )
+        };
+        let (client, journal) = session(
+            "UIDPLUS",
+            vec![
+                echange("SELECT \"INBOX\"", "* 3 EXISTS\r\n* OK [UIDVALIDITY 7] v\r\n", "OK [READ-WRITE] fait"),
+                corps(1),
+                corps(2),
+                corps(3),
+            ],
+        );
+        let (travail, mut etabli, _issues) = fil_d_essai(client, "precharger-cede");
+        let inbox = etabli.magasin.dossier_id(travail.compte, "INBOX").unwrap();
+        let h = maintenant();
+        let messages: Vec<MessageLocal> = (1..=3u32)
+            .map(|uid| MessageLocal {
+                uid,
+                message_id: format!("<m{uid}@exemple.fr>"),
+                horodatage: h - i64::from(uid),
+                taille: 60,
+                ..Default::default()
+            })
+            .collect();
+        etabli.magasin.poser_messages(inbox, &messages).unwrap();
+        let lus = |journal: &crate::simule::Journal| {
+            journal.lock().unwrap().iter().filter(|c| c.starts_with("UID FETCH")).count()
+        };
+        // Un message cliqué attend son tour : un seul message, puis la main.
+        travail.attente.store(1, Ordering::SeqCst);
+        assert!(matches!(travail.precharger(&mut etabli, "INBOX"), Ok(true)), "il en reste à garder");
+        assert_eq!(lus(&journal), 1);
+        // Plus personne n'attend : le lot va jusqu'au bout.
+        travail.attente.store(0, Ordering::SeqCst);
+        assert!(matches!(travail.precharger(&mut etabli, "INBOX"), Ok(false)));
+        assert_eq!(lus(&journal), 3);
+        let _ = std::fs::remove_dir_all(Path::new(&travail.profil).parent().unwrap());
+    }
+
+    /// Un message ancien et gros s'affiche sans ses grosses pièces jointes
+    /// (#179) : sa structure, puis les seules sections utiles. Il n'est ni
+    /// gardé sur le poste, ni retenu comme dernier message lu.
+    #[test]
+    fn message_ancien_affiche_sans_ses_pieces_jointes() {
+        use crate::simule::{echange, session};
+        let structure = "* 1 FETCH (UID 7 BODYSTRUCTURE ((\"text\" \"plain\" (\"charset\" \"utf-8\") NIL NIL \"8bit\" \
+            14 1 NIL NIL NIL NIL)(\"application\" \"pdf\" (\"name\" \"plan.pdf\") NIL NIL \"base64\" 780000 NIL \
+            (\"attachment\" (\"filename\" \"plan.pdf\")) NIL NIL) \"mixed\" (\"boundary\" \"b1\") NIL NIL NIL))\r\n";
+        let litteral = |s: &str| format!("{{{}}}\r\n{s}", s.len());
+        let sections = format!(
+            "* 1 FETCH (UID 7 FLAGS (\\Seen) BODY[HEADER] {} BODY[1.MIME] {} BODY[1] {} BODY[2.MIME] {})\r\n",
+            litteral("Subject: Plan\r\nContent-Type: multipart/mixed; boundary=b1\r\n\r\n"),
+            litteral("Content-Type: text/plain; charset=utf-8\r\n\r\n"),
+            litteral("Voici le plan."),
+            litteral("Content-Type: application/pdf; name=plan.pdf\r\nContent-Transfer-Encoding: base64\r\n\r\n"),
+        );
+        let (client, journal) = session(
+            "UIDPLUS",
+            vec![
+                echange("SELECT \"INBOX\"", "* 1 EXISTS\r\n* OK [UIDVALIDITY 7] v\r\n", "OK [READ-WRITE] fait"),
+                echange("UID FETCH 7 (UID BODYSTRUCTURE)", structure, "OK fait"),
+                echange("UID FETCH 7 (UID FLAGS BODY.PEEK[HEADER]", &sections, "OK fait"),
+            ],
+        );
+        let (travail, mut etabli, _issues) = fil_d_essai(client, "sans-pieces");
+        let inbox = etabli.magasin.dossier_id(travail.compte, "INBOX").unwrap();
+        let ancien = MessageLocal {
+            uid: 7,
+            message_id: "<plan@exemple.fr>".into(),
+            horodatage: maintenant() - 90 * 86400,
+            taille: 800_000,
+            lu: true,
+            ..Default::default()
+        };
+        etabli.magasin.poser_messages(inbox, &[ancien]).unwrap();
+        let commande = Commande::Corps { chemin: "INBOX".into(), uid: 7, brut: false, distantes: false, numero: 0 };
+        let Some(Issue::Corps { lu, .. }) = travail.traiter(commande, &mut etabli) else {
+            panic!("issue inattendue");
+        };
+        assert!(lu.pieces.contains("plan.pdf"), "{}", lu.pieces);
+        assert!(etabli.dernier.is_none(), "un message recomposé n'est pas le dernier lu");
+        assert_eq!(journal.lock().unwrap().len(), 3);
         let _ = std::fs::remove_dir_all(Path::new(&travail.profil).parent().unwrap());
     }
 }

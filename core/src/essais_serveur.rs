@@ -1370,3 +1370,69 @@ fn invitation_acceptee_puis_inscrite_et_annulee() {
         client.supprimer(&uids).expect("purge de nettoyage");
     }
 }
+
+/// Un message à grosse pièce jointe se lit sans elle (#179) : texte, HTML et
+/// liste des pièces sont ceux du message entier, rangs compris, et la pièce
+/// n'est pas transférée.
+#[test]
+#[ignore = "exige un serveur IMAP et un compte"]
+fn message_lu_sans_ses_pieces_jointes() {
+    let unique = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let id = format!("mmail-essai-sans-pieces-{unique}@exemple.fr");
+    // 5 300 lignes de base64 : 302 100 octets une fois décodés.
+    let piece = format!("{}\r\n", "A".repeat(76)).repeat(5300);
+    let brut = format!(
+        "From: Essai MMail <mmail@exemple.fr>\r\n\
+         To: test@exemple.fr\r\n\
+         Subject: Pi\u{e8}ce jointe \u{e9}preuve\r\n\
+         Date: Tue, 22 Sep 2026 10:00:00 +0200\r\n\
+         Message-ID: <{id}>\r\n\
+         MIME-Version: 1.0\r\n\
+         Content-Type: multipart/mixed; boundary=\"=_ext\"\r\n\
+         \r\n\
+         --=_ext\r\n\
+         Content-Type: multipart/alternative; boundary=\"=_alt\"\r\n\
+         \r\n\
+         --=_alt\r\n\
+         Content-Type: text/plain; charset=utf-8\r\n\
+         Content-Transfer-Encoding: 8bit\r\n\
+         \r\n\
+         Bonjour, voici le devis.\r\n\
+         --=_alt\r\n\
+         Content-Type: text/html; charset=utf-8\r\n\
+         Content-Transfer-Encoding: 8bit\r\n\
+         \r\n\
+         <p>Bonjour, voici le <b>devis</b>.</p>\r\n\
+         --=_alt--\r\n\
+         \r\n\
+         --=_ext\r\n\
+         Content-Type: application/pdf; name=\"devis.pdf\"\r\n\
+         Content-Transfer-Encoding: base64\r\n\
+         Content-Disposition: attachment; filename=\"devis.pdf\"\r\n\
+         \r\n\
+         {piece}\
+         --=_ext--\r\n"
+    );
+    let mut client = session();
+    let uid = client.deposer("INBOX", &[], DATE_ESSAI, brut.as_bytes()).unwrap().expect("UIDPLUS");
+    client.selectionner("INBOX", None).expect("SELECT");
+    let (allege, _) = client.message_allege(uid).unwrap().expect("lu par parties");
+    let entier = client.corps(uid).unwrap();
+    println!("entier : {} octets ; sans la pièce : {} octets", entier.len(), allege.len());
+    assert!(allege.len() < 5_000, "{}", String::from_utf8_lossy(&allege));
+
+    let (pieces_allege, pieces_entier) = (crate::index::pieces_jointes(&allege), crate::index::pieces_jointes(&entier));
+    assert_eq!(pieces_allege.len(), 1, "{pieces_allege:?}");
+    assert_eq!(pieces_allege[0].indice, pieces_entier[0].indice);
+    assert_eq!(pieces_allege[0].nom, pieces_entier[0].nom);
+    // Taille d'après la structure : à 2 % près de la vraie.
+    let (estimee, vraie) = (pieces_allege[0].taille as f64, pieces_entier[0].taille as f64);
+    assert!((estimee - vraie).abs() / vraie < 0.02, "taille estimée {estimee}, vraie {vraie}");
+    assert_eq!(
+        crate::rendu::corps_html(&allege).map(|c| c.html),
+        crate::rendu::corps_html(&entier).map(|c| c.html)
+    );
+    assert_eq!(crate::index::corps_affichable(&allege), crate::index::corps_affichable(&entier));
+    nettoyer(&mut client, "INBOX", &id);
+    client.fermer();
+}

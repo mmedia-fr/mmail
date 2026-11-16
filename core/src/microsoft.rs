@@ -648,12 +648,18 @@ pub fn dossier_graph(jeton: &str, chemin: &str, separateur: &str) -> Result<Stri
     dossier_graph_par(&mut |d: &Demande| http::envoyer(d), jeton, chemin, separateur)
 }
 
-fn dossier_graph_par(t: &mut Transport, jeton: &str, chemin: &str, separateur: &str) -> Result<String, ErreurOAuth> {
-    let segments: Vec<String> = if separateur.is_empty() || separateur.eq_ignore_ascii_case("NIL") {
+/// Noms des segments d'un chemin IMAP, décodés de l'UTF-7 modifié : ceux que
+/// Graph donne aux dossiers (`displayName`).
+fn segments_imap(chemin: &str, separateur: &str) -> Vec<String> {
+    if separateur.is_empty() || separateur.eq_ignore_ascii_case("NIL") {
         vec![chemin.to_string()]
     } else {
         chemin.split(separateur).map(crate::protocole::decoder_utf7).collect()
-    };
+    }
+}
+
+fn dossier_graph_par(t: &mut Transport, jeton: &str, chemin: &str, separateur: &str) -> Result<String, ErreurOAuth> {
+    let segments = segments_imap(chemin, separateur);
     let mut parent: Option<String> = None;
     for (i, nom) in segments.iter().enumerate() {
         // La boîte de réception par son nom connu, mais sous son vrai
@@ -763,6 +769,187 @@ fn lien_perime(r: &http::Reponse) -> bool {
         _ => String::new(),
     };
     code.contains("syncstate") || code.contains("resyncrequired")
+}
+
+// --------------------------------------------------------- recherche (#179)
+
+// Recherche d'un compte Microsoft 365 par Graph (`$search`, droit
+// `Mail.ReadWrite` de l'envoi) : Exchange Online applique la recherche IMAP
+// selon ses propres règles, et ses résultats ne sont pas ceux qu'Outlook
+// trouve dans la même boîte ; ceux de `$search` le sont. Graph rend des
+// `Message-ID`, que la recherche rattache aux messages de l'index.
+
+/// Messages lus par page de résultats.
+const PAGE_RECHERCHE: usize = 100;
+
+/// Pages de résultats lues au plus.
+const PAGES_RECHERCHE: usize = 10;
+
+/// Appels au plus pour relever l'arborescence des dossiers.
+const APPELS_ARBORESCENCE: usize = 200;
+
+/// Un message trouvé par Graph : son `Message-ID`, sans chevrons, et
+/// l'identifiant Graph de son dossier (`parentFolderId`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrouveGraph {
+    pub message_id: String,
+    pub dossier: String,
+}
+
+/// Requête KQL d'une recherche : chaque mot doit s'y trouver (`AND`) — dans
+/// l'objet, l'expéditeur ou le corps, et aussi dans le nom des pièces
+/// jointes (`attachment:`) pour `Texte` ; dans l'objet ou l'expéditeur
+/// (`subject:`, `from:`, nom ou adresse) pour `ObjetExpediteur`. `None` :
+/// rien à chercher, ou les non-lus seuls, que Graph ne cherche pas par
+/// `$search` (ils restent à IMAP).
+pub fn requete_recherche(texte: &str, champs: crate::imap::Champs) -> Option<String> {
+    use crate::imap::Champs;
+    if champs == Champs::NonLus {
+        return None;
+    }
+    let parties: Vec<String> = texte
+        .split_whitespace()
+        .map(terme_kql)
+        .filter(|t| !t.is_empty())
+        .map(|t| match champs {
+            Champs::ObjetExpediteur => format!("(subject:{t} OR from:{t})"),
+            _ => format!("({t} OR attachment:{t})"),
+        })
+        .collect();
+    (!parties.is_empty()).then(|| parties.join(" AND "))
+}
+
+/// Un mot pour KQL : tel quel s'il n'est fait que de lettres, de chiffres et
+/// de `@ . _ *` (une adresse, « devis », « fact* ») ; sinon entre guillemets
+/// échappés — c'est la valeur de `$search` qui est entre guillemets —, comme
+/// « jean-marc » ou « l'offre », que KQL lirait autrement. Les guillemets et
+/// barres obliques inverses tapés sont retirés ; les opérateurs (`AND`, `OR`,
+/// `NOT`, `NEAR`) deviennent de simples mots.
+fn terme_kql(mot: &str) -> String {
+    let mot: String = mot.chars().filter(|c| *c != '"' && *c != '\\').collect();
+    if mot.is_empty() {
+        return mot;
+    }
+    let simple = mot.chars().all(|c| c.is_alphanumeric() || "@._*".contains(c)) && !mot.starts_with('*');
+    let operateur = ["AND", "OR", "NOT", "NEAR"].contains(&mot.as_str());
+    if simple && !operateur {
+        mot
+    } else {
+        format!("\\\"{mot}\\\"")
+    }
+}
+
+/// Cherche `requete` (KQL, cf. `requete_recherche`) dans le dossier Graph
+/// `dossier`, ou dans toute la boîte : `limite` messages au plus.
+pub fn chercher(jeton: &str, dossier: Option<&str>, requete: &str, limite: usize) -> Result<Vec<TrouveGraph>, ErreurOAuth> {
+    chercher_par(&mut |d: &Demande| http::envoyer(d), jeton, dossier, requete, limite)
+}
+
+fn chercher_par(
+    t: &mut Transport,
+    jeton: &str,
+    dossier: Option<&str>,
+    requete: &str,
+    limite: usize,
+) -> Result<Vec<TrouveGraph>, ErreurOAuth> {
+    let base = match dossier {
+        Some(id) => format!("{GRAPH}/mailFolders/{}/messages", encoder(id)),
+        None => format!("{GRAPH}/messages"),
+    };
+    let recherche = format!("\"{requete}\"");
+    let mut url = Some(format!(
+        "{base}?$search={}&$select=internetMessageId,parentFolderId&$top={PAGE_RECHERCHE}",
+        encoder(&recherche)
+    ));
+    let mut trouves = Vec::new();
+    let mut pages = 0;
+    while let Some(adresse) = url.take() {
+        pages += 1;
+        let page = reponse_json(&appeler(t, jeton, "GET", &adresse, "", b"", REPONSE_MAX)?)?;
+        for m in page.get("value").and_then(|v| v.as_array()).into_iter().flatten() {
+            let Some(id) = m.get("internetMessageId").and_then(|v| v.as_str()).map(sans_chevrons).filter(|v| !v.is_empty())
+            else {
+                continue;
+            };
+            let dossier = m.get("parentFolderId").and_then(|v| v.as_str()).unwrap_or_default();
+            trouves.push(TrouveGraph { message_id: id.to_string(), dossier: dossier.to_string() });
+        }
+        if trouves.len() >= limite || pages >= PAGES_RECHERCHE {
+            break;
+        }
+        url = page.get("@odata.nextLink").and_then(|v| v.as_str()).map(str::to_string);
+    }
+    trouves.truncate(limite);
+    Ok(trouves)
+}
+
+/// Les dossiers de la boîte dans Graph, pour rattacher les `parentFolderId`
+/// des résultats aux chemins IMAP : un relevé pour toute une recherche dans
+/// plusieurs dossiers, au lieu d'une descente par dossier
+/// (`dossier_graph`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ArbreGraph {
+    /// Identifiant de la boîte de réception, que l'IMAP nomme « INBOX ».
+    pub boite_de_reception: String,
+    /// `(identifiant, parent, nom)` ; parent absent : sous la racine.
+    pub dossiers: Vec<(String, Option<String>, String)>,
+}
+
+impl ArbreGraph {
+    /// Identifiant Graph du dossier IMAP `chemin`, d'après les noms — comme
+    /// `dossier_graph`. `None` : introuvable.
+    pub fn id_du_chemin(&self, chemin: &str, separateur: &str) -> Option<String> {
+        let mut parent: Option<&str> = None;
+        for (i, nom) in segments_imap(chemin, separateur).iter().enumerate() {
+            if i == 0 && nom.eq_ignore_ascii_case("INBOX") {
+                parent = Some(Some(self.boite_de_reception.as_str()).filter(|p| !p.is_empty())?);
+                continue;
+            }
+            let (id, ..) = self.dossiers.iter().find(|(_, p, n)| p.as_deref() == parent && n.eq_ignore_ascii_case(nom))?;
+            parent = Some(id.as_str());
+        }
+        parent.map(str::to_string)
+    }
+}
+
+/// Relève l'arborescence des dossiers de la boîte : la racine, puis les
+/// sous-dossiers de ceux qui en ont, page à page, `APPELS_ARBORESCENCE`
+/// appels au plus — au-delà, les dossiers non relevés restent à IMAP.
+pub fn arborescence(jeton: &str) -> Result<ArbreGraph, ErreurOAuth> {
+    arborescence_par(&mut |d: &Demande| http::envoyer(d), jeton)
+}
+
+fn arborescence_par(t: &mut Transport, jeton: &str) -> Result<ArbreGraph, ErreurOAuth> {
+    let reception = reponse_json(&appeler(t, jeton, "GET", &format!("{GRAPH}/mailFolders/inbox?$select=id"), "", b"", REPONSE_MAX)?)?;
+    let mut arbre = ArbreGraph {
+        boite_de_reception: reception.get("id").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+        dossiers: Vec::new(),
+    };
+    let champs = "$select=id,displayName,childFolderCount&$top=250";
+    let mut a_lire: std::collections::VecDeque<(Option<String>, String)> = std::collections::VecDeque::new();
+    a_lire.push_back((None, format!("{GRAPH}/mailFolders?{champs}&includeHiddenFolders=true")));
+    let mut appels = 0;
+    while let Some((parent, url)) = a_lire.pop_front() {
+        appels += 1;
+        if appels > APPELS_ARBORESCENCE {
+            break;
+        }
+        let page = reponse_json(&appeler(t, jeton, "GET", &url, "", b"", REPONSE_MAX)?)?;
+        for f in page.get("value").and_then(|v| v.as_array()).into_iter().flatten() {
+            let Some(id) = f.get("id").and_then(|v| v.as_str()).filter(|v| !v.is_empty()) else {
+                continue;
+            };
+            let nom = f.get("displayName").and_then(|v| v.as_str()).unwrap_or_default();
+            arbre.dossiers.push((id.to_string(), parent.clone(), nom.to_string()));
+            if f.get("childFolderCount").and_then(|v| v.as_u64()).unwrap_or(0) > 0 {
+                a_lire.push_back((Some(id.to_string()), format!("{GRAPH}/mailFolders/{}/childFolders?{champs}", encoder(id))));
+            }
+        }
+        if let Some(suite) = page.get("@odata.nextLink").and_then(|v| v.as_str()) {
+            a_lire.push_front((parent, suite.to_string()));
+        }
+    }
+    Ok(arbre)
 }
 
 /// Pose ou retire la catégorie `nom` sur le message de `Message-ID`
@@ -1728,6 +1915,102 @@ mod tests {
             }
             Ok(reponse(400, r#"{"error":{"code":"Inattendu","message":"requête inattendue"}}"#))
         }
+    }
+
+    #[test]
+    fn requete_kql_de_la_recherche() {
+        use crate::imap::Champs;
+        assert_eq!(requete_recherche("devis", Champs::Texte).as_deref(), Some("(devis OR attachment:devis)"));
+        assert_eq!(
+            requete_recherche(" Facture   12345 ", Champs::TexteEtNomsDePieces).as_deref(),
+            Some("(Facture OR attachment:Facture) AND (12345 OR attachment:12345)")
+        );
+        // Objet ou expéditeur, nom ou adresse.
+        assert_eq!(
+            requete_recherche("contact@exemple.fr fact*", Champs::ObjetExpediteur).as_deref(),
+            Some("(subject:contact@exemple.fr OR from:contact@exemple.fr) AND (subject:fact* OR from:fact*)")
+        );
+        // Ce que KQL lirait autrement passe entre guillemets échappés.
+        assert_eq!(
+            requete_recherche("jean-marc", Champs::ObjetExpediteur).as_deref(),
+            Some(r#"(subject:\"jean-marc\" OR from:\"jean-marc\")"#)
+        );
+        assert_eq!(requete_recherche("OR", Champs::Texte).as_deref(), Some(r#"(\"OR\" OR attachment:\"OR\")"#));
+        assert_eq!(requete_recherche("l'offre", Champs::Texte).as_deref(), Some(r#"(\"l'offre\" OR attachment:\"l'offre\")"#));
+        assert_eq!(requete_recherche(r#""été""#, Champs::Texte).as_deref(), Some("(été OR attachment:été)"));
+        // Rien à chercher ; les non-lus restent à IMAP.
+        assert_eq!(requete_recherche(r#" "" "#, Champs::Texte), None);
+        assert_eq!(requete_recherche("", Champs::Texte), None);
+        assert_eq!(requete_recherche("devis", Champs::NonLus), None);
+    }
+
+    #[test]
+    fn recherche_par_graph_page_a_page() {
+        let mut journal = Vec::new();
+        let reponses = [
+            ("GET", "https://graph.microsoft.com/v1.0/me/mailFolders/I/messages?", 200,
+             r#"{"value":[{"internetMessageId":"<a@x>","parentFolderId":"I"},{"internetMessageId":"","parentFolderId":"I"},
+                          {"parentFolderId":"I"}],
+                 "@odata.nextLink":"https://graph.microsoft.com/v1.0/me/suite-recherche?p=2"}"#),
+            ("GET", "https://graph.microsoft.com/v1.0/me/suite-recherche?p=2", 200,
+             r#"{"value":[{"internetMessageId":" <b@x> ","parentFolderId":"S1"}]}"#),
+            ("GET", "https://graph.microsoft.com/v1.0/me/messages?", 400,
+             r#"{"error":{"code":"BadRequest","message":"syntaxe"}}"#),
+        ];
+        let mut t = graph_categories(&mut journal, &reponses);
+        let trouves = chercher_par(&mut t, "J", Some("I"), "(devis OR attachment:devis)", 500).unwrap();
+        assert_eq!(
+            trouves,
+            vec![
+                TrouveGraph { message_id: "a@x".into(), dossier: "I".into() },
+                TrouveGraph { message_id: "b@x".into(), dossier: "S1".into() },
+            ]
+        );
+        // Au plus `limite` : une seule page lue.
+        assert_eq!(chercher_par(&mut t, "J", Some("I"), "devis", 1).unwrap().len(), 1);
+        // Toute la boîte ; un refus de Graph est rendu.
+        assert!(chercher_par(&mut t, "J", None, "devis", 500).is_err());
+        drop(t);
+        assert_eq!(
+            journal[0].url,
+            "https://graph.microsoft.com/v1.0/me/mailFolders/I/messages?$search=%22%28devis%20OR%20attachment%3Adevis%29%22\
+             &$select=internetMessageId,parentFolderId&$top=100"
+        );
+        assert_eq!(journal[0].entete("Authorization"), Some("Bearer J"));
+        assert_eq!(journal.len(), 4);
+        assert!(journal[3].url.starts_with("https://graph.microsoft.com/v1.0/me/messages?$search=%22devis%22&"));
+    }
+
+    #[test]
+    fn arborescence_graph_et_chemins_imap() {
+        let mut journal = Vec::new();
+        let reponses = [
+            ("GET", "https://graph.microsoft.com/v1.0/me/mailFolders/inbox?", 200, r#"{"id":"I"}"#),
+            ("GET", "https://graph.microsoft.com/v1.0/me/mailFolders?", 200,
+             r#"{"value":[{"id":"I","displayName":"Boîte de réception","childFolderCount":1},
+                          {"id":"P1","displayName":"Projets","childFolderCount":1}],
+                 "@odata.nextLink":"https://graph.microsoft.com/v1.0/me/suite-racine?p=2"}"#),
+            ("GET", "https://graph.microsoft.com/v1.0/me/suite-racine?p=2", 200,
+             r#"{"value":[{"id":"A","displayName":"Archive","childFolderCount":0}]}"#),
+            ("GET", "https://graph.microsoft.com/v1.0/me/mailFolders/I/childFolders", 200,
+             r#"{"value":[{"id":"S1","displayName":"Suivi","childFolderCount":0}]}"#),
+            ("GET", "https://graph.microsoft.com/v1.0/me/mailFolders/P1/childFolders", 200,
+             r#"{"value":[{"id":"C1","displayName":"Clients été"}]}"#),
+        ];
+        let arbre = arborescence_par(&mut graph_categories(&mut journal, &reponses), "J").unwrap();
+        assert_eq!(journal.len(), 5, "boîte de réception, racine en deux pages, deux dossiers à sous-dossiers");
+        assert!(journal[1].url.contains("includeHiddenFolders=true"));
+        assert_eq!(arbre.id_du_chemin("INBOX", "/").as_deref(), Some("I"));
+        assert_eq!(arbre.id_du_chemin("INBOX/Suivi", "/").as_deref(), Some("S1"));
+        // Le nom IMAP est en UTF-7 modifié : « Clients été ».
+        assert_eq!(arbre.id_du_chemin("Projets/Clients &AOk-t&AOk-", "/").as_deref(), Some("C1"));
+        assert_eq!(arbre.id_du_chemin("archive", "/").as_deref(), Some("A"));
+        assert_eq!(arbre.id_du_chemin("Absent", "/"), None);
+        assert_eq!(arbre.id_du_chemin("INBOX/Absent", "/"), None);
+        // « Suivi » n'est pas sous la racine.
+        assert_eq!(arbre.id_du_chemin("Suivi", "/"), None);
+        // Sans identifiant de boîte de réception, « INBOX » est introuvable.
+        assert_eq!(ArbreGraph::default().id_du_chemin("INBOX", "/"), None);
     }
 
     #[test]

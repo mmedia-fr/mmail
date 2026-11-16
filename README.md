@@ -219,7 +219,17 @@ de projet interne.
   texte d'un serveur Mailcow parcourt. Les résultats se **trient** — plus
   récents, plus anciens, expéditeur, objet (sans ses « RE : »), plus gros,
   dossier dans toutes les boîtes — sur le poste : le tri n'est jamais demandé
-  au serveur, pour qui il coûte cher sur un gros dossier ;
+  au serveur, pour qui il coûte cher sur un gros dossier. Sur un **compte
+  Microsoft 365**, la part du serveur passe par Microsoft Graph (`$search`) et
+  non par la recherche IMAP, qu'Exchange Online applique selon ses propres
+  règles : les résultats sont ceux d'Outlook. Chaque mot doit se trouver dans
+  l'objet, l'expéditeur, le texte ou le nom d'une pièce jointe — l'objet ou
+  l'expéditeur seulement avec la case ci-dessus. Un dossier se cherche en
+  lui-même, toute la boîte d'une seule requête ; chaque résultat est rattaché
+  au message de l'index par son `Message-ID`, et celui que le poste n'a pas
+  encore est relu sur le serveur IMAP puis rangé. Les boîtes partagées vues
+  par IMAP, les catégories et les non-lus seuls restent à la recherche IMAP,
+  comme tout le reste si Graph ne répond pas ;
 - **Supprimer** envoie à la corbeille de la boîte (touche Suppr) ; dans la
   corbeille et les indésirables, d'où un message n'a plus de corbeille où aller,
   il l'efface pour de bon, après confirmation (0.6.24). Dans une **boîte

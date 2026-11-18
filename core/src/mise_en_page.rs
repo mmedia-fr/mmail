@@ -495,7 +495,7 @@ fn cellules_de_grille(noeud: Noeud, sous_fond: bool) -> Noeud {
 /// « 0cm 5.4pt » de Word, d'Excel et d'Outlook lui valent zéro, et le texte
 /// touchait les bords de sa case. Une sélection à la souris qui dépassait le
 /// texte d'un pixel passait alors dans la case voisine, et Qt prenait les
-/// cases entières, collées sans séparateur à la copie (« 23002611CD0267 » au
+/// cases entières, collées sans séparateur à la copie (« 3200REF0002 » au
 /// lieu de la référence seule, retour d'une utilisatrice du 18/11/2026). Une
 /// déclaration dont une valeur n'est pas une longueur absolue reste telle
 /// quelle.

@@ -7294,6 +7294,10 @@ ApplicationWindow {
             // garde la position de lecture.
             if (essai.scenario === "defilement-lecture")
                 scenarios.lancerScenarioDefilementLecture()
+            // « selection-tableau » (0.7.3, banc EML=) : une référence choisie
+            // à la souris dans un tableau bordé.
+            if (essai.scenario === "selection-tableau")
+                scenarios.lancerScenarioSelectionTableau()
             if (essai.scenario === "recherche-effacee")
                 scenarios.lancerScenarioRechercheEffacee()
             if (essai.scenario === "majuscule")

@@ -53,7 +53,9 @@
 //! moins bordées — reçoit donc une bordure de tableau d'un pixel, de la
 //! couleur de celles des cellules, et perd sa largeur ; ses cellules perdent
 //! leurs bordures, leurs largeurs et `nowrap`. Qt règle alors les colonnes sur
-//! leur texte, et ne coupe plus un mot tant que la place suffit.
+//! leur texte, et ne coupe plus un mot tant que la place suffit. Leurs
+//! retraits intérieurs passent en pixels (0.7.3) : c'est la seule unité où Qt
+//! les lise, et sans eux le texte d'une case en touchait les bords.
 //!
 //! Le HTML traité est celui qui sort d'`ammonia` : bien formé, chaque élément
 //! non vide fermé, attributs entre guillemets, aucun « < » ni « > » dans un
@@ -451,7 +453,8 @@ fn en_grille(attributs: Vec<(String, String)>, couleur: &str) -> Vec<(String, St
 /// Ce que deviennent les lignes et les cellules d'un tableau de données
 /// (0.6.37) : les cellules perdent leurs bordures de style, que la bordure du
 /// tableau remplace, leurs largeurs et `nowrap`, pour que Qt règle chaque
-/// colonne sur son texte.
+/// colonne sur son texte. Leurs retraits intérieurs passent en pixels
+/// (`retraits_en_pixels`).
 fn cellules_de_grille(noeud: Noeud) -> Noeud {
     let Noeud::Element { nom, attributs, enfants } = noeud else {
         return noeud;
@@ -468,7 +471,7 @@ fn cellules_de_grille(noeud: Noeud) -> Noeud {
                     if attribut != "style" {
                         return Some((attribut, valeur));
                     }
-                    let style = sans_bordures(&sans_proprietes(&valeur, &["white-space"]));
+                    let style = retraits_en_pixels(&sans_bordures(&sans_proprietes(&valeur, &["white-space"])));
                     (!style.is_empty()).then_some((attribut, style))
                 })
                 .collect();
@@ -476,6 +479,61 @@ fn cellules_de_grille(noeud: Noeud) -> Noeud {
         }
         _ => Noeud::Element { nom, attributs, enfants },
     }
+}
+
+/// Un style dont les retraits (`padding`, `padding-…`) sont écrits en pixels
+/// (0.7.3). Qt ne lit les retraits d'une cellule qu'en pixels : les
+/// « 0cm 5.4pt » de Word, d'Excel et d'Outlook lui valent zéro, et le texte
+/// touchait les bords de sa case. Une sélection à la souris qui dépassait le
+/// texte d'un pixel passait alors dans la case voisine, et Qt prenait les
+/// cases entières, collées sans séparateur à la copie (« 23002611CD0267 » au
+/// lieu de la référence seule, retour d'une utilisatrice du 18/11/2026). Une
+/// déclaration dont une valeur n'est pas une longueur absolue reste telle
+/// quelle.
+fn retraits_en_pixels(style: &str) -> String {
+    style
+        .split(';')
+        .map(|declaration| {
+            let Some((propriete, valeur)) = declaration.split_once(':') else {
+                return declaration.to_string();
+            };
+            let nom = propriete.trim().to_ascii_lowercase();
+            if nom != "padding" && !nom.starts_with("padding-") {
+                return declaration.to_string();
+            }
+            let valeur = valeur.trim();
+            let (valeur, important) = match valeur.strip_suffix("!important") {
+                Some(v) => (v.trim(), " !important"),
+                None => (valeur, ""),
+            };
+            let longueurs: Option<Vec<String>> = valeur.split_whitespace().map(en_pixels).collect();
+            match longueurs {
+                Some(l) if !l.is_empty() => format!("{}:{}{important}", propriete.trim(), l.join(" ")),
+                _ => declaration.to_string(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(";")
+}
+
+/// Une longueur absolue en pixels CSS (96 au pouce), arrondie : « 5.4pt » →
+/// « 7px », « 0cm » → « 0px ». `None` pour une longueur relative (`em`,
+/// `%`…) ou ce qui n'en est pas une.
+fn en_pixels(valeur: &str) -> Option<String> {
+    let valeur = valeur.trim().to_ascii_lowercase();
+    let unite = valeur.trim_start_matches(|c: char| c.is_ascii_digit() || c == '.' || c == '-' || c == '+');
+    let nombre: f64 = valeur[..valeur.len() - unite.len()].parse().ok()?;
+    let par_unite = match unite {
+        "px" => 1.0,
+        "pt" => 96.0 / 72.0,
+        "pc" => 16.0,
+        "in" => 96.0,
+        "cm" => 96.0 / 2.54,
+        "mm" => 96.0 / 25.4,
+        "" if nombre == 0.0 => 1.0,
+        _ => return None,
+    };
+    Some(format!("{}px", (nombre * par_unite).round() as i64))
 }
 
 /// Un style sans ses bordures : `border`, `border-…` (sauf `border-collapse`)
@@ -1124,7 +1182,7 @@ mod tests {
             sortie.starts_with(
                 "<table class=\"MsoNormalTable\" cellpadding=\"0\" border=\"1\" cellspacing=\"0\" \
                  style=\"border-collapse:collapse;border-style:solid;border-color:#000000\"><tbody><tr>\
-                 <td valign=\"bottom\" style=\"padding:0cm 3.5pt 0cm 3.5pt;height:15.0pt\">\
+                 <td valign=\"bottom\" style=\"padding:0px 5px 0px 5px;height:15.0pt\">\
                  <p class=\"MsoNormal\"><b>Transporteur</b></p></td>"
             ),
             "{sortie}"
@@ -1132,7 +1190,7 @@ mod tests {
         for absent in ["width", "nowrap", "windowtext", "border-left", "1.0pt"] {
             assert!(!sortie.contains(absent), "{absent} : {sortie}");
         }
-        assert_eq!(sortie.matches("<td valign=\"bottom\" style=\"padding:0cm 3.5pt 0cm 3.5pt;height:15.0pt\">").count(), 4);
+        assert_eq!(sortie.matches("<td valign=\"bottom\" style=\"padding:0px 5px 0px 5px;height:15.0pt\">").count(), 4);
 
         // Une couleur dite est reprise ; une bordure nulle ou absente ne fait
         // pas une grille.
@@ -1161,6 +1219,42 @@ mod tests {
         let bouton = "<table><tbody><tr><td width=\"200\">texte</td><td width=\"120\" style=\"border:1px solid #000\">\
                       bouton</td></tr><tr><td>a</td><td>b</td></tr></tbody></table>";
         assert_eq!(aplatir(bouton), bouton);
+    }
+
+    /// Retraits d'une cellule de tableau de données en pixels (0.7.3) : Qt ne
+    /// lit que ceux-là, et le texte collé aux bords de sa case rendait la
+    /// sélection à la souris d'une référence presque impossible.
+    #[test]
+    fn retraits_des_cellules_en_pixels() {
+        assert_eq!(retraits_en_pixels("padding:0cm 5.4pt 0cm 5.4pt;height:1.0cm"), "padding:0px 7px 0px 7px;height:1.0cm");
+        assert_eq!(retraits_en_pixels("padding-left: 3.5pt;padding-right:0.1in"), "padding-left:5px;padding-right:10px");
+        assert_eq!(retraits_en_pixels("padding:0 2mm"), "padding:0px 8px");
+        assert_eq!(retraits_en_pixels("PADDING:1pc !important"), "PADDING:16px !important");
+        assert_eq!(retraits_en_pixels("padding:4px 8px"), "padding:4px 8px");
+        // Une longueur relative, ou ce qui n'est pas une longueur : intact.
+        for intact in ["padding:1em 5.4pt", "padding:5%", "padding:auto", "padding:", "padding:5", "color:#333"] {
+            assert_eq!(retraits_en_pixels(intact), intact);
+        }
+        // Le tableau d'un bon de commande d'Outlook : la référence garde ses
+        // retraits ; une cellule hors d'un tableau de données, les siens.
+        let cellule = |texte: &str| {
+            format!(
+                "<td width=\"132\" style=\"width:99.2pt;border-top:none;border-left:none;border-bottom:solid windowtext 1.0pt;\
+                 border-right:solid windowtext 1.0pt;padding:0cm 5.4pt 0cm 5.4pt;height:1.0cm\">\
+                 <p class=\"MsoNormal\" align=\"center\">{texte}</p></td>"
+            )
+        };
+        let html = format!(
+            "<table class=\"MsoTableGrid\" border=\"1\" cellspacing=\"0\" cellpadding=\"0\"><tbody><tr>{}{}</tr><tr>{}{}</tr></tbody></table>",
+            cellule("Poids"),
+            cellule("Référence"),
+            cellule("1200"),
+            cellule("REF0001")
+        );
+        let sortie = aplatir(&html);
+        assert_eq!(sortie.matches("<td style=\"padding:0px 7px 0px 7px;height:1.0cm\">").count(), 4, "{sortie}");
+        let sans_grille = "<table><tbody><tr><td style=\"padding:0cm 5.4pt\">a</td><td>b</td></tr></tbody></table>";
+        assert_eq!(aplatir(sans_grille), sans_grille);
     }
 
     #[test]

@@ -41,12 +41,35 @@
              d'après la hauteur du champ touché (QtInputDelegate) ; dans la
              rédaction, il faisait glisser la fenêtre, et la barre de mise en
              forme, au bas, restait sous le clavier. -->
+        <!-- Activité de MMail (fr.mmedia.mmail.Activite, 0.7.3) : celle de Qt,
+             avec la garde du correctif amont de l'écran noir à la reprise
+             (QTBUG-136077), qui manque à Qt 6.8.3. Le lancement passe par
+             l'alias ci-dessous, qui garde l'ancien nom de composant. -->
         <activity
-            android:name="org.qtproject.qt.android.bindings.QtActivity"
+            android:name="fr.mmedia.mmail.Activite"
             android:configChanges="orientation|uiMode|screenLayout|screenSize|smallestScreenSize|layoutDirection|locale|fontScale|keyboard|keyboardHidden|navigation|mcc|mnc|density"
             android:launchMode="singleTop"
             android:screenOrientation="unspecified"
             android:windowSoftInputMode="adjustResize"
+            android:exported="true">
+
+          <meta-data
+                android:name="android.app.lib_name"
+                android:value="-- %%INSERT_APP_LIB_NAME%% --" />
+
+          <meta-data
+                android:name="android.app.arguments"
+                android:value="-- %%INSERT_APP_ARGUMENTS%% --" />
+        </activity>
+
+        <!-- Ancien nom de l'activité (QtActivity de Qt), gardé comme alias : les
+             icônes posées sur l'écran d'accueil désignent ce composant, et
+             disparaîtraient s'il n'existait plus. L'alias porte le lancement.
+             Il reprend les méta-données de Qt : QtActivityBase les lit sur le
+             composant lancé (getComponentName()), donc sur l'alias. -->
+        <activity-alias
+            android:name="org.qtproject.qt.android.bindings.QtActivity"
+            android:targetActivity="fr.mmedia.mmail.Activite"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -60,7 +83,7 @@
           <meta-data
                 android:name="android.app.arguments"
                 android:value="-- %%INSERT_APP_ARGUMENTS%% --" />
-        </activity>
+        </activity-alias>
 
         <!-- Relève en arrière-plan (0.7.0, cf. src/fr/mmedia/mmail/Releve.java) :
              tâche de JobScheduler, que seul le système peut lancer, dans un

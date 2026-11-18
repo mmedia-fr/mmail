@@ -2346,6 +2346,80 @@ QtObject {
         tic.start()
     }
 
+    /// Scénario « selection-tableau » (0.7.3, banc EML= : un bon de commande
+    /// en tableau bordé, cellules aux retraits « 0cm 5.4pt » comme Outlook les
+    /// écrit, la référence REF0002 dans l'une d'elles). La référence se
+    /// choisit à la souris en débordant le texte de 0, 1 puis 4 pixels, dans
+    /// les deux sens, comme on le fait à la main : la sélection doit être la
+    /// référence seule. Sans retraits, Qt passait dès le premier pixel dans
+    /// la case voisine et prenait les cases entières, collées sans
+    /// séparateur (retour d'une utilisatrice du 18/11/2026).
+    function lancerScenarioSelectionTableau() {
+        var tic = Qt.createQmlObject('import QtQuick; Timer { interval: 1000; repeat: true }', fenetre)
+        var suivi = { n: 0, echecs: 0, essais: [] }
+        var vue = colonneLecture.vueCorps
+        var motif = "REF0002"
+        var position = function() {
+            for (var p = 0; p < vue.length; ++p)
+                if (vue.getText(p, p + motif.length) === motif)
+                    return p
+            return -1
+        }
+        var finir = function() {
+            tic.stop()
+            console.log("scenario: selection-tableau " + (suivi.echecs === 0 ? "OK" : "ECHEC (" + suivi.echecs + ")"))
+            Qt.quit()
+        }
+        tic.triggered.connect(function() {
+            suivi.n += 1
+            var c = comptesConnus[0]
+            if (suivi.n === 4) {
+                ouvrirDossier(c.compte, "INBOX")
+            } else if (suivi.n === 7) {
+                if (modeleMessages.count < 1) {
+                    console.log("scenario: ECHEC selection-tableau : boîte de réception vide")
+                    suivi.echecs += 1
+                    finir()
+                    return
+                }
+                // Le message du banc (EML=) vient en tête.
+                choisir(0, 0)
+            } else if (suivi.n === 10) {
+                var p = position()
+                if (p < 0) {
+                    console.log("scenario: ECHEC selection-tableau : " + motif + " absent du message affiché")
+                    suivi.echecs += 1
+                    finir()
+                    return
+                }
+                var debut = vue.positionToRectangle(p)
+                var fin = vue.positionToRectangle(p + motif.length)
+                var y = debut.y + debut.height / 2
+                console.log("scenario: " + motif + " de x " + Math.round(debut.x) + " à " + Math.round(fin.x) + ", y " + Math.round(y))
+                var debords = [0, 1, 4]
+                for (var i = 0; i < debords.length; ++i) {
+                    var d = debords[i]
+                    suivi.essais.push({ nom: "gauche à droite, " + d + " px de part et d'autre", x1: debut.x - d, x2: fin.x + d, y: y })
+                    suivi.essais.push({ nom: "droite à gauche, " + d + " px de part et d'autre", x1: fin.x + d, x2: debut.x - d, y: y })
+                }
+            } else if (suivi.n > 10 && suivi.essais.length > 0) {
+                // Un geste par seconde : deux appuis rapprochés feraient un
+                // double-clic.
+                var e = suivi.essais.shift()
+                vue.deselect()
+                gestesEssai.glisser(vue, e.x1, e.y, e.x2, e.y, 8)
+                var bon = vue.selectedText === motif
+                if (!bon)
+                    suivi.echecs += 1
+                console.log("scenario: " + (bon ? "OK " : "ECHEC ") + e.nom + " : « "
+                            + vue.selectedText.split(String.fromCharCode(0x2029)).join("¶") + " »")
+            } else if (suivi.n > 10) {
+                finir()
+            }
+        })
+        tic.start()
+    }
+
     /// Scénario « recherche-effacee » (0.6.12, demande d'une utilisatrice) : le mot
     /// effacé au clavier (champ vidé, textEdited) met fin à la recherche et
     /// rend la liste de départ — dans le dossier, puis dans toutes les boîtes.

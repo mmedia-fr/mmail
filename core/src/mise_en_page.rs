@@ -55,7 +55,9 @@
 //! leurs bordures, leurs largeurs et `nowrap`. Qt règle alors les colonnes sur
 //! leur texte, et ne coupe plus un mot tant que la place suffit. Leurs
 //! retraits intérieurs passent en pixels (0.7.3) : c'est la seule unité où Qt
-//! les lise, et sans eux le texte d'une case en touchait les bords.
+//! les lise, et sans eux le texte d'une case en touchait les bords. Sous un
+//! fond de case ou de ligne, que Qt Quick ne peint que sous le texte, ils
+//! restent tels quels, donc ignorés : ils y feraient un cadre blanc.
 //!
 //! Le HTML traité est celui qui sort d'`ammonia` : bien formé, chaque élément
 //! non vide fermé, attributs entre guillemets, aucun « < » ni « > » dans un
@@ -293,7 +295,7 @@ fn transformer(noeud: Noeud, fond: Option<&str>) -> Vec<Noeud> {
             .into_iter()
             .flat_map(garder)
             .map(|enfant| if a_repartir { repartir(enfant) } else { enfant })
-            .map(|enfant| if couleur_grille.is_some() { cellules_de_grille(enfant) } else { enfant })
+            .map(|enfant| if couleur_grille.is_some() { cellules_de_grille(enfant, false) } else { enfant })
             .collect();
         return vec![Noeud::Element { nom, attributs, enfants }];
     }
@@ -454,15 +456,21 @@ fn en_grille(attributs: Vec<(String, String)>, couleur: &str) -> Vec<(String, St
 /// (0.6.37) : les cellules perdent leurs bordures de style, que la bordure du
 /// tableau remplace, leurs largeurs et `nowrap`, pour que Qt règle chaque
 /// colonne sur son texte. Leurs retraits intérieurs passent en pixels
-/// (`retraits_en_pixels`).
-fn cellules_de_grille(noeud: Noeud) -> Noeud {
+/// (`retraits_en_pixels`), sauf sous un fond de cellule ou de ligne : Qt Quick
+/// ne peint ce fond que sous le texte, et le retrait y ferait un cadre blanc
+/// (celui d'un tableau couvre les retraits). `sous_fond` : la ligne, ou le
+/// groupe de lignes, porte un fond autre que le blanc.
+fn cellules_de_grille(noeud: Noeud, sous_fond: bool) -> Noeud {
     let Noeud::Element { nom, attributs, enfants } = noeud else {
         return noeud;
     };
+    let fond = sous_fond || fond_de(&attributs).is_some_and(|couleur| !blanc(&couleur));
     match nom.as_str() {
-        "tbody" | "thead" | "tfoot" | "tr" => {
-            Noeud::Element { nom, attributs, enfants: enfants.into_iter().map(cellules_de_grille).collect() }
-        }
+        "tbody" | "thead" | "tfoot" | "tr" => Noeud::Element {
+            nom,
+            attributs,
+            enfants: enfants.into_iter().map(|enfant| cellules_de_grille(enfant, fond)).collect(),
+        },
         "td" | "th" => {
             let attributs = sans_largeur(attributs)
                 .into_iter()
@@ -471,7 +479,8 @@ fn cellules_de_grille(noeud: Noeud) -> Noeud {
                     if attribut != "style" {
                         return Some((attribut, valeur));
                     }
-                    let style = retraits_en_pixels(&sans_bordures(&sans_proprietes(&valeur, &["white-space"])));
+                    let style = sans_bordures(&sans_proprietes(&valeur, &["white-space"]));
+                    let style = if fond { style } else { retraits_en_pixels(&style) };
                     (!style.is_empty()).then_some((attribut, style))
                 })
                 .collect();
@@ -1253,6 +1262,20 @@ mod tests {
         );
         let sortie = aplatir(&html);
         assert_eq!(sortie.matches("<td style=\"padding:0px 7px 0px 7px;height:1.0cm\">").count(), 4, "{sortie}");
+        // Sous le fond d'une case ou d'une ligne, que Qt Quick ne peint que
+        // sous le texte, les retraits restent ceux d'avant : ignorés.
+        for (ligne, case) in [("<tr>", " bgcolor=\"#F79646\""), ("<tr style=\"background:#F79646\">", "")] {
+            let html = format!(
+                "<table border=\"1\" cellspacing=\"0\" cellpadding=\"0\"><tbody>{ligne}\
+                 <td{case} style=\"border:solid windowtext 1.0pt;padding:0cm 5.4pt\">Poids</td>\
+                 <td{case} style=\"border:solid windowtext 1.0pt;padding:0cm 5.4pt\">Référence</td></tr>\
+                 <tr><td style=\"border:solid windowtext 1.0pt;padding:0cm 5.4pt\">1200</td>\
+                 <td style=\"border:solid windowtext 1.0pt;padding:0cm 5.4pt\">REF0001</td></tr></tbody></table>"
+            );
+            let sortie = aplatir(&html);
+            assert_eq!(sortie.matches("style=\"padding:0cm 5.4pt\"").count(), 2, "{sortie}");
+            assert_eq!(sortie.matches("style=\"padding:0px 7px\"").count(), 2, "{sortie}");
+        }
         let sans_grille = "<table><tbody><tr><td style=\"padding:0cm 5.4pt\">a</td><td>b</td></tr></tbody></table>";
         assert_eq!(aplatir(sans_grille), sans_grille);
     }

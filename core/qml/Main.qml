@@ -2384,10 +2384,26 @@ ApplicationWindow {
     function doubleClicMessage(index) {
         if (dossierDeReprise)
             rediger("brouillon")
-        else if (reglages.doubleClic === "reponse")
+        else if (reglages.doubleClic === "reponse") {
+            // Ouvrir une réponse d'un double-clic, c'est avoir ouvert le
+            // message : il passe « lu » comme avec sa fenêtre, quel que soit
+            // le réglage du volet de lecture (demande d'un utilisateur, 19/11).
+            marquerLigneLue(index)
             rediger("repondre")
-        else
+        } else
             ouvrirFenetreMessage(index)
+    }
+
+    /// Passe « lu » le message de la ligne `index`, s'il ne l'est pas déjà.
+    function marquerLigneLue(index) {
+        if (index < 0 || index >= modeleMessages.count)
+            return
+        var l = modeleMessages.get(index)
+        if (l.lu)
+            return
+        boite.marquerLuDans(listeMulti ? l.compte : boite.compteCourant,
+                            listeMulti ? l.chemin : boite.dossierCourant, String(l.uid), true)
+        modeleMessages.setProperty(index, "lu", true)
     }
 
     /// Ouvre le message de la ligne `index` dans sa fenêtre ; il passe « lu »
@@ -2413,10 +2429,7 @@ ApplicationWindow {
         if (!f)
             return null
         fenetresMessage = fenetresMessage.concat([f])
-        if (!l.lu) {
-            boite.marquerLuDans(m.compte, m.chemin, String(m.uid), true)
-            modeleMessages.setProperty(index, "lu", true)
-        }
+        marquerLigneLue(index)
         f.raise()
         f.requestActivate()
         return f

@@ -295,10 +295,12 @@ QtObject {
                 reglages.doubleClic = "reponse"
                 var avant = Object.keys(fenetre.redactions).length
                 fenetre.choisir(1, 0)
+                var luAvant = modeleMessages.get(1).lu
                 fenetre.doubleClicMessage(1)
                 console.log("scenario: option « Ouvrir une réponse » : rédactions", avant, "→",
                             Object.keys(fenetre.redactions).length, "| fenêtres de message",
-                            fenetre.fenetresMessage.length)
+                            fenetre.fenetresMessage.length, "| ligne lue", luAvant, "→",
+                            modeleMessages.get(1).lu)
                 reglages.doubleClic = "message"
                 essai.etape = "brouillons"
                 fenetre.ouvrirDossier(boite.compteCourant, "Drafts")

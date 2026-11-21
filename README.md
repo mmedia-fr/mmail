@@ -858,8 +858,10 @@ reproposées.
   deux (0.6.37) ; ses cellules gardent leurs retraits intérieurs, que Qt ne lit
   qu'en pixels, sauf sous un fond de case ou de ligne, que Qt Quick ne peint que
   sous le texte (0.7.3).
-- Sous Android, les pièces jointes s'ouvrent mais ne s'enregistrent pas
-  ailleurs ; leur ouverture n'a pas été éprouvée sur un téléphone.
+- Sous Android, une pièce jointe s'enregistre par la fenêtre d'enregistrement
+  du système (Téléchargements, stockage du téléphone…) depuis la 0.7.5 ; un
+  programme (APK) ne s'ouvre pas depuis MMail : il s'enregistre, puis s'installe
+  depuis l'application Fichiers.
 - Hors connexion, un message ouvert reste non lu sur le serveur ; pas de
   filtres.
 - Agenda : une écriture exige la connexion ; les rappels

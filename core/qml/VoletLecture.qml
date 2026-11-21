@@ -406,11 +406,12 @@ ColumnLayout {
                     }
                     Button {
                         id: boutonEnregistrerPiece
-                        text: qsTr("Enregistrer sous…")
+                        // Sous Android aussi depuis la 0.7.5 : la fenêtre
+                        // d'enregistrement y rend l'adresse d'un document
+                        // (content://), que le lanceur fait remplir. C'est la
+                        // seule façon d'en sortir un programme (un APK).
+                        text: Qt.platform.os === "android" ? qsTr("Enregistrer") : qsTr("Enregistrer sous…")
                         flat: true
-                        // Sous Android, le dialogue rend une adresse
-                        // « content:// » que le noyau ne sait pas écrire.
-                        visible: Qt.platform.os !== "android"
                         onClicked: fenetre.enregistrerPiece(lignePiece.modelData)
                         ToolTip.visible: hovered && lignePiece.modelData.risquee
                         ToolTip.text: qsTr("Programme ou script : il s'enregistre, il ne s'ouvre pas depuis MMail.")

@@ -668,7 +668,15 @@ Connections {
                         : qsTr("Ouverture de %1…").arg(chemin)
             }
         } else {
-            messageEtat.texte = qsTr("Pièce jointe enregistrée : %1").arg(chemin)
+            // Sous Android, la pièce attend dans un fichier de travail d'être
+            // recopiée dans le document choisi (0.7.5).
+            var relais = lanceur.terminerEnregistrement(chemin)
+            if (!relais.relaye)
+                messageEtat.texte = qsTr("Pièce jointe enregistrée : %1").arg(chemin)
+            else if (relais.erreur.length === 0)
+                messageEtat.texte = qsTr("Pièce jointe enregistrée : %1").arg(relais.nom)
+            else
+                fenetre.annoncer(qsTr("Pièce jointe non enregistrée : %1").arg(relais.erreur), true)
         }
         if (fenetre.essai && fenetre.essai.scenario === "pieces")
             console.log("scenario: piece ecrite", chemin, ouvrir)

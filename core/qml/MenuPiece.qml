@@ -45,10 +45,9 @@ Menu {
     }
     MenuItem {
         text: qsTr("Enregistrer sous…")
-        // Sous Android, le dialogue rend une adresse « content:// » que le
-        // noyau ne sait pas écrire : l'ouverture y suffit.
-        visible: Qt.platform.os !== "android"
-        height: visible ? implicitHeight : 0
+        // Sous Android aussi depuis la 0.7.5 : la fenêtre d'enregistrement y
+        // rend l'adresse d'un document (content://), que le lanceur fait
+        // remplir (cpp/lanceur.h).
         onTriggered: fenetre.enregistrerPiece(menuPiece.piece)
     }
     MenuSeparator {}

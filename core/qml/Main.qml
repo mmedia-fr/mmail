@@ -2623,8 +2623,11 @@ ApplicationWindow {
         fileMode: FileDialog.SaveFile
         onAccepted: {
             var fichier = selectedFile.toString()
-            reglagesPieces.dernierDossier = fichier.substring(0, fichier.lastIndexOf("/"))
-            boite.enregistrerPiece(uid, piece.indice, fichier)
+            // Android : l'adresse d'un document (content:), que le lanceur
+            // fait remplir (0.7.5), et pas un dossier à reproposer.
+            if (!fichier.startsWith("content:"))
+                reglagesPieces.dernierDossier = fichier.substring(0, fichier.lastIndexOf("/"))
+            boite.enregistrerPiece(uid, piece.indice, lanceur.relaisEnregistrement(fichier, piece.nom))
         }
     }
 

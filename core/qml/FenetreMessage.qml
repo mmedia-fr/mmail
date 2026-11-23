@@ -205,8 +205,11 @@ ApplicationWindow {
         dlgDeplacerFenetre.open()
     }
 
+    /// Répondre, répondre à tous ou transférer passe le message « lu », même
+    /// remis « non lu » dans cette fenêtre (cf. rediger() de Main.qml).
     function rediger(mode) {
-        fenetre.redigerDepuis(cible, mode)
+        if (fenetre.redigerDepuis(cible, mode) && mode !== "brouillon" && !lu)
+            marquer(true)
     }
 
     /// En-tête d'impression : De, À, Cc, date et objet, comme le volet.

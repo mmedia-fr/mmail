@@ -2384,13 +2384,12 @@ ApplicationWindow {
     function doubleClicMessage(index) {
         if (dossierDeReprise)
             rediger("brouillon")
-        else if (reglages.doubleClic === "reponse") {
-            // Ouvrir une réponse d'un double-clic, c'est avoir ouvert le
-            // message : il passe « lu » comme avec sa fenêtre, quel que soit
-            // le réglage du volet de lecture (demande d'un utilisateur, 19/11).
-            marquerLigneLue(index)
+        else if (reglages.doubleClic === "reponse")
+            // Le message passe « lu » comme avec sa fenêtre (demande d'un
+            // utilisateur, 19/11) : c'est rediger() qui le marque, comme pour
+            // toute réponse (23/11).
             rediger("repondre")
-        } else
+        else
             ouvrirFenetreMessage(index)
     }
 
@@ -2479,12 +2478,16 @@ ApplicationWindow {
         modeleMessages.remove(i)
     }
 
-    /// Répondre, transférer ou reprendre depuis la fenêtre d'un message.
+    /// Répondre, transférer ou reprendre depuis la fenêtre d'un message ;
+    /// vrai si la préparation est partie (la fenêtre marque alors son
+    /// message « lu », cf. rediger()).
     function redigerDepuis(m, mode) {
         var r = ouvrirRedaction(m.compte)
         r.attendre(mode === "brouillon" ? qsTr("Reprise du brouillon…") : qsTr("Préparation…"))
-        if (!boite.preparerDans(m.compte, m.chemin, m.uid, mode, r.jeton, JSON.stringify(autresAdresses(m.compte))))
-            r.echouer(boite.erreur.length > 0 ? boite.erreur : qsTr("Préparation impossible."))
+        if (boite.preparerDans(m.compte, m.chemin, m.uid, mode, r.jeton, JSON.stringify(autresAdresses(m.compte))))
+            return true
+        r.echouer(boite.erreur.length > 0 ? boite.erreur : qsTr("Préparation impossible."))
+        return false
     }
 
     /// « Créer un filtre… » depuis la fenêtre d'un message : le dialogue des
@@ -5842,6 +5845,14 @@ ApplicationWindow {
         r.attendre(mode === "brouillon" ? qsTr("Reprise du brouillon…") : qsTr("Préparation…"))
         if (!boite.preparer(uid, mode, r.jeton, JSON.stringify(autresAdresses(compte))))
             r.echouer(boite.erreur.length > 0 ? boite.erreur : qsTr("Préparation impossible."))
+        else if (mode !== "brouillon")
+            // Répondre, répondre à tous ou transférer, c'est avoir lu le
+            // message : il passe « lu », quel que soit le réglage du volet de
+            // lecture (demande d'un utilisateur, 23/11) — boutons, menus,
+            // raccourcis et double-clic. Le message est celui que le noyau
+            // prépare : uid du dossier qu'il a ouvert, y compris quand la
+            // liste mêle plusieurs comptes ou dossiers.
+            marquerLigneLue(rangDuMessage({ compte: boite.compteCourant, chemin: boite.dossierCourant, uid: uid }))
     }
 
     function uidsChoisis() {

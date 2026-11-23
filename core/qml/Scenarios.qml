@@ -274,8 +274,11 @@ QtObject {
     }
 
     /// Scénario « double-clic » (0.6.16) : la fenêtre du message a reçu son
-    /// corps. Marquage non lu puis lu depuis la fenêtre, fermeture ; puis
-    /// l'option « Ouvrir une réponse », et les brouillons.
+    /// corps. Marquage non lu puis lu depuis la fenêtre, puis « Répondre »
+    /// sur le message remis non lu, fermeture ; puis l'option « Ouvrir une
+    /// réponse », « Répondre », « Répondre à tous » et « Transférer » sur un
+    /// message non lu de la liste (23/11 : il passe lu, la sélection seule
+    /// ne le marque pas), et les brouillons.
     function etapeScenarioDoubleClic(f) {
         if (essai.fenetreLue)
             return
@@ -289,18 +292,35 @@ QtObject {
                         "| bouton", f.lu ? "Marquer comme non lu" : "Marquer comme lu")
             f.marquer(true)
             console.log("scenario: puis lu → ligne lue", modeleMessages.get(0).lu)
+            f.marquer(false)
+            f.rediger("repondre")
+            console.log("scenario: depuis la fenêtre, non lu puis « Répondre » → fenêtre lue", f.lu,
+                        "| ligne lue", modeleMessages.get(0).lu)
             f.close()
             Qt.callLater(function() {
                 console.log("scenario: fenêtre fermée | fenêtres", fenetre.fenetresMessage.length)
                 reglages.doubleClic = "reponse"
                 var avant = Object.keys(fenetre.redactions).length
                 fenetre.choisir(1, 0)
+                fenetre.marquerSelection(false)
                 var luAvant = modeleMessages.get(1).lu
                 fenetre.doubleClicMessage(1)
                 console.log("scenario: option « Ouvrir une réponse » : rédactions", avant, "→",
                             Object.keys(fenetre.redactions).length, "| fenêtres de message",
                             fenetre.fenetresMessage.length, "| ligne lue", luAvant, "→",
                             modeleMessages.get(1).lu)
+                // Boutons, menus et raccourcis passent tous par rediger().
+                var libelles = { repondre: "Répondre", repondre_tous: "Répondre à tous", transferer: "Transférer" }
+                for (var cle in libelles) {
+                    fenetre.marquerSelection(false)
+                    fenetre.choisir(1, 0)
+                    var luChoisi = modeleMessages.get(1).lu
+                    var nombre = Object.keys(fenetre.redactions).length
+                    fenetre.rediger(cle)
+                    console.log("scenario: « " + libelles[cle] + " » : rédactions", nombre, "→",
+                                Object.keys(fenetre.redactions).length, "| ligne choisie lue", luChoisi,
+                                "→", modeleMessages.get(1).lu)
+                }
                 reglages.doubleClic = "message"
                 essai.etape = "brouillons"
                 fenetre.ouvrirDossier(boite.compteCourant, "Drafts")

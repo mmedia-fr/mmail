@@ -259,7 +259,9 @@ de projet interne.
   sauf s'il a été marqué entre-temps — « non lu » pendant son chargement le
   laisse non lu ; « Affichage › Marquer comme lu » choisit quand, comme le volet
   de lecture d'Outlook (0.6.9) : à l'affichage, après 3 à 30 secondes — un
-  message quitté avant reste non lu —, ou jamais, à la main seulement ;
+  message quitté avant reste non lu —, ou jamais, à la main seulement. Quel
+  que soit ce réglage, répondre, répondre à tous ou transférer marque le
+  message lu (0.7.6), comme l'ouvrir dans sa fenêtre ;
 - **marges du message** (0.6.23) : « Affichage › Marges du message » écarte le
   corps du message des quatre bords (en haut et en bas aussi depuis la 0.6.27),
   dans le volet de lecture comme dans la fenêtre d'un message — « Aucune » (par

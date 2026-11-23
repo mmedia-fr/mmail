@@ -277,8 +277,8 @@ QtObject {
     /// corps. Marquage non lu puis lu depuis la fenêtre, puis « Répondre »
     /// sur le message remis non lu, fermeture ; puis l'option « Ouvrir une
     /// réponse », « Répondre », « Répondre à tous » et « Transférer » sur un
-    /// message non lu de la liste (23/11 : il passe lu, la sélection seule
-    /// ne le marque pas), et les brouillons.
+    /// message de la liste remis non lu à chaque fois (23/11 : il passe lu),
+    /// et les brouillons.
     function etapeScenarioDoubleClic(f) {
         if (essai.fenetreLue)
             return
@@ -312,14 +312,14 @@ QtObject {
                 // Boutons, menus et raccourcis passent tous par rediger().
                 var libelles = { repondre: "Répondre", repondre_tous: "Répondre à tous", transferer: "Transférer" }
                 for (var cle in libelles) {
-                    fenetre.marquerSelection(false)
                     fenetre.choisir(1, 0)
+                    fenetre.marquerSelection(false)
                     var luChoisi = modeleMessages.get(1).lu
                     var nombre = Object.keys(fenetre.redactions).length
                     fenetre.rediger(cle)
                     console.log("scenario: « " + libelles[cle] + " » : rédactions", nombre, "→",
-                                Object.keys(fenetre.redactions).length, "| ligne choisie lue", luChoisi,
-                                "→", modeleMessages.get(1).lu)
+                                Object.keys(fenetre.redactions).length, "| ligne remise non lue, lue",
+                                luChoisi, "→", modeleMessages.get(1).lu)
                 }
                 reglages.doubleClic = "message"
                 essai.etape = "brouillons"

@@ -407,7 +407,9 @@ ColumnLayout {
             // jointes — un mot présent dans tous les bons de commande joints
             // trouvait des centaines de messages. L'index du poste ne porte
             // déjà que l'objet et l'expéditeur. La case reste cochée d'une
-            // session à l'autre.
+            // session à l'autre. Dans les éléments envoyés et les brouillons,
+            // où l'expéditeur est partout soi-même, ce sont l'objet et les
+            // destinataires (« À », « Cc »).
             CheckBox {
                 id: objetSeulRecherche
                 objectName: "objetSeulRecherche"
@@ -420,7 +422,8 @@ ColumnLayout {
                 }
                 ToolTip.visible: hovered
                 ToolTip.delay: 600
-                ToolTip.text: qsTr("Chercher les mots dans l'objet et l'expéditeur des messages, "
+                ToolTip.text: qsTr("Chercher les mots dans l'objet et l'expéditeur des messages "
+                                   + "(l'objet et les destinataires dans les éléments envoyés et les brouillons), "
                                    + "pas dans leur texte ni dans leurs pièces jointes")
             }
             ComboBox {

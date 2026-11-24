@@ -288,6 +288,10 @@ ApplicationWindow {
     // Dossier dont les messages se reprennent plutôt qu'on n'y répond :
     // brouillons, envois différés.
     readonly property bool dossierDeReprise: roleCourant === "Drafts" || roleCourant === "Differe"
+    // Éléments envoyés et brouillons : l'expéditeur y est partout soi-même, la
+    // recherche y regarde les destinataires à sa place (cf. le noyau,
+    // `dossiers_d_envoi`).
+    readonly property bool dossierDEnvoi: roleCourant === "Sent" || roleCourant === "Drafts"
     // Importance du message affiché, et adresse qui demande une confirmation
     // de lecture (vide si aucune, ou déjà répondu).
     property int importanceCourante: 0
@@ -388,7 +392,9 @@ ApplicationWindow {
     // restent jusqu'à ce qu'on la quitte ou la relance, comme dans Outlook —
     // la liste ne se dérobe pas sous la lecture.
     property var nonLusMontres: ({})
-    // Recherche en cours sur l'objet et l'expéditeur seulement (0.6.38).
+    // Recherche en cours sur l'objet et l'expéditeur seulement (0.6.38) — sur
+    // l'objet et les destinataires dans les éléments envoyés et les
+    // brouillons.
     property bool rechercheObjetSeul: false
     // Boîte de réception unifiée (« toutes les BàL », demande du mainteneur du
     // 08/10) : les réceptions de tous les comptes en une liste, sur le même
@@ -2211,7 +2217,9 @@ ApplicationWindow {
                     ? qsTr("recherche « %1 » : les 500 plus récents, précisez la recherche").arg(recherche)
                     : qsTr("recherche « %1 » : %2").arg(recherche)
                       .arg(accord(modeleMessages.count, qsTr("résultat"), qsTr("résultats"))))
-                    + (rechercheObjetSeul ? qsTr(", objet et expéditeur seulement") : "")
+                    + (!rechercheObjetSeul ? ""
+                       : dossierDEnvoi ? qsTr(", objet et destinataires seulement")
+                       : qsTr(", objet et expéditeur seulement"))
                     // Rien d'exact dans l'index (0.6.22).
                     + (boite.rechercheApprochee() ? qsTr(", fautes de frappe tolérées") : "")
         } else {
@@ -4906,8 +4914,9 @@ ApplicationWindow {
         // frappe (0.6.22), et la barre le dit.
         var approchee = boite.rechercheApprochee()
         // Ce que le serveur parcourt, pour la barre d'état.
-        var ouCherche = rechercheObjetSeul ? qsTr("dans l'objet et l'expéditeur des messages")
-                                           : qsTr("dans le texte des messages")
+        var ouCherche = !rechercheObjetSeul ? qsTr("dans le texte des messages")
+                : dossierDEnvoi ? qsTr("dans l'objet et les destinataires des messages")
+                : qsTr("dans l'objet et l'expéditeur des messages")
         if (!boite.chercherSurLeServeur(texte, rechercheObjetSeul, false))
             messageEtat.texte = approchee
                     ? qsTr("Recherche « %1 » : rien d'exact ; %2 en tolérant des fautes de frappe (index seulement, compte hors ligne).")

@@ -148,6 +148,11 @@ pub enum Champs {
     /// L'objet ou l'expéditeur (`SUBJECT`, `FROM`) : ni le corps, ni les
     /// pièces jointes.
     ObjetExpediteur,
+    /// L'objet ou les destinataires (`SUBJECT`, `TO`, `CC`) : ce que devient
+    /// `ObjetExpediteur` dans les éléments envoyés et les brouillons, où
+    /// l'expéditeur est partout soi-même. Un nom de destinataire n'y trouvait
+    /// que les messages qui le portaient dans leur objet.
+    ObjetDestinataires,
     /// Comme `Texte`, et aussi dans le nom des pièces jointes, mot pour mot
     /// où qu'il y soit (`MIMEPART FILENAME CONTAINS`, Dovecot). L'index plein
     /// texte prend « BonCommande12345678.pdf » pour un seul mot : « 12345678 »
@@ -828,6 +833,10 @@ impl Client {
                 // L'objet ou l'expéditeur, nom ou adresse : chaque mot dans
                 // l'un des deux, comme l'index du poste.
                 Champs::ObjetExpediteur => criteres.push_str(&format!(" OR SUBJECT {valeur} FROM {valeur}")),
+                // L'objet, « À » ou « Cc », nom ou adresse.
+                Champs::ObjetDestinataires => {
+                    criteres.push_str(&format!(" OR SUBJECT {valeur} OR TO {valeur} CC {valeur}"))
+                }
                 Champs::TexteEtNomsDePieces => {
                     criteres.push_str(&format!(" OR TEXT {valeur} MIMEPART FILENAME CONTAINS {valeur}"))
                 }
@@ -1508,6 +1517,35 @@ mod tests {
             session(DOVECOT, vec![echange("UID SEARCH CHARSET UTF-8 OR SUBJECT", "* SEARCH\r\n", "OK fait")]);
         assert!(client.chercher_patiemment("devis", &[], Champs::ObjetExpediteur, attente(5_000, false, true)).unwrap().is_empty());
         assert_eq!(journal.lock().unwrap()[0], "UID SEARCH CHARSET UTF-8 OR SUBJECT \"devis\" FROM \"devis\"");
+    }
+
+    #[test]
+    fn recherche_dans_l_objet_et_les_destinataires() {
+        // Éléments envoyés et brouillons : chaque mot dans l'objet, « À » ou
+        // « Cc », et tous les mots ; ni l'expéditeur, ni le corps.
+        let (mut client, journal) = session(
+            &format!("{DOVECOT} LITERAL+"),
+            vec![echange("UID SEARCH CHARSET UTF-8 OR SUBJECT", "* SEARCH 3 8\r\n", "OK fait")],
+        );
+        let toujours = attente(5_000, false, true);
+        assert_eq!(
+            client.chercher_patiemment("atelier  Paris", &[], Champs::ObjetDestinataires, toujours).unwrap(),
+            vec![3, 8]
+        );
+        assert_eq!(
+            journal.lock().unwrap()[0],
+            "UID SEARCH CHARSET UTF-8 OR SUBJECT {7 octets}atelier OR TO {7 octets}atelier CC {7 octets}atelier \
+             OR SUBJECT {5 octets}Paris OR TO {5 octets}Paris CC {5 octets}Paris"
+        );
+        // Sans LITERAL+ : entre guillemets.
+        let (mut client, journal) =
+            session(DOVECOT, vec![echange("UID SEARCH CHARSET UTF-8 OR SUBJECT", "* SEARCH\r\n", "OK fait")]);
+        let toujours = attente(5_000, false, true);
+        assert!(client.chercher_patiemment("devis", &[], Champs::ObjetDestinataires, toujours).unwrap().is_empty());
+        assert_eq!(
+            journal.lock().unwrap()[0],
+            "UID SEARCH CHARSET UTF-8 OR SUBJECT \"devis\" OR TO \"devis\" CC \"devis\""
+        );
     }
 
     #[test]

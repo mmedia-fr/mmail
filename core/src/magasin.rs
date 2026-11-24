@@ -1806,7 +1806,8 @@ impl Magasin {
     }
 
     /// Messages dont chaque mot de `texte` figure dans l'objet, le nom ou
-    /// l'adresse de l'expéditeur : d'un dossier, ou de tous les comptes
+    /// l'adresse de l'expéditeur — de leurs destinataires dans les dossiers
+    /// `envois` d'un `Filtre` — : d'un dossier, ou de tous les comptes
     /// (`dossier` absent), les plus récents d'abord, `limite` au plus.
     pub fn chercher(&self, dossier: Option<i64>, texte: &str, limite: usize) -> Resultat<Vec<Trouve>> {
         self.chercher_avec(dossier, texte, &[], limite)
@@ -1876,20 +1877,38 @@ impl Magasin {
         let dossier = filtre.dossier;
         let mut valeurs: Vec<rusqlite::types::Value> = vec![dossier.unwrap_or(0).into()];
         let mut conditions: Vec<String> = Vec::new();
+        // Éléments envoyés et brouillons : les destinataires à la place de
+        // l'expéditeur (des identifiants entiers, écrits tels quels).
+        let envois = (!filtre.envois.is_empty()).then(|| {
+            let ids: Vec<String> = filtre.envois.iter().map(i64::to_string).collect();
+            format!("m.folder_id IN ({})", ids.join(","))
+        });
         for mot in &replies {
             valeurs.push(format!("%{}%", mot.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")).into());
             let n = valeurs.len();
-            let mut condition = format!(
-                "replie(m.sujet) LIKE ?{n} ESCAPE '\\' OR replie(m.expediteur) LIKE ?{n} ESCAPE '\\' \
-                 OR m.adresse LIKE ?{n} ESCAPE '\\'"
-            );
+            let expediteur = format!("replie(m.expediteur) LIKE ?{n} ESCAPE '\\' OR m.adresse LIKE ?{n} ESCAPE '\\'");
+            let auteurs = match &envois {
+                Some(envois) => format!(
+                    "CASE WHEN {envois} THEN replie(m.destinataires) LIKE ?{n} ESCAPE '\\' \
+                     OR replie(m.dest_a) LIKE ?{n} ESCAPE '\\' OR replie(m.dest_cc) LIKE ?{n} ESCAPE '\\' \
+                     ELSE {expediteur} END"
+                ),
+                None => expediteur,
+            };
+            let mut condition = format!("replie(m.sujet) LIKE ?{n} ESCAPE '\\' OR {auteurs}");
             if approche {
                 valeurs.push(mot.clone().into());
                 let k = valeurs.len();
-                condition.push_str(&format!(
-                    " OR approche(COALESCE(replie(m.sujet), '') || ' ' || COALESCE(replie(m.expediteur), '') \
-                     || ' ' || COALESCE(replie(m.adresse), ''), ?{k})"
-                ));
+                let texte_expediteur = "COALESCE(replie(m.expediteur), '') || ' ' || COALESCE(replie(m.adresse), '')";
+                let texte_auteurs = match &envois {
+                    Some(envois) => format!(
+                        "CASE WHEN {envois} THEN COALESCE(replie(m.destinataires), '') || ' ' \
+                         || COALESCE(replie(m.dest_a), '') || ' ' || COALESCE(replie(m.dest_cc), '') \
+                         ELSE {texte_expediteur} END"
+                    ),
+                    None => texte_expediteur.to_string(),
+                };
+                condition.push_str(&format!(" OR approche(COALESCE(replie(m.sujet), '') || ' ' || {texte_auteurs}, ?{k})"));
             }
             conditions.push(format!("({condition})"));
         }
@@ -2776,6 +2795,11 @@ pub struct Filtre {
     /// boîtes partagées que le compte voit (cf. `boite::dossiers_de_la_boite`).
     pub parmi: Option<Vec<i64>>,
     pub non_lus: bool,
+    /// Éléments envoyés et brouillons (cf. `boite::dossiers_d_envoi`) : dans
+    /// ces dossiers, où l'expéditeur est partout soi-même, les mots se
+    /// cherchent dans les destinataires, « À » et « Cc », à la place de
+    /// l'expéditeur.
+    pub envois: Vec<i64>,
 }
 
 const SELECT_TROUVE: &str = "SELECT m.uid, m.message_id, m.expediteur, m.adresse, m.sujet, m.date, m.horodatage,
@@ -3932,6 +3956,84 @@ mod tests {
         assert!(seuls(Filtre { dossier: Some(archives), non_lus: true, ..Default::default() }).is_empty());
         // Sans la case, un champ vide ne cherche toujours rien.
         assert!(seuls(Filtre { dossier: Some(inbox), ..Default::default() }).is_empty());
+    }
+
+    /// Éléments envoyés et brouillons : les mots s'y cherchent dans l'objet
+    /// et les destinataires — « À » ou « Cc », nom ou adresse —, et non dans
+    /// l'expéditeur, partout soi-même ; ailleurs, rien ne change.
+    #[test]
+    fn recherche_dans_les_destinataires_des_envois() {
+        let m = Magasin::en_memoire().unwrap();
+        let compte = m.compte("a@exemple.fr", "h", 993, "a@exemple.fr").unwrap();
+        m.poser_dossiers(compte, &[dossier("INBOX", &[]), dossier("Sent", &["\\Sent"]), dossier("Drafts", &["\\Drafts"])])
+            .unwrap();
+        let inbox = m.dossier_id(compte, "INBOX").unwrap();
+        let envoyes = m.dossier_id(compte, "Sent").unwrap();
+        let brouillons = m.dossier_id(compte, "Drafts").unwrap();
+        let parti = |uid, h, sujet: &str, noms: &str, a: &str, cc: &str| MessageLocal {
+            uid,
+            horodatage: h,
+            expediteur: "Moi".into(),
+            adresse: "a@exemple.fr".into(),
+            sujet: sujet.into(),
+            destinataires: noms.into(),
+            a: a.into(),
+            cc: cc.into(),
+            ..Default::default()
+        };
+        m.poser_messages(
+            envoyes,
+            &[
+                parti(1, 10, "Commande", "Service Atelier", "Service Atelier\tplanning@atelier.exemple", ""),
+                parti(2, 20, "Relance", "Jean Durand", "Jean Durand\tjean@exemple.fr", "\tplanning@atelier.exemple"),
+                parti(3, 30, "Atelier de vendredi", "Jean Durand", "Jean Durand\tjean@exemple.fr", ""),
+                // Indexé avant les destinataires des filtres (0.6.33) : les
+                // noms de la liste seulement.
+                parti(4, 40, "Ancien", "Équipe Atelier", "", ""),
+            ],
+        )
+        .unwrap();
+        m.poser_messages(brouillons, &[parti(1, 50, "Brouillon", "", "\tplanning@atelier.exemple", "")]).unwrap();
+        // Un message reçu de l'atelier, adressé à soi-même.
+        let recu = MessageLocal {
+            uid: 1,
+            horodatage: 60,
+            expediteur: "Atelier".into(),
+            adresse: "info@atelier.exemple".into(),
+            sujet: "Avis".into(),
+            destinataires: "Moi".into(),
+            a: "Moi\ta@exemple.fr".into(),
+            ..Default::default()
+        };
+        m.poser_messages(inbox, &[recu]).unwrap();
+        let envois = vec![envoyes, brouillons];
+        let sujets = |f: Filtre, texte: &str| {
+            m.chercher_tolerant_selon(&f, texte, &[], 50).unwrap().0.iter().map(|t| t.message.sujet.clone()).collect::<Vec<_>>()
+        };
+        let dans_les_envoyes = || Filtre { dossier: Some(envoyes), envois: envois.clone(), ..Default::default() };
+        // L'objet, ou le nom ou l'adresse d'un destinataire, « À » ou « Cc » ;
+        // accents et casse ignorés.
+        assert_eq!(sujets(dans_les_envoyes(), "atelier"), vec!["Ancien", "Atelier de vendredi", "Relance", "Commande"]);
+        assert_eq!(sujets(dans_les_envoyes(), "jean@exemple.fr"), vec!["Atelier de vendredi", "Relance"]);
+        assert_eq!(sujets(dans_les_envoyes(), "equipe"), vec!["Ancien"]);
+        assert_eq!(sujets(dans_les_envoyes(), "planning durand"), vec!["Relance"]);
+        // L'expéditeur, soi-même, n'y est plus cherché.
+        assert!(sujets(dans_les_envoyes(), "moi").is_empty());
+        // Fautes de frappe tolérées dans les destinataires aussi.
+        assert_eq!(sujets(dans_les_envoyes(), "durrand"), vec!["Atelier de vendredi", "Relance"]);
+        // Sans `envois`, comme avant : l'objet et l'expéditeur.
+        let comme_avant = Filtre { dossier: Some(envoyes), ..Default::default() };
+        assert_eq!(sujets(comme_avant.clone(), "atelier"), vec!["Atelier de vendredi"]);
+        assert_eq!(sujets(comme_avant, "moi").len(), 4);
+        // Toutes les boîtes : les destinataires dans les envois et les
+        // brouillons, l'expéditeur ailleurs — le message reçu n'est trouvé ni
+        // par son destinataire, ni autrement que par son expéditeur.
+        let partout = || Filtre { envois: envois.clone(), ..Default::default() };
+        assert_eq!(
+            sujets(partout(), "atelier"),
+            vec!["Avis", "Brouillon", "Ancien", "Atelier de vendredi", "Relance", "Commande"]
+        );
+        assert!(sujets(partout(), "moi").is_empty());
     }
 
     /// Recherche tolérante aux fautes de frappe (0.6.22) : seulement quand la

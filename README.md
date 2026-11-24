@@ -216,15 +216,21 @@ de projet interne.
   plus récents. La case **« Objet et expéditeur seulement »** (0.6.38, gardée
   d'une session à l'autre) borne aussi le serveur à l'objet et à l'expéditeur :
   ni le texte des messages, ni celui des pièces jointes, que l'index plein
-  texte d'un serveur Mailcow parcourt. Les résultats se **trient** — plus
-  récents, plus anciens, expéditeur, objet (sans ses « RE : »), plus gros,
+  texte d'un serveur Mailcow parcourt. Dans les **éléments envoyés et les
+  brouillons** (rôle annoncé par le serveur, ou nom usuel), où l'expéditeur
+  est partout soi-même, ce sont les destinataires (« À » et « Cc », nom ou
+  adresse) qui prennent sa place, dans l'index comme sur le serveur, et la
+  barre d'état dit « objet et destinataires seulement ». Les résultats se
+  **trient** — plus récents, plus anciens, expéditeur, objet (sans ses
+  « RE : »), plus gros,
   dossier dans toutes les boîtes — sur le poste : le tri n'est jamais demandé
   au serveur, pour qui il coûte cher sur un gros dossier. Sur un **compte
   Microsoft 365**, la part du serveur passe par Microsoft Graph (`$search`) et
   non par la recherche IMAP, qu'Exchange Online applique selon ses propres
   règles : les résultats sont ceux d'Outlook. Chaque mot doit se trouver dans
   l'objet, l'expéditeur, le texte ou le nom d'une pièce jointe — l'objet ou
-  l'expéditeur seulement avec la case ci-dessus. Un dossier se cherche en
+  l'expéditeur seulement avec la case ci-dessus (l'objet, « À » ou « Cc » dans
+  les éléments envoyés et les brouillons). Un dossier se cherche en
   lui-même, toute la boîte d'une seule requête ; chaque résultat est rattaché
   au message de l'index par son `Message-ID`, et celui que le poste n'a pas
   encore est relu sur le serveur IMAP puis rangé. Les boîtes partagées vues

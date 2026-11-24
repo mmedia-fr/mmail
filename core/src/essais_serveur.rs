@@ -910,10 +910,13 @@ fn recherche_dans_le_texte() {
     let unique = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
     let id = format!("mmail-recherche-{unique}@exemple.fr");
     let mot = format!("zorglub{}", unique % 100_000);
+    // Un nom qui n'est que dans « Cc ».
+    let copie = format!("copie{}", unique % 100_000);
     let brut = format!(
-        "From: Essai <mmail@exemple.fr>\r\nTo: test@exemple.fr\r\nSubject: Recherche\r\n\
-         Message-ID: <{id}>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\
-         Content-Transfer-Encoding: 8bit\r\n\r\nLe mot {mot} et une échéance.\r\n"
+        "From: Essai <mmail@exemple.fr>\r\nTo: test@exemple.fr\r\nCc: Service {copie} <service@exemple.fr>\r\n\
+         Subject: Recherche\r\nMessage-ID: <{id}>\r\nMIME-Version: 1.0\r\n\
+         Content-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n\
+         Le mot {mot} et une échéance.\r\n"
     );
     let uid = client.deposer("INBOX", &[], DATE_ESSAI, brut.as_bytes()).expect("APPEND").expect("APPENDUID");
     client.selectionner("INBOX", None).expect("SELECT");
@@ -930,13 +933,27 @@ fn recherche_dans_le_texte() {
     // Objet et expéditeur seulement (0.6.38) : le mot du corps n'y est pas ;
     // un mot de l'objet et le nom de l'expéditeur, si.
     let objet_corps = client.chercher_patiemment(&mot, &[], Champs::ObjetExpediteur, attente.clone()).expect("SEARCH objet");
-    let objet = client.chercher_patiemment("recherche essai", &[], Champs::ObjetExpediteur, attente).expect("SEARCH objet");
+    let objet = client.chercher_patiemment("recherche essai", &[], Champs::ObjetExpediteur, attente.clone()).expect("SEARCH objet");
+    let copie_expediteur = client.chercher_patiemment(&copie, &[], Champs::ObjetExpediteur, attente.clone()).expect("SEARCH objet");
+    // Objet et destinataires (éléments envoyés et brouillons) : « À » et
+    // « Cc » ; ni l'expéditeur, ni le corps.
+    let a = client.chercher_patiemment("test@exemple.fr recherche", &[], Champs::ObjetDestinataires, attente.clone())
+        .expect("SEARCH destinataires");
+    let cc = client.chercher_patiemment(&copie, &[], Champs::ObjetDestinataires, attente.clone()).expect("SEARCH destinataires");
+    let expediteur = client.chercher_patiemment("mmail@exemple.fr", &[], Champs::ObjetDestinataires, attente.clone())
+        .expect("SEARCH destinataires");
+    let corps = client.chercher_patiemment(&mot, &[], Champs::ObjetDestinataires, attente).expect("SEARCH destinataires");
     client.supprimer(&[uid]).expect("purge");
     assert_eq!(trouves, vec![uid]);
     assert_eq!(accent, vec![uid]);
     assert_eq!(patiente, vec![uid]);
     assert!(objet_corps.is_empty(), "mot du corps trouvé dans l'objet ou l'expéditeur : {objet_corps:?}");
     assert!(objet.contains(&uid), "objet et expéditeur : {objet:?}");
+    assert!(copie_expediteur.is_empty(), "nom en copie trouvé dans l'objet ou l'expéditeur : {copie_expediteur:?}");
+    assert!(a.contains(&uid), "objet et « À » : {a:?}");
+    assert!(cc.contains(&uid), "« Cc » : {cc:?}");
+    assert!(!expediteur.contains(&uid), "expéditeur trouvé parmi les destinataires : {expediteur:?}");
+    assert!(corps.is_empty(), "mot du corps trouvé dans l'objet ou les destinataires : {corps:?}");
     assert!(compter(&mut client, "INBOX", &id).is_empty());
 }
 

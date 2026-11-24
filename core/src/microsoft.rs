@@ -799,9 +799,10 @@ pub struct TrouveGraph {
 /// Requête KQL d'une recherche : chaque mot doit s'y trouver (`AND`) — dans
 /// l'objet, l'expéditeur ou le corps, et aussi dans le nom des pièces
 /// jointes (`attachment:`) pour `Texte` ; dans l'objet ou l'expéditeur
-/// (`subject:`, `from:`, nom ou adresse) pour `ObjetExpediteur`. `None` :
-/// rien à chercher, ou les non-lus seuls, que Graph ne cherche pas par
-/// `$search` (ils restent à IMAP).
+/// (`subject:`, `from:`, nom ou adresse) pour `ObjetExpediteur` ; dans
+/// l'objet, « À » ou « Cc » (`subject:`, `to:`, `cc:`) pour
+/// `ObjetDestinataires`. `None` : rien à chercher, ou les non-lus seuls, que
+/// Graph ne cherche pas par `$search` (ils restent à IMAP).
 pub fn requete_recherche(texte: &str, champs: crate::imap::Champs) -> Option<String> {
     use crate::imap::Champs;
     if champs == Champs::NonLus {
@@ -813,6 +814,7 @@ pub fn requete_recherche(texte: &str, champs: crate::imap::Champs) -> Option<Str
         .filter(|t| !t.is_empty())
         .map(|t| match champs {
             Champs::ObjetExpediteur => format!("(subject:{t} OR from:{t})"),
+            Champs::ObjetDestinataires => format!("(subject:{t} OR to:{t} OR cc:{t})"),
             _ => format!("({t} OR attachment:{t})"),
         })
         .collect();
@@ -1934,6 +1936,14 @@ mod tests {
         assert_eq!(
             requete_recherche("jean-marc", Champs::ObjetExpediteur).as_deref(),
             Some(r#"(subject:\"jean-marc\" OR from:\"jean-marc\")"#)
+        );
+        // Éléments envoyés et brouillons : objet, « À » ou « Cc ».
+        assert_eq!(
+            requete_recherche("atelier contact@exemple.fr", Champs::ObjetDestinataires).as_deref(),
+            Some(
+                "(subject:atelier OR to:atelier OR cc:atelier) AND \
+                 (subject:contact@exemple.fr OR to:contact@exemple.fr OR cc:contact@exemple.fr)"
+            )
         );
         assert_eq!(requete_recherche("OR", Champs::Texte).as_deref(), Some(r#"(\"OR\" OR attachment:\"OR\")"#));
         assert_eq!(requete_recherche("l'offre", Champs::Texte).as_deref(), Some(r#"(\"l'offre\" OR attachment:\"l'offre\")"#));

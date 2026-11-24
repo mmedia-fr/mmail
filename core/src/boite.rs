@@ -345,7 +345,9 @@ pub mod qobject {
 
         /// Cherche aussi dans le texte entier des messages du dossier ouvert,
         /// sur le serveur, par une connexion à part (0.6.16) ; dans leur objet
-        /// et leur expéditeur seulement si `objet_seul` (0.6.38). Issue :
+        /// et leur expéditeur seulement si `objet_seul` (0.6.38) — leur objet
+        /// et leurs destinataires dans les éléments envoyés et les brouillons
+        /// (cf. `dossiers_d_envoi`). Issue :
         /// `resultatsServeur`, précédé de `rechercheInachevee` si le serveur
         /// n'a pas fini. `non_lus_seuls`, le texte vide : les messages non lus
         /// (0.6.45).
@@ -3992,14 +3994,17 @@ impl qobject::Boite {
         let (texte, categories) = criteres_recherche(magasin, &texte.to_string());
         self.recherche_approchee.store(false, Ordering::SeqCst);
         let courant = self.courant.as_ref().map(|(_, _, id)| *id);
+        // Éléments envoyés et brouillons : leurs destinataires à la place de
+        // l'expéditeur.
+        let envois = envois_de_l_index(magasin);
         let filtre = match (portee, courant) {
-            (0, Some(id)) => crate::magasin::Filtre { dossier: Some(id), non_lus, ..Default::default() },
+            (0, Some(id)) => crate::magasin::Filtre { dossier: Some(id), non_lus, envois, ..Default::default() },
             (1, _) if compte > 0 => {
                 let compte = compte as i64;
                 let parmi = dossiers_de_la_boite(magasin, compte, &chemin.to_string()).iter().map(|d| d.id).collect();
-                crate::magasin::Filtre { compte: Some(compte), parmi: Some(parmi), non_lus, ..Default::default() }
+                crate::magasin::Filtre { compte: Some(compte), parmi: Some(parmi), non_lus, envois, ..Default::default() }
             }
-            (2, _) => crate::magasin::Filtre { non_lus, ..Default::default() },
+            (2, _) => crate::magasin::Filtre { non_lus, envois, ..Default::default() },
             _ => return QString::from("[]"),
         };
         let (trouves, approchee) =
@@ -7057,26 +7062,68 @@ fn role_du_dossier(m: &Magasin, compte: i64, chemin: &str, id: i64) -> String {
     m.dossier(id)
         .ok()
         .flatten()
+        .filter(|d| d.chemin == chemin)
         .map(|d| {
             if !d.role.is_empty() {
                 return d.role;
             }
-            if d.profondeur == 0 && d.nom == DOSSIER_DIFFERE {
-                return "Differe".to_string();
-            }
-            // Rôle reconnu au nom du dossier, faute d'attribut
-            // SPECIAL-USE : un brouillon s'y reprend d'un double clic.
-            let dossiers = m.dossiers(compte).unwrap_or_default();
-            if dossier_indesirables(&dossiers).as_deref() == Some(chemin) {
-                return "Junk".to_string();
-            }
-            ["Drafts", "Sent", "Trash"]
-                .into_iter()
-                .find(|role| dossier_de_role(&dossiers, role).as_deref() == Some(chemin))
-                .unwrap_or_default()
-                .to_string()
+            role_parmi(&d, &roles_par_nom(&m.dossiers(compte).unwrap_or_default()))
         })
         .unwrap_or_default()
+}
+
+/// Dossiers d'un compte que leur nom désigne pour un rôle, faute d'attribut
+/// SPECIAL-USE, dans l'ordre où `role_parmi` les essaie : relevés une fois
+/// pour tous les dossiers du compte.
+type RolesParNom = [(&'static str, Option<String>); 4];
+
+fn roles_par_nom(dossiers: &[DossierLocal]) -> RolesParNom {
+    [
+        ("Junk", dossier_indesirables(dossiers)),
+        ("Drafts", dossier_de_role(dossiers, "Drafts")),
+        ("Sent", dossier_de_role(dossiers, "Sent")),
+        ("Trash", dossier_de_role(dossiers, "Trash")),
+    ]
+}
+
+/// Rôle du dossier `d` (cf. `role_du_dossier`) ; `par_nom` : relevé par
+/// `roles_par_nom` sur les dossiers de son compte.
+fn role_parmi(d: &DossierLocal, par_nom: &RolesParNom) -> String {
+    if !d.role.is_empty() {
+        return d.role.clone();
+    }
+    if d.profondeur == 0 && d.nom == DOSSIER_DIFFERE {
+        return "Differe".to_string();
+    }
+    // Rôle reconnu au nom du dossier, faute d'attribut SPECIAL-USE : un
+    // brouillon s'y reprend d'un double clic.
+    par_nom
+        .iter()
+        .find(|(_, chemin)| chemin.as_deref() == Some(d.chemin.as_str()))
+        .map(|(role, _)| role.to_string())
+        .unwrap_or_default()
+}
+
+/// Éléments envoyés et brouillons d'un compte, ceux dont l'interface voit le
+/// rôle (`role_du_dossier`) : attribut SPECIAL-USE, ou nom usuel. L'expéditeur
+/// y est partout soi-même : la recherche y regarde les destinataires, « À » et
+/// « Cc », à sa place. Dans un dossier d'envois, le nom d'une société ne
+/// trouvait que les messages qui le portaient dans leur objet, et non ceux
+/// envoyés à ses adresses (signalé le 24/11).
+fn dossiers_d_envoi(dossiers: &[DossierLocal]) -> Vec<&DossierLocal> {
+    let par_nom = roles_par_nom(dossiers);
+    dossiers.iter().filter(|d| matches!(role_parmi(d, &par_nom).as_str(), "Sent" | "Drafts")).collect()
+}
+
+/// Identifiants des éléments envoyés et des brouillons de tous les comptes de
+/// l'index (cf. `dossiers_d_envoi`), pour la recherche dans l'index.
+fn envois_de_l_index(magasin: &Magasin) -> Vec<i64> {
+    let mut ids = Vec::new();
+    for compte in magasin.comptes().unwrap_or_default() {
+        let dossiers = magasin.dossiers(compte.id).unwrap_or_default();
+        ids.extend(dossiers_d_envoi(&dossiers).iter().map(|d| d.id));
+    }
+    ids
 }
 
 /// Vrai pour un dossier d'où un message se reprend en rédaction — brouillons,
@@ -9670,6 +9717,28 @@ impl Recherche {
         self.courante.load(Ordering::SeqCst) == self.numero
     }
 
+    /// Éléments envoyés et brouillons du compte (cf. `dossiers_d_envoi`),
+    /// quand la recherche porte sur l'objet et l'expéditeur ; aucun sinon.
+    fn envois(&self, magasin: &Magasin) -> Vec<String> {
+        if self.champs != Champs::ObjetExpediteur {
+            return Vec::new();
+        }
+        let dossiers = magasin.dossiers(self.compte).unwrap_or_default();
+        dossiers_d_envoi(&dossiers).into_iter().map(|d| d.chemin.clone()).collect()
+    }
+
+    /// Où chercher dans le dossier `chemin` : l'objet et les destinataires
+    /// dans les éléments envoyés et les brouillons (`envois`), où l'expéditeur
+    /// est partout soi-même, à la place de l'objet et de l'expéditeur ;
+    /// ailleurs, `champs`.
+    fn champs_du_dossier(&self, chemin: &str, envois: &[String]) -> Champs {
+        if self.champs == Champs::ObjetExpediteur && envois.iter().any(|e| e == chemin) {
+            Champs::ObjetDestinataires
+        } else {
+            self.champs
+        }
+    }
+
     /// Interroge le serveur dossier après dossier et remet une issue pour
     /// chacun. `ouvrir` ouvre une session authentifiée sur le compte ;
     /// `graph`, pour un compte Microsoft 365, cherche par Graph les dossiers
@@ -9822,7 +9891,9 @@ impl Recherche {
     /// dossiers que Graph connaît — pas ceux des boîtes partagées vues par
     /// IMAP —, une issue par dossier ; rend les chemins traités. Un dossier
     /// seul se cherche en lui-même ; plusieurs, d'une requête dans toute la
-    /// boîte, chaque résultat allant à son dossier (`parentFolderId`). Les
+    /// boîte, chaque résultat allant à son dossier (`parentFolderId`) — sur
+    /// l'objet et l'expéditeur, les éléments envoyés et les brouillons ont la
+    /// leur, sur leurs destinataires. Les
     /// autres dossiers, et tous si Graph échoue (jeton, réseau, refus),
     /// passent ensuite par IMAP, comme les catégories et les non-lus seuls.
     #[allow(clippy::too_many_arguments)]
@@ -9836,12 +9907,9 @@ impl Recherche {
         restants: &mut usize,
         remettre: &mut dyn FnMut(Issue),
     ) -> Vec<String> {
-        if !categories.is_empty() || !self.actuelle() {
+        if !categories.is_empty() || !self.actuelle() || crate::microsoft::requete_recherche(mots, self.champs).is_none() {
             return Vec::new();
         }
-        let Some(requete) = crate::microsoft::requete_recherche(mots, self.champs) else {
-            return Vec::new();
-        };
         let locaux = magasin.dossiers(self.compte).unwrap_or_default();
         let partagees = magasin
             .comptes()
@@ -9863,30 +9931,43 @@ impl Recherche {
             Ok(ids) if !ids.is_empty() => ids,
             _ => return Vec::new(),
         };
-        let seul = match cibles.as_slice() {
-            [(chemin, _)] => ids.get(chemin).cloned(),
-            _ => None,
-        };
-        let Ok(trouves) = graph.chercher(seul.as_deref(), &requete, RECHERCHE_MAX) else {
-            return Vec::new();
-        };
+        // Les éléments envoyés et les brouillons à part : leur requête porte
+        // sur les destinataires (cf. `champs_du_dossier`).
+        let envois = self.envois(magasin);
+        let (dans_les_envois, autres): (Vec<_>, Vec<_>) =
+            cibles.into_iter().partition(|(c, _)| self.champs_du_dossier(c, &envois) != self.champs);
         let mut faits = Vec::new();
-        for (chemin, _) in &cibles {
-            if !self.actuelle() {
-                break;
+        for (groupe, champs) in [(autres, self.champs), (dans_les_envois, Champs::ObjetDestinataires)] {
+            if groupe.is_empty() || !self.actuelle() {
+                continue;
             }
-            let Some(id_graph) = ids.get(chemin) else {
+            let Some(requete) = crate::microsoft::requete_recherche(mots, champs) else {
                 continue;
             };
-            let mids: Vec<String> = trouves
-                .iter()
-                .filter(|t| seul.is_some() || t.dossier == *id_graph)
-                .map(|t| t.message_id.clone())
-                .collect();
-            let (uids, inacheve) = self.rattacher(client, ouvrir, magasin, chemin, &mids);
-            *restants -= 1;
-            remettre(self.issue_de(chemin, uids, inacheve, *restants));
-            faits.push(chemin.clone());
+            let seul = match groupe.as_slice() {
+                [(chemin, _)] => ids.get(chemin).cloned(),
+                _ => None,
+            };
+            let Ok(trouves) = graph.chercher(seul.as_deref(), &requete, RECHERCHE_MAX) else {
+                continue;
+            };
+            for (chemin, _) in &groupe {
+                if !self.actuelle() {
+                    break;
+                }
+                let Some(id_graph) = ids.get(chemin) else {
+                    continue;
+                };
+                let mids: Vec<String> = trouves
+                    .iter()
+                    .filter(|t| seul.is_some() || t.dossier == *id_graph)
+                    .map(|t| t.message_id.clone())
+                    .collect();
+                let (uids, inacheve) = self.rattacher(client, ouvrir, magasin, chemin, &mids);
+                *restants -= 1;
+                remettre(self.issue_de(chemin, uids, inacheve, *restants));
+                faits.push(chemin.clone());
+            }
         }
         faits
     }
@@ -9986,8 +10067,11 @@ impl Recherche {
             prolonger: dernier,
             continuer: Arc::new(move || courante.load(Ordering::SeqCst) == numero),
         };
+        // Éléments envoyés et brouillons : leurs destinataires à la place de
+        // l'expéditeur.
+        let champs = self.champs_du_dossier(chemin, &self.envois(magasin));
         let debut = Instant::now();
-        let uids = match c.chercher_patiemment(mots, categories, self.champs, attente) {
+        let uids = match c.chercher_patiemment(mots, categories, champs, attente) {
             Ok(uids) => uids,
             Err(Erreur::Abandon) => {
                 *client = None;
@@ -10075,7 +10159,9 @@ impl RechercheGraph for GraphDuCompte {
 
 /// La case « Objet et expéditeur seulement » de la recherche (0.6.38) : sans
 /// elle, le serveur cherche aussi dans le texte des messages et, sur Mailcow,
-/// dans celui de leurs pièces jointes.
+/// dans celui de leurs pièces jointes. Avec elle, les éléments envoyés et les
+/// brouillons se cherchent par leurs destinataires (`ObjetDestinataires`,
+/// cf. `Recherche::champs_du_dossier`).
 fn champs_recherche(objet_seul: bool, non_lus_seuls: bool) -> Champs {
     if non_lus_seuls {
         Champs::NonLus
@@ -11372,6 +11458,54 @@ mod tests {
         assert_eq!(reprise(b, "INBOX"), (false, String::new()));
     }
 
+    /// Éléments envoyés et brouillons, où la recherche regarde les
+    /// destinataires : ceux dont `roleCourant` dit « Sent » ou « Drafts »,
+    /// attribut SPECIAL-USE ou nom usuel — ni un dossier de l'utilisateur nommé
+    /// comme eux quand le serveur désigne les siens, ni les envois différés.
+    #[test]
+    fn dossiers_d_envoi_selon_leur_role() {
+        let magasin = Magasin::en_memoire().unwrap();
+        let d = |chemin: &str, attributs: &[&str]| crate::protocole::Dossier {
+            chemin: chemin.into(),
+            separateur: "/".into(),
+            attributs: attributs.iter().map(|a| a.to_string()).collect(),
+        };
+        let envois = |compte: i64| {
+            let dossiers = magasin.dossiers(compte).unwrap();
+            let mut chemins: Vec<String> = dossiers_d_envoi(&dossiers).iter().map(|x| x.chemin.clone()).collect();
+            let mut selon_le_role: Vec<String> = dossiers
+                .iter()
+                .filter(|x| matches!(role_du_dossier(&magasin, compte, &x.chemin, x.id).as_str(), "Sent" | "Drafts"))
+                .map(|x| x.chemin.clone())
+                .collect();
+            chemins.sort();
+            selon_le_role.sort();
+            assert_eq!(chemins, selon_le_role, "comme `roleCourant`");
+            chemins
+        };
+        let a = magasin.compte("a@exemple.fr", "h", 993, "a@exemple.fr").unwrap();
+        let dossiers_a = [
+            d("INBOX", &[]),
+            d("Drafts", &["\\Drafts"]),
+            d("Sent", &["\\Sent"]),
+            d("Trash", &["\\Trash"]),
+            d("Brouillons", &[]),
+            d("Clients", &[]),
+        ];
+        magasin.poser_dossiers(a, &dossiers_a).unwrap();
+        assert_eq!(envois(a), ["Drafts", "Sent"]);
+        // Sans SPECIAL-USE (OVH) : les noms usuels ; pas les envois différés.
+        let b = magasin.compte("b@exemple.fr", "h", 993, "b@exemple.fr").unwrap();
+        let differe = crate::protocole::encoder_utf7(DOSSIER_DIFFERE);
+        let envoyes = crate::protocole::encoder_utf7("Éléments envoyés");
+        let dossiers_b = [d("INBOX", &[]), d("Brouillons", &[]), d(&envoyes, &[]), d(&differe, &[]), d("Corbeille", &[])];
+        magasin.poser_dossiers(b, &dossiers_b).unwrap();
+        // Chemins en UTF-7 modifié : « &AMk-l&AOk-ments… » avant « Brouillons ».
+        assert_eq!(envois(b), [envoyes, "Brouillons".to_string()]);
+        // Ceux de tous les comptes, pour la recherche dans l'index.
+        assert_eq!(envois_de_l_index(&magasin).len(), 4);
+    }
+
     /// Un message d'un dossier de reprise s'affiche sans les liens que
     /// l'affichage pose de lui-même (capture du 10/11/2026, valeurs fictives).
     #[test]
@@ -11683,6 +11817,55 @@ mod tests {
         assert!(!journal.iter().any(|l| l.contains(" TEXT ")), "{journal:?}");
     }
 
+    /// Objet et expéditeur seulement, dans les éléments envoyés : l'objet et
+    /// les destinataires, l'expéditeur y étant partout soi-même ; ailleurs,
+    /// l'objet et l'expéditeur. Dans le texte entier, rien ne change.
+    #[test]
+    fn recherche_objet_et_destinataires_dans_les_envoyes() {
+        use crate::simule::{echange, session, DOVECOT};
+        let magasin = Magasin::en_memoire().unwrap();
+        let compte = magasin.compte("a@exemple.fr", "h", 993, "a@exemple.fr").unwrap();
+        assert_eq!(compte, 1, "le compte des recherches d'essai");
+        let d = |chemin: &str, attributs: &[&str]| crate::protocole::Dossier {
+            chemin: chemin.into(),
+            separateur: "/".into(),
+            attributs: attributs.iter().map(|a| a.to_string()).collect(),
+        };
+        magasin.poser_dossiers(compte, &[d("INBOX", &[]), d("Sent", &["\\Sent"])]).unwrap();
+        // Déjà dans l'index : rien à relire sur le serveur.
+        let ligne = |uid| MessageLocal { uid, ..Default::default() };
+        magasin.poser_messages(magasin.dossier_id(compte, "INBOX").unwrap(), &[ligne(4)]).unwrap();
+        magasin.poser_messages(magasin.dossier_id(compte, "Sent").unwrap(), &[ligne(2), ligne(5)]).unwrap();
+        let (s, journal) = session(
+            DOVECOT,
+            vec![
+                examen("INBOX"),
+                echange("UID SEARCH CHARSET UTF-8 OR SUBJECT", "* SEARCH 4\r\n", "OK"),
+                examen("Sent"),
+                echange("UID SEARCH CHARSET UTF-8 OR SUBJECT", "* SEARCH 2 5\r\n", "OK"),
+                echange("LOGOUT", "* BYE\r\n", "OK"),
+            ],
+        );
+        let r = Recherche { champs: Champs::ObjetExpediteur, ..recherche(&["INBOX", "Sent"], true, 5_000, 5_000) };
+        let (issues, _) = issues_avec(&r, None, &magasin, vec![s]);
+        assert_eq!(issues, ["INBOX [4] reste 1 : fini", "Sent [2, 5] reste 0 : fini"]);
+        let lignes = journal.lock().unwrap().clone();
+        assert_eq!(lignes[1], "UID SEARCH CHARSET UTF-8 OR SUBJECT \"devis\" FROM \"devis\"");
+        assert_eq!(lignes[3], "UID SEARCH CHARSET UTF-8 OR SUBJECT \"devis\" OR TO \"devis\" CC \"devis\"");
+        // Texte entier : `TEXT` parcourt déjà les en-têtes.
+        let (s, journal) = session(
+            DOVECOT,
+            vec![
+                examen("Sent"),
+                echange("UID SEARCH CHARSET UTF-8 TEXT", "* SEARCH 2\r\n", "OK"),
+                echange("LOGOUT", "* BYE\r\n", "OK"),
+            ],
+        );
+        let (issues, _) = issues_avec(&recherche(&["Sent"], true, 5_000, 5_000), None, &magasin, vec![s]);
+        assert_eq!(issues, ["Sent [2] reste 0 : fini"]);
+        assert_eq!(journal.lock().unwrap()[1], "UID SEARCH CHARSET UTF-8 TEXT \"devis\"");
+    }
+
     /// Un dossier seul a toute l'attente ; sans réponse, ou si Dovecot a
     /// renoncé à attendre son indexeur, le motif est rendu avec le dossier.
     #[test]
@@ -11860,6 +12043,49 @@ mod tests {
         let (issues, _) = issues_avec(&r, Some(&mut g), &magasin, vec![]);
         assert_eq!(issues, ["INBOX [] : fini"]);
         assert_eq!(g.appels[1], "chercher I (subject:devis OR from:devis) 500");
+    }
+
+    /// Objet et expéditeur seulement, dans plusieurs dossiers d'un compte
+    /// Microsoft 365 : les éléments envoyés et les brouillons ont leur propre
+    /// requête, sur l'objet et les destinataires ; dans le texte entier, une
+    /// seule requête, comme avant.
+    #[test]
+    fn recherche_graph_dans_les_envoyes() {
+        let magasin = Magasin::en_memoire().unwrap();
+        let compte = magasin.compte("a@exemple.fr", "outlook.office365.com", 993, "a@exemple.fr").unwrap();
+        assert_eq!(compte, 1, "le compte des recherches d'essai");
+        let d = |chemin: &str, attributs: &[&str]| crate::protocole::Dossier {
+            chemin: chemin.into(),
+            separateur: "/".into(),
+            attributs: attributs.iter().map(|a| a.to_string()).collect(),
+        };
+        magasin
+            .poser_dossiers(compte, &[d("INBOX", &[]), d("Archives", &[]), d("Sent", &["\\Sent"]), d("Drafts", &["\\Drafts"])])
+            .unwrap();
+        let recu = |uid, mid: &str| MessageLocal { uid, message_id: mid.into(), ..Default::default() };
+        magasin.poser_messages(magasin.dossier_id(compte, "INBOX").unwrap(), &[recu(3, "a@x")]).unwrap();
+        magasin.poser_messages(magasin.dossier_id(compte, "Sent").unwrap(), &[recu(4, "s@x")]).unwrap();
+        let connus = [("INBOX", "I"), ("Archives", "A"), ("Sent", "S"), ("Drafts", "D")];
+        let trouves = [("a@x", "I"), ("s@x", "S")];
+        let chemins = ["INBOX", "Archives", "Sent", "Drafts"];
+        let attendues = ["INBOX [3] reste 3 : fini", "Archives [] reste 2 : fini", "Sent [4] reste 1 : fini", "Drafts [] reste 0 : fini"];
+        let mut g = FauxGraph::nouveau(&connus, &trouves);
+        let r = Recherche { champs: Champs::ObjetExpediteur, ..recherche(&chemins, true, 30, 5_000) };
+        let (issues, ouvertes) = issues_avec(&r, Some(&mut g), &magasin, vec![]);
+        assert_eq!(issues, attendues);
+        assert_eq!(ouvertes, 0, "rien à demander au serveur IMAP");
+        assert_eq!(
+            g.appels,
+            [
+                "dossiers INBOX,Archives,Sent,Drafts",
+                "chercher partout (subject:devis OR from:devis) 500",
+                "chercher partout (subject:devis OR to:devis OR cc:devis) 500",
+            ]
+        );
+        let mut g = FauxGraph::nouveau(&connus, &trouves);
+        let (issues, _) = issues_avec(&recherche(&chemins, true, 30, 5_000), Some(&mut g), &magasin, vec![]);
+        assert_eq!(issues, attendues);
+        assert_eq!(g.appels, ["dossiers INBOX,Archives,Sent,Drafts", "chercher partout (devis OR attachment:devis) 500"]);
     }
 
     /// Un message trouvé par Graph que l'index n'a pas : retrouvé sur le

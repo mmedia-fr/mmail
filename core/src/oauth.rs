@@ -75,6 +75,10 @@ impl Fournisseur {
     /// Nouveau jeton d'accès par le jeton de rafraîchissement, délivré par
     /// l'application `client` (Microsoft ; vide : avant la 0.6.19).
     fn rafraichir(self, client: &str, rafraichissement: &str, portee: &str) -> Result<ReponseJeton, ErreurOAuth> {
+        // Compte connecté par Android (0.7.0) : le jeton vient du système.
+        if let Some(compte) = rafraichissement.strip_prefix(crate::android::DELEGUE) {
+            return crate::android::jeton(self, compte, portee);
+        }
         match self {
             Fournisseur::Microsoft => {
                 let client = crate::microsoft::client_du_compte(client);
